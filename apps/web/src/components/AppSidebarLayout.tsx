@@ -1,12 +1,15 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { isElectron } from "../env";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import ThreadSidebar from "./Sidebar";
+import PhaseGroupedSidebar from "./PhaseGroupedSidebar";
+import { useClientSettings, useClientSettingsHydrated } from "../hooks/useSettings";
+import { shouldUsePhaseGroupedSidebar } from "./sidebar/sidebarVariant";
 import { Sidebar, SidebarProvider, SidebarRail, SidebarTrigger, useSidebar } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -55,6 +58,16 @@ function SidebarControl() {
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const clientSettingsHydrated = useClientSettingsHydrated();
+  const phaseGroupedSidebarEnabled = useClientSettings(
+    (settings) => settings.phaseGroupedSidebarEnabled,
+  );
+  const usePhaseGroupedSidebar = shouldUsePhaseGroupedSidebar({
+    clientSettingsHydrated,
+    phaseGroupedSidebarEnabled,
+    pathname: location.pathname,
+  });
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(() => {
     const getWindowFullscreenState = window.desktopBridge?.getWindowFullscreenState;
@@ -114,7 +127,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        <ThreadSidebar />
+        {usePhaseGroupedSidebar ? <PhaseGroupedSidebar /> : <ThreadSidebar />}
         <SidebarRail />
       </Sidebar>
       {children}
