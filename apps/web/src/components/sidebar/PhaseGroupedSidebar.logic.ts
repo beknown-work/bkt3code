@@ -54,7 +54,13 @@ export interface PhaseSidebarRow {
   readonly repositoryLabel: string;
   readonly providerKind: string;
   readonly providerName: string;
-  readonly providerCode: string;
+}
+
+export interface PhaseSidebarRepositoryOption {
+  readonly key: string;
+  readonly label: string;
+  readonly searchText: string;
+  readonly project: Project;
 }
 
 export interface PhaseSidebarGroup extends PhaseSidebarPhaseDefinition {
@@ -91,6 +97,55 @@ export function resolvePhaseSidebarPhase(thread: ThreadShell): PhaseSidebarPhase
 
 export function derivePhaseSidebarRepositoryKey(project: Project): string {
   return deriveLogicalProjectKey(project, { groupingMode: "repository" });
+}
+
+export function buildPhaseSidebarRepositoryOptions(
+  projects: ReadonlyArray<Project>,
+): ReadonlyArray<PhaseSidebarRepositoryOption> {
+  const grouped = new Map<string, Project[]>();
+  for (const project of projects) {
+    const key = derivePhaseSidebarRepositoryKey(project);
+    const members = grouped.get(key);
+    if (members) members.push(project);
+    else grouped.set(key, [project]);
+  }
+
+  return [...grouped.entries()]
+    .map(([key, members]) => {
+      const sortedMembers = members.toSorted((left, right) =>
+        `${left.environmentId}:${left.id}`.localeCompare(`${right.environmentId}:${right.id}`),
+      );
+      const nicknames = [...new Set(sortedMembers.map((project) => project.title))].toSorted(
+        (left, right) => left.localeCompare(right),
+      );
+      const canonicalLabels = [
+        ...new Set(
+          sortedMembers.flatMap((project) => {
+            const identity = project.repositoryIdentity;
+            if (!identity) return [];
+            return [identity.displayName, identity.name].filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            );
+          }),
+        ),
+      ].toSorted((left, right) => left.localeCompare(right));
+      const label =
+        nicknames.length === 1
+          ? nicknames[0]!
+          : (canonicalLabels[0] ?? nicknames[0] ?? "Unknown repository");
+      const searchText = [
+        ...nicknames,
+        ...canonicalLabels,
+        ...sortedMembers.flatMap((project) => {
+          const identity = project.repositoryIdentity;
+          return identity ? [identity.canonicalKey, identity.owner ?? ""] : [];
+        }),
+      ].join(" ");
+      return { key, label, searchText, project: sortedMembers[0]! };
+    })
+    .toSorted(
+      (left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key),
+    );
 }
 
 const KNOWN_PROVIDER_CODES: Readonly<Record<string, string>> = {

@@ -1,6 +1,7 @@
 "use client";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { normalizeProjectNickname } from "@t3tools/client-runtime/operations/projects";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -73,7 +74,6 @@ import {
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
-  inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
   isUnsupportedWindowsProjectPath,
@@ -92,6 +92,7 @@ import {
 } from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
+  type AddProjectNicknameStep,
   buildBrowseGroups,
   buildProjectActionItems,
   buildRootGroups,
@@ -104,7 +105,11 @@ import {
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
+  markProjectNicknameCloneResolved,
+  projectNicknameWorkspaceRoot,
   RECENT_THREAD_LIMIT,
+  startCloneProjectNicknameStep,
+  startLocalProjectNicknameStep,
 } from "./CommandPalette.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -484,8 +489,10 @@ function OpenCommandPaletteDialog(props: {
   );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
+  const [addProjectNicknameStep, setAddProjectNicknameStep] =
+    useState<AddProjectNicknameStep | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
-  const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
+  const [isProjectAddSubmitting, setIsProjectAddSubmitting] = useState(false);
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
 
   const addProjectEnvironmentOptions = useMemo(() => {
@@ -560,10 +567,12 @@ function OpenCommandPaletteDialog(props: {
   const browseEnvironmentPlatform = getEnvironmentBrowsePlatform(
     browseEnvironment?.serverConfig?.environment.platform.os,
   );
-  const isRemoteProjectCloneFlow = addProjectCloneFlow !== null;
+  const isRemoteProjectCloneFlow = addProjectCloneFlow !== null || addProjectNicknameStep !== null;
   const isRemoteProjectRepositoryStep = addProjectCloneFlow?.step === "repository";
   const isBrowsing =
-    !isRemoteProjectRepositoryStep && isFilesystemBrowseQuery(query, browseEnvironmentPlatform);
+    addProjectNicknameStep === null &&
+    !isRemoteProjectRepositoryStep &&
+    isFilesystemBrowseQuery(query, browseEnvironmentPlatform);
   const paletteMode = getCommandPaletteMode({ currentView, isBrowsing });
   const getAddProjectInitialQueryForEnvironment = useCallback(
     (environmentId: EnvironmentId | null): string => {
@@ -738,6 +747,13 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function popView(): void {
+    if (addProjectNicknameStep) {
+      setAddProjectNicknameStep(null);
+      setHighlightedItemValue(null);
+      setQuery(addProjectNicknameStep.returnQuery);
+      setBrowseGeneration((generation) => generation + 1);
+      return;
+    }
     setAddProjectCloneFlow(null);
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
@@ -750,7 +766,7 @@ function OpenCommandPaletteDialog(props: {
   function handleQueryChange(nextQuery: string): void {
     setHighlightedItemValue(null);
     setQuery(nextQuery);
-    if (nextQuery === "" && currentView?.initialQuery) {
+    if (addProjectNicknameStep === null && nextQuery === "" && currentView?.initialQuery) {
       popView();
     }
   }
@@ -759,6 +775,7 @@ function OpenCommandPaletteDialog(props: {
     (environmentId: EnvironmentId): void => {
       setAddProjectEnvironmentId(environmentId);
       setAddProjectCloneFlow(null);
+      setAddProjectNicknameStep(null);
       pushPaletteView({
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: [],
@@ -771,6 +788,7 @@ function OpenCommandPaletteDialog(props: {
   const startAddProjectClone = useCallback(
     (environmentId: EnvironmentId, source: AddProjectRemoteSource): void => {
       setAddProjectEnvironmentId(environmentId);
+      setAddProjectNicknameStep(null);
       setAddProjectCloneFlow({ step: "repository", environmentId, source });
       pushPaletteView({
         addonIcon: remoteProjectSourceIcon(source, ADDON_ICON_CLASS),
@@ -1077,7 +1095,42 @@ function OpenCommandPaletteDialog(props: {
     threadSearchItems: allThreadItems,
   });
 
-  const handleAddProjectForEnvironment = useCallback(
+  const openExistingProject = useCallback(
+    async (existing: (typeof projects)[number]) => {
+      const latestThread = getLatestThreadForProject(
+        threads.filter((thread) => thread.environmentId === existing.environmentId),
+        existing.id,
+        clientSettings.sidebarThreadSortOrder,
+      );
+      if (latestThread) {
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(latestThread.environmentId, latestThread.id),
+          ),
+        });
+      } else {
+        const navigationResult = await settlePromise(() =>
+          handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
+        );
+        if (navigationResult._tag === "Failure") {
+          const error = squashAtomCommandFailure(navigationResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to open project",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return;
+        }
+      }
+      setOpen(false);
+    },
+    [clientSettings.sidebarThreadSortOrder, handleNewThread, navigate, setOpen, threads],
+  );
+
+  const prepareAddProjectForEnvironment = useCallback(
     async (input: {
       readonly environmentId: EnvironmentId;
       readonly rawCwd: string;
@@ -1116,45 +1169,35 @@ function OpenCommandPaletteDialog(props: {
         cwd,
       );
       if (existing) {
-        const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
-          existing.id,
-          clientSettings.sidebarThreadSortOrder,
-        );
-        if (latestThread) {
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(
-              scopeThreadRef(latestThread.environmentId, latestThread.id),
-            ),
-          });
-        } else {
-          const navigationResult = await settlePromise(() =>
-            handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
-          );
-          if (navigationResult._tag === "Failure") {
-            const error = squashAtomCommandFailure(navigationResult);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to open project",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-            return;
-          }
-        }
-        setOpen(false);
+        await openExistingProject(existing);
         return;
       }
 
+      const nickname = startLocalProjectNicknameStep({
+        environmentId: input.environmentId,
+        workspaceRoot: cwd,
+        returnQuery: rawCwd,
+      });
+      setAddProjectNicknameStep(nickname.step);
+      setHighlightedItemValue(null);
+      setQuery(nickname.query);
+    },
+    [openExistingProject, projects],
+  );
+
+  const createNamedProject = useCallback(
+    async (input: {
+      readonly environmentId: EnvironmentId;
+      readonly cwd: string;
+      readonly title: string;
+    }) => {
       const projectId = newProjectId();
       const createResult = await createProject({
         environmentId: input.environmentId,
         input: {
           projectId,
-          title: inferProjectTitleFromPath(cwd),
-          workspaceRoot: cwd,
+          title: input.title,
+          workspaceRoot: input.cwd,
           createWorkspaceRootIfMissing: true,
           defaultModelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -1173,7 +1216,7 @@ function OpenCommandPaletteDialog(props: {
             }),
           );
         }
-        return;
+        return false;
       }
 
       const navigationResult = await settlePromise(() =>
@@ -1188,25 +1231,18 @@ function OpenCommandPaletteDialog(props: {
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
-        return;
+        return false;
       }
       setOpen(false);
+      return true;
     },
-    [
-      handleNewThread,
-      createProject,
-      navigate,
-      projects,
-      setOpen,
-      clientSettings.sidebarThreadSortOrder,
-      threads,
-    ],
+    [createProject, handleNewThread, setOpen],
   );
 
-  const handleAddProject = useCallback(
+  const prepareAddProject = useCallback(
     async (rawCwd: string) => {
       if (!browseEnvironmentId) return;
-      await handleAddProjectForEnvironment({
+      await prepareAddProjectForEnvironment({
         environmentId: browseEnvironmentId,
         rawCwd,
         platform: browseEnvironmentPlatform,
@@ -1217,9 +1253,55 @@ function OpenCommandPaletteDialog(props: {
       browseEnvironmentId,
       browseEnvironmentPlatform,
       currentProjectCwdForBrowse,
-      handleAddProjectForEnvironment,
+      prepareAddProjectForEnvironment,
     ],
   );
+
+  const submitAddProjectNickname = useCallback(async () => {
+    const step = addProjectNicknameStep;
+    const nickname = normalizeProjectNickname(query);
+    if (!step || !nickname || isProjectAddSubmitting) return;
+
+    setIsProjectAddSubmitting(true);
+    try {
+      let resolvedStep = step;
+      let workspaceRoot = projectNicknameWorkspaceRoot(resolvedStep);
+      if (resolvedStep.kind === "clone" && workspaceRoot === null) {
+        const cloneResult = await cloneRepository({
+          environmentId: resolvedStep.environmentId,
+          input: {
+            remoteUrl: resolvedStep.remoteUrl,
+            destinationPath: resolvedStep.destinationPath,
+          },
+        });
+        if (cloneResult._tag === "Failure") {
+          if (!isAtomCommandInterrupted(cloneResult)) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Clone failed",
+                description: errorMessage(squashAtomCommandFailure(cloneResult)),
+              }),
+            );
+          }
+          return;
+        }
+        resolvedStep = markProjectNicknameCloneResolved(resolvedStep, cloneResult.value.cwd);
+        workspaceRoot = cloneResult.value.cwd;
+        setAddProjectNicknameStep(resolvedStep);
+      }
+
+      if (!workspaceRoot) return;
+      const created = await createNamedProject({
+        environmentId: resolvedStep.environmentId,
+        cwd: workspaceRoot,
+        title: nickname,
+      });
+      if (created) setAddProjectNicknameStep(null);
+    } finally {
+      setIsProjectAddSubmitting(false);
+    }
+  }, [addProjectNicknameStep, cloneRepository, createNamedProject, isProjectAddSubmitting, query]);
 
   function getDefaultCloneParentPath(environmentId: EnvironmentId): string {
     return getAddProjectInitialQueryForEnvironment(environmentId);
@@ -1291,7 +1373,7 @@ function OpenCommandPaletteDialog(props: {
     }
 
     const rawDestination = (destinationPathInput ?? query).trim();
-    if (rawDestination.length === 0 || isRemoteProjectCloning) {
+    if (rawDestination.length === 0 || isProjectAddSubmitting) {
       return;
     }
 
@@ -1325,28 +1407,18 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
-    setIsRemoteProjectCloning(true);
-    const cloneResult = await cloneRepository({
+    const nickname = startCloneProjectNicknameStep({
       environmentId: addProjectCloneFlow.environmentId,
-      input: {
-        remoteUrl: addProjectCloneFlow.remoteUrl,
-        destinationPath,
-      },
+      remoteUrl: addProjectCloneFlow.remoteUrl,
+      destinationPath,
+      repositoryTitle:
+        addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput,
+      repositoryName:
+        addProjectCloneFlow.repository?.nameWithOwner ?? addProjectCloneFlow.repositoryInput,
     });
-    setIsRemoteProjectCloning(false);
-    if (cloneResult._tag === "Failure") {
-      if (!isAtomCommandInterrupted(cloneResult)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Clone failed",
-            description: errorMessage(squashAtomCommandFailure(cloneResult)),
-          }),
-        );
-      }
-      return;
-    }
-    await handleAddProject(cloneResult.value.cwd);
+    setAddProjectNicknameStep(nickname.step);
+    setHighlightedItemValue(null);
+    setQuery(nickname.query);
   }
 
   function browseTo(name: string): void {
@@ -1396,7 +1468,7 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const remoteProjectContext = useMemo(() => {
-    if (addProjectCloneFlow?.step !== "confirm") {
+    if (addProjectNicknameStep || addProjectCloneFlow?.step !== "confirm") {
       return null;
     }
 
@@ -1405,10 +1477,31 @@ function OpenCommandPaletteDialog(props: {
       description: addProjectCloneFlow.repository?.url ?? addProjectCloneFlow.remoteUrl,
       icon: remoteProjectSourceIcon(addProjectCloneFlow.source, ITEM_ICON_CLASS),
     };
-  }, [addProjectCloneFlow]);
+  }, [addProjectCloneFlow, addProjectNicknameStep]);
+
+  const projectNicknameContext = addProjectNicknameStep
+    ? {
+        title:
+          addProjectNicknameStep.kind === "clone"
+            ? addProjectNicknameStep.repositoryTitle
+            : "Local folder",
+        description:
+          addProjectNicknameStep.kind === "clone"
+            ? (addProjectNicknameStep.clonedWorkspaceRoot ?? addProjectNicknameStep.destinationPath)
+            : addProjectNicknameStep.workspaceRoot,
+        icon:
+          addProjectNicknameStep.kind === "clone" ? (
+            <LinkIcon className={ITEM_ICON_CLASS} />
+          ) : (
+            <FolderIcon className={ITEM_ICON_CLASS} />
+          ),
+      }
+    : null;
 
   let displayedGroups: CommandPaletteView["groups"] = filteredGroups;
-  if (addProjectCloneFlow?.step === "repository") {
+  if (addProjectNicknameStep) {
+    displayedGroups = [];
+  } else if (addProjectCloneFlow?.step === "repository") {
     displayedGroups = [];
   } else if (addProjectCloneFlow?.step === "confirm") {
     displayedGroups = relativePathNeedsActiveProject ? [] : cloneDestinationBrowseGroups;
@@ -1417,6 +1510,7 @@ function OpenCommandPaletteDialog(props: {
   }
 
   const inputPlaceholder =
+    (addProjectNicknameStep ? "Repository nickname" : null) ??
     remoteProjectInputPlaceholder(addProjectCloneFlow) ??
     getCommandPaletteInputPlaceholder(paletteMode);
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
@@ -1432,9 +1526,7 @@ function OpenCommandPaletteDialog(props: {
   const submitModifierLabel = useMetaForMod ? "\u2318" : "Ctrl";
   const isCloneDestinationStep = addProjectCloneFlow?.step === "confirm";
   const submitActionLabel = isCloneDestinationStep
-    ? willCreateProjectPath
-      ? "Create & Clone"
-      : "Clone"
+    ? "Continue"
     : willCreateProjectPath
       ? "Create & Add"
       : "Add";
@@ -1444,7 +1536,7 @@ function OpenCommandPaletteDialog(props: {
       ? "Continue"
       : "Lookup"
     : null;
-  const isRemoteProjectPending = isRemoteProjectLookingUp || isRemoteProjectCloning;
+  const isRemoteProjectPending = isRemoteProjectLookingUp || isProjectAddSubmitting;
   const canSubmitRemoteProjectFlow =
     addProjectCloneFlow?.step === "repository" &&
     query.trim().length > 0 &&
@@ -1491,6 +1583,12 @@ function OpenCommandPaletteDialog(props: {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (addProjectNicknameStep && event.key === "Enter") {
+      event.preventDefault();
+      void submitAddProjectNickname();
+      return;
+    }
+
     if (addProjectCloneFlow?.step === "repository" && event.key === "Enter") {
       event.preventDefault();
       void submitAddProjectCloneFlow();
@@ -1507,7 +1605,7 @@ function OpenCommandPaletteDialog(props: {
       if (isCloneDestinationStep) {
         void submitAddProjectCloneFlow(resolvedAddProjectPath);
       } else {
-        void handleAddProject(resolvedAddProjectPath);
+        void prepareAddProject(resolvedAddProjectPath);
       }
       return;
     }
@@ -1631,7 +1729,7 @@ function OpenCommandPaletteDialog(props: {
         );
         return;
       }
-      await handleAddProjectForEnvironment({
+      await prepareAddProjectForEnvironment({
         environmentId: selection.environmentId,
         rawCwd: selection.linuxPath,
         platform: "Linux",
@@ -1639,7 +1737,7 @@ function OpenCommandPaletteDialog(props: {
       });
       return;
     }
-    await handleAddProject(pickedPath);
+    await prepareAddProject(pickedPath);
   }, [
     browseDesktopInstanceId,
     browseEnvironmentId,
@@ -1648,8 +1746,8 @@ function OpenCommandPaletteDialog(props: {
     desktopLocalBootstraps,
     environments,
     fileManagerInitialPath,
-    handleAddProject,
-    handleAddProjectForEnvironment,
+    prepareAddProject,
+    prepareAddProjectForEnvironment,
     isPickingProjectFolder,
     primaryEnvironmentId,
   ]);
@@ -1669,7 +1767,7 @@ function OpenCommandPaletteDialog(props: {
       }}
     >
       <Command
-        key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
+        key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}-${addProjectNicknameStep?.kind ?? "none"}`}
         aria-label="Command palette"
         autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
         mode="none"
@@ -1682,13 +1780,15 @@ function OpenCommandPaletteDialog(props: {
         <div className="relative">
           <CommandInput
             className={
-              addProjectCloneFlow?.step === "repository"
+              addProjectNicknameStep
                 ? "pe-32"
-                : isBrowsing
-                  ? willCreateProjectPath
-                    ? "pe-36"
-                    : "pe-16"
-                  : undefined
+                : addProjectCloneFlow?.step === "repository"
+                  ? "pe-32"
+                  : isBrowsing
+                    ? willCreateProjectPath
+                      ? "pe-36"
+                      : "pe-16"
+                    : undefined
             }
             placeholder={inputPlaceholder}
             wrapperClassName={
@@ -1714,7 +1814,45 @@ function OpenCommandPaletteDialog(props: {
                 : {})}
             onKeyDown={handleKeyDown}
           />
-          {addProjectCloneFlow?.step === "repository" ? (
+          {addProjectNicknameStep ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    tabIndex={-1}
+                    className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
+                    aria-label={`${addProjectNicknameStep.kind === "clone" ? "Clone & add" : "Add project"} (Enter)`}
+                    disabled={normalizeProjectNickname(query) === null || isProjectAddSubmitting}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                    }}
+                    onClick={() => {
+                      void submitAddProjectNickname();
+                    }}
+                  />
+                }
+              >
+                <span>
+                  {isProjectAddSubmitting
+                    ? addProjectNicknameStep.kind === "clone" &&
+                      addProjectNicknameStep.clonedWorkspaceRoot === null
+                      ? "Cloning"
+                      : "Adding"
+                    : addProjectNicknameStep.kind === "clone"
+                      ? "Clone & add"
+                      : "Add project"}
+                </span>
+                <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+                  <Kbd>Enter</Kbd>
+                </KbdGroup>
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {addProjectNicknameStep.kind === "clone" ? "Clone & add" : "Add project"} (Enter)
+              </TooltipPopup>
+            </Tooltip>
+          ) : addProjectCloneFlow?.step === "repository" ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1770,7 +1908,7 @@ function OpenCommandPaletteDialog(props: {
                       if (isCloneDestinationStep) {
                         void submitAddProjectCloneFlow(resolvedAddProjectPath);
                       } else {
-                        void handleAddProject(resolvedAddProjectPath);
+                        void prepareAddProject(resolvedAddProjectPath);
                       }
                     }}
                   />
@@ -1790,6 +1928,24 @@ function OpenCommandPaletteDialog(props: {
           ) : null}
         </div>
         <CommandPanel className="max-h-[min(28rem,70vh)]">
+          {projectNicknameContext ? (
+            <div className="border-b p-3">
+              <div className="flex min-h-8 items-center gap-2 rounded-sm px-1 py-1.5">
+                {projectNicknameContext.icon}
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-foreground text-sm">
+                    {projectNicknameContext.title}
+                  </span>
+                  <span className="truncate text-muted-foreground/70 text-xs">
+                    {projectNicknameContext.description}
+                  </span>
+                </span>
+              </div>
+              <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
+                Give your repository a nickname. This is how it will appear in the left sidebar.
+              </p>
+            </div>
+          ) : null}
           {remoteProjectContext ? (
             <div className="p-2 pb-0">
               <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
@@ -1814,37 +1970,53 @@ function OpenCommandPaletteDialog(props: {
             isActionsOnly={isActionsOnly}
             keybindings={keybindings}
             onExecuteItem={executeItem}
-            {...(addProjectCloneFlow?.step === "repository"
+            {...(addProjectNicknameStep
               ? {
                   emptyStateMessage:
-                    addProjectCloneFlow.source === "url"
-                      ? "Enter a Git clone URL and press Enter to continue."
-                      : "Enter a repository path and press Enter to look it up.",
+                    normalizeProjectNickname(query) === null
+                      ? "Enter a repository nickname to continue."
+                      : "Press Enter to confirm this repository nickname.",
                 }
-              : addProjectCloneFlow?.step === "confirm"
-                ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-                : relativePathNeedsActiveProject
-                  ? { emptyStateMessage: "Relative paths require an active project." }
-                  : willCreateProjectPath
-                    ? {
-                        emptyStateMessage:
-                          "Press Enter to create this folder and add it as a project.",
-                      }
-                    : {})}
+              : addProjectCloneFlow?.step === "repository"
+                ? {
+                    emptyStateMessage:
+                      addProjectCloneFlow.source === "url"
+                        ? "Enter a Git clone URL and press Enter to continue."
+                        : "Enter a repository path and press Enter to look it up.",
+                  }
+                : addProjectCloneFlow?.step === "confirm"
+                  ? { emptyStateMessage: "Choose a destination path and press Enter to continue." }
+                  : relativePathNeedsActiveProject
+                    ? { emptyStateMessage: "Relative paths require an active project." }
+                    : willCreateProjectPath
+                      ? {
+                          emptyStateMessage:
+                            "Press Enter to create this folder and add it as a project.",
+                        }
+                      : {})}
           />
         </CommandPanel>
         <CommandFooter className="gap-3 max-sm:flex-col max-sm:items-start">
           <div className="flex items-center gap-3">
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>
-                <ArrowUpIcon />
-              </Kbd>
-              <Kbd>
-                <ArrowDownIcon />
-              </Kbd>
-              <span className={cn("text-muted-foreground/80")}>Navigate</span>
-            </KbdGroup>
-            {addProjectCloneFlow?.step === "repository" ? (
+            {!addProjectNicknameStep ? (
+              <KbdGroup className="items-center gap-1.5">
+                <Kbd>
+                  <ArrowUpIcon />
+                </Kbd>
+                <Kbd>
+                  <ArrowDownIcon />
+                </Kbd>
+                <span className={cn("text-muted-foreground/80")}>Navigate</span>
+              </KbdGroup>
+            ) : null}
+            {addProjectNicknameStep ? (
+              <KbdGroup className="items-center gap-1.5">
+                <Kbd>Enter</Kbd>
+                <span className={cn("text-muted-foreground/80")}>
+                  {addProjectNicknameStep.kind === "clone" ? "Clone & add" : "Add project"}
+                </span>
+              </KbdGroup>
+            ) : addProjectCloneFlow?.step === "repository" ? (
               <KbdGroup className="items-center gap-1.5">
                 <Kbd>Enter</Kbd>
                 <span className={cn("text-muted-foreground/80")}>
