@@ -36,4 +36,6 @@ On the server, `t3-bkmain-deploy.timer` checks the current `origin/bkmain` head 
 per minute. It deploys only when the GitHub Actions run for that exact commit has
 finished successfully. This avoids storing production SSH or Tailscale credentials
 in the public repository and prevents an older workflow run from deploying over a
-newer commit.
+newer commit. The last successfully deployed commit is recorded separately from the
+worktree HEAD, so pushes made directly from the server are still rebuilt and
+restarted after CI passes.

@@ -6,6 +6,7 @@ EXPECTED_BRANCH="bkmain"
 EXPECTED_SHA="${1:-${EXPECTED_SHA:-}}"
 SERVICE_NAME="t3-bkmain.service"
 HEALTH_URL="http://10.31.39.131:18083/"
+DEPLOYED_SHA_FILE="/home/ubuntu/.t3/bkt3-dev/deployed-sha"
 
 exec 9>"/tmp/bkt3-deploy.lock"
 if ! flock -n 9; then
@@ -73,4 +74,6 @@ if [[ "$DEPLOYED_SHA" != "$REMOTE_SHA" ]]; then
   exit 1
 fi
 
+umask 077
+printf '%s\n' "$DEPLOYED_SHA" >"$DEPLOYED_SHA_FILE"
 echo "==> bkt3 deployed at $DEPLOYED_SHA"

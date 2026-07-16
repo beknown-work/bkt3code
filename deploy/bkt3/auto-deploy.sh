@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTED_BRANCH="bkmain"
+DEPLOYED_SHA_FILE="/home/ubuntu/.t3/bkt3-dev/deployed-sha"
 WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/t3code/actions/workflows/deploy-bkt3.yml/runs?branch=bkmain&event=push&per_page=20"
 
 CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
@@ -14,8 +15,9 @@ fi
 git -C "$REPO_DIR" fetch --quiet --prune origin "$EXPECTED_BRANCH"
 LOCAL_SHA="$(git -C "$REPO_DIR" rev-parse HEAD)"
 REMOTE_SHA="$(git -C "$REPO_DIR" rev-parse "origin/$EXPECTED_BRANCH")"
+DEPLOYED_SHA="$(sed -n '1p' "$DEPLOYED_SHA_FILE" 2>/dev/null || true)"
 
-if [[ "$LOCAL_SHA" == "$REMOTE_SHA" ]]; then
+if [[ "$DEPLOYED_SHA" == "$REMOTE_SHA" ]]; then
   exit 0
 fi
 
