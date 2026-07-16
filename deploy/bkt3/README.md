@@ -12,6 +12,7 @@ This deployment serves the Beknown-maintained T3 Code branch at
 - Server address: `10.31.39.131:18083`
 - Persistent state: `/home/ubuntu/.t3/bkt3-dev`
 - Swarm proxy: `bkt3-proxy`
+- Automatic deployment timer: `t3-bkmain-deploy.timer`
 
 `start.sh` refuses to run unless the worktree is currently on `bkmain`.
 
@@ -26,12 +27,13 @@ The deployment script fetches and fast-forwards `bkmain`, installs the locked
 dependencies, rebuilds the web and server bundles, restarts the service, and waits
 for the local endpoint to become healthy.
 
-## GitHub Actions deployment
+## Automatic CI/CD
 
-`.github/workflows/deploy-bkt3.yml` validates pull requests and automatically
-deploys successful pushes to `bkmain`. Configure these repository secrets:
+`.github/workflows/deploy-bkt3.yml` validates, typechecks, and builds pull requests
+and pushes targeting `bkmain`.
 
-- `BKT3_DEPLOY_HOST`: the Tailscale address or name of this server
-- `BKT3_DEPLOY_SSH_KEY`: an SSH private key accepted by the `ubuntu` account
-- `TAILSCALE_OAUTH_CLIENT_ID`: OAuth client for the CI Tailscale connection
-- `TAILSCALE_OAUTH_SECRET`: OAuth secret for the CI Tailscale connection
+On the server, `t3-bkmain-deploy.timer` checks the current `origin/bkmain` head once
+per minute. It deploys only when the GitHub Actions run for that exact commit has
+finished successfully. This avoids storing production SSH or Tailscale credentials
+in the public repository and prevents an older workflow run from deploying over a
+newer commit.
