@@ -4,11 +4,48 @@ import type { Thread } from "../types";
 import {
   buildThreadActionItems,
   filterCommandPaletteGroups,
+  markProjectNicknameCloneResolved,
+  projectNicknameWorkspaceRoot,
+  startCloneProjectNicknameStep,
+  startLocalProjectNicknameStep,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-1");
+
+describe("add project nickname steps", () => {
+  it("starts local and clone steps with inferred nicknames", () => {
+    const local = startLocalProjectNicknameStep({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      workspaceRoot: "/work/my-app",
+    });
+    expect(local.query).toBe("my-app");
+    expect(projectNicknameWorkspaceRoot(local.step)).toBe("/work/my-app");
+
+    const clone = startCloneProjectNicknameStep({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      remoteUrl: "git@github.com:example/server.git",
+      destinationPath: "/work",
+      repositoryTitle: "example/server",
+      repositoryName: "example/server",
+    });
+    expect(clone.query).toBe("server");
+    expect(projectNicknameWorkspaceRoot(clone.step)).toBeNull();
+  });
+
+  it("records a completed clone so create retries do not clone again", () => {
+    const { step } = startCloneProjectNicknameStep({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      remoteUrl: "https://github.com/example/server.git",
+      destinationPath: "/work",
+      repositoryTitle: "example/server",
+    });
+    const resolved = markProjectNicknameCloneResolved(step, "/work/server");
+    expect(projectNicknameWorkspaceRoot(resolved)).toBe("/work/server");
+    expect(resolved).toMatchObject({ kind: "clone", clonedWorkspaceRoot: "/work/server" });
+  });
+});
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {

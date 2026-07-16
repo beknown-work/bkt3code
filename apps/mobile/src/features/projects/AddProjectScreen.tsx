@@ -6,8 +6,10 @@ import {
   buildProjectCreateCommand,
   findExistingAddProject,
   getAddProjectInitialQuery,
+  normalizeProjectNickname,
   resolveAddProjectPath,
   sortAddProjectProviderSources,
+  suggestProjectNickname,
   type AddProjectRemoteSource,
 } from "@t3tools/client-runtime/operations/projects";
 import {
@@ -18,7 +20,6 @@ import {
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
-  inferProjectTitleFromPath,
   isFilesystemBrowseQuery,
 } from "@t3tools/client-runtime/state/projects";
 import { CommandId, type EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -46,6 +47,7 @@ import { uuidv4 } from "../../lib/uuid";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
+import type { AddProjectNameInput } from "./addProjectNameFlow";
 
 interface EnvironmentOption {
   readonly environmentId: EnvironmentId;
@@ -444,7 +446,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
   const projects = useProjects();
 
   return useCallback(
-    async (workspaceRoot: string) => {
+    async (workspaceRoot: string, title: string) => {
       if (!environment) return;
 
       const existing = findExistingAddProject({
@@ -468,6 +470,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
       const command = buildProjectCreateCommand({
         commandId: CommandId.make(uuidv4()),
         projectId,
+        title,
         workspaceRoot,
         createdAt: new Date().toISOString(),
       });
@@ -482,12 +485,40 @@ function useCreateProject(environment: EnvironmentOption | null) {
         StackActions.replace("NewTaskDraft", {
           environmentId: environment.environmentId,
           projectId,
-          title: inferProjectTitleFromPath(workspaceRoot),
+          title,
         }),
       );
       return result;
     },
     [createProject, environment, projects, navigation],
+  );
+}
+
+function useOpenExistingProject(environment: EnvironmentOption | null) {
+  const navigation = useNavigation();
+  const projects = useProjects();
+
+  return useCallback(
+    (workspaceRoot: string): boolean => {
+      if (!environment) return false;
+      const existing = findExistingAddProject({
+        projects,
+        environmentId: environment.environmentId,
+        path: workspaceRoot,
+      });
+      if (!existing) return false;
+
+      Alert.alert("Project already exists", existing.title);
+      navigation.dispatch(
+        StackActions.replace("NewTaskDraft", {
+          environmentId: existing.environmentId,
+          projectId: existing.id,
+          title: existing.title,
+        }),
+      );
+      return true;
+    },
+    [environment, navigation, projects],
   );
 }
 
@@ -682,8 +713,9 @@ function FolderBrowser(props: {
 }
 
 export function AddProjectLocalFolderScreen(props: { readonly environmentId?: string | string[] }) {
+  const navigation = useNavigation();
   const environment = useEnvironmentFromParam(props.environmentId);
-  const createProject = useCreateProject(environment);
+  const openExistingProject = useOpenExistingProject(environment);
   const [pathInput, setPathInput] = useState(() =>
     getAddProjectInitialQuery(environment?.baseDirectory),
   );
@@ -709,12 +741,19 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
     }
 
     setIsSubmitting(true);
-    const result = await createProject(resolved.path);
-    if (result && AsyncResult.isFailure(result)) {
-      setError(errorMessage(Cause.squash(result.cause)));
+    if (!openExistingProject(resolved.path)) {
+      navigation.navigate("NewTaskSheet", {
+        screen: "AddProjectName",
+        params: {
+          kind: "local",
+          environmentId: environment.environmentId,
+          workspaceRoot: resolved.path,
+          suggestedNickname: suggestProjectNickname({ workspaceRoot: resolved.path }),
+        },
+      });
     }
     setIsSubmitting(false);
-  }, [createProject, environment, isSubmitting, pathInput]);
+  }, [environment, isSubmitting, navigation, openExistingProject, pathInput]);
 
   return (
     <AddProjectShell>
@@ -750,11 +789,8 @@ export function AddProjectDestinationScreen(props: {
   readonly remoteUrl?: string | string[];
   readonly repositoryTitle?: string | string[];
 }) {
-  const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
-    reportFailure: false,
-  });
+  const navigation = useNavigation();
   const environment = useEnvironmentFromParam(props.environmentId);
-  const createProject = useCreateProject(environment);
   const remoteUrl = stringParam(props.remoteUrl);
   const repositoryTitle = stringParam(props.repositoryTitle);
   const [pathInput, setPathInput] = useState(() =>
@@ -782,23 +818,22 @@ export function AddProjectDestinationScreen(props: {
     }
 
     setIsSubmitting(true);
-    const cloneResult = await cloneRepository({
-      environmentId: environment.environmentId,
-      input: {
+    navigation.navigate("NewTaskSheet", {
+      screen: "AddProjectName",
+      params: {
+        kind: "clone",
+        environmentId: environment.environmentId,
         remoteUrl,
         destinationPath: resolved.path,
+        repositoryTitle: repositoryTitle ?? remoteUrl,
+        suggestedNickname: suggestProjectNickname({
+          repositoryName: repositoryTitle,
+          remoteUrl,
+        }),
       },
     });
-    if (AsyncResult.isFailure(cloneResult)) {
-      setError(errorMessage(Cause.squash(cloneResult.cause)));
-    } else {
-      const createResult = await createProject(cloneResult.value.cwd);
-      if (createResult && AsyncResult.isFailure(createResult)) {
-        setError(errorMessage(Cause.squash(createResult.cause)));
-      }
-    }
     setIsSubmitting(false);
-  }, [cloneRepository, createProject, environment, isSubmitting, pathInput, remoteUrl]);
+  }, [environment, isSubmitting, navigation, pathInput, remoteUrl, repositoryTitle]);
 
   return (
     <AddProjectShell>
@@ -833,6 +868,130 @@ export function AddProjectDestinationScreen(props: {
       ) : (
         <EmptyEnvironmentState />
       )}
+    </AddProjectShell>
+  );
+}
+
+export function AddProjectNameScreen(props: { readonly input: AddProjectNameInput | null }) {
+  const input = props.input;
+  const environment = useEnvironmentFromParam(input?.environmentId);
+  const createProject = useCreateProject(environment);
+  const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
+    reportFailure: false,
+  });
+  const iconColor = useThemeColor("--color-icon");
+  const [nickname, setNickname] = useState(input?.suggestedNickname ?? "");
+  const [clonedWorkspaceRoot, setClonedWorkspaceRoot] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setNickname(input?.suggestedNickname ?? "");
+    setClonedWorkspaceRoot(null);
+    setError(null);
+  }, [input]);
+
+  const submitNickname = useCallback(async () => {
+    const title = normalizeProjectNickname(nickname);
+    if (!input || !environment || isSubmitting) return;
+    if (!title) {
+      setError("Enter a repository nickname.");
+      return;
+    }
+
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      let workspaceRoot = input.kind === "local" ? input.workspaceRoot : clonedWorkspaceRoot;
+      if (input.kind === "clone" && workspaceRoot === null) {
+        const cloneResult = await cloneRepository({
+          environmentId: environment.environmentId,
+          input: {
+            remoteUrl: input.remoteUrl,
+            destinationPath: input.destinationPath,
+          },
+        });
+        if (AsyncResult.isFailure(cloneResult)) {
+          setError(errorMessage(Cause.squash(cloneResult.cause)));
+          return;
+        }
+        workspaceRoot = cloneResult.value.cwd;
+        setClonedWorkspaceRoot(workspaceRoot);
+      }
+
+      if (!workspaceRoot) return;
+      const createResult = await createProject(workspaceRoot, title);
+      if (createResult && AsyncResult.isFailure(createResult)) {
+        setError(errorMessage(Cause.squash(createResult.cause)));
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [
+    cloneRepository,
+    clonedWorkspaceRoot,
+    createProject,
+    environment,
+    input,
+    isSubmitting,
+    nickname,
+  ]);
+
+  if (!input) {
+    return (
+      <AddProjectShell>
+        <ErrorBanner message="This Add Project link is incomplete. Go back and choose the project again." />
+      </AddProjectShell>
+    );
+  }
+
+  const summaryTitle = input.kind === "clone" ? input.repositoryTitle : "Local folder";
+  const summaryPath =
+    input.kind === "clone" ? (clonedWorkspaceRoot ?? input.destinationPath) : input.workspaceRoot;
+  const actionLabel = input.kind === "clone" ? "Clone & add" : "Add project";
+
+  return (
+    <AddProjectShell>
+      {error ? <ErrorBanner message={error} /> : null}
+      <View className="rounded-[24px] bg-card px-4 py-3">
+        <View className="flex-row items-center gap-3">
+          <SymbolView
+            name={input.kind === "clone" ? "link" : "folder"}
+            size={17}
+            tintColor={iconColor}
+            type="monochrome"
+          />
+          <View className="flex-1">
+            <Text className="text-base font-t3-bold" numberOfLines={1}>
+              {summaryTitle}
+            </Text>
+            <Text className="mt-0.5 text-xs text-foreground-muted" numberOfLines={2}>
+              {summaryPath}
+            </Text>
+          </View>
+        </View>
+      </View>
+      <SectionTitle>Repository nickname</SectionTitle>
+      <TextInput
+        autoFocus
+        className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
+        value={nickname}
+        onChangeText={setNickname}
+        autoCapitalize="sentences"
+        autoCorrect={false}
+        placeholder="Repository nickname"
+        returnKeyType="done"
+        onSubmitEditing={() => void submitNickname()}
+      />
+      <Text className="px-1 text-sm leading-normal text-foreground-muted">
+        Give your repository a nickname. This is how it will appear in the left sidebar.
+      </Text>
+      <PrimaryActionButton
+        label={actionLabel}
+        disabled={isSubmitting || normalizeProjectNickname(nickname) === null}
+        loading={isSubmitting}
+        onPress={() => void submitNickname()}
+      />
     </AddProjectShell>
   );
 }

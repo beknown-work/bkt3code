@@ -15,6 +15,7 @@ import {
   PHASE_SIDEBAR_PHASE_IDS,
   buildPhaseSidebarFilterChips,
   buildPhaseSidebarGroups,
+  buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
   matchesPhaseSidebarFilters,
   reconcilePhaseSidebarFilters,
@@ -77,7 +78,6 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     repositoryLabel: "repo-one",
     providerKind: "codex",
     providerName: "Codex",
-    providerCode: "cx",
     ...overrides,
   };
 }
@@ -219,6 +219,57 @@ describe("phase sidebar metadata and filters", () => {
     expect(derivePhaseSidebarRepositoryKey({ ...baseProject, repositoryIdentity: null })).not.toBe(
       "github.com/example/repo",
     );
+  });
+
+  it("uses project nicknames for repository facets and searches every canonical member", () => {
+    const repositoryIdentity = {
+      canonicalKey: "github.com/example/repo",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/example/repo.git",
+      },
+      displayName: "example/repo",
+      name: "repo",
+    };
+    const projects: Project[] = [
+      {
+        id: ProjectId.make("project-a"),
+        environmentId: EnvironmentId.make("env-a"),
+        title: "Frontend",
+        workspaceRoot: "/work/repo",
+        repositoryIdentity,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: ProjectId.make("project-b"),
+        environmentId: EnvironmentId.make("env-b"),
+        title: "Backend",
+        workspaceRoot: "/srv/repo",
+        repositoryIdentity,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+
+    const [option] = buildPhaseSidebarRepositoryOptions(projects);
+    expect(option).toMatchObject({
+      key: "github.com/example/repo",
+      label: "example/repo",
+    });
+    expect(option?.searchText).toContain("Frontend");
+    expect(option?.searchText).toContain("Backend");
+    expect(option?.searchText).toContain("github.com/example/repo");
+
+    const sameNicknameOptions = buildPhaseSidebarRepositoryOptions(
+      projects.map((project) => ({ ...project, title: "Work" })),
+    );
+    expect(sameNicknameOptions[0]?.label).toBe("Work");
   });
 
   it("uses OR semantics within facets and AND semantics across them", () => {

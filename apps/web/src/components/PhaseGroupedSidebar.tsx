@@ -10,7 +10,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { ProviderDriverKind, type ScopedThreadRef } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
   ArchiveIcon,
@@ -63,6 +63,7 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { Project } from "../types";
 import { useUiStateStore } from "../uiStateStore";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import {
   isTrailingDoubleClick,
   resolveThreadStatusPill,
@@ -73,6 +74,7 @@ import {
   PHASE_SIDEBAR_PHASES,
   buildPhaseSidebarFilterChips,
   buildPhaseSidebarGroups,
+  buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
   flattenPhaseSidebarGroups,
   resolvePhaseSidebarPhase,
@@ -123,11 +125,7 @@ const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
   ready: "bg-muted-foreground/45",
 };
 
-interface RepositoryOption {
-  readonly key: string;
-  readonly label: string;
-  readonly project: Project;
-}
+type RepositoryOption = ReturnType<typeof buildPhaseSidebarRepositoryOptions>[number];
 
 interface ProviderOption {
   readonly kind: string;
@@ -138,15 +136,6 @@ interface ProviderOption {
 function SidebarThreadDetailPrewarmer({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
   return null;
-}
-
-function projectDisplayLabel(project: Project): string {
-  return (
-    project.repositoryIdentity?.displayName ??
-    project.repositoryIdentity?.name ??
-    project.title ??
-    "Unknown repository"
-  );
 }
 
 function phaseRowClassName(isActive: boolean, isSelected: boolean): string {
@@ -184,7 +173,7 @@ function PhaseFilterPopover({
   const selectionCount = repositoryKeys.length + phaseIds.length + providerKinds.length;
   const needle = search.trim().toLowerCase();
   const visibleRepositories = repositories.filter((option) =>
-    option.label.toLowerCase().includes(needle),
+    option.searchText.toLowerCase().includes(needle),
   );
   const visiblePhases = PHASE_SIDEBAR_PHASES.filter((phase) =>
     phase.label.toLowerCase().includes(needle),
@@ -262,8 +251,16 @@ function PhaseFilterPopover({
               <FacetOption
                 key={provider.kind}
                 checked={providerKinds.includes(provider.kind)}
-                label={`${provider.code} · ${provider.name}`}
+                label={provider.name}
                 onCheckedChange={() => toggleProvider(provider.kind)}
+                leading={
+                  <ProviderInstanceIcon
+                    driverKind={ProviderDriverKind.make(provider.kind)}
+                    displayName={provider.name}
+                    className="size-3"
+                    iconClassName="size-3"
+                  />
+                }
               />
             ))}
           </FacetSection>
@@ -546,9 +543,19 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             ) : null}
             <Tooltip>
               <TooltipTrigger
-                render={<span className="font-mono lowercase" aria-label={row.providerName} />}
+                render={
+                  <span
+                    className="inline-flex size-3 items-center justify-center"
+                    aria-label={row.providerName}
+                  />
+                }
               >
-                {row.providerCode}
+                <ProviderInstanceIcon
+                  driverKind={ProviderDriverKind.make(row.providerKind)}
+                  displayName={row.providerName}
+                  className="size-3"
+                  iconClassName="size-3 text-[8px]"
+                />
               </TooltipTrigger>
               <TooltipPopup side="top">{row.providerName}</TooltipPopup>
             </Tooltip>
@@ -685,18 +692,7 @@ export function PhaseGroupedSidebar() {
       ),
     [projects],
   );
-  const repositoryOptions = useMemo(() => {
-    const options = new Map<string, RepositoryOption>();
-    for (const project of projects) {
-      const key = derivePhaseSidebarRepositoryKey(project);
-      const existing = options.get(key);
-      const label = projectDisplayLabel(project);
-      if (!existing || label.localeCompare(existing.label) < 0) {
-        options.set(key, { key, label, project });
-      }
-    }
-    return [...options.values()].sort((left, right) => left.label.localeCompare(right.label));
-  }, [projects]);
+  const repositoryOptions = useMemo(() => buildPhaseSidebarRepositoryOptions(projects), [projects]);
   const repositoryLabels = useMemo(
     () => new Map(repositoryOptions.map((option) => [option.key, option.label])),
     [repositoryOptions],
@@ -756,10 +752,9 @@ export function PhaseGroupedSidebar() {
           phaseId: resolvePhaseSidebarPhase(thread),
           repositoryKey,
           repositoryLabel:
-            repositoryLabels.get(repositoryKey) ?? project?.title ?? "Unknown repository",
+            project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
           providerKind,
           providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
-          providerCode: resolvePhaseSidebarProviderCode(providerKind),
         };
       }),
     [projectByKey, repositoryLabels, serverConfigs, threads],
