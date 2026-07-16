@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  ClientSettingsPatch,
   ClientSettingsSchema,
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
@@ -10,6 +11,7 @@ import {
 } from "./settings.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
+const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
@@ -28,6 +30,21 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
+  });
+});
+
+describe("ClientSettings phase-grouped sidebar", () => {
+  it("defaults the experiment off for legacy settings", () => {
+    expect(decodeClientSettings({}).phaseGroupedSidebarEnabled).toBe(false);
+  });
+
+  it("accepts persisted values and client patches", () => {
+    expect(
+      decodeClientSettings({ phaseGroupedSidebarEnabled: true }).phaseGroupedSidebarEnabled,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ phaseGroupedSidebarEnabled: true }).phaseGroupedSidebarEnabled,
+    ).toBe(true);
   });
 });
 
