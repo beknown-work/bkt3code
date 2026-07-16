@@ -40,3 +40,7 @@ newer commit. The last successfully deployed commit is recorded separately from 
 worktree HEAD, so pushes made directly from the server are still rebuilt and
 restarted after CI passes. Local commits that have not been pushed are never
 replaced by the deployment watcher.
+
+The root `.gitmodules` entry describes the nested gitlink already present in the
+vendored Alchemy reference. It lets GitHub Actions clean credentials safely without
+initializing or changing that vendored submodule.
