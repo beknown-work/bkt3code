@@ -1,0 +1,21 @@
+[Unit]
+Description=T3 Code (Beknown bkmain)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/repos/t3code-bkmain
+ExecStart=/home/ubuntu/repos/t3code-bkmain/deploy/bkt3/start.sh
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=130
+TimeoutStopSec=30
+KillMode=mixed
+UMask=0077
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
