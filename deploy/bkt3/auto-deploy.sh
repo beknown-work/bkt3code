@@ -21,7 +21,8 @@ if [[ "$DEPLOYED_SHA" == "$REMOTE_SHA" ]]; then
   exit 0
 fi
 
-if git -C "$REPO_DIR" merge-base --is-ancestor "$REMOTE_SHA" "$LOCAL_SHA"; then
+if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]] && \
+  git -C "$REPO_DIR" merge-base --is-ancestor "$REMOTE_SHA" "$LOCAL_SHA"; then
   echo "Local bkmain is ahead of origin/bkmain; automatic deployment deferred until it is pushed."
   exit 0
 fi

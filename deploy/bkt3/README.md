@@ -38,4 +38,5 @@ finished successfully. This avoids storing production SSH or Tailscale credentia
 in the public repository and prevents an older workflow run from deploying over a
 newer commit. The last successfully deployed commit is recorded separately from the
 worktree HEAD, so pushes made directly from the server are still rebuilt and
-restarted after CI passes.
+restarted after CI passes. Local commits that have not been pushed are never
+replaced by the deployment watcher.
