@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { normalizeDispatchCommand } from "./Normalizer.ts";
+import * as OrchestrationCommandDispatcher from "./dispatchCommand.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -15,15 +16,14 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
-import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
+    const commandDispatcher = yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const orchestrationEngine = yield* OrchestrationEngineService;
 
     return handlers
       .handle(
@@ -80,7 +80,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          return yield* orchestrationEngine
+          return yield* commandDispatcher
             .dispatch(normalizedCommand)
             .pipe(
               Effect.catch((cause) =>

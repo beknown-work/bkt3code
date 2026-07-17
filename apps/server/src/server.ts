@@ -83,6 +83,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -339,8 +340,12 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provide(NetService.layer),
 );
 
-const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
+const RuntimeBaseServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
+);
+const RuntimeServicesLive = Layer.mergeAll(
+  RuntimeBaseServicesLive,
+  OrchestrationCommandDispatcher.layer.pipe(Layer.provide(RuntimeBaseServicesLive)),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(

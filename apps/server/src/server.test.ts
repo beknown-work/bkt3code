@@ -77,6 +77,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -520,10 +521,11 @@ const buildAppUnderTest = (options?: {
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
 
-    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
+    const servedRoutesWithDispatcherLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
       disableLogger: true,
-    }).pipe(
+    }).pipe(Layer.provide(OrchestrationCommandDispatcher.layer));
+    const servedRoutesLayer = servedRoutesWithDispatcherLayer.pipe(
       Layer.provide(
         Layer.mock(Keybindings.Keybindings)({
           loadConfigState: Effect.succeed({
@@ -6092,7 +6094,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
-    "bootstraps first-send worktree turns on the server before dispatching turn start",
+    "bootstraps first-send worktree turns through the HTTP API before dispatching turn start",
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
@@ -6184,46 +6186,53 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         });
 
         const createdAt = "2026-01-01T00:00:00.000Z";
-        const wsUrl = yield* getWsServerUrl("/ws");
-        const response = yield* Effect.scoped(
-          withWsRpcClient(wsUrl, (client) =>
-            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
-              type: "thread.turn.start",
-              commandId: CommandId.make("cmd-bootstrap-turn-start"),
-              threadId: ThreadId.make("thread-bootstrap"),
-              message: {
-                messageId: MessageId.make("msg-bootstrap"),
-                role: "user",
-                text: "hello",
-                attachments: [],
-              },
+        const command: OrchestrationCommand = {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-bootstrap-turn-start"),
+          threadId: ThreadId.make("thread-bootstrap"),
+          message: {
+            messageId: MessageId.make("msg-bootstrap"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          modelSelection: defaultModelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          bootstrap: {
+            createThread: {
+              projectId: defaultProjectId,
+              title: "Bootstrap Thread",
               modelSelection: defaultModelSelection,
               runtimeMode: "full-access",
               interactionMode: "default",
-              bootstrap: {
-                createThread: {
-                  projectId: defaultProjectId,
-                  title: "Bootstrap Thread",
-                  modelSelection: defaultModelSelection,
-                  runtimeMode: "full-access",
-                  interactionMode: "default",
-                  branch: "main",
-                  worktreePath: null,
-                  createdAt,
-                },
-                prepareWorktree: {
-                  projectCwd: "/tmp/project",
-                  baseBranch: "main",
-                  branch: "t3code/bootstrap-refName",
-                  startFromOrigin: true,
-                },
-                runSetupScript: true,
-              },
+              branch: "main",
+              worktreePath: null,
               createdAt,
-            }),
-          ),
-        );
+            },
+            prepareWorktree: {
+              projectCwd: "/tmp/project",
+              baseBranch: "main",
+              branch: "t3code/bootstrap-refName",
+              startFromOrigin: true,
+            },
+            runSetupScript: true,
+          },
+          createdAt,
+        };
+        const bearerToken = yield* getAuthenticatedBearerSessionToken();
+        const url = yield* getHttpServerUrl("/api/orchestration/dispatch");
+        const httpResponse = yield* fetchEffect(url, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${bearerToken}`,
+            "content-type": "application/json",
+          },
+          body: jsonRequestBody(command),
+        });
+        const response = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
 
+        assert.equal(httpResponse.status, 200);
         assert.equal(response.sequence, 5);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
