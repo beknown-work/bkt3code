@@ -25,6 +25,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { makeProviderRegistryLayer } from "./provider/testUtils/providerRegistryMock.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import {
@@ -113,6 +114,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(OrchestrationCommandDispatcher.passthroughLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
+      Layer.provide(makeProviderRegistryLayer()),
     );
     const appLayer = HttpRouter.serve(routesLayer, {
       disableListenLog: true,

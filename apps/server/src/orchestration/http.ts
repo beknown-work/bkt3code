@@ -17,6 +17,7 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -24,6 +25,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const commandDispatcher = yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const providerRegistry = yield* ProviderRegistry;
 
     return handlers
       .handle(
@@ -52,6 +54,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 failEnvironmentInternal("orchestration_snapshot_failed", cause),
               ),
             );
+        }),
+      )
+      .handle(
+        "providers",
+        Effect.fn("environment.orchestration.providers")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* providerRegistry.getProviders;
         }),
       )
       .handle(

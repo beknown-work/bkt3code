@@ -1295,6 +1295,44 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves the authenticated orchestration provider catalog", () =>
+    Effect.gen(function* () {
+      const providers = [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          installed: true,
+          version: "1.0.0",
+          status: "ready" as const,
+          auth: { status: "authenticated" as const },
+          checkedAt: "2026-07-18T00:00:00.000Z",
+          models: [
+            {
+              slug: "gpt-5.4",
+              name: "GPT-5.4",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        },
+      ] as const;
+      yield* buildAppUnderTest({
+        layers: { providerRegistry: { getProviders: Effect.succeed(providers) } },
+      });
+
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/orchestration/providers"), {
+        headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+      });
+      const body = yield* responseJsonEffect<typeof providers>(response);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(body, providers);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("reports unauthenticated session state without requiring auth", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
