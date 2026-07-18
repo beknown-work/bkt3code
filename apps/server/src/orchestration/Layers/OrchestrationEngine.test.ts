@@ -127,6 +127,8 @@ describe("OrchestrationEngine", () => {
           createdAt: "2026-03-03T00:00:00.000Z",
           updatedAt: "2026-03-03T00:00:01.000Z",
           deletedAt: null,
+          ownerUserId: null,
+          memberUserIds: [],
         },
       ],
       threads: [
@@ -152,6 +154,8 @@ describe("OrchestrationEngine", () => {
           activities: [],
           checkpoints: [],
           session: null,
+          ownerUserId: null,
+          memberUserIds: [],
         },
       ],
     };
@@ -199,6 +203,7 @@ describe("OrchestrationEngine", () => {
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),
           getFullThreadDiffContext: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
+          listThreadShellsByProjectId: () => Effect.succeed([]),
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         }),

@@ -44,6 +44,10 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type AddThreadMemberInput = CommandInput<"thread.member.add">;
+export type RemoveThreadMemberInput = CommandInput<"thread.member.remove">;
+export type AddProjectMemberInput = CommandInput<"project.member.add">;
+export type RemoveProjectMemberInput = CommandInput<"project.member.remove">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -149,6 +153,46 @@ export const unarchiveThread: (input: UnarchiveThreadInput) => CommandEffect = E
   return yield* dispatch({
     ...input,
     type: "thread.unarchive",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const addThreadMember: (input: AddThreadMemberInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.addThreadMember",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.member.add",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const removeThreadMember: (input: RemoveThreadMemberInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.removeThreadMember",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.member.remove",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const addProjectMember: (input: AddProjectMemberInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.addProjectMember",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "project.member.add",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const removeProjectMember: (input: RemoveProjectMemberInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.removeProjectMember",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "project.member.remove",
     commandId: yield* commandId(input),
   });
 });

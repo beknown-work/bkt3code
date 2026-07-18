@@ -12,6 +12,7 @@ import {
   AuthAccessTokenResult,
   AuthBrowserSessionRequest,
   AuthBrowserSessionResult,
+  AuthClerkSessionRequest,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
   AuthPairingCredentialResult,
@@ -32,6 +33,7 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationUsersResult,
 } from "./orchestration.ts";
 import { ServerProviders } from "./server.ts";
 import {
@@ -269,6 +271,14 @@ const EnvironmentSessionCreationErrors = [
   EnvironmentAuthInvalidError,
   EnvironmentInternalError,
 ] as const;
+// Clerk sign-in exchange: a bad/expired token is `auth_invalid` (401); a valid
+// token for someone outside the configured org is `forbidden` (403) so the SPA
+// can show "not a member — try a different account" distinctly from a retry.
+const EnvironmentClerkSessionErrors = [
+  EnvironmentAuthInvalidError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentTokenExchangeErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentAuthInvalidError,
@@ -394,6 +404,13 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }),
   )
   .add(
+    HttpApiEndpoint.post("clerkSession", "/api/auth/clerk-session", {
+      payload: AuthClerkSessionRequest,
+      success: AuthBrowserSessionResult,
+      error: EnvironmentClerkSessionErrors,
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("token", "/oauth/token", {
       headers: OptionalDpopProofHeaders,
       payload: AuthTokenExchangeRequest,
@@ -477,6 +494,13 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("providers", "/api/orchestration/providers", {
       headers: OptionalBearerHeaders,
       success: ServerProviders,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("users", "/api/orchestration/users", {
+      headers: OptionalBearerHeaders,
+      success: OrchestrationUsersResult,
       error: EnvironmentOrchestrationSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

@@ -72,6 +72,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import { ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
@@ -90,6 +91,7 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -351,9 +353,14 @@ const RuntimeServicesLive = Layer.mergeAll(
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(authHttpApiLayer),
+      Layer.provide(authHttpApiLayer.pipe(Layer.provide(ClerkDirectoryLive))),
       Layer.provide(connectHttpApiLayer),
-      Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(
+        orchestrationHttpApiLayer.pipe(
+          Layer.provide(ClerkDirectoryLive),
+          Layer.provide(OrchestrationAccessControlLive),
+        ),
+      ),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),

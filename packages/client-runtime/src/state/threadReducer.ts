@@ -69,6 +69,8 @@ export function applyThreadDetailEvent(
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
+          ownerUserId: event.payload.createdByUserId ?? null,
+          memberUserIds: [],
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
@@ -117,6 +119,34 @@ export function applyThreadDetailEvent(
           updatedAt: event.payload.updatedAt,
         },
       };
+
+    case "thread.member-added":
+      return thread.memberUserIds.includes(event.payload.userId)
+        ? { kind: "unchanged" }
+        : {
+            kind: "updated",
+            thread: {
+              ...thread,
+              memberUserIds: [...thread.memberUserIds, event.payload.userId],
+              updatedAt: event.payload.addedAt,
+            },
+          };
+
+    case "thread.member-removed":
+      return thread.memberUserIds.includes(event.payload.userId)
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              memberUserIds: thread.memberUserIds.filter((id) => id !== event.payload.userId),
+              updatedAt: event.payload.removedAt,
+            },
+          }
+        : { kind: "unchanged" };
+
+    case "project.member-added":
+    case "project.member-removed":
+      return { kind: "unchanged" };
 
     case "thread.runtime-mode-set":
       return {

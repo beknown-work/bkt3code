@@ -36,6 +36,7 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
+  type UserId,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchEntriesError,
@@ -68,6 +69,10 @@ import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationAccessControl } from "./orchestration/Services/AccessControl.ts";
+import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
+import { filterShellSnapshot, isOwnerOrMember } from "./orchestration/accessRules.ts";
+import { checkCommandAccess } from "./orchestration/commandAccess.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -111,6 +116,8 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isOrchestrationGetTurnDiffError = Schema.is(OrchestrationGetTurnDiffError);
+const isOrchestrationGetFullThreadDiffError = Schema.is(OrchestrationGetFullThreadDiffError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -231,7 +238,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "thread.member-added"
+      | "thread.member-removed";
   }
 > {
   return (
@@ -240,7 +249,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.member-added" ||
+    event.type === "thread.member-removed"
   );
 }
 
@@ -368,6 +379,52 @@ const makeWsRpcLayer = (
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const orchestrationCommandDispatcher =
         yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
+      const accessControl = yield* OrchestrationAccessControl;
+      // The operating Clerk user for this connection, or null for an
+      // unrestricted operator (pairing/CLI/single-user) which skips filtering.
+      const actorUserId = Option.getOrNull(accessControl.actorFor(currentSession.subject));
+      // The set of thread/project ids the operator may see (active + archived),
+      // derived from the filtered shell snapshots. Used to filter raw event
+      // replays.
+      const visibleAggregateIdsForActor = (userId: UserId) =>
+        Effect.all([
+          projectionSnapshotQuery.getShellSnapshot(),
+          projectionSnapshotQuery.getArchivedShellSnapshot(),
+        ]).pipe(
+          Effect.map(([activeSnapshot, archivedSnapshot]) => {
+            const active = filterShellSnapshot(activeSnapshot, userId);
+            const archived = filterShellSnapshot(archivedSnapshot, userId);
+            const threadIds = new Set<string>([
+              ...active.threads.map((thread) => thread.id),
+              ...archived.threads.map((thread) => thread.id),
+            ]);
+            const projectIds = new Set<string>([
+              ...active.projects.map((project) => project.id),
+              ...archived.projects.map((project) => project.id),
+            ]);
+            return { threadIds, projectIds };
+          }),
+        );
+      // Guard a per-thread read; denials read as "not found" (no existence leak)
+      // and are re-wrapped into each caller's error type.
+      const requireThreadAccess = (
+        threadId: ThreadId,
+      ): Effect.Effect<void, OrchestrationGetSnapshotError> =>
+        actorUserId === null
+          ? Effect.void
+          : accessControl.canAccessThread(actorUserId, threadId).pipe(
+              Effect.orElseSucceed(() => false),
+              Effect.flatMap((allowed) =>
+                allowed
+                  ? Effect.void
+                  : Effect.fail(
+                      new OrchestrationGetSnapshotError({
+                        message: `Thread ${threadId} was not found`,
+                        cause: threadId,
+                      }),
+                    ),
+              ),
+            );
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -531,6 +588,8 @@ const makeWsRpcLayer = (
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
+          case "project.member-added":
+          case "project.member-removed":
             return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
                 Option.map(project, (nextProject) => ({
@@ -588,8 +647,135 @@ const makeWsRpcLayer = (
         }
       };
 
+      // Team mode: transform a global shell delta into what the operating user
+      // may see. A thread/project that becomes visible (e.g. the user is tagged)
+      // is forwarded as an upsert — for a project tag we also emit upserts for
+      // all of the project's now-visible threads. A thread/project that is no
+      // longer visible (untagged) is converted to a removal so it disappears
+      // live from the sidebar. Removals pass through unchanged.
+      const shellEventsForActor = (
+        event: OrchestrationShellStreamEvent,
+        userId: UserId,
+      ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamEvent>, never, never> => {
+        switch (event.kind) {
+          case "thread-removed":
+          case "project-removed":
+            return Effect.succeed([event]);
+          case "thread-upserted": {
+            const thread = event.thread;
+            if (isOwnerOrMember(thread, userId)) {
+              return Effect.succeed([event]);
+            }
+            return projectionSnapshotQuery.getProjectShellById(thread.projectId).pipe(
+              Effect.map((projectOption) => {
+                const project = Option.getOrNull(projectOption);
+                if (project !== null && isOwnerOrMember(project, userId)) {
+                  // Ensure the container project is present, then the thread.
+                  return [
+                    { kind: "project-upserted" as const, sequence: event.sequence, project },
+                    event,
+                  ];
+                }
+                return [
+                  {
+                    kind: "thread-removed" as const,
+                    sequence: event.sequence,
+                    threadId: thread.id,
+                  },
+                ];
+              }),
+              Effect.orElseSucceed(() => [
+                {
+                  kind: "thread-removed" as const,
+                  sequence: event.sequence,
+                  threadId: thread.id,
+                },
+              ]),
+            );
+          }
+          case "project-upserted": {
+            const project = event.project;
+            const directlyVisible = isOwnerOrMember(project, userId);
+            return projectionSnapshotQuery.listThreadShellsByProjectId(project.id).pipe(
+              Effect.map((threads) => {
+                const visibleThreads = threads.filter(
+                  (thread) => directlyVisible || isOwnerOrMember(thread, userId),
+                );
+                if (directlyVisible || visibleThreads.length > 0) {
+                  return [
+                    event,
+                    ...visibleThreads.map((thread) => ({
+                      kind: "thread-upserted" as const,
+                      sequence: event.sequence,
+                      thread,
+                    })),
+                  ];
+                }
+                return [
+                  {
+                    kind: "project-removed" as const,
+                    sequence: event.sequence,
+                    projectId: project.id,
+                  },
+                ];
+              }),
+              Effect.orElseSucceed(() =>
+                directlyVisible
+                  ? [event]
+                  : [
+                      {
+                        kind: "project-removed" as const,
+                        sequence: event.sequence,
+                        projectId: project.id,
+                      },
+                    ],
+              ),
+            );
+          }
+        }
+      };
+
+      // Wrap a shell-event stream with per-user visibility (no-op for an
+      // unrestricted operator).
+      const applyShellVisibility = <E, R>(
+        stream: Stream.Stream<OrchestrationShellStreamEvent, E, R>,
+      ): Stream.Stream<OrchestrationShellStreamEvent, E, R> =>
+        actorUserId === null
+          ? stream
+          : stream.pipe(
+              Stream.mapEffect((event) => shellEventsForActor(event, actorUserId)),
+              Stream.flatMap((events) => Stream.fromIterable(events)),
+            );
+
       const dispatchNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
-        orchestrationCommandDispatcher.dispatch(normalizedCommand);
+        Effect.gen(function* () {
+          // Team mode: reject commands on threads/projects this operator can't
+          // access before they reach the engine; the actor is stamped onto the
+          // resulting events and any thread it creates.
+          if (actorUserId !== null) {
+            const allowed = yield* checkCommandAccess(
+              accessControl,
+              actorUserId,
+              normalizedCommand,
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationDispatchCommandError({
+                    message: "Failed to authorize orchestration command",
+                    cause,
+                  }),
+              ),
+            );
+            if (!allowed) {
+              // Reads as "not found" — no existence leak.
+              return yield* new OrchestrationDispatchCommandError({
+                message: "Thread or project not found.",
+                cause: normalizedCommand.type,
+              });
+            }
+          }
+          return yield* orchestrationCommandDispatcher.dispatch(normalizedCommand, { actorUserId });
+        });
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -697,13 +883,17 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getTurnDiff,
-            checkpointDiffQuery.getTurnDiff(input).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationGetTurnDiffError({
-                    message: "Failed to load turn diff",
-                    cause,
-                  }),
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId);
+              return yield* checkpointDiffQuery.getTurnDiff(input);
+            }).pipe(
+              Effect.mapError((cause) =>
+                isOrchestrationGetTurnDiffError(cause)
+                  ? cause
+                  : new OrchestrationGetTurnDiffError({
+                      message: "Failed to load turn diff",
+                      cause,
+                    }),
               ),
             ),
             { "rpc.aggregate": "orchestration" },
@@ -711,13 +901,17 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getFullThreadDiff,
-            checkpointDiffQuery.getFullThreadDiff(input).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationGetFullThreadDiffError({
-                    message: "Failed to load full thread diff",
-                    cause,
-                  }),
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId);
+              return yield* checkpointDiffQuery.getFullThreadDiff(input);
+            }).pipe(
+              Effect.mapError((cause) =>
+                isOrchestrationGetFullThreadDiffError(cause)
+                  ? cause
+                  : new OrchestrationGetFullThreadDiffError({
+                      message: "Failed to load full thread diff",
+                      cause,
+                    }),
               ),
             ),
             { "rpc.aggregate": "orchestration" },
@@ -735,6 +929,21 @@ const makeWsRpcLayer = (
             ).pipe(
               Effect.map((events) => Array.from(events)),
               Effect.flatMap(enrichOrchestrationEvents),
+              // Team mode: drop events for threads/projects the operator can't
+              // see so a raw replay never leaks other users' work.
+              Effect.flatMap((events) =>
+                actorUserId === null
+                  ? Effect.succeed(events)
+                  : visibleAggregateIdsForActor(actorUserId).pipe(
+                      Effect.map(({ threadIds, projectIds }) =>
+                        events.filter((event) =>
+                          event.aggregateKind === "thread"
+                            ? threadIds.has(event.aggregateId)
+                            : projectIds.has(event.aggregateId),
+                        ),
+                      ),
+                    ),
+              ),
               Effect.mapError(
                 (cause) =>
                   new OrchestrationReplayEventsError({
@@ -749,10 +958,12 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.mapEffect(toShellStreamEvent),
-                Stream.flatMap((event) =>
-                  Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
+              const liveStream = applyShellVisibility(
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.mapEffect(toShellStreamEvent),
+                  Stream.flatMap((event) =>
+                    Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
+                  ),
                 ),
               );
 
@@ -773,9 +984,8 @@ const makeWsRpcLayer = (
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
-                    const catchUpStream = orchestrationEngine
-                      .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
-                      .pipe(
+                    const catchUpStream = applyShellVisibility(
+                      orchestrationEngine.readEvents(afterSequence, Number.MAX_SAFE_INTEGER).pipe(
                         Stream.mapEffect(toShellStreamEvent),
                         Stream.flatMap((event) =>
                           Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
@@ -787,7 +997,8 @@ const makeWsRpcLayer = (
                               cause,
                             }),
                         ),
-                      );
+                      ),
+                    );
                     return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
                   }),
                 );
@@ -809,7 +1020,8 @@ const makeWsRpcLayer = (
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
-                  snapshot,
+                  snapshot:
+                    actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId),
                 }),
                 liveStream,
               );
@@ -820,6 +1032,9 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
             projectionSnapshotQuery.getArchivedShellSnapshot().pipe(
+              Effect.map((snapshot) =>
+                actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId),
+              ),
               Effect.tapError((cause) =>
                 Effect.logError("orchestration archived shell snapshot load failed", { cause }),
               ),
@@ -837,10 +1052,40 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              // Team mode: reject a thread the operator can't access (as
+              // not-found — no existence leak).
+              if (actorUserId !== null) {
+                const accessible = yield* accessControl
+                  .canAccessThread(actorUserId, input.threadId)
+                  .pipe(Effect.orElseSucceed(() => false));
+                if (!accessible) {
+                  return yield* new OrchestrationGetSnapshotError({
+                    message: `Thread ${input.threadId} was not found`,
+                    cause: input.threadId,
+                  });
+                }
+              }
+
               const isThisThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
                 isThreadDetailEvent(event);
+
+              // Close the stream once the operator is untagged from this thread
+              // so an open viewer who loses access is kicked out live.
+              const takeUntilSelfRemoved = <E, R>(
+                stream: Stream.Stream<OrchestrationThreadStreamItem, E, R>,
+              ): Stream.Stream<OrchestrationThreadStreamItem, E, R> =>
+                actorUserId === null
+                  ? stream
+                  : stream.pipe(
+                      Stream.takeUntil(
+                        (item) =>
+                          item.kind === "event" &&
+                          item.event.type === "thread.member-removed" &&
+                          item.event.payload.userId === actorUserId,
+                      ),
+                    );
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.filter(isThisThreadDetailEvent),
@@ -888,7 +1133,9 @@ const makeWsRpcLayer = (
                             }),
                         ),
                       );
-                    return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
+                    return takeUntilSelfRemoved(
+                      Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer)),
+                    );
                   }),
                 );
               }
@@ -912,12 +1159,14 @@ const makeWsRpcLayer = (
                 });
               }
 
-              return Stream.concat(
-                Stream.make({
-                  kind: "snapshot" as const,
-                  snapshot: snapshot.value,
-                }),
-                liveStream,
+              return takeUntilSelfRemoved(
+                Stream.concat(
+                  Stream.make({
+                    kind: "snapshot" as const,
+                    snapshot: snapshot.value,
+                  }),
+                  liveStream,
+                ),
               );
             }),
             { "rpc.aggregate": "orchestration" },
@@ -1567,6 +1816,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(OrchestrationAccessControlLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

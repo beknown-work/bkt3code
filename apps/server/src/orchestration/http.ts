@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -17,6 +18,10 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationAccessControl } from "./Services/AccessControl.ts";
+import { filterReadModel, filterShellSnapshot } from "./accessRules.ts";
+import { checkCommandAccess } from "./commandAccess.ts";
+import { ClerkDirectory } from "../auth/ClerkDirectory.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -25,7 +30,16 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const commandDispatcher = yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const accessControl = yield* OrchestrationAccessControl;
+    const clerkDirectory = yield* ClerkDirectory;
     const providerRegistry = yield* ProviderRegistry;
+
+    // Resolve the operating Clerk user for the current request, or null for an
+    // unrestricted operator (pairing/CLI/single-user) which skips all filtering.
+    const currentActorUserId = Effect.gen(function* () {
+      const principal = yield* EnvironmentAuthenticatedPrincipal;
+      return Option.getOrNull(accessControl.actorFor(principal.subject));
+    });
 
     return handlers
       .handle(
@@ -33,13 +47,15 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.snapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* projectionSnapshotQuery
+          const actorUserId = yield* currentActorUserId;
+          const snapshot = yield* projectionSnapshotQuery
             .getSnapshot()
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_snapshot_failed", cause),
               ),
             );
+          return actorUserId === null ? snapshot : filterReadModel(snapshot, actorUserId);
         }),
       )
       .handle(
@@ -47,13 +63,15 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* projectionSnapshotQuery
+          const actorUserId = yield* currentActorUserId;
+          const snapshot = yield* projectionSnapshotQuery
             .getShellSnapshot()
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_snapshot_failed", cause),
               ),
             );
+          return actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId);
         }),
       )
       .handle(
@@ -65,10 +83,37 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "users",
+        Effect.fn("environment.orchestration.users")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          // Backs the tagging UI. Serves a stale cache on a Clerk outage, and
+          // an empty list in single-user mode (Clerk disabled).
+          const users = yield* clerkDirectory
+            .listOrgMembers()
+            .pipe(Effect.catch(() => Effect.succeed([])));
+          return { users };
+        }),
+      )
+      .handle(
         "threadSnapshot",
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const actorUserId = yield* currentActorUserId;
+          // Deny inaccessible threads as "not found" (no existence leak).
+          if (actorUserId !== null) {
+            const accessible = yield* accessControl
+              .canAccessThread(actorUserId, args.params.threadId)
+              .pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+                ),
+              );
+            if (!accessible) {
+              return yield* failEnvironmentNotFound("thread_not_found");
+            }
+          }
           const snapshot = yield* projectionSnapshotQuery
             .getThreadDetailSnapshot(args.params.threadId)
             .pipe(
@@ -87,11 +132,28 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const actorUserId = yield* currentActorUserId;
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
+          // Team mode: reject commands on threads/projects the operator can't
+          // access. Reads as "invalid_command" so we don't leak existence.
+          if (actorUserId !== null) {
+            const allowed = yield* checkCommandAccess(
+              accessControl,
+              actorUserId,
+              normalizedCommand,
+            ).pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
+            if (!allowed) {
+              return yield* failEnvironmentInvalidRequest("invalid_command");
+            }
+          }
           return yield* commandDispatcher
-            .dispatch(normalizedCommand)
+            .dispatch(normalizedCommand, { actorUserId })
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_dispatch_failed", cause),

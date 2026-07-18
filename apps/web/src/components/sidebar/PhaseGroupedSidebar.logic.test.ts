@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  UserId,
   type OrchestrationSession,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -17,6 +18,7 @@ import {
   buildPhaseSidebarGroups,
   buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
+  isThreadAssignedToUser,
   matchesPhaseSidebarFilters,
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarPhase,
@@ -50,6 +52,8 @@ function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
     id: threadId,
     environmentId,
     projectId,
+    ownerUserId: null,
+    memberUserIds: [],
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -78,6 +82,7 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     repositoryLabel: "repo-one",
     providerKind: "codex",
     providerName: "Codex",
+    isAssignedToMe: false,
     ...overrides,
   };
 }
@@ -193,6 +198,8 @@ describe("phase sidebar metadata and filters", () => {
     const baseProject: Project = {
       id: projectId,
       environmentId,
+      ownerUserId: null,
+      memberUserIds: [],
       title: "repo",
       workspaceRoot: "/tmp/repo",
       repositoryIdentity: {
@@ -236,6 +243,8 @@ describe("phase sidebar metadata and filters", () => {
       {
         id: ProjectId.make("project-a"),
         environmentId: EnvironmentId.make("env-a"),
+        ownerUserId: null,
+        memberUserIds: [],
         title: "Frontend",
         workspaceRoot: "/work/repo",
         repositoryIdentity,
@@ -247,6 +256,8 @@ describe("phase sidebar metadata and filters", () => {
       {
         id: ProjectId.make("project-b"),
         environmentId: EnvironmentId.make("env-b"),
+        ownerUserId: null,
+        memberUserIds: [],
         title: "Backend",
         workspaceRoot: "/srv/repo",
         repositoryIdentity,
@@ -280,6 +291,7 @@ describe("phase sidebar metadata and filters", () => {
         repositoryKeys: ["repo-2", "repo-1"],
         phaseIds: ["ready", "failed"],
         providerKinds: ["codex"],
+        assignedToMe: false,
       }),
     ).toBe(true);
     expect(
@@ -287,12 +299,13 @@ describe("phase sidebar metadata and filters", () => {
         repositoryKeys: ["repo-1"],
         phaseIds: ["ready"],
         providerKinds: ["opencode"],
+        assignedToMe: false,
       }),
     ).toBe(false);
     expect(
       buildPhaseSidebarGroups(
         [row],
-        { repositoryKeys: ["missing"], phaseIds: [], providerKinds: [] },
+        { repositoryKeys: ["missing"], phaseIds: [], providerKinds: [], assignedToMe: false },
         "updated_at",
       ),
     ).toEqual([]);
@@ -305,6 +318,7 @@ describe("phase sidebar metadata and filters", () => {
           repositoryKeys: ["repo-1"],
           phaseIds: ["plan_ready"],
           providerKinds: ["codex"],
+          assignedToMe: false,
         },
         {
           repositories: new Map([["repo-1", "T3 Code"]]),
@@ -326,7 +340,12 @@ describe("phase sidebar metadata and filters", () => {
         phaseIds: ["ready", "unknown"],
         providerKinds: "codex",
       }),
-    ).toEqual({ repositoryKeys: ["repo-1"], phaseIds: ["ready"], providerKinds: [] });
+    ).toEqual({
+      repositoryKeys: ["repo-1"],
+      phaseIds: ["ready"],
+      providerKinds: [],
+      assignedToMe: false,
+    });
 
     expect(
       reconcilePhaseSidebarFilters(
@@ -334,13 +353,76 @@ describe("phase sidebar metadata and filters", () => {
           repositoryKeys: ["repo-1", "stale-repo"],
           phaseIds: ["ready"],
           providerKinds: ["codex", "stale-provider"],
+          assignedToMe: false,
         },
         {
           repositoryKeys: new Set(["repo-1"]),
           providerKinds: new Set(["codex"]),
+          assignmentAvailable: true,
         },
       ),
-    ).toEqual({ repositoryKeys: ["repo-1"], phaseIds: ["ready"], providerKinds: ["codex"] });
+    ).toEqual({
+      repositoryKeys: ["repo-1"],
+      phaseIds: ["ready"],
+      providerKinds: ["codex"],
+      assignedToMe: false,
+    });
+  });
+
+  it("treats the owner and directly tagged members as assigned and everyone else as not", () => {
+    const owner = UserId.make("user_owner");
+    const member = UserId.make("user_member");
+    const stranger = UserId.make("user_stranger");
+    const thread = makeThread({ ownerUserId: owner, memberUserIds: [member] });
+
+    expect(isThreadAssignedToUser(thread, owner)).toBe(true);
+    expect(isThreadAssignedToUser(thread, member)).toBe(true);
+    expect(isThreadAssignedToUser(thread, stranger)).toBe(false);
+    expect(
+      isThreadAssignedToUser(makeThread({ ownerUserId: null, memberUserIds: [] }), owner),
+    ).toBe(false);
+  });
+
+  it("keeps only assigned rows when assignedToMe is on and all rows when off", () => {
+    const assignedRow = makeRow({ isAssignedToMe: true });
+    const unassignedRow = makeRow({ isAssignedToMe: false });
+    const assignedFilters = { ...EMPTY_PHASE_SIDEBAR_FILTERS, assignedToMe: true };
+
+    expect(matchesPhaseSidebarFilters(assignedRow, assignedFilters)).toBe(true);
+    expect(matchesPhaseSidebarFilters(unassignedRow, assignedFilters)).toBe(false);
+    expect(matchesPhaseSidebarFilters(assignedRow, EMPTY_PHASE_SIDEBAR_FILTERS)).toBe(true);
+    expect(matchesPhaseSidebarFilters(unassignedRow, EMPTY_PHASE_SIDEBAR_FILTERS)).toBe(true);
+  });
+
+  it("defaults assignedToMe to false when missing and reads it when present", () => {
+    expect(
+      sanitizePhaseSidebarFilters({
+        repositoryKeys: [],
+        phaseIds: [],
+        providerKinds: [],
+      }).assignedToMe,
+    ).toBe(false);
+    expect(
+      sanitizePhaseSidebarFilters({
+        repositoryKeys: [],
+        phaseIds: [],
+        providerKinds: [],
+        assignedToMe: true,
+      }).assignedToMe,
+    ).toBe(true);
+  });
+
+  it("forces assignedToMe off when assignment is unavailable and preserves it otherwise", () => {
+    const filters = { ...EMPTY_PHASE_SIDEBAR_FILTERS, assignedToMe: true };
+    const options = { repositoryKeys: new Set<string>(), providerKinds: new Set<string>() };
+
+    expect(
+      reconcilePhaseSidebarFilters(filters, { ...options, assignmentAvailable: false })
+        .assignedToMe,
+    ).toBe(false);
+    expect(
+      reconcilePhaseSidebarFilters(filters, { ...options, assignmentAvailable: true }).assignedToMe,
+    ).toBe(true);
   });
 
   it("traverses only visible filtered rows and starts at an edge when the active row is hidden", () => {

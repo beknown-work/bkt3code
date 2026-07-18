@@ -261,6 +261,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       scripts: [],
       createdAt: editingPendingTask.createdAt,
       updatedAt: editingPendingTask.createdAt,
+      ownerUserId: null,
+      memberUserIds: [],
     };
   }, [editingPendingTask]);
 

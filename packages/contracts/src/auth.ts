@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
 
 /**
  * Declares the server's overall authentication posture.
@@ -46,8 +46,15 @@ export type ServerAuthPolicy = typeof ServerAuthPolicy.Type;
  *   shell can pair the renderer without a login screen
  * - `one-time-token`: a short-lived pairing token, suitable for manual pairing
  *   flows such as `/pair?token=...`
+ * - `clerk-session`: the environment expects the operator to sign in with Clerk
+ *   (team mode); the browser exchanges a Clerk session token for a browser
+ *   session cookie via `POST /api/auth/clerk-session`
  */
-export const ServerAuthBootstrapMethod = Schema.Literals(["desktop-bootstrap", "one-time-token"]);
+export const ServerAuthBootstrapMethod = Schema.Literals([
+  "desktop-bootstrap",
+  "one-time-token",
+  "clerk-session",
+]);
 export type ServerAuthBootstrapMethod = typeof ServerAuthBootstrapMethod.Type;
 
 /**
@@ -135,13 +142,47 @@ export const AuthEnvironmentBootstrapTokenType =
  * the right UX without embedding server-specific auth logic or assuming a
  * single access method.
  */
+/**
+ * Runtime hint that lets the SPA detect team mode and configure its Clerk
+ * sign-in surface without any build-time coupling. Present only when the server
+ * is configured with a Clerk secret (team mode); absent for single-user
+ * desktop/local deployments.
+ */
+export const ServerAuthClerkDescriptor = Schema.Struct({
+  publishableKey: TrimmedNonEmptyString,
+  organizationId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ServerAuthClerkDescriptor = typeof ServerAuthClerkDescriptor.Type;
+
 export const ServerAuthDescriptor = Schema.Struct({
   policy: ServerAuthPolicy,
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
+  clerk: Schema.optionalKey(ServerAuthClerkDescriptor),
 });
 export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
+
+export const AuthClerkSessionRequest = Schema.Struct({
+  token: TrimmedNonEmptyString,
+});
+export type AuthClerkSessionRequest = typeof AuthClerkSessionRequest.Type;
+
+/** Subject-string encoding for a Clerk-authenticated operator. */
+const CLERK_SUBJECT_PREFIX = "clerk:";
+
+export const clerkSubjectForUser = (userId: UserId): string => `${CLERK_SUBJECT_PREFIX}${userId}`;
+
+/**
+ * Decode a session subject back into a Clerk `UserId`, or `null` when the
+ * subject is not a Clerk operator (pairing, CLI, desktop bootstrap ⇒
+ * unrestricted local mode).
+ */
+export const userIdFromSubject = (subject: string): UserId | null => {
+  if (!subject.startsWith(CLERK_SUBJECT_PREFIX)) return null;
+  const raw = subject.slice(CLERK_SUBJECT_PREFIX.length).trim();
+  return raw.length > 0 ? (raw as UserId) : null;
+};
 
 export const AuthBrowserSessionRequest = Schema.Struct({
   credential: TrimmedNonEmptyString,

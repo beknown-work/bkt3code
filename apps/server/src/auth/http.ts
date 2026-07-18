@@ -11,6 +11,7 @@ import {
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
   EnvironmentHttpApi,
+  EnvironmentHttpForbiddenError,
   EnvironmentInternalError,
   type EnvironmentInternalErrorReason,
   EnvironmentOperationForbiddenError,
@@ -35,6 +36,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { ClerkDirectory } from "./ClerkDirectory.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
@@ -203,6 +205,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const clerkDirectory = yield* ClerkDirectory;
 
     return handlers
       .handle(
@@ -245,6 +248,50 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
+          ),
+          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+            failEnvironmentInternal("browser_session_issuance_failed", error),
+          ),
+        ),
+      )
+      .handle(
+        "clerkSession",
+        Effect.fn("environment.auth.clerkSession")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            // Verify the Clerk token and hard-gate on org membership before
+            // minting a browser-session cookie bound to "clerk:<userId>".
+            const verified = yield* clerkDirectory.verifySessionToken(args.payload.token);
+            const result = yield* serverAuth.createClerkBrowserSession(
+              { subject: verified.subject },
+              deriveAuthClientMetadata({ request }),
+            );
+            const sessionCookies = yield* Effect.fromResult(
+              Cookies.set(Cookies.empty, sessions.cookieName, result.sessionToken, {
+                expires: DateTime.toDate(result.response.expiresAt),
+                httpOnly: true,
+                path: "/",
+                sameSite: "lax",
+              }),
+            ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
+
+            yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+              Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
+            );
+            yield* appendCredentialResponseHeaders;
+            return result.response;
+          },
+          // A valid token for a non-member (or Clerk disabled) is forbidden;
+          // a bad/expired token is auth_invalid.
+          Effect.catchTag(
+            "ClerkAuthError",
+            (
+              error,
+            ): Effect.Effect<never, EnvironmentAuthInvalidError | EnvironmentHttpForbiddenError> =>
+              error.reason === "invalid_token"
+                ? failEnvironmentAuthInvalid("invalid_credential")
+                : Effect.fail(new EnvironmentHttpForbiddenError({ message: error.message })),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("browser_session_issuance_failed", error),

@@ -3,10 +3,12 @@ import { Atom } from "effect/unstable/reactivity";
 
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 import {
+  type AddThreadMemberInput,
   type ArchiveThreadInput,
   type CreateThreadInput,
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
+  type RemoveThreadMemberInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
   type RevertThreadCheckpointInput,
@@ -16,10 +18,12 @@ import {
   type StopThreadSessionInput,
   type UnarchiveThreadInput,
   type UpdateThreadMetadataInput,
+  addThreadMember,
   archiveThread,
   createThread,
   deleteThread,
   interruptThreadTurn,
+  removeThreadMember,
   respondToThreadApproval,
   respondToThreadUserInput,
   revertThreadCheckpoint,
@@ -33,10 +37,12 @@ import {
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
+  AddThreadMemberInput,
   ArchiveThreadInput,
   CreateThreadInput,
   DeleteThreadInput,
   InterruptThreadTurnInput,
+  RemoveThreadMemberInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
@@ -133,6 +139,18 @@ export function createThreadEnvironmentAtoms<R, E>(
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
+      scheduler,
+      concurrency,
+    }),
+    addMember: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:add-member",
+      execute: (input: AddThreadMemberInput) => addThreadMember(input),
+      scheduler,
+      concurrency,
+    }),
+    removeMember: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:remove-member",
+      execute: (input: RemoveThreadMemberInput) => removeThreadMember(input),
       scheduler,
       concurrency,
     }),

@@ -152,6 +152,8 @@ export function buildHomeThreadGroups(input: {
             scripts: [],
             createdAt: pendingTask.message.createdAt,
             updatedAt: pendingTask.message.createdAt,
+            ownerUserId: null,
+            memberUserIds: [],
           },
         ],
         pendingTasks: [],

@@ -441,6 +441,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.170
         version: 0.3.170(@anthropic-ai/sdk@0.93.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      '@clerk/backend':
+        specifier: 3.11.2
+        version: 3.11.2(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@effect/platform-bun':
         specifier: 4.0.0-beta.78
         version: 4.0.0-beta.78(bufferutil@4.1.0)(effect@4.0.0-beta.78(patch_hash=c502bc684210b707dfceb87d8fe6ad6843395af6e19cfc02cd65854898bde2c5))(utf-8-validate@6.0.6)

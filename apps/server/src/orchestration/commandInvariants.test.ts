@@ -37,6 +37,8 @@ const readModel: OrchestrationReadModel = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
     {
       id: ProjectId.make("project-b"),
@@ -50,6 +52,8 @@ const readModel: OrchestrationReadModel = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
   ],
   threads: [
@@ -75,6 +79,8 @@ const readModel: OrchestrationReadModel = {
       proposedPlans: [],
       checkpoints: [],
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
     {
       id: ThreadId.make("thread-2"),
@@ -98,6 +104,8 @@ const readModel: OrchestrationReadModel = {
       proposedPlans: [],
       checkpoints: [],
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
   ],
 };

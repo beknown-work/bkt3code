@@ -56,6 +56,7 @@ describe("phase sidebar filter store", () => {
     usePhaseSidebarFilterStore.getState().reconcile({
       repositoryKeys: new Set(["repo-1"]),
       providerKinds: new Set(["codex"]),
+      assignmentAvailable: true,
     });
     expect(usePhaseSidebarFilterStore.getState()).toMatchObject({
       repositoryKeys: ["repo-1"],

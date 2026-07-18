@@ -1,4 +1,5 @@
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type { UserId } from "@t3tools/contracts";
 
 import { deriveLogicalProjectKey } from "../../logicalProject";
 import { isLatestTurnSettled } from "../../session-logic";
@@ -39,13 +40,26 @@ export interface PhaseSidebarFilters {
   readonly repositoryKeys: ReadonlyArray<string>;
   readonly phaseIds: ReadonlyArray<PhaseSidebarPhaseId>;
   readonly providerKinds: ReadonlyArray<string>;
+  readonly assignedToMe: boolean;
 }
 
 export const EMPTY_PHASE_SIDEBAR_FILTERS: PhaseSidebarFilters = {
   repositoryKeys: [],
   phaseIds: [],
   providerKinds: [],
+  assignedToMe: false,
 };
+
+/**
+ * "Assigned to me" = owned by, or directly tagged on, the thread. A thread made
+ * visible only by a project tag is not "assigned" (matches the server rule).
+ */
+export function isThreadAssignedToUser(
+  thread: Pick<ThreadShell, "ownerUserId" | "memberUserIds">,
+  userId: UserId,
+): boolean {
+  return thread.ownerUserId === userId || thread.memberUserIds.includes(userId);
+}
 
 export interface PhaseSidebarRow {
   readonly thread: ThreadShell;
@@ -54,6 +68,7 @@ export interface PhaseSidebarRow {
   readonly repositoryLabel: string;
   readonly providerKind: string;
   readonly providerName: string;
+  readonly isAssignedToMe: boolean;
 }
 
 export interface PhaseSidebarRepositoryOption {
@@ -68,7 +83,7 @@ export interface PhaseSidebarGroup extends PhaseSidebarPhaseDefinition {
 }
 
 export interface PhaseSidebarFilterChip {
-  readonly facet: "repository" | "phase" | "provider";
+  readonly facet: "repository" | "phase" | "provider" | "assignment";
   readonly value: string;
   readonly label: string;
 }
@@ -179,7 +194,8 @@ export function matchesPhaseSidebarFilters(
   return (
     (filters.repositoryKeys.length === 0 || filters.repositoryKeys.includes(row.repositoryKey)) &&
     (filters.phaseIds.length === 0 || filters.phaseIds.includes(row.phaseId)) &&
-    (filters.providerKinds.length === 0 || filters.providerKinds.includes(row.providerKind))
+    (filters.providerKinds.length === 0 || filters.providerKinds.includes(row.providerKind)) &&
+    (!filters.assignedToMe || row.isAssignedToMe)
   );
 }
 
@@ -229,6 +245,8 @@ export function sanitizePhaseSidebarFilters(value: unknown): PhaseSidebarFilters
       (phaseId): phaseId is PhaseSidebarPhaseId => PHASE_ID_SET.has(phaseId),
     ),
     providerKinds: sanitizeStringArray(candidate.providerKinds),
+    // Missing on older persisted (v1) blobs ⇒ default off; storage stays v1.
+    assignedToMe: candidate.assignedToMe === true,
   };
 }
 
@@ -237,12 +255,16 @@ export function reconcilePhaseSidebarFilters(
   options: {
     readonly repositoryKeys: ReadonlySet<string>;
     readonly providerKinds: ReadonlySet<string>;
+    // False on single-user builds (no operator identity): a persisted
+    // "assigned to me" filter would otherwise hide every thread.
+    readonly assignmentAvailable: boolean;
   },
 ): PhaseSidebarFilters {
   return {
     repositoryKeys: filters.repositoryKeys.filter((key) => options.repositoryKeys.has(key)),
     phaseIds: filters.phaseIds.filter((phaseId) => PHASE_ID_SET.has(phaseId)),
     providerKinds: filters.providerKinds.filter((kind) => options.providerKinds.has(kind)),
+    assignedToMe: options.assignmentAvailable ? filters.assignedToMe : false,
   };
 }
 
@@ -270,6 +292,9 @@ export function buildPhaseSidebarFilterChips(
       value,
       label: labels.providers.get(value) ?? value,
     })),
+    ...(filters.assignedToMe
+      ? [{ facet: "assignment" as const, value: "assigned-to-me", label: "Assigned to me" }]
+      : []),
   ];
 }
 

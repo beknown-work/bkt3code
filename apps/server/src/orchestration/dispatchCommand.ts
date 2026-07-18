@@ -4,6 +4,7 @@ import {
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   type ThreadId,
+  type UserId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -70,6 +71,7 @@ export class OrchestrationCommandDispatcher extends Context.Service<
   {
     readonly dispatch: (
       command: OrchestrationCommand,
+      options?: { readonly actorUserId?: UserId | null },
     ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
   }
 >()("t3/orchestration/dispatchCommand/OrchestrationCommandDispatcher") {}
@@ -84,7 +86,13 @@ export const make = Effect.gen(function* () {
 
   const dispatch = Effect.fn("OrchestrationCommandDispatcher.dispatch")(function* (
     command: OrchestrationCommand,
+    options?: { readonly actorUserId?: UserId | null },
   ) {
+    // The operating Clerk user (team mode), threaded into every produced event's
+    // metadata and into the owner of any thread this command creates — including
+    // the internal thread.create issued during bootstrap turn-starts.
+    const actorUserId = options?.actorUserId ?? null;
+    const dispatchOptions = { actorUserId };
     const randomUUID = crypto.randomUUIDv4.pipe(
       Effect.mapError((cause) =>
         toDispatchCommandError(cause, "Failed to generate orchestration command identifier."),
@@ -251,19 +259,22 @@ export const make = Effect.gen(function* () {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread) {
-          yield* orchestrationEngine.dispatch({
-            type: "thread.create",
-            commandId: yield* serverCommandId("bootstrap-thread-create"),
-            threadId: turnStart.threadId,
-            projectId: bootstrap.createThread.projectId,
-            title: bootstrap.createThread.title,
-            modelSelection: bootstrap.createThread.modelSelection,
-            runtimeMode: bootstrap.createThread.runtimeMode,
-            interactionMode: bootstrap.createThread.interactionMode,
-            branch: bootstrap.createThread.branch,
-            worktreePath: bootstrap.createThread.worktreePath,
-            createdAt: bootstrap.createThread.createdAt,
-          });
+          yield* orchestrationEngine.dispatch(
+            {
+              type: "thread.create",
+              commandId: yield* serverCommandId("bootstrap-thread-create"),
+              threadId: turnStart.threadId,
+              projectId: bootstrap.createThread.projectId,
+              title: bootstrap.createThread.title,
+              modelSelection: bootstrap.createThread.modelSelection,
+              runtimeMode: bootstrap.createThread.runtimeMode,
+              interactionMode: bootstrap.createThread.interactionMode,
+              branch: bootstrap.createThread.branch,
+              worktreePath: bootstrap.createThread.worktreePath,
+              createdAt: bootstrap.createThread.createdAt,
+            },
+            dispatchOptions,
+          );
           createdThread = true;
         }
 
@@ -302,7 +313,7 @@ export const make = Effect.gen(function* () {
         }
 
         yield* runSetupProgram();
-        return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
+        return yield* orchestrationEngine.dispatch(finalTurnStartCommand, dispatchOptions);
       });
 
       return yield* bootstrapProgram.pipe(
@@ -323,7 +334,7 @@ export const make = Effect.gen(function* () {
       command.type === "thread.turn.start" && command.bootstrap
         ? dispatchBootstrapTurnStart(command)
         : orchestrationEngine
-            .dispatch(command)
+            .dispatch(command, dispatchOptions)
             .pipe(
               Effect.mapError((cause) =>
                 toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
@@ -349,9 +360,9 @@ export const passthroughLayer = Layer.effect(
   Effect.gen(function* () {
     const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
     return OrchestrationCommandDispatcher.of({
-      dispatch: (command) =>
+      dispatch: (command, options) =>
         orchestrationEngine
-          .dispatch(command)
+          .dispatch(command, options)
           .pipe(
             Effect.mapError((cause) =>
               toDispatchCommandError(cause, "Failed to dispatch orchestration command"),

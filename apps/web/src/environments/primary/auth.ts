@@ -25,6 +25,7 @@ import { runPrimaryHttp } from "../../lib/runtime";
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
   "exchange-bootstrap-credential",
+  "exchange-clerk-session",
   "fetch-environment-descriptor",
   "create-pairing-credential",
   "list-pairing-links",
@@ -253,6 +254,64 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
       });
     }
   });
+}
+
+/**
+ * A valid Clerk token for someone outside the configured organization — the
+ * gate surfaces this distinctly ("not a member — try a different account").
+ */
+export class PrimaryEnvironmentClerkNotMemberError extends Schema.TaggedErrorClass<PrimaryEnvironmentClerkNotMemberError>()(
+  "PrimaryEnvironmentClerkNotMemberError",
+  {
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+async function exchangeClerkSession(token: string): Promise<AuthBrowserSessionResult> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.clerkSession({ payload: { token } })),
+      ),
+    );
+  } catch (error) {
+    // Non-org-member ⇒ 403 forbidden; distinguish from a retryable failure.
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "_tag" in error &&
+      (error as { _tag?: unknown })._tag === "EnvironmentHttpForbiddenError"
+    ) {
+      const detail =
+        "message" in error && typeof (error as { message?: unknown }).message === "string"
+          ? (error as { message: string }).message
+          : "This account is not a member of the workspace organization.";
+      throw new PrimaryEnvironmentClerkNotMemberError({ detail });
+    }
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "exchange-clerk-session",
+      cause: error,
+    });
+  }
+}
+
+/**
+ * Exchange a verified Clerk session token for a browser-session cookie, then
+ * clear the auth gate caches so the app re-resolves as authenticated.
+ */
+export async function submitClerkSessionToken(token: string): Promise<void> {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    throw new PrimaryEnvironmentClerkNotMemberError({ detail: "Missing Clerk session token." });
+  }
+  resolvedAuthenticatedGateState = null;
+  await exchangeClerkSession(trimmed);
+  await waitForAuthenticatedSessionAfterBootstrap();
+  bootstrapPromise = null;
 }
 
 async function waitForAuthenticatedSessionAfterBootstrap(): Promise<AuthSessionState> {

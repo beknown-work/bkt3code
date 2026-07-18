@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type UserId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -13,6 +14,8 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
   requireActiveProjectWorkspaceRootAbsent,
+  requireMemberAddable,
+  requireMemberRemovable,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -63,9 +66,11 @@ type DecideOrchestrationCommandResult =
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
+  actor = null,
 }: {
   readonly commands: ReadonlyArray<OrchestrationCommand>;
   readonly readModel: OrchestrationReadModel;
+  readonly actor?: UserId | null;
 }): Effect.fn.Return<
   ReadonlyArray<PlannedOrchestrationEvent>,
   OrchestrationCommandInvariantError | PlatformError.PlatformError,
@@ -79,6 +84,7 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
     const decided = yield* decideOrchestrationCommand({
       command: nextCommand,
       readModel: nextReadModel,
+      actor,
     });
     const nextEvents = Array.isArray(decided) ? decided : [decided];
     for (const nextEvent of nextEvents) {
@@ -97,9 +103,15 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   command,
   readModel,
+  actor = null,
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
+  /**
+   * The Clerk operator behind this command (team mode), or null when the server
+   * runs single-user. Threaded into created-payload ownership and member events.
+   */
+  readonly actor?: UserId | null;
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
   OrchestrationCommandInvariantError | PlatformError.PlatformError,
@@ -133,6 +145,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
+          createdByUserId: actor,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -193,6 +206,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (activeThreads.length > 0) {
         return yield* decideCommandSequence({
           readModel,
+          actor,
           commands: [
             ...activeThreads.map(
               (thread): Extract<OrchestrationCommand, { type: "thread.delete" }> => ({
@@ -254,6 +268,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          createdByUserId: actor,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -357,6 +372,130 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(branch !== undefined ? { branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.member.add": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireMemberAddable({
+        commandType: command.type,
+        entityLabel: `thread '${command.threadId}'`,
+        ownerUserId: thread.ownerUserId,
+        memberUserIds: thread.memberUserIds,
+        userId: command.userId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.member-added",
+        payload: {
+          threadId: command.threadId,
+          userId: command.userId,
+          addedByUserId: actor,
+          addedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.member.remove": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireMemberRemovable({
+        commandType: command.type,
+        entityLabel: `thread '${command.threadId}'`,
+        ownerUserId: thread.ownerUserId,
+        memberUserIds: thread.memberUserIds,
+        userId: command.userId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.member-removed",
+        payload: {
+          threadId: command.threadId,
+          userId: command.userId,
+          removedByUserId: actor,
+          removedAt: occurredAt,
+        },
+      };
+    }
+
+    case "project.member.add": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireMemberAddable({
+        commandType: command.type,
+        entityLabel: `project '${command.projectId}'`,
+        ownerUserId: project.ownerUserId,
+        memberUserIds: project.memberUserIds,
+        userId: command.userId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.member-added",
+        payload: {
+          projectId: command.projectId,
+          userId: command.userId,
+          addedByUserId: actor,
+          addedAt: occurredAt,
+        },
+      };
+    }
+
+    case "project.member.remove": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireMemberRemovable({
+        commandType: command.type,
+        entityLabel: `project '${command.projectId}'`,
+        ownerUserId: project.ownerUserId,
+        memberUserIds: project.memberUserIds,
+        userId: command.userId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.member-removed",
+        payload: {
+          projectId: command.projectId,
+          userId: command.userId,
+          removedByUserId: actor,
+          removedAt: occurredAt,
         },
       };
     }

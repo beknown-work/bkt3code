@@ -44,6 +44,10 @@ export type TurnId = typeof TurnId.Type;
 export const AuthSessionId = makeEntityId("AuthSessionId");
 export type AuthSessionId = typeof AuthSessionId.Type;
 
+/** Clerk user id (e.g. "user_2abc..."). Identifies a person operating the server. */
+export const UserId = makeEntityId("UserId");
+export type UserId = typeof UserId.Type;
+
 export const ProviderItemId = makeEntityId("ProviderItemId");
 export type ProviderItemId = typeof ProviderItemId.Type;
 export const RuntimeSessionId = makeEntityId("RuntimeSessionId");

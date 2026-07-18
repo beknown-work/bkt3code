@@ -22,6 +22,8 @@ const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationPro
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   deletedAt: null,
+  ownerUserId: null,
+  memberUserIds: [],
 });
 
 const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
@@ -42,6 +44,7 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getThreadCheckpointContext: () => Effect.die("unused"),
     getFullThreadDiffContext: () => Effect.die("unused"),
     getThreadShellById: () => Effect.die("unused"),
+    listThreadShellsByProjectId: () => Effect.die("unused"),
     getThreadDetailById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
   });

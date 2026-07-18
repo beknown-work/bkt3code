@@ -13,7 +13,12 @@ import "./index.css";
 
 import { isElectron } from "./env";
 import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
-import { hasCloudPublicConfig } from "./cloud/publicConfig";
+import {
+  hasClerkPublicConfig,
+  hasCloudPublicConfig,
+  resolveClerkPublishableKey,
+} from "./cloud/publicConfig";
+import { TeamIdentityBridge } from "./components/clerk/TeamIdentityBridge";
 import { getRouter } from "./router";
 import { syncDocumentWindowControlsOverlayClass } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
@@ -27,21 +32,29 @@ if (isElectron) {
   syncDocumentWindowControlsOverlayClass();
 }
 
-const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const clerkPublishableKey = resolveClerkPublishableKey();
 
 const app = <AppRoot router={router} />;
 
+// Inside Clerk: mirror the signed-in user into the identity atom (team mode),
+// and keep the managed relay auth bridge only when full cloud config is present
+// (publish-only Clerk sign-in does not need the relay JWT template / relay URL).
+const clerkChildren = (
+  <>
+    <TeamIdentityBridge />
+    {hasCloudPublicConfig() ? <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider> : app}
+  </>
+);
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {clerkPublishableKey && hasCloudPublicConfig() ? (
+    {clerkPublishableKey && hasClerkPublicConfig() ? (
       isElectron ? (
         <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
+          {clerkChildren}
         </ElectronClerkProvider>
       ) : (
-        <ClerkProvider publishableKey={clerkPublishableKey}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
-        </ClerkProvider>
+        <ClerkProvider publishableKey={clerkPublishableKey}>{clerkChildren}</ClerkProvider>
       )
     ) : (
       app

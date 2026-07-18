@@ -149,6 +149,8 @@ const makeDefaultOrchestrationReadModel = () => {
         createdAt: now,
         updatedAt: now,
         deletedAt: null,
+        ownerUserId: null,
+        memberUserIds: [],
       },
     ],
     threads: [
@@ -171,6 +173,8 @@ const makeDefaultOrchestrationReadModel = () => {
         proposedPlans: [],
         checkpoints: [],
         deletedAt: null,
+        ownerUserId: null,
+        memberUserIds: [],
       },
     ],
   };
@@ -198,6 +202,8 @@ const makeDefaultOrchestrationThreadShell = (
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    ownerUserId: null,
+    memberUserIds: [],
     ...overrides,
   };
 };
@@ -382,6 +388,7 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      clerkAuth: undefined,
       ...options?.config,
     };
     const layerConfig = ServerConfig.layer(config);
@@ -5520,6 +5527,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             createdAt: now,
             updatedAt: now,
             deletedAt: null,
+            ownerUserId: null,
+            memberUserIds: [],
           },
         ],
         threads: [
@@ -5542,6 +5551,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             proposedPlans: [],
             checkpoints: [],
             deletedAt: null,
+            ownerUserId: null,
+            memberUserIds: [],
           },
         ],
       };

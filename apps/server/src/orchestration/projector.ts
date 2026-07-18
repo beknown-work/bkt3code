@@ -26,6 +26,10 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadMemberAddedPayload,
+  ThreadMemberRemovedPayload,
+  ProjectMemberAddedPayload,
+  ProjectMemberRemovedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -208,6 +212,10 @@ export function projectEvent(
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
+            // Owner is the creator (team mode). Preserve a prior owner on
+            // idempotent re-creation; otherwise seed from the created payload.
+            ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
+            memberUserIds: existing?.memberUserIds ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -271,6 +279,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
+        const existing = nextBase.threads.find((entry) => entry.id === payload.threadId);
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -283,6 +292,10 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
+            // Owner is the creator (team mode). Preserve a prior owner on
+            // idempotent re-creation (bootstrap retry after compensation).
+            ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
+            memberUserIds: existing?.memberUserIds ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
@@ -295,7 +308,6 @@ export function projectEvent(
           event.type,
           "thread",
         );
-        const existing = nextBase.threads.find((entry) => entry.id === thread.id);
         return {
           ...nextBase,
           threads: existing
@@ -351,6 +363,84 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "thread.member-added":
+      return decodeForEvent(ThreadMemberAddedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || thread.memberUserIds.includes(payload.userId)) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              memberUserIds: [...thread.memberUserIds, payload.userId],
+              updatedAt: payload.addedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.member-removed":
+      return decodeForEvent(ThreadMemberRemovedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              memberUserIds: thread.memberUserIds.filter((id) => id !== payload.userId),
+              updatedAt: payload.removedAt,
+            }),
+          };
+        }),
+      );
+
+    case "project.member-added":
+      return decodeForEvent(ProjectMemberAddedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
+          if (!project || project.memberUserIds.includes(payload.userId)) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            projects: nextBase.projects.map((entry) =>
+              entry.id === payload.projectId
+                ? {
+                    ...entry,
+                    memberUserIds: [...entry.memberUserIds, payload.userId],
+                    updatedAt: payload.addedAt,
+                  }
+                : entry,
+            ),
+          };
+        }),
+      );
+
+    case "project.member-removed":
+      return decodeForEvent(ProjectMemberRemovedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
+          if (!project) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            projects: nextBase.projects.map((entry) =>
+              entry.id === payload.projectId
+                ? {
+                    ...entry,
+                    memberUserIds: entry.memberUserIds.filter((id) => id !== payload.userId),
+                    updatedAt: payload.removedAt,
+                  }
+                : entry,
+            ),
+          };
+        }),
       );
 
     case "thread.runtime-mode-set":

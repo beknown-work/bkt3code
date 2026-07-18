@@ -153,6 +153,14 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
+   * Read active thread shells for a project (team mode: used when a project tag
+   * changes so the affected threads can be pushed to a subscriber's sidebar).
+   */
+  readonly listThreadShellsByProjectId: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active thread detail snapshot by id.
    */
   readonly getThreadDetailById: (

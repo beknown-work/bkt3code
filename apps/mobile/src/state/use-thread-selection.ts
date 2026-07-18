@@ -63,6 +63,8 @@ function threadDetailToShell(
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    ownerUserId: thread.ownerUserId,
+    memberUserIds: thread.memberUserIds,
   };
 }
 

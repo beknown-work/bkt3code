@@ -3,6 +3,7 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
+  UserId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -52,6 +53,7 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
+  actorUserId: UserId | null;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
 }
@@ -64,6 +66,8 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+    case "project.member.add":
+    case "project.member.remove":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
@@ -153,6 +157,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
           readModel: commandReadModel,
+          actor: envelope.actorUserId,
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError((cause) =>
@@ -165,7 +170,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
           ),
         );
-        const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
+        const decidedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
+        // Stamp the acting operator into every produced event's metadata in one
+        // place (audit trail via the existing metadata_json column). No-op in
+        // single-user mode where actorUserId is null.
+        const actorUserId = envelope.actorUserId;
+        const eventBases =
+          actorUserId === null
+            ? decidedEvents
+            : decidedEvents.map((decided) => ({
+                ...decided,
+                metadata: { ...decided.metadata, actorUserId },
+              }));
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
@@ -309,11 +325,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
     eventStore.readFromSequence(fromSequenceExclusive, limit);
 
-  const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
+  const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       yield* Queue.offer(commandQueue, {
         command,
+        actorUserId: options?.actorUserId ?? null,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
       });

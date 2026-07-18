@@ -9,18 +9,24 @@ import {
   createEnvironmentRpcQueryAtomFamily,
 } from "./runtime.ts";
 import {
+  type AddProjectMemberInput,
   type CreateProjectInput,
   type DeleteProjectInput,
+  type RemoveProjectMemberInput,
   type UpdateProjectInput,
+  addProjectMember,
   createProject,
   deleteProject,
+  removeProjectMember,
   updateProject,
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
+  AddProjectMemberInput,
   CreateProjectInput,
   DeleteProjectInput,
+  RemoveProjectMemberInput,
   UpdateProjectInput,
 } from "../operations/commands.ts";
 
@@ -89,6 +95,18 @@ export function createProjectEnvironmentAtoms<R, E>(
     delete: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:delete",
       execute: (input: DeleteProjectInput) => deleteProject(input),
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+    }),
+    addMember: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:add-member",
+      execute: (input: AddProjectMemberInput) => addProjectMember(input),
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+    }),
+    removeMember: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:remove-member",
+      execute: (input: RemoveProjectMemberInput) => removeProjectMember(input),
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),

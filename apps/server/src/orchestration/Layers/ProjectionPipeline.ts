@@ -34,6 +34,8 @@ import {
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionMembershipRepository } from "../../persistence/Services/ProjectionMemberships.ts";
+import { ProjectionMembershipRepositoryLive } from "../../persistence/Layers/ProjectionMemberships.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -480,6 +482,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+    const projectionMembershipRepository = yield* ProjectionMembershipRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -496,9 +499,26 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             workspaceRoot: event.payload.workspaceRoot,
             defaultModelSelection: event.payload.defaultModelSelection,
             scripts: event.payload.scripts,
+            ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
+          });
+          return;
+
+        case "project.member-added":
+          yield* projectionMembershipRepository.upsertProjectMember({
+            projectId: event.payload.projectId,
+            userId: event.payload.userId,
+            addedByUserId: event.payload.addedByUserId,
+            addedAt: event.payload.addedAt,
+          });
+          return;
+
+        case "project.member-removed":
+          yield* projectionMembershipRepository.removeProjectMember({
+            projectId: event.payload.projectId,
+            userId: event.payload.userId,
           });
           return;
 
@@ -604,6 +624,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
+            ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
@@ -612,6 +633,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
             deletedAt: null,
+          });
+          return;
+
+        case "thread.member-added":
+          yield* projectionMembershipRepository.upsertThreadMember({
+            threadId: event.payload.threadId,
+            userId: event.payload.userId,
+            addedByUserId: event.payload.addedByUserId,
+            addedAt: event.payload.addedAt,
+          });
+          return;
+
+        case "thread.member-removed":
+          yield* projectionMembershipRepository.removeThreadMember({
+            threadId: event.payload.threadId,
+            userId: event.payload.userId,
           });
           return;
 
@@ -1598,5 +1635,6 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
+  Layer.provideMerge(ProjectionMembershipRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
 );

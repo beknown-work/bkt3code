@@ -16,6 +16,7 @@ import ProjectScriptsControl, {
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { ThreadMembersControl } from "../members/ThreadMembersControl";
 import { cn } from "~/lib/utils";
 
 interface ChatHeaderProps {
@@ -100,6 +101,7 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}

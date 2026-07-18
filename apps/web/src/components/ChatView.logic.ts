@@ -47,6 +47,8 @@ export function buildLocalDraftThread(
     archivedAt: null,
     deletedAt: null,
     latestTurn: null,
+    ownerUserId: null,
+    memberUserIds: [],
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
     checkpoints: [],

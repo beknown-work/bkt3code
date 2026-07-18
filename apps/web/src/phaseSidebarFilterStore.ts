@@ -16,10 +16,12 @@ interface PhaseSidebarFilterStoreState extends PhaseSidebarFilters {
   toggleRepository: (repositoryKey: string) => void;
   togglePhase: (phaseId: PhaseSidebarPhaseId) => void;
   toggleProvider: (providerKind: string) => void;
+  toggleAssignedToMe: () => void;
   clearAll: () => void;
   reconcile: (options: {
     readonly repositoryKeys: ReadonlySet<string>;
     readonly providerKinds: ReadonlySet<string>;
+    readonly assignmentAvailable: boolean;
   }) => void;
 }
 
@@ -39,6 +41,7 @@ export const usePhaseSidebarFilterStore = create<PhaseSidebarFilterStoreState>()
         set((state) => ({ phaseIds: toggleValue(state.phaseIds, phaseId) })),
       toggleProvider: (providerKind) =>
         set((state) => ({ providerKinds: toggleValue(state.providerKinds, providerKind) })),
+      toggleAssignedToMe: () => set((state) => ({ assignedToMe: !state.assignedToMe })),
       clearAll: () => set(EMPTY_PHASE_SIDEBAR_FILTERS),
       reconcile: (options) => set((state) => reconcilePhaseSidebarFilters(state, options)),
     }),
@@ -52,6 +55,7 @@ export const usePhaseSidebarFilterStore = create<PhaseSidebarFilterStoreState>()
         repositoryKeys: state.repositoryKeys,
         phaseIds: state.phaseIds,
         providerKinds: state.providerKinds,
+        assignedToMe: state.assignedToMe,
       }),
       merge: (persisted, current) => ({
         ...current,

@@ -28,6 +28,8 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
+import { runOwnershipBackfill } from "./orchestration/ownershipBackfill.ts";
+import { ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -344,6 +346,15 @@ export const make = Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
       }),
+    );
+
+    // Team mode only: assign legacy (pre-ownership) threads/projects to the
+    // configured default owner. No-op + fail-soft in single-user mode / on a
+    // Clerk outage (converges on a later boot).
+    yield* Effect.logDebug("startup phase: ownership backfill");
+    yield* runStartupPhase(
+      "ownership.backfill",
+      runOwnershipBackfill.pipe(Effect.provide(ClerkDirectoryLive)),
     );
 
     const welcomeBase = yield* resolveWelcomeBase;

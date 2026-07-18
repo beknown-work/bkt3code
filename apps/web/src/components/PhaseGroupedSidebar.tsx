@@ -77,12 +77,14 @@ import {
   buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
   flattenPhaseSidebarGroups,
+  isThreadAssignedToUser,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
 } from "./sidebar/PhaseGroupedSidebar.logic";
+import { useCurrentUserId } from "../state/identity";
 import {
   SidebarChromeFooter,
   SidebarChromeHeader,
@@ -159,18 +161,34 @@ function PhaseFilterPopover({
   readonly providers: ReadonlyArray<ProviderOption>;
 }) {
   const [search, setSearch] = useState("");
-  const { repositoryKeys, phaseIds, providerKinds, toggleRepository, togglePhase, toggleProvider } =
-    usePhaseSidebarFilterStore(
-      useShallow((state) => ({
-        repositoryKeys: state.repositoryKeys,
-        phaseIds: state.phaseIds,
-        providerKinds: state.providerKinds,
-        toggleRepository: state.toggleRepository,
-        togglePhase: state.togglePhase,
-        toggleProvider: state.toggleProvider,
-      })),
-    );
-  const selectionCount = repositoryKeys.length + phaseIds.length + providerKinds.length;
+  const currentUserId = useCurrentUserId();
+  const assignmentAvailable = currentUserId !== null;
+  const {
+    repositoryKeys,
+    phaseIds,
+    providerKinds,
+    assignedToMe,
+    toggleRepository,
+    togglePhase,
+    toggleProvider,
+    toggleAssignedToMe,
+  } = usePhaseSidebarFilterStore(
+    useShallow((state) => ({
+      repositoryKeys: state.repositoryKeys,
+      phaseIds: state.phaseIds,
+      providerKinds: state.providerKinds,
+      assignedToMe: state.assignedToMe,
+      toggleRepository: state.toggleRepository,
+      togglePhase: state.togglePhase,
+      toggleProvider: state.toggleProvider,
+      toggleAssignedToMe: state.toggleAssignedToMe,
+    })),
+  );
+  const selectionCount =
+    repositoryKeys.length +
+    phaseIds.length +
+    providerKinds.length +
+    (assignmentAvailable && assignedToMe ? 1 : 0);
   const needle = search.trim().toLowerCase();
   const visibleRepositories = repositories.filter((option) =>
     option.searchText.toLowerCase().includes(needle),
@@ -264,7 +282,17 @@ function PhaseFilterPopover({
               />
             ))}
           </FacetSection>
-          {visibleRepositories.length + visiblePhases.length + visibleProviders.length === 0 ? (
+          {assignmentAvailable && "assigned to me".includes(needle) ? (
+            <FacetSection label="Assignment">
+              <FacetOption
+                checked={assignedToMe}
+                label="Assigned to me"
+                onCheckedChange={() => toggleAssignedToMe()}
+              />
+            </FacetSection>
+          ) : null}
+          {visibleRepositories.length + visiblePhases.length + visibleProviders.length === 0 &&
+          !(assignmentAvailable && "assigned to me".includes(needle)) ? (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">
               No filter options match.
             </p>
@@ -323,23 +351,27 @@ function ActiveFilterChips({
     repositoryKeys,
     phaseIds,
     providerKinds,
+    assignedToMe,
     toggleRepository,
     togglePhase,
     toggleProvider,
+    toggleAssignedToMe,
     clearAll,
   } = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
+      assignedToMe: state.assignedToMe,
       toggleRepository: state.toggleRepository,
       togglePhase: state.togglePhase,
       toggleProvider: state.toggleProvider,
+      toggleAssignedToMe: state.toggleAssignedToMe,
       clearAll: state.clearAll,
     })),
   );
   const chips = buildPhaseSidebarFilterChips(
-    { repositoryKeys, phaseIds, providerKinds },
+    { repositoryKeys, phaseIds, providerKinds, assignedToMe },
     { repositories: repositoryLabels, providers: providerLabels },
   );
   if (chips.length === 0) return null;
@@ -354,6 +386,7 @@ function ActiveFilterChips({
             if (chip.facet === "repository") toggleRepository(chip.value);
             if (chip.facet === "phase") togglePhase(chip.value as PhaseSidebarPhaseId);
             if (chip.facet === "provider") toggleProvider(chip.value);
+            if (chip.facet === "assignment") toggleAssignedToMe();
           }}
         />
       ))}
@@ -666,11 +699,13 @@ export function PhaseGroupedSidebar() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
+  const currentUserId = useCurrentUserId();
   const filters = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
+      assignedToMe: state.assignedToMe,
     })),
   );
   const clearFilters = usePhaseSidebarFilterStore((state) => state.clearAll);
@@ -755,9 +790,10 @@ export function PhaseGroupedSidebar() {
             project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
           providerKind,
           providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
+          isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
         };
       }),
-    [projectByKey, repositoryLabels, serverConfigs, threads],
+    [projectByKey, repositoryLabels, serverConfigs, threads, currentUserId],
   );
   const groups = useMemo(
     () => buildPhaseSidebarGroups(allRows, filters, sortOrder),
@@ -776,7 +812,10 @@ export function PhaseGroupedSidebar() {
     [visibleRows, visibleThreadKeys],
   );
   const activeFiltersCount =
-    filters.repositoryKeys.length + filters.phaseIds.length + filters.providerKinds.length;
+    filters.repositoryKeys.length +
+    filters.phaseIds.length +
+    filters.providerKinds.length +
+    (filters.assignedToMe ? 1 : 0);
   const activeThreadHidden =
     activeFiltersCount > 0 &&
     routeThreadKey !== null &&
@@ -846,9 +885,11 @@ export function PhaseGroupedSidebar() {
     reconcileFilters({
       repositoryKeys: new Set(repositoryOptions.map((option) => option.key)),
       providerKinds: new Set(providerOptions.map((option) => option.kind)),
+      assignmentAvailable: currentUserId !== null,
     });
   }, [
     allEnvironmentShellsLive,
+    currentUserId,
     environments.length,
     networkStatus,
     providerOptions,

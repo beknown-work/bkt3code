@@ -19,6 +19,8 @@ const stubProject = {
   repositoryIdentity: null,
   defaultModelSelection: null,
   scripts: [],
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
 } as const;
@@ -33,6 +35,8 @@ const stubThread = {
   branch: null,
   worktreePath: null,
   latestTurn: null,
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
   archivedAt: null,

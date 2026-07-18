@@ -86,6 +86,8 @@ function makeReadModel(
         createdAt: now,
         updatedAt: now,
         deletedAt: null,
+        ownerUserId: null,
+        memberUserIds: [],
       },
     ],
     threads: threads.map((thread) => ({
@@ -111,6 +113,8 @@ function makeReadModel(
       proposedPlans: [],
       checkpoints: [],
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     })),
   };
 }
@@ -208,6 +212,7 @@ describe("ProviderSessionReaper", () => {
                 ? Option.some(input.readModel.threads.find((thread) => thread.id === threadId)!)
                 : Option.none(),
             ),
+          listThreadShellsByProjectId: () => Effect.succeed([]),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
         }),

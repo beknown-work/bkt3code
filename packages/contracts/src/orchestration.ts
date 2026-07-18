@@ -19,6 +19,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
+  UserId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -208,6 +209,20 @@ export const ProjectScript = Schema.Struct({
 });
 export type ProjectScript = typeof ProjectScript.Type;
 
+/**
+ * Ownership + membership fields shared by threads/projects (and their shells).
+ *
+ * Both carry `withDecodingDefault` so pre-ownership rows and cached client
+ * snapshots decode cleanly (same compat pattern as `archivedAt`). `ownerUserId`
+ * null ⇒ legacy/unowned (single-user mode, or awaiting backfill).
+ */
+const OwnerUserIdField = Schema.NullOr(UserId).pipe(
+  Schema.withDecodingDefault(Effect.succeed(null)),
+);
+const MemberUserIdsField = Schema.Array(UserId).pipe(
+  Schema.withDecodingDefault(Effect.succeed([])),
+);
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
@@ -215,6 +230,8 @@ export const OrchestrationProject = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  ownerUserId: OwnerUserIdField,
+  memberUserIds: MemberUserIdsField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -353,6 +370,8 @@ export const OrchestrationThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  ownerUserId: OwnerUserIdField,
+  memberUserIds: MemberUserIdsField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -382,6 +401,8 @@ export const OrchestrationProjectShell = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  ownerUserId: OwnerUserIdField,
+  memberUserIds: MemberUserIdsField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -399,6 +420,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  ownerUserId: OwnerUserIdField,
+  memberUserIds: MemberUserIdsField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -556,6 +579,34 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 
+const ThreadMemberAddCommand = Schema.Struct({
+  type: Schema.Literal("thread.member.add"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  userId: UserId,
+});
+
+const ThreadMemberRemoveCommand = Schema.Struct({
+  type: Schema.Literal("thread.member.remove"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  userId: UserId,
+});
+
+const ProjectMemberAddCommand = Schema.Struct({
+  type: Schema.Literal("project.member.add"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  userId: UserId,
+});
+
+const ProjectMemberRemoveCommand = Schema.Struct({
+  type: Schema.Literal("project.member.remove"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  userId: UserId,
+});
+
 const ThreadRuntimeModeSetCommand = Schema.Struct({
   type: Schema.Literal("thread.runtime-mode.set"),
   commandId: CommandId,
@@ -683,11 +734,15 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectMemberAddCommand,
+  ProjectMemberRemoveCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
   ThreadMetaUpdateCommand,
+  ThreadMemberAddCommand,
+  ThreadMemberRemoveCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -704,11 +759,15 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectMemberAddCommand,
+  ProjectMemberRemoveCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
   ThreadMetaUpdateCommand,
+  ThreadMemberAddCommand,
+  ThreadMemberRemoveCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -806,11 +865,15 @@ export const OrchestrationEventType = Schema.Literals([
   "project.created",
   "project.meta-updated",
   "project.deleted",
+  "project.member-added",
+  "project.member-removed",
   "thread.created",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
   "thread.meta-updated",
+  "thread.member-added",
+  "thread.member-removed",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -839,6 +902,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
+  createdByUserId: Schema.optional(Schema.NullOr(UserId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -869,6 +933,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  createdByUserId: Schema.optional(Schema.NullOr(UserId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -999,12 +1064,42 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const ThreadMemberAddedPayload = Schema.Struct({
+  threadId: ThreadId,
+  userId: UserId,
+  addedByUserId: Schema.NullOr(UserId),
+  addedAt: IsoDateTime,
+});
+
+export const ThreadMemberRemovedPayload = Schema.Struct({
+  threadId: ThreadId,
+  userId: UserId,
+  removedByUserId: Schema.NullOr(UserId),
+  removedAt: IsoDateTime,
+});
+
+export const ProjectMemberAddedPayload = Schema.Struct({
+  projectId: ProjectId,
+  userId: UserId,
+  addedByUserId: Schema.NullOr(UserId),
+  addedAt: IsoDateTime,
+});
+
+export const ProjectMemberRemovedPayload = Schema.Struct({
+  projectId: ProjectId,
+  userId: UserId,
+  removedByUserId: Schema.NullOr(UserId),
+  removedAt: IsoDateTime,
+});
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
   adapterKey: Schema.optional(TrimmedNonEmptyString),
   requestId: Schema.optional(ApprovalRequestId),
   ingestedAt: Schema.optional(IsoDateTime),
+  /** Clerk user id of the operator who caused this event (audit trail). */
+  actorUserId: Schema.optional(UserId),
 });
 export type OrchestrationEventMetadata = typeof OrchestrationEventMetadata.Type;
 
@@ -1060,6 +1155,26 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
     payload: ThreadMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.member-added"),
+    payload: ThreadMemberAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.member-removed"),
+    payload: ThreadMemberRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.member-added"),
+    payload: ProjectMemberAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.member-removed"),
+    payload: ProjectMemberRemovedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -1270,6 +1385,19 @@ export const OrchestrationRpcSchemas = {
     output: OrchestrationShellStreamItem,
   },
 } as const;
+
+export const OrchestrationUser = Schema.Struct({
+  id: UserId,
+  name: Schema.NullOr(TrimmedNonEmptyString),
+  email: Schema.NullOr(TrimmedNonEmptyString),
+  imageUrl: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type OrchestrationUser = typeof OrchestrationUser.Type;
+
+export const OrchestrationUsersResult = Schema.Struct({
+  users: Schema.Array(OrchestrationUser),
+});
+export type OrchestrationUsersResult = typeof OrchestrationUsersResult.Type;
 
 export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<OrchestrationGetSnapshotError>()(
   "OrchestrationGetSnapshotError",
