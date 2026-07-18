@@ -156,7 +156,13 @@ export function requireThreadAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (!findThreadById(input.readModel, input.threadId)) {
+  const existing = findThreadById(input.readModel, input.threadId);
+  // Bootstrap is a multi-step operation: create thread, prepare worktree,
+  // then start the turn. A later step can fail after thread.created has been
+  // persisted. The dispatcher compensates with thread.deleted; allow the
+  // same stable client thread ID to be recreated when the durable command is
+  // retried. Active and archived threads remain protected from duplication.
+  if (!existing || existing.deletedAt !== null) {
     return Effect.void;
   }
   return Effect.fail(
