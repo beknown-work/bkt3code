@@ -88,46 +88,27 @@ const connectivityLayer = Connectivity.layer({
   ),
 });
 
-// An "application-active" wakeup stream from a DOM event source. `register`
-// wires the listener(s) and returns a cleanup function.
-const applicationActiveFrom = (register: (emit: () => void) => () => void) =>
-  Stream.callback<"application-active">((queue) =>
-    Effect.acquireRelease(
-      Effect.sync(() => register(() => Queue.offerUnsafe(queue, "application-active"))),
-      (cleanup) => Effect.sync(cleanup),
-    ).pipe(Effect.asVoid),
-  );
-
 const wakeupsLayer = Wakeups.layer({
   changes: Stream.merge(
-    // Tab/window became visible again.
-    applicationActiveFrom((emit) => {
-      const listener = () => {
-        if (document.visibilityState === "visible") {
-          emit();
-        }
-      };
-      document.addEventListener("visibilitychange", listener);
-      return () => document.removeEventListener("visibilitychange", listener);
-    }),
-    Stream.merge(
-      // Window regained focus — fire unconditionally. Covers the always-visible
-      // desktop window that never emits `visibilitychange` after a sleep, so the
-      // supervisor still runs a liveness probe on wake.
-      applicationActiveFrom((emit) => {
-        window.addEventListener("focus", emit);
-        return () => window.removeEventListener("focus", emit);
-      }),
-      Stream.merge(
-        // Network connectivity returned.
-        applicationActiveFrom((emit) => {
-          window.addEventListener("online", emit);
-          return () => window.removeEventListener("online", emit);
+    Stream.callback<"application-active">((queue) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const listener = () => {
+            if (document.visibilityState === "visible") {
+              Queue.offerUnsafe(queue, "application-active");
+            }
+          };
+          document.addEventListener("visibilitychange", listener);
+          return listener;
         }),
-        managedRelayAccountChanges(appAtomRegistry).pipe(
-          Stream.map(() => "credentials-changed" as const),
-        ),
-      ),
+        (listener) =>
+          Effect.sync(() => {
+            document.removeEventListener("visibilitychange", listener);
+          }),
+      ).pipe(Effect.asVoid),
+    ),
+    managedRelayAccountChanges(appAtomRegistry).pipe(
+      Stream.map(() => "credentials-changed" as const),
     ),
   ),
 });
