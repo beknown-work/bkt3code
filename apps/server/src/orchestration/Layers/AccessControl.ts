@@ -24,12 +24,9 @@ const makeAccessControl = Effect.gen(function* () {
       if (Option.isNone(threadOption)) {
         return false;
       }
-      const thread = threadOption.value;
-      if (isOwnerOrMember(thread, userId)) {
-        return true;
-      }
-      const projectOption = yield* snapshotQuery.getProjectShellById(thread.projectId);
-      return Option.isSome(projectOption) && isOwnerOrMember(projectOption.value, userId);
+      // Thread access = own it or be tagged on it directly. Project membership
+      // does not grant access to a project's threads.
+      return isOwnerOrMember(threadOption.value, userId);
     });
 
   const canAccessProject: OrchestrationAccessControlShape["canAccessProject"] = (

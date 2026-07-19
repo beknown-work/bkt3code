@@ -6,13 +6,15 @@
  * memory (fine at a handful of users) without extra queries.
  *
  * Visibility model:
- * - A thread is visible iff the user owns it, is tagged on it, OR owns/is tagged
- *   on its project (a project tag reveals ALL of the project's threads). Being
- *   tagged on a *sibling* thread does not reveal this thread.
+ * - A thread is visible iff the user owns it or is tagged on it directly.
+ *   Project membership does NOT reveal a project's threads — sharing is explicit
+ *   per thread.
  * - A project appears iff the user owns/is tagged on it, OR it contains at least
- *   one visible thread (so a tagged thread is shown grouped under its project).
- * - "Assigned to me" is the stricter notion: owned OR directly tagged on the
- *   thread (project-tag visibility does not count as an assignment).
+ *   one visible thread (so a directly-tagged thread is grouped under its
+ *   project). A project tag therefore grants workspace access — the project
+ *   shows up and the user can create their own threads in it — without exposing
+ *   other people's existing threads.
+ * - "Assigned to me" equals thread visibility here: owned or directly tagged.
  *
  * @module accessRules
  */
@@ -59,9 +61,11 @@ const filterProjectsAndThreads = <
   const directlyVisibleProjectIds = new Set(
     projects.filter((project) => isOwnerOrMember(project, userId)).map((project) => project.id),
   );
-  const visibleThreads = threads.filter(
-    (thread) => isOwnerOrMember(thread, userId) || directlyVisibleProjectIds.has(thread.projectId),
-  );
+  // A thread is visible ONLY if the user owns it or is tagged on it directly.
+  // Being tagged on the parent project does NOT reveal its threads — a project
+  // tag grants workspace access (the project shows up; you can create your own
+  // threads there), but existing threads must be shared individually.
+  const visibleThreads = threads.filter((thread) => isOwnerOrMember(thread, userId));
   const projectIdsWithVisibleThread = new Set(visibleThreads.map((thread) => thread.projectId));
   const visibleProjects = projects.filter(
     (project) =>
@@ -94,10 +98,9 @@ export const filterReadModel = (
   return { ...readModel, projects: filtered.projects, threads: filtered.threads };
 };
 
-/** True when a specific thread (with its project) is visible to the user. */
-export const isThreadVisible = (
-  thread: ThreadLike,
-  project: OwnableEntity | null,
-  userId: UserId,
-): boolean =>
-  isOwnerOrMember(thread, userId) || (project !== null && isOwnerOrMember(project, userId));
+/**
+ * True when a thread is visible to the user: they own it or are tagged on it
+ * directly. Project membership does not grant thread visibility.
+ */
+export const isThreadVisible = (thread: ThreadLike, userId: UserId): boolean =>
+  isOwnerOrMember(thread, userId);

@@ -98,14 +98,25 @@ describe("accessRules.filterShellSnapshot", () => {
     expect(filtered.projects.map((p) => p.id)).toEqual(["p1"]);
   });
 
-  it("a project tag reveals all of the project's threads", () => {
+  it("a project tag reveals the project only, NOT its threads", () => {
     const snap = snapshot(
       [project("p1", OWNER, [ALICE])],
       [thread("t1", "p1", OWNER, []), thread("t2", "p1", OWNER, [])],
     );
     const filtered = filterShellSnapshot(snap, ALICE);
-    expect(filtered.threads.map((t) => t.id).sort()).toEqual(["t1", "t2"]);
+    // Project appears (Alice is a project member) but none of its threads.
     expect(filtered.projects.map((p) => p.id)).toEqual(["p1"]);
+    expect(filtered.threads).toEqual([]);
+  });
+
+  it("a project tag + a direct thread tag shows the project and only the tagged thread", () => {
+    const snap = snapshot(
+      [project("p1", OWNER, [ALICE])],
+      [thread("t1", "p1", OWNER, [ALICE]), thread("t2", "p1", OWNER, [])],
+    );
+    const filtered = filterShellSnapshot(snap, ALICE);
+    expect(filtered.projects.map((p) => p.id)).toEqual(["p1"]);
+    expect(filtered.threads.map((t) => t.id)).toEqual(["t1"]);
   });
 
   it("isThreadAssignedToUser is owner-or-direct-tag only (not project-tag)", () => {

@@ -663,53 +663,48 @@ const makeWsRpcLayer = (
             return Effect.succeed([event]);
           case "thread-upserted": {
             const thread = event.thread;
-            if (isOwnerOrMember(thread, userId)) {
-              return Effect.succeed([event]);
-            }
-            return projectionSnapshotQuery.getProjectShellById(thread.projectId).pipe(
-              Effect.map((projectOption) => {
-                const project = Option.getOrNull(projectOption);
-                if (project !== null && isOwnerOrMember(project, userId)) {
-                  // Ensure the container project is present, then the thread.
-                  return [
-                    { kind: "project-upserted" as const, sequence: event.sequence, project },
-                    event,
-                  ];
-                }
-                return [
-                  {
-                    kind: "thread-removed" as const,
-                    sequence: event.sequence,
-                    threadId: thread.id,
-                  },
-                ];
-              }),
-              Effect.orElseSucceed(() => [
+            // A thread is delivered only if the user owns it or is tagged on it
+            // directly (project membership does not reveal threads). When it is
+            // visible, resolve the parent project so the thread arrives together
+            // with its container shell — otherwise it lands in the sidebar with
+            // no project to group under ("unknown project").
+            if (!isOwnerOrMember(thread, userId)) {
+              return Effect.succeed([
                 {
                   kind: "thread-removed" as const,
                   sequence: event.sequence,
                   threadId: thread.id,
                 },
-              ]),
+              ]);
+            }
+            return projectionSnapshotQuery.getProjectShellById(thread.projectId).pipe(
+              Effect.map((projectOption) => {
+                const project = Option.getOrNull(projectOption);
+                return project !== null
+                  ? [
+                      { kind: "project-upserted" as const, sequence: event.sequence, project },
+                      event,
+                    ]
+                  : [event];
+              }),
+              Effect.orElseSucceed(() => [event]),
             );
           }
           case "project-upserted": {
             const project = event.project;
             const directlyVisible = isOwnerOrMember(project, userId);
+            if (directlyVisible) {
+              // Owner/member: the project is visible. Do NOT fan out its threads
+              // — a project tag grants workspace access, not thread visibility.
+              return Effect.succeed([event]);
+            }
+            // Otherwise the project only appears if it contains a thread the user
+            // can see directly; if not, remove it from their sidebar.
             return projectionSnapshotQuery.listThreadShellsByProjectId(project.id).pipe(
               Effect.map((threads) => {
-                const visibleThreads = threads.filter(
-                  (thread) => directlyVisible || isOwnerOrMember(thread, userId),
-                );
-                if (directlyVisible || visibleThreads.length > 0) {
-                  return [
-                    event,
-                    ...visibleThreads.map((thread) => ({
-                      kind: "thread-upserted" as const,
-                      sequence: event.sequence,
-                      thread,
-                    })),
-                  ];
+                const hasVisibleThread = threads.some((thread) => isOwnerOrMember(thread, userId));
+                if (hasVisibleThread) {
+                  return [event];
                 }
                 return [
                   {
