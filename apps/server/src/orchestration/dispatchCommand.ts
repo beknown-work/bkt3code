@@ -12,6 +12,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -19,6 +20,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
+import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -81,6 +83,7 @@ export const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
 
@@ -135,6 +138,35 @@ export const make = Effect.gen(function* () {
       turnStart: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
     ) {
       const bootstrap = turnStart.bootstrap;
+
+      // Durable-retry idempotency: a bootstrap turn-start that creates a thread
+      // may be re-dispatched by the client when it never received the first ack
+      // (e.g. the page was refreshed while the bootstrap — worktree creation plus
+      // setup script — was still running). A partially-failed bootstrap is
+      // compensated with thread.deleted, so an *active* thread here means the
+      // prior attempt already succeeded end to end. Treat the retry as a no-op
+      // instead of re-running thread.create (which fails the "already exists"
+      // invariant and leaves the thread wedged) and re-emitting the user message.
+      if (bootstrap?.createThread) {
+        const existing = yield* snapshotQuery
+          .getThreadShellById(turnStart.threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to check thread existence for bootstrap."),
+            ),
+          );
+        if (Option.isSome(existing)) {
+          const { snapshotSequence } = yield* snapshotQuery
+            .getSnapshotSequence()
+            .pipe(
+              Effect.mapError((cause) =>
+                toDispatchCommandError(cause, "Failed to read projection sequence."),
+              ),
+            );
+          return { sequence: snapshotSequence };
+        }
+      }
+
       const { bootstrap: _bootstrap, ...finalTurnStartCommand } = turnStart;
       let createdThread = false;
       let targetProjectId = bootstrap?.createThread?.projectId;
