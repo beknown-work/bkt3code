@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { useThreadShell } from "../../state/entities";
+import { useCurrentUserId } from "../../state/identity";
 import { useOrgMembers } from "../../state/orgMembers";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
@@ -427,6 +428,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const memoizedThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
   const threadShellForSenders = useThreadShell(memoizedThreadRef);
   const { resolveUser: resolveOrgUser } = useOrgMembers();
+  const viewerUserId = useCurrentUserId();
   // Multiple collaborators = owner + at least one tagged member.
   const collaboratorCount = useMemo(() => {
     if (!threadShellForSenders) return 0;
@@ -438,10 +440,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [threadShellForSenders]);
   const resolveMessageSenderName = useCallback(
     (message: { readonly sentByUserId: UserId | null }): string | null => {
-      if (collaboratorCount < 2 || message.sentByUserId === null) return null;
+      // Only label messages from someone else, and only in shared threads.
+      if (
+        collaboratorCount < 2 ||
+        message.sentByUserId === null ||
+        message.sentByUserId === viewerUserId
+      ) {
+        return null;
+      }
       return firstNameOfUser(resolveOrgUser(message.sentByUserId));
     },
-    [collaboratorCount, resolveOrgUser],
+    [collaboratorCount, resolveOrgUser, viewerUserId],
   );
 
   const sharedState = useMemo<TimelineRowSharedState>(
