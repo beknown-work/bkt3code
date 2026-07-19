@@ -248,6 +248,10 @@ export const OrchestrationMessage = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  // Clerk user who sent this message (team mode, user messages only). Null for
+  // assistant/system messages or single-user mode. Compat-defaulted so old rows
+  // decode.
+  sentByUserId: Schema.NullOr(UserId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -985,6 +989,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  sentByUserId: Schema.optional(Schema.NullOr(UserId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

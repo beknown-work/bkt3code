@@ -217,6 +217,7 @@ export function applyThreadDetailEvent(
           : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
+        sentByUserId: event.payload.sentByUserId ?? null,
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
       };

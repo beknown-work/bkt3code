@@ -214,6 +214,7 @@ function buildUserTimelineEntry(text: string) {
       createdAt: MESSAGE_CREATED_AT,
       updatedAt: MESSAGE_CREATED_AT,
       streaming: false,
+      sentByUserId: null,
     },
   };
 }
@@ -486,6 +487,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               updatedAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
+              sentByUserId: null,
             },
           },
         ]}
@@ -526,6 +528,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               updatedAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
+              sentByUserId: null,
             },
           },
         ]}

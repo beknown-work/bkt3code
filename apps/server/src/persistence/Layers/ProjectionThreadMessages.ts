@@ -34,6 +34,7 @@ function toProjectionThreadMessage(
     role: row.role,
     text: row.text,
     isStreaming: row.isStreaming === 1,
+    sentByUserId: row.sentByUserId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
@@ -57,6 +58,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json,
           is_streaming,
+          sent_by_user_id,
           created_at,
           updated_at
         )
@@ -75,6 +77,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             )
           ),
           ${row.isStreaming ? 1 : 0},
+          ${row.sentByUserId},
           ${row.createdAt},
           ${row.updatedAt}
         )
@@ -89,6 +92,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             projection_thread_messages.attachments_json
           ),
           is_streaming = excluded.is_streaming,
+          sent_by_user_id = COALESCE(
+            excluded.sent_by_user_id,
+            projection_thread_messages.sent_by_user_id
+          ),
           created_at = excluded.created_at,
           updated_at = excluded.updated_at
       `;
@@ -108,6 +115,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          sent_by_user_id AS "sentByUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -129,6 +137,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          sent_by_user_id AS "sentByUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages

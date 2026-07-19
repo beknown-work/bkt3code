@@ -276,6 +276,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -290,6 +291,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -304,6 +306,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -339,6 +342,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -353,6 +357,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -402,6 +407,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -416,6 +422,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -454,6 +461,7 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
           streaming: false,
+          sentByUserId: null,
         },
       },
       {
@@ -468,6 +476,7 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt: "2026-01-01T00:00:05Z",
           updatedAt: "2026-01-01T00:00:06Z",
           streaming: false,
+          sentByUserId: null,
         },
       },
       {
@@ -494,6 +503,7 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt: "2026-01-01T00:00:20Z",
           updatedAt: "2026-01-01T00:00:22Z",
           streaming: false,
+          sentByUserId: null,
         },
       },
     ];
@@ -560,6 +570,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -574,6 +585,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:09Z",
             updatedAt: "2026-01-01T00:00:09Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -600,6 +612,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:14Z",
             updatedAt: "2026-01-01T00:00:14Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -614,6 +627,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:17Z",
             updatedAt: "2026-01-01T00:00:17Z",
             streaming: true,
+            sentByUserId: null,
           },
         },
       ],
@@ -705,6 +719,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:22Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -719,6 +734,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:01:00Z",
             updatedAt: "2026-01-01T00:01:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -759,6 +775,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:05Z",
             updatedAt: "2026-01-01T00:00:06Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -821,6 +838,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:01:00Z",
             updatedAt: "2026-01-01T00:01:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -870,6 +888,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -884,6 +903,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -917,6 +937,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -1023,6 +1044,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
       streaming: false,
+      sentByUserId: null,
     };
     const secondUserMessage = {
       id: "user-2" as never,
@@ -1032,6 +1054,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:10Z",
       updatedAt: "2026-01-01T00:00:10Z",
       streaming: false,
+      sentByUserId: null,
     };
 
     const rows = deriveMessagesTimelineRows({
@@ -1128,6 +1151,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
       streaming: false,
+      sentByUserId: null,
     };
     const secondUserMessage = {
       id: "user-2" as never,
@@ -1137,6 +1161,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:10Z",
       updatedAt: "2026-01-01T00:00:10Z",
       streaming: false,
+      sentByUserId: null,
     };
 
     const firstRows = deriveMessagesTimelineRows({

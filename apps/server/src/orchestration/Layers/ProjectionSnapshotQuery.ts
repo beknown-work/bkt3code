@@ -500,6 +500,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          sent_by_user_id AS "sentByUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -898,6 +899,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          sent_by_user_id AS "sentByUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1190,6 +1192,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
                   turnId: row.turnId,
                   streaming: row.isStreaming === 1,
+                  sentByUserId: row.sentByUserId,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                 });
@@ -2298,6 +2301,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             text: row.text,
             turnId: row.turnId,
             streaming: row.isStreaming === 1,
+            sentByUserId: row.sentByUserId,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
           };

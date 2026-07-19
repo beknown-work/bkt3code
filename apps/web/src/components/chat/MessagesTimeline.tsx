@@ -1,11 +1,15 @@
 import {
   type EnvironmentId,
   type MessageId,
+  type OrchestrationUser,
   type ScopedThreadRef,
   type ServerProviderSkill,
   type TurnId,
+  type UserId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { useThreadShell } from "../../state/entities";
+import { useOrgMembers } from "../../state/orgMembers";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   createContext,
@@ -129,6 +133,11 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  /**
+   * First name to attribute a user message to, or null when it shouldn't be
+   * shown (single-collaborator thread, no author, or single-user mode).
+   */
+  resolveMessageSenderName: (message: { readonly sentByUserId: UserId | null }) => string | null;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -140,6 +149,15 @@ interface TimelineRowActivityState {
   isWorking: boolean;
   isRevertingCheckpoint: boolean;
   activeTurnInProgress: boolean;
+}
+
+/** First name to attribute a message to: given name, else email local-part. */
+function firstNameOfUser(user: OrchestrationUser): string {
+  const name = user.name?.trim();
+  if (name) return name.split(/\s+/u)[0]!;
+  const email = user.email?.trim();
+  if (email) return email.split("@")[0]!;
+  return "Member";
 }
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
@@ -406,16 +424,37 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [timelineViewportElement, rows.length]);
 
+  const memoizedThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
+  const threadShellForSenders = useThreadShell(memoizedThreadRef);
+  const { resolveUser: resolveOrgUser } = useOrgMembers();
+  // Multiple collaborators = owner + at least one tagged member.
+  const collaboratorCount = useMemo(() => {
+    if (!threadShellForSenders) return 0;
+    return new Set(
+      [threadShellForSenders.ownerUserId, ...threadShellForSenders.memberUserIds].filter(
+        (id): id is UserId => id !== null,
+      ),
+    ).size;
+  }, [threadShellForSenders]);
+  const resolveMessageSenderName = useCallback(
+    (message: { readonly sentByUserId: UserId | null }): string | null => {
+      if (collaboratorCount < 2 || message.sentByUserId === null) return null;
+      return firstNameOfUser(resolveOrgUser(message.sentByUserId));
+    },
+    [collaboratorCount, resolveOrgUser],
+  );
+
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       timestampFormat,
       routeThreadKey,
-      threadRef: parseScopedThreadKey(routeThreadKey),
+      threadRef: memoizedThreadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      resolveMessageSenderName,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -425,11 +464,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timestampFormat,
       routeThreadKey,
+      memoizedThreadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      resolveMessageSenderName,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -827,6 +868,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  const senderName = ctx.resolveMessageSenderName(row.message);
   const userImages = row.message.attachments ?? [];
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
@@ -849,6 +891,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 
   return (
     <div className="group flex flex-col items-end gap-1">
+      {senderName ? (
+        <span className="px-1 text-xs font-medium text-muted-foreground">{senderName}</span>
+      ) : null}
       <div className="relative max-w-[80%] rounded-2xl border border-border bg-secondary p-3">
         {regularImages.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">

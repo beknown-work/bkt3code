@@ -592,6 +592,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           attachments: command.message.attachments,
           turnId: null,
           streaming: false,
+          sentByUserId: actor,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },

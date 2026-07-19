@@ -1504,6 +1504,7 @@ describe("deriveTimelineEntries", () => {
           turnId: null,
           updatedAt: "2026-02-23T00:00:01.000Z",
           streaming: false,
+          sentByUserId: null,
         },
       ],
       [
