@@ -204,7 +204,6 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
-import { deriveBootstrapSteps, type BootstrapPlan } from "./chat/BootstrapStepper.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -397,7 +396,7 @@ function useLocalDispatchState(input: {
   );
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
   const beginLocalDispatch = useCallback(
-    (options?: { preparingWorktree?: boolean; bootstrapPlan?: BootstrapPlan | null }) => {
+    (options?: { preparingWorktree?: boolean }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
       setLocalDispatch((current) => {
         const active = serverAcknowledgedLocalDispatch ? null : current;
@@ -418,7 +417,6 @@ function useLocalDispatchState(input: {
     localDispatchStartedAt: activeLocalDispatch?.startedAt ?? null,
     isPreparingWorktree: activeLocalDispatch?.preparingWorktree ?? false,
     isSendBusy: activeLocalDispatch !== null,
-    bootstrapPlan: activeLocalDispatch?.bootstrapPlan ?? null,
   };
 }
 
@@ -1038,12 +1036,6 @@ function ChatViewContent(props: ChatViewProps) {
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
   const serverThread = useThread(routeKind === "server" ? routeThreadRef : null);
-  // While a draft is bootstrapping, subscribe to the same threadId the server is
-  // creating so the loading stepper can read live progress (thread.created,
-  // worktree meta, setup-script activities). Mutually exclusive with
-  // `serverThread` by routeKind; Effect Atom dedupes so this costs nothing extra
-  // and does not affect route promotion.
-  const bootstrapLiveThread = useThread(routeKind === "draft" ? routeThreadRef : null);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
@@ -1812,7 +1804,6 @@ function ChatViewContent(props: ChatViewProps) {
     localDispatchStartedAt,
     isPreparingWorktree,
     isSendBusy,
-    bootstrapPlan,
   } = useLocalDispatchState({
     activeThread,
     activeLatestTurn,
@@ -1826,15 +1817,6 @@ function ChatViewContent(props: ChatViewProps) {
     activeLatestTurn,
     activeThread?.session ?? null,
     localDispatchStartedAt,
-  );
-  // Live bootstrap checklist for a new thread's first message (create → worktree
-  // → setup → start). Only while the local draft is still awaiting server ack.
-  const bootstrapSteps = useMemo(
-    () =>
-      isLocalDraftThread && isSendBusy && bootstrapPlan
-        ? deriveBootstrapSteps({ plan: bootstrapPlan, liveThread: bootstrapLiveThread })
-        : null,
-    [isLocalDraftThread, isSendBusy, bootstrapPlan, bootstrapLiveThread],
   );
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
@@ -4181,14 +4163,7 @@ function ChatViewContent(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({
-        preparingWorktree: Boolean(baseBranchForWorktree),
-        bootstrapPlan: {
-          createThread: isLocalDraftThread,
-          worktree: Boolean(baseBranchForWorktree),
-          setupScript: Boolean(baseBranchForWorktree),
-        },
-      });
+      beginLocalDispatch({ preparingWorktree: false });
       const startResult = await startThreadTurn({
         environmentId,
         input: {
@@ -5101,7 +5076,6 @@ function ChatViewContent(props: ChatViewProps) {
                 isWorking={isWorking}
                 activeTurnInProgress={isWorking || !latestTurnSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
-                bootstrapSteps={bootstrapSteps}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
                 latestTurn={activeLatestTurn}

@@ -85,8 +85,6 @@ import {
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestTurn,
 } from "./MessagesTimeline.logic";
-import { BootstrapStepper } from "./BootstrapStepper";
-import type { BootstrapStep } from "./BootstrapStepper.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -177,7 +175,6 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
-  bootstrapSteps?: ReadonlyArray<BootstrapStep> | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
@@ -211,7 +208,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
-  bootstrapSteps,
   listRef,
   timelineEntries,
   latestTurn,
@@ -326,7 +322,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
-        bootstrapSteps: bootstrapSteps ?? null,
       }),
     [
       timelineEntries,
@@ -338,7 +333,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
-      bootstrapSteps,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -877,7 +871,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
-      {row.kind === "bootstrap" ? <BootstrapStepper steps={row.steps} /> : null}
     </div>
   );
 });

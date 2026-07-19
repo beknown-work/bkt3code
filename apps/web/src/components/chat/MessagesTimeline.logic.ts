@@ -8,7 +8,6 @@ import {
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
-import type { BootstrapStep } from "./BootstrapStepper.logic";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
@@ -137,8 +136,7 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null }
-  | { kind: "bootstrap"; id: string; steps: ReadonlyArray<BootstrapStep> };
+  | { kind: "working"; id: string; createdAt: string | null };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -375,7 +373,6 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
-  bootstrapSteps?: ReadonlyArray<BootstrapStep> | null;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const durationStartByMessageId = computeMessageDurationStart(
@@ -527,15 +524,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // While a new thread is bootstrapping, show the live stage checklist in place
-  // of the generic "Working…" row so the ~15s setup reads as progress.
-  if (input.bootstrapSteps && input.bootstrapSteps.length > 0) {
-    nextRows.push({
-      kind: "bootstrap",
-      id: "bootstrap-stepper-row",
-      steps: input.bootstrapSteps,
-    });
-  } else if (input.isWorking) {
+  if (input.isWorking) {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
@@ -573,22 +562,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   switch (a.kind) {
     case "working":
       return a.createdAt === (b as typeof a).createdAt;
-
-    case "bootstrap": {
-      const bs = (b as typeof a).steps;
-      return (
-        a.steps.length === bs.length &&
-        a.steps.every((step, index) => {
-          const other = bs[index];
-          return (
-            other !== undefined &&
-            step.id === other.id &&
-            step.status === other.status &&
-            step.label === other.label
-          );
-        })
-      );
-    }
 
     case "turn-fold": {
       const bf = b as typeof a;
