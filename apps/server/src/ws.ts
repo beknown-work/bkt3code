@@ -71,6 +71,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationAccessControl } from "./orchestration/Services/AccessControl.ts";
 import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
+import { ClerkDirectory, ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import { filterShellSnapshot, isOwnerOrMember } from "./orchestration/accessRules.ts";
 import { checkCommandAccess } from "./orchestration/commandAccess.ts";
 import {
@@ -380,9 +381,14 @@ const makeWsRpcLayer = (
       const orchestrationCommandDispatcher =
         yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
       const accessControl = yield* OrchestrationAccessControl;
+      const clerkDirectory = yield* ClerkDirectory;
       // The operating Clerk user for this connection, or null for an
       // unrestricted operator (pairing/CLI/single-user) which skips filtering.
       const actorUserId = Option.getOrNull(accessControl.actorFor(currentSession.subject));
+      // Whether that operator is a Clerk org admin (may manage project access).
+      // Stable for the connection's identity, so resolve once.
+      const actorIsAdmin =
+        actorUserId === null ? false : yield* clerkDirectory.isOrgAdmin(actorUserId);
       // The set of thread/project ids the operator may see (active + archived),
       // derived from the filtered shell snapshots. Used to filter raw event
       // replays.
@@ -751,6 +757,7 @@ const makeWsRpcLayer = (
             const allowed = yield* checkCommandAccess(
               accessControl,
               actorUserId,
+              actorIsAdmin,
               normalizedCommand,
             ).pipe(
               Effect.mapError(
@@ -1812,6 +1819,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(OrchestrationAccessControlLive),
+              Layer.provide(ClerkDirectoryLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

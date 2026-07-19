@@ -139,9 +139,11 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           // Team mode: reject commands on threads/projects the operator can't
           // access. Reads as "invalid_command" so we don't leak existence.
           if (actorUserId !== null) {
+            const actorIsAdmin = yield* clerkDirectory.isOrgAdmin(actorUserId);
             const allowed = yield* checkCommandAccess(
               accessControl,
               actorUserId,
+              actorIsAdmin,
               normalizedCommand,
             ).pipe(
               Effect.catch((cause) =>

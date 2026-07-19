@@ -67,6 +67,11 @@ export interface ClerkDirectoryShape {
     ReadonlyArray<OrchestrationUser>,
     ClerkDirectoryError
   >;
+  /**
+   * Whether the user is a Clerk organization admin (manages project access).
+   * Derived from the cached member list; false in single-user mode or on error.
+   */
+  readonly isOrgAdmin: (userId: UserId) => Effect.Effect<boolean, never>;
   /** Resolve a user id by email (backfill). Returns null when not found. */
   readonly findUserIdByEmail: (email: string) => Effect.Effect<UserId | null, ClerkDirectoryError>;
 }
@@ -90,6 +95,10 @@ const nonEmpty = (value: string | null | undefined): string | null => {
   return trimmed && trimmed.length > 0 ? trimmed : null;
 };
 
+/** Clerk admin role — matches the modern `org:admin` and legacy `admin`. */
+const isAdminRole = (role: string | null | undefined): boolean =>
+  role === "org:admin" || role === "admin";
+
 const makeDisabledDirectory: ClerkDirectoryShape = {
   enabled: false,
   descriptor: null,
@@ -98,6 +107,7 @@ const makeDisabledDirectory: ClerkDirectoryShape = {
       new ClerkAuthError({ reason: "disabled", message: "Clerk auth is not configured." }),
     ),
   listOrgMembers: () => Effect.succeed([]),
+  isOrgAdmin: () => Effect.succeed(false),
   findUserIdByEmail: () => Effect.succeed(null),
 };
 
@@ -140,6 +150,7 @@ const makeEnabledDirectory = (
                     name: memberDisplayName(publicUserData.firstName, publicUserData.lastName),
                     email: nonEmpty(publicUserData.identifier),
                     imageUrl: nonEmpty(publicUserData.imageUrl),
+                    isAdmin: isAdminRole(membership.role),
                   });
                 }
                 offset += ORG_MEMBER_PAGE_SIZE;
@@ -225,6 +236,13 @@ const makeEnabledDirectory = (
         );
       });
 
+    const isOrgAdmin: ClerkDirectoryShape["isOrgAdmin"] = (userId) =>
+      listOrgMembers().pipe(
+        Effect.map((users) => users.find((user) => user.id === userId)?.isAdmin ?? false),
+        // Fail-closed: never grant admin on a Clerk directory error.
+        Effect.orElseSucceed(() => false),
+      );
+
     const findUserIdByEmail: ClerkDirectoryShape["findUserIdByEmail"] = (email) =>
       Effect.tryPromise({
         try: async () => {
@@ -244,6 +262,7 @@ const makeEnabledDirectory = (
       descriptor,
       verifySessionToken,
       listOrgMembers,
+      isOrgAdmin,
       findUserIdByEmail,
     } satisfies ClerkDirectoryShape;
   });

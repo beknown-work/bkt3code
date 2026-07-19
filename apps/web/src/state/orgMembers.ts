@@ -18,6 +18,7 @@ import { useCallback, useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { PrimaryEnvironmentHttpClient } from "../environments/primary";
 import { runPrimaryHttp } from "../lib/runtime";
+import { useCurrentUserId } from "./identity";
 
 async function fetchOrgMembers(): Promise<ReadonlyArray<OrchestrationUser>> {
   const result = await runPrimaryHttp(
@@ -50,8 +51,19 @@ export function useOrgMembers(): UseOrgMembersResult {
   const byId = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
   const resolveUser = useCallback(
     (id: UserId): OrchestrationUser =>
-      byId.get(id) ?? { id, name: null, email: null, imageUrl: null },
+      byId.get(id) ?? { id, name: null, email: null, imageUrl: null, isAdmin: false },
     [byId],
   );
   return { users, isPending: result.waiting, resolveUser };
+}
+
+/**
+ * Whether the current operator is a Clerk org admin (may manage project access).
+ * False outside team mode.
+ */
+export function useIsTeamAdmin(): boolean {
+  const currentUserId = useCurrentUserId();
+  const { resolveUser } = useOrgMembers();
+  if (currentUserId === null) return false;
+  return resolveUser(currentUserId).isAdmin;
 }

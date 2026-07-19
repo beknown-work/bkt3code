@@ -8,8 +8,11 @@ import {
   KeyboardIcon,
   Link2Icon,
   Settings2Icon,
+  UsersIcon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
+
+import { useIsTeamAdmin } from "../../state/orgMembers";
 
 import {
   SidebarContent,
@@ -29,14 +32,17 @@ export type SettingsSectionPath =
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/project-access"
   | "/settings/experiments"
   | "/settings/archived";
 
-export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
-  label: string;
-  to: SettingsSectionPath;
-  icon: ComponentType<{ className?: string }>;
-}> = [
+interface SettingsNavItem {
+  readonly label: string;
+  readonly to: SettingsSectionPath;
+  readonly icon: ComponentType<{ className?: string }>;
+}
+
+export const SETTINGS_NAV_ITEMS: ReadonlyArray<SettingsNavItem> = [
   { label: "General", to: "/settings/general", icon: Settings2Icon },
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
@@ -46,10 +52,21 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
 ];
 
+// Clerk org admins only — grants project workspace access.
+const PROJECT_ACCESS_NAV_ITEM: SettingsNavItem = {
+  label: "Project access",
+  to: "/settings/project-access",
+  icon: UsersIcon,
+};
+
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile } = useSidebar();
+  const isTeamAdmin = useIsTeamAdmin();
+  const navItems = isTeamAdmin
+    ? [...SETTINGS_NAV_ITEMS, PROJECT_ACCESS_NAV_ITEM]
+    : SETTINGS_NAV_ITEMS;
   const handleSectionClick = useCallback(
     (to: SettingsSectionPath) => {
       if (isMobile) {
@@ -75,7 +92,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       <SidebarContent className="overflow-x-hidden">
         <SidebarGroup className="px-2 py-3">
           <SidebarMenu>
-            {SETTINGS_NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.to;
               return (

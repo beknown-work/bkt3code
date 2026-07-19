@@ -16,14 +16,16 @@ import type { OrchestrationAccessControlShape } from "./Services/AccessControl.t
 /**
  * Whether `actorUserId` may dispatch `command`. A null actor is an unrestricted
  * operator (pairing/CLI/single-user) and is always allowed. `project.create` is
- * open to any operator; `thread.create` needs access to its target project; all
- * other thread/project-scoped commands need access to that entity. Internal
- * (server/provider-issued) commands are always allowed — they never carry a
- * client actor.
+ * open to any operator; `project.member.*` (granting/revoking project access) is
+ * restricted to Clerk org admins (`actorIsAdmin`); `thread.create` and other
+ * project-scoped commands need access to the target project; thread-scoped
+ * commands need access to that thread. Internal (server/provider-issued)
+ * commands are always allowed — they never carry a client actor.
  */
 export const checkCommandAccess = (
   accessControl: OrchestrationAccessControlShape,
   actorUserId: UserId | null,
+  actorIsAdmin: boolean,
   command: OrchestrationCommand,
 ): Effect.Effect<boolean, ProjectionRepositoryError> => {
   if (actorUserId === null) {
@@ -34,10 +36,13 @@ export const checkCommandAccess = (
     case "project.create":
       return Effect.succeed(true);
 
-    case "project.meta.update":
-    case "project.delete":
+    // Only Clerk org admins manage project access (from the Settings panel).
     case "project.member.add":
     case "project.member.remove":
+      return Effect.succeed(actorIsAdmin);
+
+    case "project.meta.update":
+    case "project.delete":
       return accessControl.canAccessProject(actorUserId, command.projectId);
 
     case "thread.create":

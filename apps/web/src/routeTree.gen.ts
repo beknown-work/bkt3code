@@ -15,6 +15,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
+import { Route as SettingsProjectAccessRouteImport } from './routes/settings.project-access'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsExperimentsRouteImport } from './routes/settings.experiments'
@@ -51,6 +52,11 @@ const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: '/providers',
   path: '/providers',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsProjectAccessRoute = SettingsProjectAccessRouteImport.update({
+  id: '/project-access',
+  path: '/project-access',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
@@ -105,6 +111,7 @@ export interface FileRoutesByFullPath {
   '/settings/experiments': typeof SettingsExperimentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/project-access': typeof SettingsProjectAccessRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -119,6 +126,7 @@ export interface FileRoutesByTo {
   '/settings/experiments': typeof SettingsExperimentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/project-access': typeof SettingsProjectAccessRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/': typeof ChatIndexRoute
@@ -136,6 +144,7 @@ export interface FileRoutesById {
   '/settings/experiments': typeof SettingsExperimentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/project-access': typeof SettingsProjectAccessRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/_chat/': typeof ChatIndexRoute
@@ -154,6 +163,7 @@ export interface FileRouteTypes {
     | '/settings/experiments'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/project-access'
     | '/settings/providers'
     | '/settings/source-control'
     | '/$environmentId/$threadId'
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
     | '/settings/experiments'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/project-access'
     | '/settings/providers'
     | '/settings/source-control'
     | '/'
@@ -184,6 +195,7 @@ export interface FileRouteTypes {
     | '/settings/experiments'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/project-access'
     | '/settings/providers'
     | '/settings/source-control'
     | '/_chat/'
@@ -239,6 +251,13 @@ declare module '@tanstack/react-router' {
       path: '/providers'
       fullPath: '/settings/providers'
       preLoaderRoute: typeof SettingsProvidersRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/project-access': {
+      id: '/settings/project-access'
+      path: '/project-access'
+      fullPath: '/settings/project-access'
+      preLoaderRoute: typeof SettingsProjectAccessRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/keybindings': {
@@ -321,6 +340,7 @@ interface SettingsRouteChildren {
   SettingsExperimentsRoute: typeof SettingsExperimentsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsProjectAccessRoute: typeof SettingsProjectAccessRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
 }
@@ -332,6 +352,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsExperimentsRoute: SettingsExperimentsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsProjectAccessRoute: SettingsProjectAccessRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
 }

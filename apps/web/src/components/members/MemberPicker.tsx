@@ -1,12 +1,11 @@
 /**
  * MemberPicker - searchable member checkbox list (team mode).
  *
- * Presentational: the parent (ThreadMembersControl / ProjectMembersDialog) owns
- * the popover/dialog shell and the command wiring. The owner row is checked +
- * disabled with an "Owner" badge (creator permanence). At thread level, members
- * inherited from the project are shown checked + disabled ("via project"). Rows
- * are disabled while their toggle is pending. Structure follows the phase
- * sidebar's search + checkbox-row popover.
+ * Presentational: the parent (ThreadMembersControl / project-access settings)
+ * owns the popover/dialog shell and the command wiring. The owner row is checked
+ * + disabled with an "Owner" badge (creator permanence). Rows are disabled while
+ * their toggle is pending. Structure follows the phase sidebar's search +
+ * checkbox-row popover.
  *
  * @module components/members/MemberPicker
  */
@@ -23,7 +22,6 @@ export function MemberPicker({
   users,
   ownerUserId,
   memberUserIds,
-  viaProjectUserIds = [],
   pendingUserIds,
   onToggle,
   resolveUser,
@@ -31,23 +29,20 @@ export function MemberPicker({
   readonly users: ReadonlyArray<OrchestrationUser>;
   readonly ownerUserId: UserId | null;
   readonly memberUserIds: ReadonlyArray<UserId>;
-  readonly viaProjectUserIds?: ReadonlyArray<UserId>;
   readonly pendingUserIds: ReadonlySet<UserId>;
   readonly onToggle: (userId: UserId, nextChecked: boolean) => void;
   readonly resolveUser: (id: UserId) => OrchestrationUser;
 }) {
   const [search, setSearch] = useState("");
   const memberSet = useMemo(() => new Set(memberUserIds), [memberUserIds]);
-  const viaProjectSet = useMemo(() => new Set(viaProjectUserIds), [viaProjectUserIds]);
 
-  // Union of directory users + any owner/member/project ids not in the directory
+  // Union of directory users + any owner/member ids not in the directory
   // (departed users), so nothing silently disappears from the list.
   const rows = useMemo(() => {
     const ids = new Set<UserId>();
     for (const user of users) ids.add(user.id);
     if (ownerUserId !== null) ids.add(ownerUserId);
     for (const id of memberUserIds) ids.add(id);
-    for (const id of viaProjectUserIds) ids.add(id);
     const needle = search.trim().toLowerCase();
     return [...ids]
       .map((id) => resolveUser(id))
@@ -55,7 +50,7 @@ export function MemberPicker({
         needle.length === 0 ? true : userDisplayName(user).toLowerCase().includes(needle),
       )
       .sort((a, b) => userDisplayName(a).localeCompare(userDisplayName(b)));
-  }, [users, ownerUserId, memberUserIds, viaProjectUserIds, search, resolveUser]);
+  }, [users, ownerUserId, memberUserIds, search, resolveUser]);
 
   return (
     <div className="flex max-h-80 flex-col">
@@ -76,22 +71,20 @@ export function MemberPicker({
         ) : (
           rows.map((user) => {
             const isOwner = ownerUserId === user.id;
-            const isViaProject = !isOwner && viaProjectSet.has(user.id);
             const isMember = memberSet.has(user.id);
             const isPending = pendingUserIds.has(user.id);
-            const locked = isOwner || isViaProject;
-            const checked = isOwner || isViaProject || isMember;
+            const checked = isOwner || isMember;
             return (
               <label
                 key={user.id}
                 className={cn(
                   "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent",
-                  (locked || isPending) && "cursor-default opacity-80 hover:bg-transparent",
+                  (isOwner || isPending) && "cursor-default opacity-80 hover:bg-transparent",
                 )}
               >
                 <Checkbox
                   checked={checked}
-                  disabled={locked || isPending}
+                  disabled={isOwner || isPending}
                   onCheckedChange={(next) => onToggle(user.id, next === true)}
                 />
                 <Avatar user={user} size="sm" />
@@ -99,10 +92,6 @@ export function MemberPicker({
                 {isOwner ? (
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                     Owner
-                  </span>
-                ) : isViaProject ? (
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                    via project
                   </span>
                 ) : null}
               </label>

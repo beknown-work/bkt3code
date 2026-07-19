@@ -1396,6 +1396,9 @@ export const OrchestrationUser = Schema.Struct({
   name: Schema.NullOr(TrimmedNonEmptyString),
   email: Schema.NullOr(TrimmedNonEmptyString),
   imageUrl: Schema.NullOr(TrimmedNonEmptyString),
+  // Clerk organization admin. Admins manage project access; compat-defaulted so
+  // older payloads/callers decode.
+  isAdmin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type OrchestrationUser = typeof OrchestrationUser.Type;
 
