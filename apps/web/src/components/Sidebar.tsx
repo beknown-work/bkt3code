@@ -111,6 +111,8 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import { useCurrentUserId } from "../state/identity";
+import { ProjectMembersDialog } from "./members/ProjectMembersDialog";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
@@ -1206,6 +1208,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     null,
   );
   const [projectRenameTitle, setProjectRenameTitle] = useState("");
+  const [projectMembersTarget, setProjectMembersTarget] =
+    useState<SidebarProjectGroupMember | null>(null);
+  const teamModeEnabled = useCurrentUserId() !== null;
   const [projectGroupingTarget, setProjectGroupingTarget] =
     useState<SidebarProjectGroupMember | null>(null);
   const [projectGroupingSelection, setProjectGroupingSelection] = useState<
@@ -1418,6 +1423,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     setProjectRenameTitle(member.title);
   }, []);
 
+  const openProjectMembersDialog = useCallback((member: SidebarProjectGroupMember) => {
+    setProjectMembersTarget(member);
+  }, []);
+
   const openProjectGroupingDialog = useCallback(
     (member: SidebarProjectGroupMember) => {
       const overrideKey = deriveProjectGroupingOverrideKey(member);
@@ -1591,7 +1600,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "manage-members" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1610,6 +1619,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
                 return;
+              case "manage-members":
+                openProjectMembersDialog(member);
+                return;
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1624,7 +1636,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "manage-members" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1661,6 +1673,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
+            // Team mode only: tag people onto the project (workspace access).
+            ...(teamModeEnabled ? [buildTargetedItem("manage-members", "Manage members…")] : []),
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -1682,10 +1696,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       copyPathToClipboard,
       handleRemoveProject,
       openProjectGroupingDialog,
+      openProjectMembersDialog,
       openProjectRenameDialog,
       project.groupedProjectCount,
       project.memberProjects,
       suppressProjectClickForContextMenuRef,
+      teamModeEnabled,
     ],
   );
 
@@ -2336,6 +2352,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         expandThreadListForProject={expandThreadListForProject}
         collapseThreadListForProject={collapseThreadListForProject}
       />
+
+      {projectMembersTarget !== null ? (
+        <ProjectMembersDialog
+          environmentId={projectMembersTarget.environmentId}
+          projectId={projectMembersTarget.id}
+          open={projectMembersTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setProjectMembersTarget(null);
+            }
+          }}
+        />
+      ) : null}
 
       <Dialog
         open={projectRenameTarget !== null}
