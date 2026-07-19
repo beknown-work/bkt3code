@@ -48,6 +48,17 @@ export const checkCommandAccess = (
     case "thread.create":
       return accessControl.canAccessProject(actorUserId, command.projectId);
 
+    case "thread.turn.start": {
+      // A new thread's first message arrives as a bootstrap turn-start that
+      // creates the thread — the thread doesn't exist yet, so gate on access to
+      // the target project. A normal turn-start on an existing thread gates on
+      // thread access.
+      const bootstrapProjectId = command.bootstrap?.createThread?.projectId;
+      return bootstrapProjectId !== undefined
+        ? accessControl.canAccessProject(actorUserId, bootstrapProjectId)
+        : accessControl.canAccessThread(actorUserId, command.threadId);
+    }
+
     case "thread.delete":
     case "thread.archive":
     case "thread.unarchive":
@@ -56,7 +67,6 @@ export const checkCommandAccess = (
     case "thread.member.remove":
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
-    case "thread.turn.start":
     case "thread.turn.interrupt":
     case "thread.approval.respond":
     case "thread.user-input.respond":
