@@ -1196,3 +1196,33 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
   });
 });
+
+describe("deriveMessagesTimelineRows bootstrap row", () => {
+  const baseInput = {
+    timelineEntries: [],
+    latestTurn: null,
+    isWorking: true,
+    activeTurnStartedAt: null,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    revertTurnCountByUserMessageId: new Map(),
+  } as const;
+
+  it("emits a bootstrap row and suppresses the working row when steps are present", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      bootstrapSteps: [
+        { id: "create", label: "Creating thread", status: "done" },
+        { id: "agent", label: "Starting agent", status: "active" },
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["bootstrap"]);
+    const bootstrapRow = rows[0];
+    expect(bootstrapRow?.kind === "bootstrap" ? bootstrapRow.steps.length : 0).toBe(2);
+  });
+
+  it("falls back to the working row when no bootstrap steps are supplied", () => {
+    const rows = deriveMessagesTimelineRows({ ...baseInput, bootstrapSteps: null });
+    expect(rows.map((row) => row.kind)).toEqual(["working"]);
+  });
+});
