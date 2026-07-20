@@ -142,11 +142,16 @@ export const make = Effect.gen(function* () {
       // Durable-retry idempotency: a bootstrap turn-start that creates a thread
       // may be re-dispatched by the client when it never received the first ack
       // (e.g. the page was refreshed while the bootstrap — worktree creation plus
-      // setup script — was still running). A partially-failed bootstrap is
-      // compensated with thread.deleted, so an *active* thread here means the
-      // prior attempt already succeeded end to end. Treat the retry as a no-op
-      // instead of re-running thread.create (which fails the "already exists"
-      // invariant and leaves the thread wedged) and re-emitting the user message.
+      // setup script — was still running). An active thread whose first turn
+      // already started means the prior attempt succeeded end to end; treat that
+      // retry as a no-op instead of re-running thread.create (which fails the
+      // "already exists" invariant) and re-emitting the user message. An active
+      // thread WITHOUT a turn is a half-finished bootstrap (a prior attempt died
+      // between thread.create and the turn start, e.g. on a dropped socket) —
+      // resume it: skip thread.create, reuse an already-prepared worktree, and
+      // carry on to the turn start so the thread does not stay wedged forever.
+      let resumeExistingThread = false;
+      let existingWorktreePath: string | null = null;
       if (bootstrap?.createThread) {
         const existing = yield* snapshotQuery
           .getThreadShellById(turnStart.threadId)
@@ -156,14 +161,22 @@ export const make = Effect.gen(function* () {
             ),
           );
         if (Option.isSome(existing)) {
-          const { snapshotSequence } = yield* snapshotQuery
-            .getSnapshotSequence()
-            .pipe(
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to read projection sequence."),
-              ),
-            );
-          return { sequence: snapshotSequence };
+          if (existing.value.latestTurn !== null) {
+            const { snapshotSequence } = yield* snapshotQuery
+              .getSnapshotSequence()
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to read projection sequence."),
+                ),
+              );
+            return { sequence: snapshotSequence };
+          }
+          resumeExistingThread = true;
+          existingWorktreePath = existing.value.worktreePath;
+          yield* Effect.logInfo("resuming half-finished bootstrap turn start", {
+            threadId: turnStart.threadId,
+            worktreePath: existingWorktreePath,
+          });
         }
       }
 
@@ -171,7 +184,8 @@ export const make = Effect.gen(function* () {
       let createdThread = false;
       let targetProjectId = bootstrap?.createThread?.projectId;
       let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
-      let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+      let targetWorktreePath =
+        existingWorktreePath ?? bootstrap?.createThread?.worktreePath ?? null;
 
       const cleanupCreatedThread = () =>
         createdThread
@@ -290,7 +304,7 @@ export const make = Effect.gen(function* () {
       });
 
       const bootstrapProgram = Effect.gen(function* () {
-        if (bootstrap?.createThread) {
+        if (bootstrap?.createThread && !resumeExistingThread) {
           yield* orchestrationEngine.dispatch(
             {
               type: "thread.create",
@@ -310,7 +324,9 @@ export const make = Effect.gen(function* () {
           createdThread = true;
         }
 
-        if (bootstrap?.prepareWorktree) {
+        // Skip re-preparing when resuming a bootstrap whose worktree already
+        // exists — createWorktree is not idempotent for the same branch name.
+        if (bootstrap?.prepareWorktree && targetWorktreePath === null) {
           let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
           if (bootstrap.prepareWorktree.startFromOrigin) {
             yield* gitWorkflow.fetchRemote({
@@ -348,7 +364,13 @@ export const make = Effect.gen(function* () {
         return yield* orchestrationEngine.dispatch(finalTurnStartCommand, dispatchOptions);
       });
 
-      return yield* bootstrapProgram.pipe(
+      // Uninterruptible: a dropped websocket must not kill the bootstrap between
+      // thread.create and the turn start — that used to strand an active thread
+      // with no turn (and no compensating delete on the interrupt-only path),
+      // which every retry then mis-read as an already-completed bootstrap. Each
+      // inner step is bounded (git commands time out; the setup script only
+      // launches), so this cannot pin the fiber indefinitely.
+      return yield* Effect.uninterruptible(bootstrapProgram).pipe(
         Effect.catchCause((cause) => {
           const error = Cause.squash(cause);
           const dispatchError = toDispatchCommandError(
