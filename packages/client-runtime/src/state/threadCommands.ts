@@ -38,6 +38,8 @@ import {
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
+export { OrchestrationCommandAcknowledgementTimeoutError } from "../operations/commands.ts";
+
 export type {
   AddThreadMemberInput,
   ArchiveThreadInput,

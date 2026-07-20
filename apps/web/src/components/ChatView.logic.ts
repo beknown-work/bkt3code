@@ -196,6 +196,40 @@ export function resolveSendEnvMode(input: {
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
+export function resolveSendWorkspaceContext(input: {
+  isLocalDraftThread: boolean;
+  isGitRepo: boolean;
+  rendered: {
+    envMode: DraftThreadEnvMode;
+    branch: string | null;
+    worktreePath: string | null;
+  };
+  latestDraft: Pick<DraftThreadState, "envMode" | "branch" | "worktreePath"> | null;
+}): {
+  envMode: DraftThreadEnvMode;
+  branch: string | null;
+  worktreePath: string | null;
+} {
+  const selected =
+    input.isLocalDraftThread && input.latestDraft ? input.latestDraft : input.rendered;
+  return {
+    envMode: resolveSendEnvMode({
+      requestedEnvMode: selected.envMode,
+      isGitRepo: input.isGitRepo,
+    }),
+    branch: selected.branch,
+    worktreePath: selected.worktreePath,
+  };
+}
+
+export function shouldPrepareWorktreeForFirstTurn(input: {
+  isFirstMessage: boolean;
+  envMode: DraftThreadEnvMode;
+  worktreePath: string | null;
+}): boolean {
+  return input.isFirstMessage && input.envMode === "worktree" && input.worktreePath === null;
+}
+
 export function cloneComposerImageForRetry(
   image: ComposerImageAttachment,
 ): ComposerImageAttachment {

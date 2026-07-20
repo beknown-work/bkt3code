@@ -231,9 +231,10 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
-  resolveSendEnvMode,
+  resolveSendWorkspaceContext,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldPrepareWorktreeForFirstTurn,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -3620,11 +3621,6 @@ function ChatViewContent(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         settings.newWorktreesStartFromOrigin)
       : false;
-  const sendEnvMode = resolveSendEnvMode({
-    requestedEnvMode: envMode,
-    isGitRepo,
-  });
-
   useEffect(() => {
     setPendingServerThreadEnvMode(null);
     setPendingServerThreadBranch(undefined);
@@ -3998,19 +3994,32 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
-    const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
-        ? activeThreadBranch
-        : null;
-
+    // The environment selector and the send handler can run in adjacent browser
+    // tasks. Read the draft store at submission time so the command cannot use
+    // a stale render that still says "worktree" after the UI says "Current checkout".
+    const sendWorkspace = resolveSendWorkspaceContext({
+      isLocalDraftThread,
+      isGitRepo,
+      rendered: {
+        envMode,
+        branch: activeThreadBranch,
+        worktreePath: activeThread.worktreePath,
+      },
+      latestDraft:
+        isLocalDraftThread && draftId !== null ? (getDraftSession(draftId) ?? null) : null,
+    });
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
-    const shouldCreateWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
-    if (shouldCreateWorktree && !activeThreadBranch) {
+    const shouldCreateWorktree = shouldPrepareWorktreeForFirstTurn({
+      isFirstMessage,
+      envMode: sendWorkspace.envMode,
+      worktreePath: sendWorkspace.worktreePath,
+    });
+    if (shouldCreateWorktree && !sendWorkspace.branch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
+    const baseBranchForWorktree = shouldCreateWorktree ? sendWorkspace.branch : null;
 
     sendInFlightRef.current = true;
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
@@ -4145,8 +4154,8 @@ function ChatViewContent(props: ChatViewProps) {
           modelSelection: threadCreateModelSelection,
           runtimeMode,
           interactionMode,
-          branch: activeThreadBranch,
-          worktreePath: activeThread.worktreePath,
+          branch: sendWorkspace.branch,
+          worktreePath: sendWorkspace.worktreePath,
           createdAt: activeThread.createdAt,
         },
       });

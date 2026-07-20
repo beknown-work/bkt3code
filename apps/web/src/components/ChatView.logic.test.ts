@@ -14,6 +14,8 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveSendEnvMode,
+  resolveSendWorkspaceContext,
+  shouldPrepareWorktreeForFirstTurn,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -300,6 +302,83 @@ describe("resolveSendEnvMode", () => {
   it("keeps worktree mode only for git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+  });
+});
+
+describe("resolveSendWorkspaceContext", () => {
+  it("uses the latest local draft selection instead of a stale rendered worktree mode", () => {
+    expect(
+      resolveSendWorkspaceContext({
+        isLocalDraftThread: true,
+        isGitRepo: true,
+        rendered: {
+          envMode: "worktree",
+          branch: "main",
+          worktreePath: null,
+        },
+        latestDraft: {
+          envMode: "local",
+          branch: "main",
+          worktreePath: null,
+        },
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: "main",
+      worktreePath: null,
+    });
+  });
+
+  it("does not let an unrelated draft override a server thread context", () => {
+    expect(
+      resolveSendWorkspaceContext({
+        isLocalDraftThread: false,
+        isGitRepo: true,
+        rendered: {
+          envMode: "local",
+          branch: "release",
+          worktreePath: null,
+        },
+        latestDraft: {
+          envMode: "worktree",
+          branch: "main",
+          worktreePath: null,
+        },
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: "release",
+      worktreePath: null,
+    });
+  });
+});
+
+describe("shouldPrepareWorktreeForFirstTurn", () => {
+  it("never prepares a worktree for Current checkout", () => {
+    expect(
+      shouldPrepareWorktreeForFirstTurn({
+        isFirstMessage: true,
+        envMode: "local",
+        worktreePath: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("prepares one only for an unattached first turn in New worktree mode", () => {
+    expect(
+      shouldPrepareWorktreeForFirstTurn({
+        isFirstMessage: true,
+        envMode: "worktree",
+        worktreePath: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPrepareWorktreeForFirstTurn({
+        isFirstMessage: false,
+        envMode: "worktree",
+        worktreePath: null,
+      }),
+    ).toBe(false);
   });
 });
 

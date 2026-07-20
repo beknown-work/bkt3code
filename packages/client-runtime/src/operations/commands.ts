@@ -7,8 +7,9 @@ import {
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
-import type { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import {
   type EnvironmentRpcFailure,
   type EnvironmentRpcSuccess,
@@ -52,9 +53,30 @@ export type AddProjectMemberInput = CommandInput<"project.member.add">;
 export type RemoveProjectMemberInput = CommandInput<"project.member.remove">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
+const ORCHESTRATION_COMMAND_ACK_TIMEOUT = "10 seconds";
+
+export class OrchestrationCommandAcknowledgementTimeoutError extends Schema.TaggedErrorClass<OrchestrationCommandAcknowledgementTimeoutError>()(
+  "OrchestrationCommandAcknowledgementTimeoutError",
+  {
+    commandType: Schema.String,
+  },
+) {
+  override get message(): string {
+    const operation =
+      this.commandType === "thread.create"
+        ? "Thread creation"
+        : this.commandType === "thread.turn.start"
+          ? "Starting the agent"
+          : `The ${this.commandType} request`;
+    return `${operation} was not acknowledged by the server within 10 seconds. Check the connection and retry.`;
+  }
+}
+
 type CommandEffect = Effect.Effect<
   EnvironmentRpcSuccess<DispatchTag>,
-  EnvironmentRpcFailure<DispatchTag> | EnvironmentRpcUnavailableError,
+  | EnvironmentRpcFailure<DispatchTag>
+  | EnvironmentRpcUnavailableError
+  | OrchestrationCommandAcknowledgementTimeoutError,
   Crypto.Crypto | EnvironmentSupervisor
 >;
 
@@ -81,9 +103,24 @@ function timestampedCommandMetadata(input: {
   });
 }
 
-function dispatch(command: ClientOrchestrationCommand) {
-  return request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
-}
+const dispatch = Effect.fn("EnvironmentCommands.dispatch")(function* (
+  command: ClientOrchestrationCommand,
+) {
+  const supervisor = yield* EnvironmentSupervisor;
+  return yield* request(ORCHESTRATION_WS_METHODS.dispatchCommand, command).pipe(
+    Effect.timeoutOrElse({
+      duration: ORCHESTRATION_COMMAND_ACK_TIMEOUT,
+      orElse: () =>
+        supervisor.retryNow.pipe(
+          Effect.andThen(
+            new OrchestrationCommandAcknowledgementTimeoutError({
+              commandType: command.type,
+            }),
+          ),
+        ),
+    }),
+  );
+});
 
 export const createProject: (input: CreateProjectInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createProject",
