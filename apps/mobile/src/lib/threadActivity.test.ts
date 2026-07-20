@@ -68,6 +68,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: null,
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
@@ -120,6 +121,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: "2026-04-01T00:00:03.000Z",
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
@@ -190,6 +192,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: "2026-04-01T00:00:03.000Z",
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
@@ -240,6 +243,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: "2026-04-01T00:00:18.000Z",
         assistantMessageId: MessageId.make("assistant-final"),
+        durationMs: null,
       },
       messages: [
         {
@@ -312,6 +316,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:14.000Z",
         completedAt: null,
         assistantMessageId: MessageId.make("assistant-next"),
+        durationMs: null,
       },
       messages: [
         {
@@ -393,6 +398,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: null,
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
