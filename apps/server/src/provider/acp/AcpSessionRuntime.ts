@@ -44,7 +44,20 @@ export interface AcpSessionEventStreamBarrier {
   readonly acknowledge: Deferred.Deferred<void>;
 }
 
-export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
+/**
+ * The ACP agent child process exited. Emitted so a crashed agent settles the
+ * thread instead of leaving its turn "running" forever — the ACP transport has
+ * no keepalive, so process exit is the only reliable death signal.
+ */
+export interface AcpSessionRuntimeExited {
+  readonly _tag: "Exited";
+  readonly exitCode: number;
+}
+
+export type AcpSessionRuntimeEvent =
+  | AcpParsedSessionEvent
+  | AcpSessionEventStreamBarrier
+  | AcpSessionRuntimeExited;
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
@@ -341,6 +354,15 @@ export const make = (
             }),
         ),
       );
+
+    // Observe child exit. Codex (CodexSessionRuntime) and OpenCode already do
+    // this; ACP did not, so a dead Cursor/Grok agent left the thread pinned to
+    // "running" indefinitely (nothing else in the ACP path reports death).
+    yield* child.exitCode.pipe(
+      Effect.flatMap((exitCode) => Queue.offer(eventQueue, { _tag: "Exited" as const, exitCode })),
+      Effect.ignore,
+      Effect.forkIn(runtimeScope),
+    );
 
     const acpContext = yield* Layer.build(
       EffectAcpClient.layerChildProcess(child, {

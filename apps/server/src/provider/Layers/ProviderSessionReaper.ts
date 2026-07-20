@@ -1,11 +1,18 @@
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  listRunningSessionRows,
+  settleRunningSession,
+} from "../../orchestration/reconcileRunningTurns.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -15,10 +22,24 @@ import { ProviderService } from "../Services/ProviderService.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * Last-resort backstop for a turn that is still "running" with a live provider
+ * session but has clearly gone nowhere. Deliberately generous: silence is not
+ * evidence of death (see reconcileRunningTurns), so this must never be the
+ * mechanism that ends a normal turn.
+ */
+const DEFAULT_TURN_ABSOLUTE_CAP_MS = 2 * 60 * 60 * 1000;
+/**
+ * A turn must have been running at least this long before "no in-memory
+ * session" counts as proof of death, so a session that is mid-registration is
+ * never mistaken for an orphan.
+ */
+const ORPHAN_EVIDENCE_GRACE_MS = 5 * 60 * 1000;
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
   readonly sweepIntervalMs?: number;
+  readonly turnAbsoluteCapMs?: number;
 }
 
 const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =>
@@ -26,14 +47,80 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    // Captured here (rather than inside the sweep) so the orphan pass does not
+    // leak these requirements into `start()`, whose context is Scope-only.
+    const reconcileContext = yield* Effect.context<
+      Crypto.Crypto | OrchestrationEngine.OrchestrationEngineService | SqlClient.SqlClient
+    >();
 
     const inactivityThresholdMs = Math.max(
       1,
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    const turnAbsoluteCapMs = Math.max(
+      1,
+      options?.turnAbsoluteCapMs ?? DEFAULT_TURN_ABSOLUTE_CAP_MS,
+    );
+
+    /**
+     * Settle threads still marked running whose agent is provably gone.
+     *
+     * The plain session reaper below can never do this: it skips any thread
+     * with an active turn, which is exactly the stuck case. Evidence here is
+     * "the adapters hold no in-memory session for this thread" — never silence,
+     * because a healthy agent can emit nothing for the whole of a long tool
+     * call.
+     */
+    const sweepOrphanedTurns = Effect.gen(function* () {
+      const rows = yield* listRunningSessionRows;
+
+      if (rows.length === 0) {
+        return;
+      }
+
+      const liveThreadIds = new Set(
+        (yield* providerService.listSessions()).map((session) => String(session.threadId)),
+      );
+      const now = yield* Clock.currentTimeMillis;
+
+      for (const row of rows) {
+        const startedMs = Date.parse(row.turnStartedAt ?? row.updatedAt);
+        const runningForMs = Number.isNaN(startedMs) ? 0 : now - startedMs;
+
+        const reason = !liveThreadIds.has(row.threadId)
+          ? runningForMs >= ORPHAN_EVIDENCE_GRACE_MS
+            ? "Interrupted: the agent session is no longer running."
+            : null
+          : runningForMs >= turnAbsoluteCapMs
+            ? "Interrupted: the turn exceeded the maximum run time."
+            : null;
+
+        if (reason === null) {
+          continue;
+        }
+
+        yield* settleRunningSession({ row, reason }).pipe(
+          Effect.tap(() =>
+            Effect.logInfo("provider.session.reaper.settled-orphaned-turn", {
+              threadId: row.threadId,
+              runningForMs,
+              reason,
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.session.reaper.settle-orphaned-turn-failed", {
+              threadId: row.threadId,
+              cause,
+            }),
+          ),
+        );
+      }
+    }).pipe(Effect.provide(reconcileContext));
 
     const sweep = Effect.gen(function* () {
+      yield* sweepOrphanedTurns;
+
       const bindings = yield* directory.listBindings();
       const now = yield* Clock.currentTimeMillis;
       let reapedCount = 0;

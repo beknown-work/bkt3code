@@ -787,6 +787,30 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   yield* Deferred.succeed(event.acknowledge, undefined);
                   return;
                 }
+                if (event._tag === "Exited") {
+                  // The agent process died. Nothing else in the ACP path reports
+                  // this, so without it the turn stays "running" forever.
+                  // Deliberately does not interrupt the notification fiber or
+                  // close the session scope — we are running inside that fiber;
+                  // a later stopSession/shutdown closes the scope.
+                  if (ctx.stopped) return;
+                  ctx.stopped = true;
+                  yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+                  yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+                  sessions.delete(ctx.threadId);
+                  yield* offerRuntimeEvent({
+                    type: "session.exited",
+                    ...(yield* makeEventStamp()),
+                    provider: PROVIDER,
+                    threadId: ctx.threadId,
+                    payload: {
+                      exitKind: event.exitCode === 0 ? "graceful" : "error",
+                      reason: `Grok agent process exited with code ${event.exitCode}.`,
+                      recoverable: false,
+                    },
+                  });
+                  return;
+                }
                 if (
                   event._tag === "PlanUpdated" ||
                   event._tag === "ToolCallUpdated" ||

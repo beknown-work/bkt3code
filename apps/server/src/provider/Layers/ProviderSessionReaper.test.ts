@@ -17,6 +17,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
@@ -217,6 +218,17 @@ describe("ProviderSessionReaper", () => {
           getThreadDetailSnapshot: () => Effect.die("unused"),
         }),
       ),
+      // The reaper's orphaned-turn pass reads the projections directly and
+      // settles via the orchestration engine. No rows exist in this harness, so
+      // the engine is never actually dispatched to.
+      Layer.provideMerge(
+        Layer.succeed(OrchestrationEngineService, {
+          readEvents: () => Stream.empty,
+          dispatch: () => Effect.die("unused"),
+          streamDomainEvents: Stream.empty,
+        }),
+      ),
+      Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(NodeServices.layer),
     );
 
