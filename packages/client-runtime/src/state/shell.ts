@@ -216,6 +216,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
       yield* subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, subscribeInput, {
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
+        // A shell stream is the live source for sidebar rows and draft-to-thread
+        // promotion. An expected subscription failure must not permanently
+        // freeze the last snapshot; without this retry, only a page reload or a
+        // full connection restart could make newly-created threads visible.
+        retryExpectedFailureAfter: "250 millis",
       }).pipe(Stream.runForEach(applyItem));
     }),
   );

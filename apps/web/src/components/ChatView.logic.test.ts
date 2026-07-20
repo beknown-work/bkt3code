@@ -1,10 +1,18 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  EventId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Thread } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  activeRuntimeWarningLabel,
   buildExpiredTerminalContextToastCopy,
   buildStopExecutionInput,
   createLocalDispatchSnapshot,
@@ -573,5 +581,44 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("activeRuntimeWarningLabel", () => {
+  const warning = {
+    id: EventId.make("warning-1"),
+    tone: "info" as const,
+    kind: "runtime.warning",
+    summary: "Reconnecting... 2/5",
+    payload: {},
+    turnId: null,
+    createdAt: "2026-03-29T00:00:05.000Z",
+  };
+
+  it("surfaces a warning from the active execution", () => {
+    expect(
+      activeRuntimeWarningLabel({
+        activities: [warning],
+        activeWorkStartedAt: now,
+        isWorking: true,
+      }),
+    ).toBe("Reconnecting... 2/5");
+  });
+
+  it("ignores warnings from an older execution or an idle thread", () => {
+    expect(
+      activeRuntimeWarningLabel({
+        activities: [warning],
+        activeWorkStartedAt: "2026-03-29T00:01:00.000Z",
+        isWorking: true,
+      }),
+    ).toBeNull();
+    expect(
+      activeRuntimeWarningLabel({
+        activities: [warning],
+        activeWorkStartedAt: now,
+        isWorking: false,
+      }),
+    ).toBeNull();
   });
 });

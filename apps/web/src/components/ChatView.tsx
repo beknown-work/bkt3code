@@ -159,10 +159,11 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { buildDraftThreadRouteParams } from "../threadRoutes";
+import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  markPromotedDraftThreadByRef,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -214,6 +215,7 @@ import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
+  activeRuntimeWarningLabel,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -334,6 +336,7 @@ function formatOutgoingPrompt(params: {
 }
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
+const CREATED_THREAD_SHELL_RECONCILIATION_DELAY_MS = 750;
 
 type ChatViewProps =
   | {
@@ -2151,16 +2154,23 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.execution,
     providerExecutionLabel,
   );
+  const runtimeWarningStatus = activeRuntimeWarningLabel({
+    activities: threadActivities,
+    activeWorkStartedAt,
+    isWorking,
+  });
   const workingStatusLabel = isPreparingWorktree
     ? "Preparing worktree"
-    : (backendExecutionStatus ??
-      (routeKind === "draft" && isSendBusy
-        ? "Creating thread"
-        : isRevertingCheckpoint
-          ? "Restoring checkpoint"
-          : isConnecting
-            ? "Connecting to server"
-            : "Agent is working"));
+    : runtimeWarningStatus
+      ? runtimeWarningStatus
+      : (backendExecutionStatus ??
+        (routeKind === "draft" && isSendBusy
+          ? "Creating thread"
+          : isRevertingCheckpoint
+            ? "Restoring checkpoint"
+            : isConnecting
+              ? "Connecting to server"
+              : "Agent is working"));
   const backendExecutionError =
     activeThread?.execution?.activity === "failed"
       ? (activeThread.execution.turn?.lastError ??
@@ -4140,6 +4150,7 @@ function ChatViewContent(props: ChatViewProps) {
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
+    let durableThreadCreated = isServerThread;
     // Promote a local draft to a durable thread before any worktree or provider
     // startup. This makes the sidebar row and canonical route available
     // immediately while the slower execution setup continues independently.
@@ -4161,6 +4172,8 @@ function ChatViewContent(props: ChatViewProps) {
       });
       if (createResult._tag === "Failure") {
         failure = createResult;
+      } else {
+        durableThreadCreated = true;
       }
     }
     // Auto-title from first message
@@ -4272,11 +4285,42 @@ function ChatViewContent(props: ChatViewProps) {
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);
-        setThreadError(
-          threadIdForSend,
-          error instanceof Error ? error.message : "Failed to send message.",
+        const errorMessage = error instanceof Error ? error.message : "Failed to send message.";
+        setThreadError(threadIdForSend, errorMessage);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: isLocalDraftThread ? "Could not start thread" : "Could not send message",
+            description: errorMessage,
+          }),
         );
       }
+    }
+
+    if (isLocalDraftThread && durableThreadCreated) {
+      const createdThreadRef = scopeThreadRef(environmentId, threadIdForSend);
+      // Command acknowledgement is authoritative proof that the durable thread
+      // exists. Do not leave promotion entirely dependent on observing the
+      // matching shell delta: a dropped delta used to strand the draft route on
+      // "Creating thread…" until a full page reload rebuilt the shell snapshot.
+      markPromotedDraftThreadByRef(createdThreadRef);
+      await navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(createdThreadRef),
+        replace: true,
+      });
+
+      // The canonical route can load its detail snapshot directly by id, while
+      // the sidebar still depends on the shell snapshot. Give the normal live
+      // delta a brief chance to arrive, then reconnect only if the row is still
+      // absent. Every shell subscription starts with a fresh authoritative
+      // snapshot, so this repairs the left navigation without a manual reload.
+      window.setTimeout(() => {
+        if (readThreadShell(createdThreadRef) !== null) {
+          return;
+        }
+        void retryEnvironment(environmentId);
+      }, CREATED_THREAD_SHELL_RECONCILIATION_DELAY_MS);
     }
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {

@@ -4,6 +4,7 @@ import {
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
+  type OrchestrationThreadActivity,
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
@@ -26,6 +27,21 @@ export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+export function activeRuntimeWarningLabel(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  activeWorkStartedAt: string | null;
+  isWorking: boolean;
+}): string | null {
+  if (!input.isWorking || input.activeWorkStartedAt === null) {
+    return null;
+  }
+  const latestActivity = input.activities.at(-1);
+  return latestActivity?.kind === "runtime.warning" &&
+    latestActivity.createdAt >= input.activeWorkStartedAt
+    ? latestActivity.summary
+    : null;
+}
 
 export function buildLocalDraftThread(
   threadId: ThreadId,
