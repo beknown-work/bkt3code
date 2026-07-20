@@ -29,6 +29,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import { runOwnershipBackfill } from "./orchestration/ownershipBackfill.ts";
+import { runStaleSessionReconciliation } from "./orchestration/staleSessionReconciliation.ts";
 import { ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -347,6 +348,13 @@ export const make = Effect.gen(function* () {
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
       }),
     );
+
+    // A turn cannot outlive the process that ran it: settle any session still
+    // marked running/starting by the previous process so restarted threads do
+    // not show "Agent is working" forever. Runs after the reactors so the
+    // projection is loaded, and before commands are accepted.
+    yield* Effect.logDebug("startup phase: stale session reconciliation");
+    yield* runStartupPhase("sessions.reconcile", runStaleSessionReconciliation);
 
     // Team mode only: assign legacy (pre-ownership) threads/projects to the
     // configured default owner. No-op + fail-soft in single-user mode / on a
