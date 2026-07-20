@@ -24,12 +24,14 @@ export default Effect.gen(function* () {
       SELECT t.turn_id
       FROM projection_turns t
       WHERE t.thread_id = projection_threads.thread_id
+        AND t.turn_id IS NOT NULL
       ORDER BY t.requested_at DESC, t.row_id DESC
       LIMIT 1
     )
     WHERE latest_turn_id IS NULL
       AND EXISTS (
-        SELECT 1 FROM projection_turns t WHERE t.thread_id = projection_threads.thread_id
+        SELECT 1 FROM projection_turns t
+        WHERE t.thread_id = projection_threads.thread_id AND t.turn_id IS NOT NULL
       )
   `;
 });
