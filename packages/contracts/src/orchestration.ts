@@ -358,8 +358,37 @@ export const OrchestrationLatestTurn = Schema.Struct({
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
+  /**
+   * Server-computed wall-clock duration of a settled turn (completedAt minus
+   * startedAt). The UI renders this instead of deriving elapsed time from a
+   * browser clock. Null while the turn is still running, or when either
+   * endpoint is missing. Compat-defaulted so pre-existing cached rows decode.
+   */
+  durationMs: Schema.NullOr(NonNegativeInt).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
 });
+
+/**
+ * Wall-clock duration of a settled turn, from server-side timestamps.
+ *
+ * Shared by every place that builds a latest-turn record — the server projector,
+ * the server's snapshot hydration, and the client-side reducer that mirrors the
+ * projector — so all three agree on the stored value.
+ */
+export function computeTurnDurationMs(
+  startedAt: string | null,
+  completedAt: string | null,
+): number | null {
+  if (startedAt === null || completedAt === null) {
+    return null;
+  }
+  const startedMs = Date.parse(startedAt);
+  const completedMs = Date.parse(completedAt);
+  if (!Number.isFinite(startedMs) || !Number.isFinite(completedMs)) {
+    return null;
+  }
+  return Math.max(0, completedMs - startedMs);
+}
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
 export const OrchestrationThread = Schema.Struct({

@@ -311,6 +311,7 @@ describe("applyThreadDetailEvent", () => {
           startedAt: "2026-04-01T06:59:00.000Z",
           completedAt: null,
           assistantMessageId: null,
+          durationMs: null,
         },
       };
 
@@ -352,6 +353,7 @@ describe("applyThreadDetailEvent", () => {
           startedAt: "2026-04-01T07:00:00.000Z",
           completedAt: null,
           assistantMessageId: MessageId.make("msg-3"),
+          durationMs: null,
         },
       };
 

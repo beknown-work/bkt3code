@@ -271,11 +271,19 @@ export function formatDuration(durationMs: number): string {
     return tenths >= 10 ? "10s" : `${tenths.toFixed(1)}s`;
   }
   if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}s`;
-  const minutes = Math.floor(durationMs / 60_000);
-  const seconds = Math.round((durationMs % 60_000) / 1_000);
-  if (seconds === 0) return `${minutes}m`;
-  if (seconds === 60) return `${minutes + 1}m`;
-  return `${minutes}m ${seconds}s`;
+  if (durationMs < 3_600_000) {
+    const minutes = Math.floor(durationMs / 60_000);
+    const seconds = Math.round((durationMs % 60_000) / 1_000);
+    if (seconds === 0) return `${minutes}m`;
+    if (seconds === 60) return `${minutes + 1}m`;
+    return `${minutes}m ${seconds}s`;
+  }
+  // Hours matter for long turns: without this a 21h turn rendered as "1290m".
+  const hours = Math.floor(durationMs / 3_600_000);
+  const minutes = Math.round((durationMs % 3_600_000) / 60_000);
+  if (minutes === 0) return `${hours}h`;
+  if (minutes === 60) return `${hours + 1}h`;
+  return `${hours}h ${minutes}m`;
 }
 
 export function formatElapsed(startIso: string, endIso: string | undefined): string | null {
@@ -314,9 +322,11 @@ export function deriveActiveWorkStartedAt(
     }
     return sendStartedAt;
   }
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? sendStartedAt;
-  }
+  // The session is not running. Previously this still counted from an old
+  // turn's startedAt whenever completedAt was missing, so a never-finalized
+  // turn produced an ever-growing timer. The server now settles orphaned turns
+  // authoritatively, so a non-running session means no active work: fall back
+  // to the local send timestamp only.
   return sendStartedAt;
 }
 

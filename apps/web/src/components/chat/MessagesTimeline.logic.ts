@@ -91,7 +91,7 @@ export interface TimelineDurationMessage {
 
 export type TimelineLatestTurn = Pick<
   OrchestrationLatestTurn,
-  "turnId" | "state" | "startedAt" | "completedAt"
+  "turnId" | "state" | "startedAt" | "completedAt" | "durationMs"
 >;
 
 export type MessagesTimelineRow =
@@ -333,16 +333,21 @@ function deriveTurnFolds(input: {
     // terminal message — take whichever ended last.
     const lastEntryEnd =
       lastEntry.kind === "message" ? lastEntry.message.updatedAt : lastEntry.createdAt;
+    // Prefer the server-stored duration for the settled turn — it is computed
+    // from server-side timestamps, so it never depends on the browser clock.
+    // Older cached rows have no durationMs, so keep deriving as a fallback.
     const elapsedMs =
-      input.latestTurn?.turnId === turnId &&
-      input.latestTurn.startedAt &&
-      input.latestTurn.completedAt
-        ? computeElapsedMs(input.latestTurn.startedAt, input.latestTurn.completedAt)
-        : computeElapsedMs(
-            group.startBoundary ?? firstEntry.createdAt,
-            maxIsoTimestamp(group.terminalEntry?.message.updatedAt ?? null, lastEntryEnd) ??
-              lastEntryEnd,
-          );
+      input.latestTurn?.turnId === turnId && input.latestTurn.durationMs !== null
+        ? input.latestTurn.durationMs
+        : input.latestTurn?.turnId === turnId &&
+            input.latestTurn.startedAt &&
+            input.latestTurn.completedAt
+          ? computeElapsedMs(input.latestTurn.startedAt, input.latestTurn.completedAt)
+          : computeElapsedMs(
+              group.startBoundary ?? firstEntry.createdAt,
+              maxIsoTimestamp(group.terminalEntry?.message.updatedAt ?? null, lastEntryEnd) ??
+                lastEntryEnd,
+            );
     const duration = elapsedMs !== null ? formatDuration(elapsedMs) : null;
     const label = isLatestInterruptedTurn
       ? duration

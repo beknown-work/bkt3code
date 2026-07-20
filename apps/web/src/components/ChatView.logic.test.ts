@@ -59,6 +59,7 @@ const completedTurn = {
   startedAt: "2026-03-29T00:00:01.000Z",
   completedAt: "2026-03-29T00:00:10.000Z",
   assistantMessageId: null,
+  durationMs: null,
 };
 
 const readySession = {
@@ -405,6 +406,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       requestedAt: "2026-03-29T00:01:00.000Z",
       startedAt: "2026-03-29T00:01:01.000Z",
       completedAt: null,
+      durationMs: null,
     };
 
     expect(

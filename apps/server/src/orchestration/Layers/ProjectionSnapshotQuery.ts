@@ -1,6 +1,7 @@
 import {
   ChatAttachment,
   CheckpointRef,
+  computeTurnDurationMs,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
@@ -199,6 +200,7 @@ function mapLatestTurn(
     startedAt: row.startedAt,
     completedAt: row.completedAt,
     assistantMessageId: row.assistantMessageId,
+    durationMs: computeTurnDurationMs(row.startedAt, row.completedAt),
     ...(row.sourceProposedPlanThreadId !== null && row.sourceProposedPlanId !== null
       ? {
           sourceProposedPlan: {
@@ -1270,6 +1272,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   startedAt: row.startedAt,
                   completedAt: row.completedAt,
                   assistantMessageId: row.assistantMessageId,
+                  durationMs: computeTurnDurationMs(row.startedAt, row.completedAt),
                   ...(row.sourceProposedPlanThreadId !== null && row.sourceProposedPlanId !== null
                     ? {
                         sourceProposedPlan: {

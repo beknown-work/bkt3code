@@ -96,6 +96,7 @@ describe("phase sidebar lifecycle", () => {
       startedAt: now,
       completedAt: now,
       assistantMessageId: null,
+      durationMs: null,
     };
 
     expect(

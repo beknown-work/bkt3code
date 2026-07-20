@@ -14,6 +14,7 @@ import {
   derivePendingUserInputs,
   deriveTimelineEntries,
   deriveWorkLogEntries,
+  formatDuration,
   findLatestProposedPlan,
   findSidebarProposedPlan,
   hasActionableProposedPlan,
@@ -1685,5 +1686,38 @@ describe("deriveActiveWorkStartedAt", () => {
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
+  });
+
+  // Regression: a never-finalized turn (completedAt null) on a non-running
+  // session used to keep counting from its old startedAt, producing an
+  // ever-growing "Working for 21h 30m". The server now settles orphaned turns,
+  // so a non-running session must never resurrect an old start timestamp.
+  it("does not count from an unfinished turn when the session is not running", () => {
+    expect(
+      deriveActiveWorkStartedAt(
+        {
+          turnId: TurnId.make("turn-1"),
+          startedAt: "2026-02-27T21:10:00.000Z",
+          completedAt: null,
+        },
+        { status: "ready", activeTurnId: null },
+        null,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("formatDuration hours", () => {
+  // Regression: without an hours branch a 21h30m turn rendered as "1290m".
+  it("renders hours and minutes for multi-hour durations", () => {
+    expect(formatDuration(21 * 3_600_000 + 30 * 60_000)).toBe("21h 30m");
+  });
+
+  it("omits minutes on a whole hour", () => {
+    expect(formatDuration(3_600_000)).toBe("1h");
+  });
+
+  it("still renders minutes below an hour", () => {
+    expect(formatDuration(59 * 60_000)).toBe("59m");
   });
 });

@@ -86,6 +86,7 @@ function makeLatestTurn(overrides?: {
     requestedAt: "2026-03-09T10:00:00.000Z",
     startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
+    durationMs: null,
   };
 }
 

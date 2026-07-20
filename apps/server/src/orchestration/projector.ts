@@ -1,5 +1,6 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  computeTurnDurationMs,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -577,6 +578,7 @@ export function projectEvent(
                       thread.latestTurn?.turnId === session.activeTurnId
                         ? thread.latestTurn.assistantMessageId
                         : null,
+                    durationMs: null,
                   }
                 : thread.latestTurn !== null &&
                     thread.latestTurn.state === "running" &&
@@ -588,6 +590,10 @@ export function projectEvent(
                       // placeholder checkpoint timestamp — the session leaving
                       // "running" is the authoritative turn end.
                       completedAt: session.updatedAt,
+                      durationMs: computeTurnDurationMs(
+                        thread.latestTurn.startedAt,
+                        session.updatedAt,
+                      ),
                     }
                   : thread.latestTurn,
             updatedAt: event.occurredAt,
@@ -696,6 +702,12 @@ export function projectEvent(
                       : payload.completedAt,
                   completedAt: payload.completedAt,
                   assistantMessageId: payload.assistantMessageId,
+                  durationMs: computeTurnDurationMs(
+                    thread.latestTurn?.turnId === payload.turnId
+                      ? (thread.latestTurn.startedAt ?? payload.completedAt)
+                      : payload.completedAt,
+                    payload.completedAt,
+                  ),
                 },
             updatedAt: event.occurredAt,
           }),
@@ -737,6 +749,8 @@ export function projectEvent(
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId,
+                  // Reverted turns collapse to a single checkpoint instant.
+                  durationMs: 0,
                 };
 
           return {

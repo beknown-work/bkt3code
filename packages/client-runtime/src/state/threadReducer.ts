@@ -1,6 +1,7 @@
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as O from "effect/Order";
+import { computeTurnDurationMs } from "@t3tools/contracts";
 import type {
   MessageId,
   OrchestrationCheckpointSummary,
@@ -200,6 +201,10 @@ export function applyThreadDetailEvent(
             state: "interrupted",
             startedAt: latestTurn.startedAt ?? event.payload.createdAt,
             completedAt: latestTurn.completedAt ?? event.payload.createdAt,
+            durationMs: computeTurnDurationMs(
+              latestTurn.startedAt ?? event.payload.createdAt,
+              latestTurn.completedAt ?? event.payload.createdAt,
+            ),
           },
           updatedAt: event.occurredAt,
         },
@@ -253,6 +258,15 @@ export function applyThreadDetailEvent(
         thread.session?.status === "running" &&
         thread.session.activeTurnId === event.payload.turnId;
       const settlesTurn = !event.payload.streaming && !turnStillRunning;
+      const messageTurnStartedAt =
+        thread.latestTurn?.turnId === event.payload.turnId
+          ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
+          : event.payload.createdAt;
+      const messageTurnCompletedAt = settlesTurn
+        ? event.payload.updatedAt
+        : thread.latestTurn?.turnId === event.payload.turnId
+          ? (thread.latestTurn.completedAt ?? null)
+          : null;
       const latestTurn: OrchestrationThread["latestTurn"] =
         event.payload.role === "assistant" &&
         event.payload.turnId !== null &&
@@ -270,16 +284,10 @@ export function applyThreadDetailEvent(
                 thread.latestTurn?.turnId === event.payload.turnId
                   ? thread.latestTurn.requestedAt
                   : event.payload.createdAt,
-              startedAt:
-                thread.latestTurn?.turnId === event.payload.turnId
-                  ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
-                  : event.payload.createdAt,
-              completedAt: settlesTurn
-                ? event.payload.updatedAt
-                : thread.latestTurn?.turnId === event.payload.turnId
-                  ? (thread.latestTurn.completedAt ?? null)
-                  : null,
+              startedAt: messageTurnStartedAt,
+              completedAt: messageTurnCompletedAt,
               assistantMessageId: event.payload.messageId,
+              durationMs: computeTurnDurationMs(messageTurnStartedAt, messageTurnCompletedAt),
             }
           : thread.latestTurn;
 
@@ -328,6 +336,7 @@ export function applyThreadDetailEvent(
                 thread.latestTurn?.turnId === event.payload.session.activeTurnId
                   ? thread.latestTurn.assistantMessageId
                   : null,
+              durationMs: null,
             }
           : thread.latestTurn !== null &&
               thread.latestTurn.state === "running" &&
@@ -339,6 +348,10 @@ export function applyThreadDetailEvent(
                 // placeholder checkpoint timestamp — the session leaving
                 // "running" is the authoritative turn end.
                 completedAt: event.payload.session.updatedAt,
+                durationMs: computeTurnDurationMs(
+                  thread.latestTurn.startedAt,
+                  event.payload.session.updatedAt,
+                ),
               }
             : thread.latestTurn;
 
@@ -427,6 +440,10 @@ export function applyThreadDetailEvent(
               startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
               completedAt: event.payload.completedAt,
               assistantMessageId: event.payload.assistantMessageId,
+              durationMs: computeTurnDurationMs(
+                thread.latestTurn?.startedAt ?? event.payload.completedAt,
+                event.payload.completedAt,
+              ),
             }
           : thread.latestTurn;
 
@@ -480,6 +497,8 @@ export function applyThreadDetailEvent(
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
+                  // Reverted turns collapse to a single checkpoint instant.
+                  durationMs: 0,
                 },
           updatedAt: event.occurredAt,
         },
