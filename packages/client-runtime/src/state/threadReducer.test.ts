@@ -264,7 +264,7 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
-    it("updates latestTurn for assistant messages with a turn", () => {
+    it("annotates but does not settle latestTurn for assistant messages", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
         sequence: 8,
@@ -287,7 +287,8 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
-        expect(result.thread.latestTurn?.state).toBe("completed");
+        expect(result.thread.latestTurn?.state).toBe("running");
+        expect(result.thread.latestTurn?.completedAt).toBeNull();
         expect(result.thread.latestTurn?.assistantMessageId).toBe("msg-3");
       }
     });
@@ -343,7 +344,7 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.session-set", () => {
-    it("settles a running latestTurn when the session leaves the running status", () => {
+    it("does not settle a turn from provider routing/session metadata", () => {
       const threadWithRunningTurn: OrchestrationThread = {
         ...baseThread,
         latestTurn: {
@@ -380,12 +381,12 @@ describe("applyThreadDetailEvent", () => {
 
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
-        expect(result.thread.latestTurn?.state).toBe("completed");
-        expect(result.thread.latestTurn?.completedAt).toBe("2026-04-01T08:00:00.000Z");
+        expect(result.thread.latestTurn?.state).toBe("running");
+        expect(result.thread.latestTurn?.completedAt).toBeNull();
       }
     });
 
-    it("updates session and latestTurn for a running session", () => {
+    it("updates session metadata without creating a latestTurn", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
         sequence: 9,
@@ -410,14 +411,13 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.session?.status).toBe("running");
-        expect(result.thread.latestTurn?.turnId).toBe("turn-1");
-        expect(result.thread.latestTurn?.state).toBe("running");
+        expect(result.thread.latestTurn).toBeNull();
       }
     });
   });
 
   describe("thread.session-stop-requested", () => {
-    it("marks session as stopped", () => {
+    it("does not optimistically mark a session stopped from an intent event", () => {
       const threadWithSession: OrchestrationThread = {
         ...baseThread,
         session: {
@@ -444,11 +444,7 @@ describe("applyThreadDetailEvent", () => {
         },
       });
 
-      expect(result.kind).toBe("updated");
-      if (result.kind === "updated") {
-        expect(result.thread.session?.status).toBe("stopped");
-        expect(result.thread.session?.activeTurnId).toBeNull();
-      }
+      expect(result.kind).toBe("unchanged");
     });
 
     it("returns unchanged when no session exists", () => {
@@ -574,7 +570,7 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.turn-diff-completed", () => {
-    it("adds a checkpoint and updates latestTurn", () => {
+    it("adds a checkpoint without treating it as lifecycle evidence", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
         sequence: 13,
@@ -597,8 +593,7 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.checkpoints).toHaveLength(1);
-        expect(result.thread.latestTurn?.turnId).toBe("turn-1");
-        expect(result.thread.latestTurn?.state).toBe("completed");
+        expect(result.thread.latestTurn).toBeNull();
       }
     });
   });

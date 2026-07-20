@@ -41,6 +41,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { ThreadExecutionSupervisor } from "../../execution/ThreadExecutionSupervisor.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -196,6 +197,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const executionSupervisor = yield* ThreadExecutionSupervisor;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -751,6 +753,11 @@ const make = Effect.gen(function* () {
     if (yield* hasHandledTurnStartRecently(key)) {
       return;
     }
+    const executionId = String(event.commandId ?? event.eventId);
+    const preparedExecution = yield* executionSupervisor.prepareExecution(event);
+    if (preparedExecution.turn?.executionId !== executionId) {
+      return;
+    }
 
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) {
@@ -855,8 +862,24 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
+    if (!(yield* executionSupervisor.canContinueExecution(event.payload.threadId, executionId))) {
+      // A stop may arrive while the provider process is starting. Ensure a
+      // process spawned during that window cannot survive or receive a turn.
+      yield* providerService
+        .terminateSession({ threadId: event.payload.threadId })
+        .pipe(Effect.catchCause(Effect.logWarning));
+      return;
+    }
+
+    yield* executionSupervisor
+      .canContinueExecution(event.payload.threadId, executionId)
+      .pipe(
+        Effect.flatMap((canContinue) =>
+          canContinue
+            ? providerService.sendTurn(sendTurnRequest.value).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+      )
       .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 

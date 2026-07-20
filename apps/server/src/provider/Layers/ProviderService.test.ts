@@ -58,6 +58,7 @@ import {
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 
@@ -199,10 +200,10 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       }),
   );
 
-  const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+  const adapterBase = {
     provider,
     capabilities: {
-      sessionModelSwitch: "in-session",
+      sessionModelSwitch: "in-session" as const,
     },
     startSession,
     sendTurn,
@@ -218,6 +219,10 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },
+  };
+  const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+    ...adapterBase,
+    ...makeObservableLifecycle(adapterBase),
   };
 
   const emit = (event: LegacyProviderRuntimeEvent): void => {

@@ -36,6 +36,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -413,14 +414,31 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   // Best-effort remote abort. The scope close below tears down the local
   // handles (event-pump fiber, server-exit fiber, event-subscribe fetch),
   // but we still want to tell OpenCode that this session is done.
-  yield* runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
+  const abortExit = yield* Effect.exit(
+    runOpenCodeSdk("session.abort", () =>
+      context.client.session.abort({ sessionID: context.openCodeSessionId }),
+    ).pipe(Effect.mapError(toRequestError)),
+  );
 
   // Closing the session scope interrupts every fiber forked into it and
   // runs each finalizer we registered — the `AbortController.abort()` call,
   // the child-process termination, etc.
-  yield* Scope.close(context.sessionScope, Exit.void);
+  yield* Scope.close(context.sessionScope, Exit.void).pipe(
+    Effect.onError(() => Ref.set(context.stopped, false)),
+  );
+  if (!context.server.external && context.server.exitCode !== null) {
+    const exited = yield* context.server.exitCode.pipe(Effect.timeoutOption("2 seconds"));
+    if (Option.isNone(exited)) {
+      return yield* Effect.die(
+        new Error(
+          `OpenCode process tree for thread '${context.session.threadId}' remained alive after close.`,
+        ),
+      );
+    }
+  }
+  if (Exit.isFailure(abortExit)) {
+    return yield* Effect.failCause(abortExit.cause);
+  }
   return true;
 });
 
@@ -1033,8 +1051,9 @@ export function makeOpenCodeAdapter(
         const directory = input.cwd ?? serverConfig.cwd;
         const existing = sessions.get(input.threadId);
         if (existing) {
-          yield* stopOpenCodeContext(existing);
-          sessions.delete(input.threadId);
+          const stopExit = yield* Effect.exit(stopOpenCodeContext(existing));
+          if (yield* Ref.get(existing.stopped)) sessions.delete(input.threadId);
+          if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
         }
 
         const started = yield* Effect.gen(function* () {
@@ -1360,8 +1379,10 @@ export function makeOpenCodeAdapter(
             threadId,
           });
         }
-        const stopped = yield* stopOpenCodeContext(context);
-        sessions.delete(threadId);
+        const stopExit = yield* Effect.exit(stopOpenCodeContext(context));
+        if (yield* Ref.get(context.stopped)) sessions.delete(threadId);
+        if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
+        const stopped = stopExit.value;
         if (!stopped) {
           return;
         }
@@ -1437,19 +1458,23 @@ export function makeOpenCodeAdapter(
     const stopAll: OpenCodeAdapterShape["stopAll"] = () =>
       Effect.gen(function* () {
         const contexts = [...sessions.values()];
-        sessions.clear();
-        // `stopOpenCodeContext` is typed as never-failing — SDK aborts are
-        // already `Effect.ignore`'d inside it. `ignoreCause` here also
-        // swallows defects from throwing finalizers so one bad close can't
-        // interrupt the sibling fibers. Same pattern as the layer finalizer.
-        yield* Effect.forEach(
+        const exits = yield* Effect.forEach(
           contexts,
-          (context) => Effect.ignoreCause(stopOpenCodeContext(context)),
-          { concurrency: "unbounded", discard: true },
+          (context) =>
+            Effect.exit(
+              Effect.gen(function* () {
+                const stopExit = yield* Effect.exit(stopOpenCodeContext(context));
+                if (yield* Ref.get(context.stopped)) sessions.delete(context.session.threadId);
+                if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
+              }),
+            ),
+          { concurrency: "unbounded" },
         );
+        const failed = exits.find(Exit.isFailure);
+        if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause);
       });
 
-    return {
+    const adapter = {
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
@@ -1468,6 +1493,10 @@ export function makeOpenCodeAdapter(
       get streamEvents() {
         return Stream.fromQueue(runtimeEvents);
       },
-    } satisfies OpenCodeAdapterShape;
+    } satisfies Omit<
+      OpenCodeAdapterShape,
+      "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+    >;
+    return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies OpenCodeAdapterShape;
   });
 }

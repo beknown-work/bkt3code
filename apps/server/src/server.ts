@@ -86,6 +86,7 @@ import * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
+import { ThreadExecutionSupervisorLive } from "./execution/ThreadExecutionSupervisorLive.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -288,13 +289,23 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
+const ExecutionLayerLive = ThreadExecutionSupervisorLive.pipe(
+  Layer.provide(ProviderLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+  Layer.provide(PersistenceLayerLive),
+);
+const ProviderExecutionRuntimeLayerLive = Layer.mergeAll(
+  ProviderRuntimeLayerLive,
+  ExecutionLayerLive,
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
-  Layer.provideMerge(ProviderRuntimeLayerLive),
+  Layer.provideMerge(ProviderExecutionRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),

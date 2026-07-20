@@ -29,7 +29,12 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  InterruptAcknowledgement,
+  ProviderAdapterCapabilities,
+  ProviderSessionInspection,
+  VerifiedTermination,
+} from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -57,6 +62,18 @@ export interface ProviderServiceShape {
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  readonly inspectSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionInspection | null, ProviderServiceError>;
+
+  readonly requestTurnInterrupt: (
+    input: ProviderInterruptTurnInput,
+  ) => Effect.Effect<InterruptAcknowledgement, ProviderServiceError>;
+
+  readonly terminateSession: (
+    input: ProviderStopSessionInput,
+  ) => Effect.Effect<VerifiedTermination, ProviderServiceError>;
 
   /**
    * Respond to a provider approval request.

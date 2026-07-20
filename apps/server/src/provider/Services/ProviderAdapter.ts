@@ -42,6 +42,25 @@ export interface ProviderThreadSnapshot {
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
 }
 
+export interface ProviderSessionInspection {
+  readonly threadId: ThreadId;
+  readonly generation: number;
+  readonly state: "starting" | "ready" | "running" | "stopping" | "stopped" | "failed";
+  readonly activeProviderTurnId: TurnId | null;
+  readonly runtimeAlive: boolean;
+}
+
+export interface InterruptAcknowledgement {
+  readonly acknowledged: boolean;
+  readonly acknowledgedAt: string;
+}
+
+export interface VerifiedTermination {
+  readonly verified: boolean;
+  readonly graceful: boolean;
+  readonly processTreeExited: boolean;
+}
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -67,6 +86,20 @@ export interface ProviderAdapterShape<TError> {
    * Interrupt an active turn.
    */
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
+
+  /** Observable lifecycle API used by the execution supervisor. */
+  readonly inspectSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionInspection | null, TError>;
+  readonly requestTurnInterrupt: (
+    threadId: ThreadId,
+    turnId?: TurnId,
+  ) => Effect.Effect<InterruptAcknowledgement, TError>;
+  readonly terminateSession: (threadId: ThreadId) => Effect.Effect<VerifiedTermination, TError>;
+  readonly watchSession: (
+    threadId: ThreadId,
+    generation: number,
+  ) => Stream.Stream<ProviderRuntimeEvent, TError>;
 
   /**
    * Respond to an interactive approval request.

@@ -25,6 +25,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
+  stopExecution: "orchestration.stopExecution",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
@@ -301,6 +302,71 @@ export const OrchestrationSession = Schema.Struct({
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
 
+/**
+ * Backend-authoritative provider-session and turn lifecycle. Provider routing
+ * metadata and browser caches are deliberately not part of this state model.
+ */
+export const ProviderSessionState = Schema.Literals([
+  "absent",
+  "starting",
+  "ready",
+  "stopping",
+  "stopped",
+  "failed",
+]);
+export type ProviderSessionState = typeof ProviderSessionState.Type;
+
+export const TurnExecutionState = Schema.Literals([
+  "idle",
+  "starting",
+  "running",
+  "waiting-for-approval",
+  "waiting-for-input",
+  "stopping",
+  "completed",
+  "interrupted",
+  "failed",
+]);
+export type TurnExecutionState = typeof TurnExecutionState.Type;
+
+export const ThreadExecutionActivity = Schema.Literals([
+  "idle",
+  "active",
+  "blocked",
+  "stopping",
+  "failed",
+]);
+export type ThreadExecutionActivity = typeof ThreadExecutionActivity.Type;
+
+export const ThreadExecutionSnapshot = Schema.Struct({
+  threadId: ThreadId,
+  authorityEpoch: TrimmedNonEmptyString,
+  revision: NonNegativeInt,
+  observedAt: IsoDateTime,
+  activity: ThreadExecutionActivity,
+  canStop: Schema.Boolean,
+  providerSession: Schema.Struct({
+    state: ProviderSessionState,
+    generation: NonNegativeInt,
+    providerInstanceId: Schema.NullOr(ProviderInstanceId),
+    startedAt: Schema.NullOr(IsoDateTime),
+    lastObservedAt: Schema.NullOr(IsoDateTime),
+    lastError: Schema.NullOr(Schema.String),
+  }),
+  turn: Schema.NullOr(
+    Schema.Struct({
+      executionId: TrimmedNonEmptyString,
+      providerTurnId: Schema.NullOr(TurnId),
+      state: TurnExecutionState,
+      startedAt: IsoDateTime,
+      stopRequestedAt: Schema.NullOr(IsoDateTime),
+      completedAt: Schema.NullOr(IsoDateTime),
+      lastError: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+export type ThreadExecutionSnapshot = typeof ThreadExecutionSnapshot.Type;
+
 export const OrchestrationCheckpointFile = Schema.Struct({
   path: TrimmedNonEmptyString,
   kind: TrimmedNonEmptyString,
@@ -416,6 +482,7 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  execution: Schema.optionalKey(Schema.NullOr(ThreadExecutionSnapshot)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -459,6 +526,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   session: Schema.NullOr(OrchestrationSession),
+  execution: Schema.optionalKey(Schema.NullOr(ThreadExecutionSnapshot)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
@@ -502,6 +570,10 @@ export const OrchestrationShellStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
     snapshot: OrchestrationShellSnapshot,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("execution"),
+    execution: ThreadExecutionSnapshot,
   }),
   OrchestrationShellStreamEvent,
 ]);
@@ -1292,6 +1364,10 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
   }),
+  Schema.Struct({
+    kind: Schema.Literal("execution"),
+    execution: ThreadExecutionSnapshot,
+  }),
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 
@@ -1359,6 +1435,19 @@ export const DispatchResult = Schema.Struct({
 });
 export type DispatchResult = typeof DispatchResult.Type;
 
+export const OrchestrationStopExecutionInput = Schema.Struct({
+  threadId: ThreadId,
+  expectedExecutionId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type OrchestrationStopExecutionInput = typeof OrchestrationStopExecutionInput.Type;
+
+export const OrchestrationStopExecutionResult = Schema.Struct({
+  operationId: TrimmedNonEmptyString,
+  disposition: Schema.Literals(["stopping", "already-stopped"]),
+  snapshot: ThreadExecutionSnapshot,
+});
+export type OrchestrationStopExecutionResult = typeof OrchestrationStopExecutionResult.Type;
+
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
@@ -1393,6 +1482,10 @@ export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  stopExecution: {
+    input: OrchestrationStopExecutionInput,
+    output: OrchestrationStopExecutionResult,
   },
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
@@ -1446,6 +1539,14 @@ export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<Orche
 
 export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<OrchestrationDispatchCommandError>()(
   "OrchestrationDispatchCommandError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationStopExecutionError extends Schema.TaggedErrorClass<OrchestrationStopExecutionError>()(
+  "OrchestrationStopExecutionError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

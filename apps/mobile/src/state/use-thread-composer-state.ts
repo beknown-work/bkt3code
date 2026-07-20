@@ -103,18 +103,6 @@ export function useThreadComposerState() {
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
 
-  const selectedThreadSessionActivity = useMemo(() => {
-    const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-    if (!selectedThread?.session) {
-      return null;
-    }
-
-    return {
-      orchestrationStatus: selectedThread.session.status,
-      activeTurnId: selectedThread.session.activeTurnId ?? undefined,
-    };
-  }, [selectedThreadDetail, selectedThreadShell]);
-
   const activeWorkStartedAt = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
     if (!selectedThread) {
@@ -123,14 +111,16 @@ export function useThreadComposerState() {
 
     return deriveActiveWorkStartedAt(
       selectedThread.latestTurn,
-      selectedThreadSessionActivity,
+      selectedThread.execution ?? null,
       null,
     );
-  }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
+  }, [selectedThreadDetail, selectedThreadShell]);
 
   const activeThreadBusy =
     !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
+    (selectedThread.execution?.activity === "active" ||
+      selectedThread.execution?.activity === "blocked" ||
+      selectedThread.execution?.activity === "stopping");
 
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {

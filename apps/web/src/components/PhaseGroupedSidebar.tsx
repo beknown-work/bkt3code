@@ -124,6 +124,7 @@ const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
   plan_ready: "bg-primary",
   drafting_plan: "bg-info",
   implementing: "bg-success",
+  checking: "bg-muted-foreground/45",
   ready: "bg-muted-foreground/45",
 };
 

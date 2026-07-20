@@ -13,6 +13,7 @@ export const PHASE_SIDEBAR_PHASE_IDS = [
   "plan_ready",
   "drafting_plan",
   "implementing",
+  "checking",
   "ready",
 ] as const;
 
@@ -31,6 +32,7 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
   { id: "plan_ready", label: "Plan Ready", helperText: "Ready for review" },
   { id: "drafting_plan", label: "Drafting Plan", helperText: "Agent is planning" },
   { id: "implementing", label: "Implementing", helperText: "Agent is working" },
+  { id: "checking", label: "Checking", helperText: "Checking agent status" },
   { id: "ready", label: "Ready", helperText: "No active agent work" },
 ];
 
@@ -89,20 +91,24 @@ export interface PhaseSidebarFilterChip {
 }
 
 export function resolvePhaseSidebarPhase(thread: ThreadShell): PhaseSidebarPhaseId {
-  if (thread.hasPendingApprovals) return "approval_needed";
-  if (thread.hasPendingUserInput) return "awaiting_input";
+  if (thread.execution === null || thread.execution === undefined) return "checking";
+  if (thread.execution?.turn?.state === "waiting-for-approval") return "approval_needed";
+  if (thread.execution?.turn?.state === "waiting-for-input") return "awaiting_input";
 
-  const isActive = thread.session?.status === "starting" || thread.session?.status === "running";
+  const isActive =
+    thread.execution?.activity === "active" ||
+    thread.execution?.activity === "blocked" ||
+    thread.execution?.activity === "stopping";
   if (isActive) {
     return thread.interactionMode === "plan" ? "drafting_plan" : "implementing";
   }
 
-  if (thread.session?.status === "error" || thread.session?.lastError) return "failed";
+  if (thread.execution?.activity === "failed") return "failed";
 
   if (
     thread.interactionMode === "plan" &&
     thread.hasActionableProposedPlan &&
-    isLatestTurnSettled(thread.latestTurn, thread.session)
+    isLatestTurnSettled(thread.latestTurn, thread.execution ?? null)
   ) {
     return "plan_ready";
   }

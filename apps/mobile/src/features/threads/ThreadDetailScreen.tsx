@@ -404,6 +404,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}
+            execution={props.selectedThread.execution ?? null}
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}

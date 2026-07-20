@@ -43,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -465,7 +466,14 @@ export function makeCursorAdapter(
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+        yield* Scope.close(ctx.scope, Exit.void);
+        if (yield* ctx.acp.isProcessAlive) {
+          return yield* Effect.die(
+            new Error(
+              `Cursor process tree for thread '${ctx.threadId}' remained alive after close.`,
+            ),
+          );
+        }
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent({
           type: "session.exited",
@@ -474,7 +482,7 @@ export function makeCursorAdapter(
           threadId: ctx.threadId,
           payload: { exitKind: "graceful" },
         });
-      });
+      }).pipe(Effect.onError(() => Effect.sync(() => (ctx.stopped = false))));
 
     const startSession: CursorAdapterShape["startSession"] = (input) =>
       withThreadLock(
@@ -1185,7 +1193,7 @@ export function makeCursorAdapter(
 
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);
 
-    return {
+    const adapter = {
       provider: PROVIDER,
       capabilities: { sessionModelSwitch: "in-session" },
       startSession,
@@ -1200,6 +1208,10 @@ export function makeCursorAdapter(
       hasSession,
       stopAll,
       streamEvents,
-    } satisfies CursorAdapterShape;
+    } satisfies Omit<
+      CursorAdapterShape,
+      "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+    >;
+    return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies CursorAdapterShape;
   });
 }

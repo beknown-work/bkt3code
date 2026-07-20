@@ -310,7 +310,10 @@ export function useThreadOutboxDrain(): void {
         threadExists: thread !== undefined,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
-        threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
+        threadBusy:
+          thread?.execution?.activity === "active" ||
+          thread?.execution?.activity === "blocked" ||
+          thread?.execution?.activity === "stopping",
       });
       if (deliveryAction === "wait") {
         continue;

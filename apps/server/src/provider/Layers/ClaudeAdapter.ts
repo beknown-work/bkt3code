@@ -86,6 +86,7 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
@@ -2996,7 +2997,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           cause,
         }),
     }).pipe(
-      Effect.catch((error) =>
+      Effect.tapError((error) =>
         emitRuntimeError(context, "Failed to close Claude runtime query.", {
           errorTag: error._tag,
           provider: error.provider,
@@ -3004,6 +3005,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           detail: error.detail,
         }),
       ),
+      Effect.onError(() => Effect.sync(() => (context.stopped = false))),
     );
 
     const updatedAt = yield* nowIso;
@@ -3846,7 +3848,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     ),
   );
 
-  return {
+  const adapter = {
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
@@ -3865,5 +3867,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },
-  } satisfies ClaudeAdapterShape;
+  } satisfies Omit<
+    ClaudeAdapterShape,
+    "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+  >;
+  return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies ClaudeAdapterShape;
 });

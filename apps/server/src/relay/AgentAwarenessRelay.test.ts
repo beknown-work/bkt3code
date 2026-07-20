@@ -10,6 +10,7 @@ import type {
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  ThreadExecutionSnapshot,
   TurnId,
 } from "@t3tools/contracts";
 import type {
@@ -59,6 +60,40 @@ const state: RelayAgentActivityState = {
 };
 
 const encodeSecret = (value: string): Uint8Array => new TextEncoder().encode(value);
+
+function executionSnapshot(
+  threadId: ThreadId,
+  observedAt: string,
+  active: boolean,
+): ThreadExecutionSnapshot {
+  return {
+    threadId,
+    authorityEpoch: "server-epoch",
+    revision: 1,
+    observedAt,
+    activity: active ? "active" : "idle",
+    canStop: active,
+    providerSession: {
+      state: "ready",
+      generation: 1,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      startedAt: observedAt,
+      lastObservedAt: observedAt,
+      lastError: null,
+    },
+    turn: active
+      ? {
+          executionId: `execution-${threadId}`,
+          providerTurnId: "turn-1" as TurnId,
+          state: "running",
+          startedAt: observedAt,
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        }
+      : null,
+  };
+}
 
 function makeMemorySecretStore() {
   const values = new Map<string, Uint8Array>();
@@ -253,6 +288,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
       title: "Deleted thread",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       session: null,
+      execution: executionSnapshot(threadId, "2026-05-25T00:00:00.000Z", false),
       latestTurn: null,
       updatedAt: "2026-05-25T00:00:00.000Z",
       hasPendingApprovals: false,
@@ -327,6 +363,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           {
             ...baseThread,
             id: activeThreadId,
+            execution: executionSnapshot(activeThreadId, now, true),
             latestTurn: {
               turnId: "turn-1" as TurnId,
               state: "running",
@@ -345,6 +382,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             ...baseThread,
             id: "thread-missing-project" as ThreadId,
             projectId: "missing-project" as ProjectId,
+            execution: executionSnapshot("thread-missing-project" as ThreadId, now, true),
             latestTurn: {
               turnId: "turn-2" as TurnId,
               state: "running",
@@ -467,6 +505,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             lastError: null,
             updatedAt: now,
           },
+          execution: executionSnapshot(threadId, now, true),
           latestUserMessageAt: now,
           hasPendingApprovals: false,
           hasPendingUserInput: false,
@@ -627,6 +666,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             lastError: null,
             updatedAt: now,
           },
+          execution: executionSnapshot(threadId, now, true),
           latestUserMessageAt: now,
           hasPendingApprovals: false,
           hasPendingUserInput: false,

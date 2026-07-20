@@ -3,7 +3,10 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
+  type OrchestrationLatestTurn,
+  type ThreadId,
 } from "@t3tools/contracts";
+import { withExecutionSnapshot } from "@t3tools/shared/threadExecution";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -23,6 +26,7 @@ import { filterReadModel, filterShellSnapshot } from "./accessRules.ts";
 import { checkCommandAccess } from "./commandAccess.ts";
 import { ClerkDirectory } from "../auth/ClerkDirectory.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -33,6 +37,27 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const accessControl = yield* OrchestrationAccessControl;
     const clerkDirectory = yield* ClerkDirectory;
     const providerRegistry = yield* ProviderRegistry;
+    const executionSupervisor = yield* ThreadExecutionSupervisor;
+
+    const attachExecutions = Effect.fn("orchestration.http.attachExecutions")(function* <
+      T extends {
+        readonly threads: ReadonlyArray<{
+          readonly id: ThreadId;
+          readonly latestTurn: OrchestrationLatestTurn | null;
+        }>;
+      },
+    >(snapshot: T) {
+      const executions = yield* executionSupervisor.getSnapshots(
+        snapshot.threads.map((thread) => thread.id),
+      );
+      return {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) => {
+          const execution = executions.get(thread.id);
+          return execution ? withExecutionSnapshot(thread, execution) : thread;
+        }),
+      };
+    });
 
     // Resolve the operating Clerk user for the current request, or null for an
     // unrestricted operator (pairing/CLI/single-user) which skips all filtering.
@@ -55,7 +80,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 failEnvironmentInternal("orchestration_snapshot_failed", cause),
               ),
             );
-          return actorUserId === null ? snapshot : filterReadModel(snapshot, actorUserId);
+          return yield* attachExecutions(
+            actorUserId === null ? snapshot : filterReadModel(snapshot, actorUserId),
+          );
         }),
       )
       .handle(
@@ -71,7 +98,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 failEnvironmentInternal("orchestration_snapshot_failed", cause),
               ),
             );
-          return actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId);
+          return yield* attachExecutions(
+            actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId),
+          );
         }),
       )
       .handle(
@@ -124,7 +153,13 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          return snapshot.value;
+          return {
+            ...snapshot.value,
+            thread: {
+              ...snapshot.value.thread,
+              execution: yield* executionSupervisor.getSnapshot(snapshot.value.thread.id),
+            },
+          };
         }),
       )
       .handle(

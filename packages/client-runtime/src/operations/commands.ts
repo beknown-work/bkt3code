@@ -2,6 +2,7 @@ import {
   CommandId,
   ORCHESTRATION_WS_METHODS,
   type ClientOrchestrationCommand,
+  type OrchestrationStopExecutionInput,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -44,6 +45,7 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type StopThreadExecutionInput = OrchestrationStopExecutionInput;
 export type AddThreadMemberInput = CommandInput<"thread.member.add">;
 export type RemoveThreadMemberInput = CommandInput<"thread.member.remove">;
 export type AddProjectMemberInput = CommandInput<"project.member.add">;
@@ -297,4 +299,15 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });
+});
+
+type StopExecutionTag = typeof ORCHESTRATION_WS_METHODS.stopExecution;
+export const stopThreadExecution: (
+  input: StopThreadExecutionInput,
+) => Effect.Effect<
+  EnvironmentRpcSuccess<StopExecutionTag>,
+  EnvironmentRpcFailure<StopExecutionTag> | EnvironmentRpcUnavailableError,
+  EnvironmentSupervisor
+> = Effect.fn("EnvironmentCommands.stopThreadExecution")(function* (input) {
+  return yield* request(ORCHESTRATION_WS_METHODS.stopExecution, input);
 });

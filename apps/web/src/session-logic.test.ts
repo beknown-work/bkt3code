@@ -1587,29 +1587,29 @@ describe("isLatestTurnSettled", () => {
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("returns false while the same turn is still active in a running session", () => {
+  it("returns false while the backend reports an active execution", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
-        status: "running",
-        activeTurnId: TurnId.make("turn-1"),
+        activity: "active",
+        turn: null,
       }),
     ).toBe(false);
   });
 
-  it("returns false while any turn is running to avoid stale latest-turn banners", () => {
+  it("returns false while the backend reports a blocked execution", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
-        status: "running",
-        activeTurnId: TurnId.make("turn-2"),
+        activity: "blocked",
+        turn: null,
       }),
     ).toBe(false);
   });
 
-  it("returns true once the session is no longer running that turn", () => {
+  it("returns true once the authoritative execution is idle", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
-        status: "ready",
-        activeTurnId: null,
+        activity: "idle",
+        turn: null,
       }),
     ).toBe(true);
   });
@@ -1635,39 +1635,39 @@ describe("deriveActiveWorkStartedAt", () => {
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("prefers the in-flight turn start when the latest turn is not settled", () => {
+  it("prefers the authoritative execution start", () => {
     expect(
       deriveActiveWorkStartedAt(
         latestTurn,
         {
-          status: "running",
-          activeTurnId: TurnId.make("turn-1"),
+          activity: "active",
+          turn: { startedAt: "2026-02-27T21:10:00.000Z" },
         },
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:10:00.000Z");
   });
 
-  it("uses the new send start while the session is running a different turn", () => {
+  it("uses the local send start while execution startup lacks a timestamp", () => {
     expect(
       deriveActiveWorkStartedAt(
         latestTurn,
         {
-          status: "running",
-          activeTurnId: TurnId.make("turn-2"),
+          activity: "active",
+          turn: null,
         },
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
   });
 
-  it("falls back to sendStartedAt once the latest turn is settled", () => {
+  it("falls back to sendStartedAt once execution is idle", () => {
     expect(
       deriveActiveWorkStartedAt(
         latestTurn,
         {
-          status: "ready",
-          activeTurnId: null,
+          activity: "idle",
+          turn: null,
         },
         "2026-02-27T21:11:00.000Z",
       ),
@@ -1688,11 +1688,9 @@ describe("deriveActiveWorkStartedAt", () => {
     ).toBe("2026-02-27T21:11:00.000Z");
   });
 
-  // Regression: a never-finalized turn (completedAt null) on a non-running
-  // session used to keep counting from its old startedAt, producing an
-  // ever-growing "Working for 21h 30m". The server now settles orphaned turns,
-  // so a non-running session must never resurrect an old start timestamp.
-  it("does not count from an unfinished turn when the session is not running", () => {
+  // A cached unfinished turn must not resurrect an old timer after the current
+  // authority reports idle.
+  it("does not count from an unfinished turn when execution is idle", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
@@ -1700,7 +1698,7 @@ describe("deriveActiveWorkStartedAt", () => {
           startedAt: "2026-02-27T21:10:00.000Z",
           completedAt: null,
         },
-        { status: "ready", activeTurnId: null },
+        { activity: "idle", turn: null },
         null,
       ),
     ).toBeNull();

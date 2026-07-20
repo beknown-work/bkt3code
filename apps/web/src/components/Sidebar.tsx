@@ -450,8 +450,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
     [discoveredPorts, navigateToThread, openPreview, threadRef],
   );
-  const isThreadRunning =
-    thread.session?.status === "running" && thread.session.activeTurnId != null;
+  const isThreadRunning = thread.execution?.canStop === true;
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,

@@ -33,7 +33,8 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "Checking agent status";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -46,6 +47,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Connecting: 3,
   "Plan Ready": 2,
   Completed: 1,
+  "Checking agent status": 0,
 };
 
 type ThreadStatusInput = Pick<
@@ -56,6 +58,7 @@ type ThreadStatusInput = Pick<
   | "interactionMode"
   | "latestTurn"
   | "session"
+  | "execution"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -362,7 +365,16 @@ export function resolveThreadStatusPill(input: {
 }): ThreadStatusPill | null {
   const { thread } = input;
 
-  if (thread.hasPendingApprovals) {
+  if (thread.execution === null || thread.execution === undefined) {
+    return {
+      label: "Checking agent status",
+      colorClass: "text-muted-foreground",
+      dotClass: "bg-muted-foreground/60",
+      pulse: true,
+    };
+  }
+
+  if (thread.execution?.turn?.state === "waiting-for-approval") {
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
@@ -371,7 +383,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (thread.execution?.turn?.state === "waiting-for-input") {
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
@@ -380,7 +392,11 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.session?.status === "running") {
+  if (
+    thread.execution?.activity === "active" ||
+    thread.execution?.activity === "blocked" ||
+    thread.execution?.activity === "stopping"
+  ) {
     return {
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -389,7 +405,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.session?.status === "starting") {
+  if (thread.execution?.providerSession.state === "starting") {
     return {
       label: "Connecting",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -401,7 +417,7 @@ export function resolveThreadStatusPill(input: {
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
     thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    isLatestTurnSettled(thread.latestTurn, thread.execution ?? null) &&
     thread.hasActionableProposedPlan;
   if (hasPlanReadyPrompt) {
     return {

@@ -11,16 +11,10 @@ import {
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
+  type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 
-import type {
-  ChatMessage,
-  ProposedPlan,
-  SessionPhase,
-  Thread,
-  ThreadSession,
-  TurnDiffSummary,
-} from "./types";
+import type { ChatMessage, ProposedPlan, SessionPhase, Thread, TurnDiffSummary } from "./types";
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -297,36 +291,33 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
 }
 
 type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
-type SessionActivityState = Pick<NonNullable<Thread["session"]>, "status" | "activeTurnId">;
+type ExecutionActivityState = {
+  readonly activity: NonNullable<Thread["execution"]>["activity"];
+  readonly turn: { readonly startedAt: string } | null;
+};
 
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
+  execution: ExecutionActivityState | null,
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  if (session.status === "running") return false;
-  return true;
+  return !execution || execution.activity === "idle" || execution.activity === "failed";
 }
 
 export function deriveActiveWorkStartedAt(
   latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
+  execution: ExecutionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  const runningTurnId = session?.status === "running" ? session.activeTurnId : null;
-  if (runningTurnId !== null) {
-    if (latestTurn?.turnId === runningTurnId) {
-      return latestTurn.startedAt ?? sendStartedAt;
-    }
-    return sendStartedAt;
+  if (
+    execution &&
+    (execution.activity === "active" ||
+      execution.activity === "blocked" ||
+      execution.activity === "stopping")
+  ) {
+    return execution.turn?.startedAt ?? sendStartedAt;
   }
-  // The session is not running. Previously this still counted from an old
-  // turn's startedAt whenever completedAt was missing, so a never-finalized
-  // turn produced an ever-growing timer. The server now settles orphaned turns
-  // authoritatively, so a non-running session means no active work: fall back
-  // to the local send timestamp only.
   return sendStartedAt;
 }
 
@@ -1388,16 +1379,16 @@ export function inferCheckpointTurnCountByTurnId(
   return result;
 }
 
-export function derivePhase(session: ThreadSession | null): SessionPhase {
+export function executionPhase(execution: ThreadExecutionSnapshot | null): SessionPhase {
+  if (!execution) return "disconnected";
   if (
-    !session ||
-    session.status === "stopped" ||
-    session.status === "interrupted" ||
-    session.status === "error"
+    execution.activity === "active" ||
+    execution.activity === "blocked" ||
+    execution.activity === "stopping"
   ) {
-    return "disconnected";
+    return "running";
   }
-  if (session.status === "starting") return "connecting";
-  if (session.status === "running") return "running";
+  if (execution.providerSession.state === "starting") return "connecting";
+  if (execution.activity === "failed") return "disconnected";
   return "ready";
 }

@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { withExecutionSnapshot } from "@t3tools/shared/threadExecution";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
@@ -51,7 +52,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ShellSnapshotLoader;
   const environmentId = supervisor.target.environmentId;
-  const cachedSnapshot = yield* cache.loadShell(environmentId).pipe(
+  const loadedCachedSnapshot = yield* cache.loadShell(environmentId).pipe(
     Effect.catch((error) =>
       Effect.logWarning("Could not load cached environment shell.").pipe(
         Effect.annotateLogs({
@@ -62,6 +63,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     ),
   );
+  const cachedSnapshot = Option.map(loadedCachedSnapshot, (snapshot) => ({
+    ...snapshot,
+    threads: snapshot.threads.map((thread) => ({ ...thread, execution: null })),
+  }));
   const state = yield* SubscriptionRef.make<EnvironmentShellState>({
     snapshot: cachedSnapshot,
     status: shellStatusForSnapshot(cachedSnapshot),
@@ -92,6 +97,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   const setDisconnected = SubscriptionRef.update(state, (current) => ({
     ...current,
+    snapshot: Option.map(current.snapshot, (snapshot) => ({
+      ...snapshot,
+      threads: snapshot.threads.map((thread) => ({ ...thread, execution: null })),
+    })),
     status: shellStatusForSnapshot(current.snapshot),
   }));
   const setSynchronizing = SubscriptionRef.update(state, (current) => ({
@@ -117,6 +126,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       Effect.andThen(
         SubscriptionRef.update(state, (current) => ({
           ...current,
+          snapshot: Option.map(current.snapshot, (snapshot) => ({
+            ...snapshot,
+            threads: snapshot.threads.map((thread) => ({ ...thread, execution: null })),
+          })),
           status: shellStatusForSnapshot(current.snapshot),
           error: Option.some(SHELL_SYNCHRONIZATION_ERROR_MESSAGE),
         })),
@@ -127,6 +140,24 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     item: OrchestrationShellStreamItem,
   ) {
     const current = yield* SubscriptionRef.get(state);
+    if (item.kind === "execution") {
+      if (Option.isNone(current.snapshot)) return;
+      const nextSnapshot = {
+        ...current.snapshot.value,
+        threads: current.snapshot.value.threads.map((thread) =>
+          thread.id === item.execution.threadId
+            ? withExecutionSnapshot(thread, item.execution)
+            : thread,
+        ),
+      };
+      yield* SubscriptionRef.set(state, {
+        snapshot: Option.some(nextSnapshot),
+        status: "live",
+        error: Option.none(),
+      });
+      yield* Queue.offer(persistence, nextSnapshot);
+      return;
+    }
     const nextSnapshot =
       item.kind === "snapshot"
         ? item.snapshot

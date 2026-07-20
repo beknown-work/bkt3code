@@ -6,7 +6,7 @@ import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
-  buildThreadTurnInterruptInput,
+  buildStopExecutionInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   getStartedThreadModelChangeBlockReason,
@@ -73,25 +73,71 @@ const readySession = {
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
 
-describe("buildThreadTurnInterruptInput", () => {
-  it("targets the session's active running turn", () => {
-    const activeTurnId = TurnId.make("turn-running");
+const activeExecution = {
+  threadId,
+  authorityEpoch: "epoch-1",
+  revision: 1,
+  observedAt: now,
+  activity: "active" as const,
+  canStop: true,
+  providerSession: {
+    state: "ready" as const,
+    generation: 1,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    startedAt: now,
+    lastObservedAt: now,
+    lastError: null,
+  },
+  turn: {
+    executionId: "execution-1",
+    providerTurnId: TurnId.make("turn-running"),
+    state: "running" as const,
+    startedAt: now,
+    stopRequestedAt: null,
+    completedAt: null,
+    lastError: null,
+  },
+};
+
+describe("buildStopExecutionInput", () => {
+  it("fences the stop request to the backend execution", () => {
+    const executionId = "execution-running";
 
     expect(
-      buildThreadTurnInterruptInput(
+      buildStopExecutionInput(
         makeThread({
-          session: {
-            ...readySession,
-            status: "running",
-            activeTurnId,
+          execution: {
+            threadId,
+            authorityEpoch: "epoch-1",
+            revision: 4,
+            observedAt: now,
+            activity: "active",
+            canStop: true,
+            providerSession: {
+              state: "ready",
+              generation: 1,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              startedAt: now,
+              lastObservedAt: now,
+              lastError: null,
+            },
+            turn: {
+              executionId,
+              providerTurnId: TurnId.make("turn-running"),
+              state: "running",
+              startedAt: now,
+              stopRequestedAt: null,
+              completedAt: null,
+              lastError: null,
+            },
           },
         }),
       ),
-    ).toEqual({ threadId, turnId: activeTurnId });
+    ).toEqual({ threadId, expectedExecutionId: executionId });
   });
 
-  it("omits a turn id when the session is not running", () => {
-    expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
+  it("omits an execution id before an authoritative execution exists", () => {
+    expect(buildStopExecutionInput(makeThread({ execution: null }))).toEqual({
       threadId,
     });
   });
@@ -362,7 +408,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "ready",
         latestTurn: completedTurn,
-        session: readySession,
+        execution: null,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -387,7 +433,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "ready",
         latestTurn: newerTurn,
-        session: { ...readySession, updatedAt: newerTurn.completedAt },
+        execution: null,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -414,11 +460,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "running",
         latestTurn: runningTurn,
-        session: {
-          ...readySession,
-          status: "running",
-          activeTurnId: TurnId.make("turn-other"),
-        },
+        execution: { ...activeExecution, activity: "idle", canStop: false },
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -429,11 +471,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "running",
         latestTurn: runningTurn,
-        session: {
-          ...readySession,
-          status: "running",
-          activeTurnId: runningTurn.turnId,
-        },
+        execution: activeExecution,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -447,7 +485,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       localDispatch,
       phase: "ready" as const,
       latestTurn: null,
-      session: null,
+      execution: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,
       threadError: null,

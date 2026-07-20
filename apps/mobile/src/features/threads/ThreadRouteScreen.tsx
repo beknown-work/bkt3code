@@ -194,7 +194,7 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
-  const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, "thread stop");
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -460,23 +460,19 @@ function ThreadRouteContent(
     void navigation.navigate("Connections");
   }, [navigation]);
   const handleStopThread = useCallback(() => {
-    if (
-      !selectedThread ||
-      (selectedThread.session?.status !== "running" &&
-        selectedThread.session?.status !== "starting")
-    ) {
+    if (!selectedThread || selectedThread.execution?.canStop !== true) {
       return;
     }
-    return interruptThreadTurn({
+    return stopThreadExecution({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        ...(selectedThread.session.activeTurnId
-          ? { turnId: selectedThread.session.activeTurnId }
+        ...(selectedThread.execution.turn?.executionId
+          ? { expectedExecutionId: selectedThread.execution.turn.executionId }
           : {}),
       },
     });
-  }, [interruptThreadTurn, selectedThread]);
+  }, [stopThreadExecution, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {

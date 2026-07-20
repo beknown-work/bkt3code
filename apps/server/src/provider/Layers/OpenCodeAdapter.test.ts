@@ -293,7 +293,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("clears session state even when cleanup finalizers throw", () =>
+  it.effect("retains session ownership until cleanup finalizers succeed", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       yield* adapter.startSession({
@@ -308,11 +308,6 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       });
 
       runtimeMock.state.closeError = new Error("close failed");
-      // `stopAll` relies on `stopOpenCodeContext`, which is typed as
-      // never-failing. A throwing finalizer surfaces as a defect — `Effect.exit`
-      // captures it so the assertions can still run. The key invariant we're
-      // validating is "the sessions map and close-call probes reflect cleanup
-      // attempts regardless of finalizer outcome".
       yield* Effect.exit(adapter.stopAll());
       const sessions = yield* adapter.listSessions();
 
@@ -320,7 +315,12 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         "http://127.0.0.1:9999",
         "http://127.0.0.1:9999",
       ]);
-      NodeAssert.deepEqual(sessions, []);
+      NodeAssert.equal(sessions.length, 2);
+
+      // A retry can now verify cleanup and only then clear ownership.
+      runtimeMock.state.closeError = null;
+      yield* adapter.stopAll();
+      NodeAssert.deepEqual(yield* adapter.listSessions(), []);
     }),
   );
 

@@ -26,6 +26,7 @@ import {
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
+  type OrchestrationLatestTurn,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -44,6 +45,7 @@ import {
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   OrchestrationReplayEventsError,
+  OrchestrationStopExecutionError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -57,6 +59,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
+import { withExecutionSnapshot } from "@t3tools/shared/threadExecution";
 import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -69,6 +72,7 @@ import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadExecutionSupervisor } from "./execution/ThreadExecutionSupervisor.ts";
 import { OrchestrationAccessControl } from "./orchestration/Services/AccessControl.ts";
 import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
 import { ClerkDirectory, ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
@@ -261,6 +265,7 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
+  [ORCHESTRATION_WS_METHODS.stopExecution, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getFullThreadDiff, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.replayEvents, AuthOrchestrationReadScope],
@@ -380,6 +385,7 @@ const makeWsRpcLayer = (
       const currentSessionId = currentSession.sessionId;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const executionSupervisor = yield* ThreadExecutionSupervisor;
       const orchestrationCommandDispatcher =
         yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
       const accessControl = yield* OrchestrationAccessControl;
@@ -781,6 +787,30 @@ const makeWsRpcLayer = (
           }
           return yield* orchestrationCommandDispatcher.dispatch(normalizedCommand, { actorUserId });
         });
+      const withThreadExecution = Effect.fn("ws.withThreadExecution")(function* <
+        T extends { readonly id: ThreadId; readonly latestTurn: OrchestrationLatestTurn | null },
+      >(thread: T) {
+        return withExecutionSnapshot(thread, yield* executionSupervisor.getSnapshot(thread.id));
+      });
+      const withShellExecutions = Effect.fn("ws.withShellExecutions")(function* <
+        T extends {
+          readonly threads: ReadonlyArray<{
+            readonly id: ThreadId;
+            readonly latestTurn: OrchestrationLatestTurn | null;
+          }>;
+        },
+      >(snapshot: T) {
+        const executions = yield* executionSupervisor.getSnapshots(
+          snapshot.threads.map((thread) => thread.id),
+        );
+        return {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) => {
+            const execution = executions.get(thread.id);
+            return execution ? withExecutionSnapshot(thread, execution) : thread;
+          }),
+        };
+      });
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -885,6 +915,31 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_WS_METHODS.stopExecution]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.stopExecution,
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationStopExecutionError({
+                      message: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+              return yield* executionSupervisor.stopExecution(input).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationStopExecutionError({
+                      message: "Failed to stop thread execution",
+                      cause,
+                    }),
+                ),
+              );
+            }),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getTurnDiff,
@@ -963,7 +1018,7 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
-              const liveStream = applyShellVisibility(
+              const domainLiveStream = applyShellVisibility(
                 orchestrationEngine.streamDomainEvents.pipe(
                   Stream.mapEffect(toShellStreamEvent),
                   Stream.flatMap((event) =>
@@ -971,6 +1026,45 @@ const makeWsRpcLayer = (
                   ),
                 ),
               );
+              const executionLiveStream = executionSupervisor.streamSnapshots.pipe(
+                Stream.mapEffect((execution) =>
+                  actorUserId === null
+                    ? Effect.succeed(Option.some({ kind: "execution" as const, execution }))
+                    : projectionSnapshotQuery.getThreadShellById(execution.threadId).pipe(
+                        Effect.map((thread) =>
+                          Option.filter(
+                            Option.map(thread, () => ({ kind: "execution" as const, execution })),
+                            () =>
+                              Option.isSome(thread) && isOwnerOrMember(thread.value, actorUserId),
+                          ),
+                        ),
+                        Effect.orElseSucceed(() => Option.none()),
+                      ),
+                ),
+                Stream.flatMap((item) =>
+                  Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
+                ),
+              );
+              const liveStream: Stream.Stream<OrchestrationShellStreamItem> = Stream.merge(
+                domainLiveStream,
+                executionLiveStream,
+              );
+              const rawSnapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+                Effect.tapError((cause) =>
+                  Effect.logError("orchestration shell snapshot load failed", { cause }),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationGetSnapshotError({
+                      message: "Failed to load orchestration shell snapshot",
+                      cause,
+                    }),
+                ),
+              );
+              const visibleSnapshot =
+                actorUserId === null ? rawSnapshot : filterShellSnapshot(rawSnapshot, actorUserId);
+              const snapshot = yield* withShellExecutions(visibleSnapshot);
+              const snapshotFrame = Stream.make({ kind: "snapshot" as const, snapshot });
 
               // When the client already holds a shell snapshot (cached, or loaded
               // over HTTP) it passes that snapshot's sequence, and we resume by
@@ -1004,32 +1098,15 @@ const makeWsRpcLayer = (
                         ),
                       ),
                     );
-                    return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
+                    return Stream.concat(
+                      snapshotFrame,
+                      Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer)),
+                    );
                   }),
                 );
               }
 
-              const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
-                Effect.tapError((cause) =>
-                  Effect.logError("orchestration shell snapshot load failed", { cause }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationGetSnapshotError({
-                      message: "Failed to load orchestration shell snapshot",
-                      cause,
-                    }),
-                ),
-              );
-
-              return Stream.concat(
-                Stream.make({
-                  kind: "snapshot" as const,
-                  snapshot:
-                    actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId),
-                }),
-                liveStream,
-              );
+              return Stream.concat(snapshotFrame, liveStream);
             }),
             { "rpc.aggregate": "orchestration" },
           ),
@@ -1092,13 +1169,44 @@ const makeWsRpcLayer = (
                       ),
                     );
 
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
+              const domainLiveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
                   event,
                 })),
               );
+              const executionLiveStream = executionSupervisor.streamSnapshots.pipe(
+                Stream.filter((execution) => execution.threadId === input.threadId),
+                Stream.map((execution) => ({ kind: "execution" as const, execution })),
+              );
+              const liveStream: Stream.Stream<OrchestrationThreadStreamItem> = Stream.merge(
+                domainLiveStream,
+                executionLiveStream,
+              );
+
+              const loadedSnapshot = yield* projectionSnapshotQuery
+                .getThreadDetailSnapshot(input.threadId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: `Failed to load thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                );
+              if (Option.isNone(loadedSnapshot)) {
+                return yield* new OrchestrationGetSnapshotError({
+                  message: `Thread ${input.threadId} was not found`,
+                  cause: input.threadId,
+                });
+              }
+              const snapshot = {
+                ...loadedSnapshot.value,
+                thread: yield* withThreadExecution(loadedSnapshot.value.thread),
+              };
+              const snapshotFrame = Stream.make({ kind: "snapshot" as const, snapshot });
 
               // When the client already loaded the snapshot over HTTP it passes
               // that snapshot's sequence, and we resume the live subscription by
@@ -1139,40 +1247,16 @@ const makeWsRpcLayer = (
                         ),
                       );
                     return takeUntilSelfRemoved(
-                      Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer)),
+                      Stream.concat(
+                        snapshotFrame,
+                        Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer)),
+                      ),
                     );
                   }),
                 );
               }
 
-              const snapshot = yield* projectionSnapshotQuery
-                .getThreadDetailSnapshot(input.threadId)
-                .pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new OrchestrationGetSnapshotError({
-                        message: `Failed to load thread ${input.threadId}`,
-                        cause,
-                      }),
-                  ),
-                );
-
-              if (Option.isNone(snapshot)) {
-                return yield* new OrchestrationGetSnapshotError({
-                  message: `Thread ${input.threadId} was not found`,
-                  cause: input.threadId,
-                });
-              }
-
-              return takeUntilSelfRemoved(
-                Stream.concat(
-                  Stream.make({
-                    kind: "snapshot" as const,
-                    snapshot: snapshot.value,
-                  }),
-                  liveStream,
-                ),
-              );
+              return takeUntilSelfRemoved(Stream.concat(snapshotFrame, liveStream));
             }),
             { "rpc.aggregate": "orchestration" },
           ),

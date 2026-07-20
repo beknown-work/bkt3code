@@ -1,5 +1,5 @@
 import type { StatusTone } from "../../components/StatusPill";
-import type { OrchestrationLatestTurn, OrchestrationSession } from "@t3tools/contracts";
+import type { OrchestrationLatestTurn, ThreadExecutionSnapshot } from "@t3tools/contracts";
 import { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
 export function threadSortValue(thread: EnvironmentThreadShell): number {
@@ -12,6 +12,7 @@ export type ThreadStatusKind =
   | "awaiting-input"
   | "working"
   | "connecting"
+  | "checking"
   | "error"
   | "plan-ready";
 
@@ -33,12 +34,11 @@ export const THREAD_STATUS_NEUTRAL_ICON = {
 
 function isLatestTurnSettled(
   latestTurn: OrchestrationLatestTurn | null,
-  session: OrchestrationSession | null,
+  execution: ThreadExecutionSnapshot | null,
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  return session.status !== "running";
+  return !execution || execution.activity === "idle" || execution.activity === "failed";
 }
 
 /**
@@ -49,7 +49,18 @@ function isLatestTurnSettled(
 export function resolveThreadStatus(
   thread: EnvironmentThreadShell,
 ): ThreadStatusPresentation | null {
-  if (thread.hasPendingApprovals) {
+  if (thread.execution === null || thread.execution === undefined) {
+    return {
+      kind: "checking",
+      label: "Checking agent status",
+      pillClassName: "bg-slate-500/10 dark:bg-slate-400/10",
+      textClassName: "text-slate-600 dark:text-slate-300",
+      iconColor: "#8e8e93",
+      iconBackground: "rgba(142,142,147,0.22)",
+      pulse: true,
+    };
+  }
+  if (thread.execution?.turn?.state === "waiting-for-approval") {
     return {
       kind: "pending-approval",
       label: "Needs Approval",
@@ -61,7 +72,7 @@ export function resolveThreadStatus(
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (thread.execution?.turn?.state === "waiting-for-input") {
     return {
       kind: "awaiting-input",
       label: "Awaiting Input",
@@ -73,7 +84,7 @@ export function resolveThreadStatus(
     };
   }
 
-  if (thread.session?.status === "running") {
+  if (thread.execution?.activity === "active" || thread.execution?.activity === "stopping") {
     return {
       kind: "working",
       label: "Working",
@@ -85,7 +96,7 @@ export function resolveThreadStatus(
     };
   }
 
-  if (thread.session?.status === "starting") {
+  if (thread.execution?.providerSession.state === "starting") {
     return {
       kind: "connecting",
       label: "Connecting",
@@ -97,7 +108,7 @@ export function resolveThreadStatus(
     };
   }
 
-  if (thread.session?.status === "error" || thread.latestTurn?.state === "error") {
+  if (thread.execution?.activity === "failed") {
     return {
       kind: "error",
       label: "Error",
@@ -111,7 +122,7 @@ export function resolveThreadStatus(
 
   const hasPlanReadyPrompt =
     thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    isLatestTurnSettled(thread.latestTurn, thread.execution ?? null) &&
     thread.hasActionableProposedPlan;
   if (hasPlanReadyPrompt) {
     return {

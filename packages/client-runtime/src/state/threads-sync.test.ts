@@ -9,6 +9,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
+  type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -76,7 +77,37 @@ const BASE_THREAD: OrchestrationThread = {
   activities: [],
   checkpoints: [],
   session: null,
+  execution: null,
 };
+
+const executionSnapshot = (
+  activity: ThreadExecutionSnapshot["activity"],
+  turnState: NonNullable<ThreadExecutionSnapshot["turn"]>["state"] = "completed",
+): ThreadExecutionSnapshot => ({
+  threadId: THREAD_ID,
+  authorityEpoch: "server-epoch",
+  revision: 2,
+  observedAt: "2026-04-01T01:00:00.000Z",
+  activity,
+  canStop: activity !== "idle",
+  providerSession: {
+    state: activity === "idle" ? "ready" : "ready",
+    generation: 1,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    startedAt: "2026-04-01T00:00:00.000Z",
+    lastObservedAt: "2026-04-01T01:00:00.000Z",
+    lastError: null,
+  },
+  turn: {
+    executionId: "execution-1",
+    providerTurnId: TurnId.make("turn-from-a-previous-life"),
+    state: turnState,
+    startedAt: "2026-04-01T00:00:00.000Z",
+    stopRequestedAt: null,
+    completedAt: activity === "idle" ? "2026-04-01T01:00:00.000Z" : null,
+    lastError: null,
+  },
+});
 
 type TestThreadInput = OrchestrationThreadStreamItem | Error;
 
@@ -267,12 +298,11 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("re-verifies a warm cache that claims a turn is still running", () =>
+  it.effect("treats cached running state as historical until the execution frame arrives", () =>
     Effect.gen(function* () {
-      // A cached snapshot claiming in-flight work cannot be confirmed by
-      // replaying events after its own sequence: anything at or below it is
-      // dropped. Left untrusted-but-unverified, the thread shows a turn the
-      // server finished long ago and stop has nothing to act on.
+      // Cached lifecycle data is never authoritative. It is cleared before the
+      // warm snapshot is painted, then replaced by the mandatory execution
+      // frame sent at the start of every subscription.
       const staleRunningThread: OrchestrationThread = {
         ...BASE_THREAD,
         session: {
@@ -284,38 +314,28 @@ describe("EnvironmentThreads", () => {
           lastError: null,
           updatedAt: "2026-04-01T00:00:00.000Z",
         },
+        execution: executionSnapshot("active", "running"),
       };
-      const serverSnapshot: OrchestrationThreadDetailSnapshot = {
-        snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 5,
-        thread: { ...BASE_THREAD, title: "Settled by the server" },
-      };
-      const harness = yield* makeHarness({
-        cached: staleRunningThread,
-        httpSnapshot: Option.some(serverSnapshot),
+      const harness = yield* makeHarness({ cached: staleRunningThread });
+
+      const historical = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.execution === null,
+      );
+      expect(Option.getOrThrow(historical.data).execution).toBeNull();
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+
+      yield* Queue.offer(harness.inputs, {
+        kind: "execution",
+        execution: executionSnapshot("idle"),
       });
-
-      const state = yield* awaitThreadState(
+      const authoritative = yield* awaitThreadState(
         harness.observed,
-        (value) => Option.isSome(value.data) && value.data.value.session === null,
-      );
-      expect(Option.getOrThrow(state.data).title).toBe("Settled by the server");
-      expect(yield* Ref.get(harness.loaderCalls)).toBeGreaterThanOrEqual(1);
-
-      // Drive a live event through so the subscription is known to be
-      // established before asserting which sequence it resumed from.
-      yield* Queue.offer(
-        harness.inputs,
-        titleUpdated("Live title", serverSnapshot.snapshotSequence + 1),
-      );
-      yield* awaitThreadState(
-        harness.observed,
-        (value) => Option.isSome(value.data) && value.data.value.title === "Live title",
+        (value) => Option.isSome(value.data) && value.data.value.execution?.activity === "idle",
       );
 
-      // It resumed from the server's sequence, not the stale cached one.
-      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(
-        serverSnapshot.snapshotSequence,
-      );
+      expect(Option.getOrThrow(authoritative.data).latestTurn?.state).toBe("completed");
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
     }),
   );
 
@@ -462,6 +482,26 @@ describe("EnvironmentThreads", () => {
 
       expect(Option.isNone(recovered.error)).toBe(true);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+    }),
+  );
+
+  it.effect("clears live execution authority when the stream disconnects", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(harness.inputs, {
+        kind: "execution",
+        execution: executionSnapshot("active", "running"),
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.execution?.activity === "active",
+      );
+
+      yield* Queue.offer(harness.inputs, new Error("connection lost"));
+      const disconnected = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(Option.getOrThrow(disconnected.data).execution).toBeNull();
     }),
   );
 

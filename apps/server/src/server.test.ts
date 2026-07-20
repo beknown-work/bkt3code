@@ -5604,6 +5604,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(dispatchResult.sequence, 7);
 
+      const stopResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.stopExecution]({
+            threadId: ThreadId.make("thread-1"),
+            expectedExecutionId: "execution-from-an-older-client",
+          }),
+        ),
+      );
+      assert.equal(stopResult.disposition, "already-stopped");
+      assert.equal(stopResult.snapshot.threadId, ThreadId.make("thread-1"));
+      assert.equal(stopResult.snapshot.activity, "idle");
+      assert.isFalse(stopResult.snapshot.canStop);
+
       const turnDiffResult = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[ORCHESTRATION_WS_METHODS.getTurnDiff]({

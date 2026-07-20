@@ -340,6 +340,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  isStopPending: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -366,6 +367,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        isStopPending={props.isStopPending}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -506,7 +508,7 @@ export interface ChatComposerProps {
 
   // Callbacks
   onSend: (e?: { preventDefault: () => void }) => void;
-  onInterrupt: () => void;
+  onInterrupt: () => void | Promise<void>;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
@@ -1855,9 +1857,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     addComposerImages(files);
     focusComposer();
   };
-  const handleInterruptPrimaryAction = useCallback(() => {
-    void onInterrupt();
-  }, [onInterrupt]);
+  const [isStopPending, setIsStopPending] = useState(false);
+  const canStopExecution = activeThread?.execution?.canStop === true;
+  const handleInterruptPrimaryAction = useCallback(async () => {
+    if (isStopPending) return;
+    setIsStopPending(true);
+    try {
+      await onInterrupt();
+    } finally {
+      setIsStopPending(false);
+    }
+  }, [isStopPending, onInterrupt]);
   const handleImplementPlanInNewThreadPrimaryAction = useCallback(() => {
     void onImplementPlanInNewThread();
   }, [onImplementPlanInNewThread]);
@@ -2170,7 +2180,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     <ComposerPrimaryActions
                       compact
                       pendingAction={pendingPrimaryAction}
-                      isRunning={false}
+                      isRunning={canStopExecution}
+                      isStopPending={isStopPending}
                       showPlanFollowUpPrompt={false}
                       promptHasText={false}
                       isSendBusy={isSendBusy}
@@ -2431,7 +2442,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerPrimaryActions
                     compact
                     pendingAction={pendingPrimaryAction}
-                    isRunning={false}
+                    isRunning={canStopExecution}
+                    isStopPending={isStopPending}
                     showPlanFollowUpPrompt={false}
                     promptHasText={false}
                     isSendBusy={isSendBusy}
@@ -2542,7 +2554,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeContextWindow={activeContextWindow}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   pendingAction={pendingPrimaryAction}
-                  isRunning={phase === "running"}
+                  isRunning={canStopExecution}
+                  isStopPending={isStopPending}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}

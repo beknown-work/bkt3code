@@ -74,7 +74,7 @@ import {
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
-  derivePhase,
+  executionPhase,
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
@@ -216,7 +216,7 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
-  buildThreadTurnInterruptInput,
+  buildStopExecutionInput,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -379,7 +379,7 @@ function useLocalDispatchState(input: {
         localDispatch,
         phase: input.phase,
         latestTurn: input.activeLatestTurn,
-        session: input.activeThread?.session ?? null,
+        execution: input.activeThread?.execution ?? null,
         hasPendingApproval: input.activePendingApproval !== null,
         hasPendingUserInput: input.activePendingUserInput !== null,
         threadError: input.threadError,
@@ -388,7 +388,7 @@ function useLocalDispatchState(input: {
       input.activeLatestTurn,
       input.activePendingApproval,
       input.activePendingUserInput,
-      input.activeThread?.session,
+      input.activeThread?.execution,
       input.phase,
       input.threadError,
       localDispatch,
@@ -1012,7 +1012,7 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
-  const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
+  const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, {
     reportFailure: false,
   });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
@@ -1376,7 +1376,7 @@ function ChatViewContent(props: ChatViewProps) {
         : nextThreadIds;
     });
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.execution ?? null);
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
@@ -1724,7 +1724,7 @@ function ChatViewContent(props: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
-  const phase = derivePhase(activeThread?.session ?? null);
+  const phase = executionPhase(activeThread?.execution ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   const pendingApprovals = useMemo(
@@ -1815,7 +1815,7 @@ function ChatViewContent(props: ChatViewProps) {
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
-    activeThread?.session ?? null,
+    activeThread?.execution ?? null,
     localDispatchStartedAt,
   );
   useEffect(() => {
@@ -2192,7 +2192,10 @@ function ChatViewContent(props: ChatViewProps) {
   const envLocked = Boolean(
     activeThread &&
     (activeThread.messages.length > 0 ||
-      (activeThread.session !== null && activeThread.session.status !== "stopped")),
+      (activeThread.execution !== null &&
+        activeThread.execution !== undefined &&
+        activeThread.execution.providerSession.state !== "absent" &&
+        activeThread.execution.providerSession.state !== "stopped")),
   );
 
   // Handle environment change for draft threads.  When the user picks a
@@ -4258,15 +4261,15 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onInterrupt = async () => {
     if (!activeThread) return;
-    const result = await interruptThreadTurn({
+    const result = await stopThreadExecution({
       environmentId,
-      input: buildThreadTurnInterruptInput(activeThread),
+      input: buildStopExecutionInput(activeThread),
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       setThreadError(
         activeThread.id,
-        error instanceof Error ? error.message : "Failed to interrupt the current turn.",
+        error instanceof Error ? error.message : "Failed to stop the current execution.",
       );
     }
   };
@@ -5091,16 +5094,12 @@ function ChatViewContent(props: ChatViewProps) {
               <MessagesTimeline
                 key={activeThread.id}
                 isWorking={isWorking}
-                activeTurnInProgress={isWorking || !latestTurnSettled}
-                activeTurnStartedAt={activeWorkStartedAt}
+                activeTurnInProgress={phase === "running"}
+                activeTurnStartedAt={phase === "running" ? activeWorkStartedAt : null}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
                 latestTurn={activeLatestTurn}
-                runningTurnId={
-                  activeThread.session?.status === "running"
-                    ? activeThread.session.activeTurnId
-                    : null
-                }
+                runningTurnId={activeThread.execution?.turn?.providerTurnId ?? null}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}

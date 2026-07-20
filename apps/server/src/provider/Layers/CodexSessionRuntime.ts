@@ -1255,6 +1255,13 @@ export const makeCodexSessionRuntime = (
         ),
       );
       yield* Scope.close(runtimeScope, Exit.void);
+      if (yield* child.isRunning.pipe(Effect.orDie)) {
+        return yield* Effect.die(
+          new Error(
+            `Codex app-server process tree for thread '${options.threadId}' remained alive after close.`,
+          ),
+        );
+      }
       yield* Queue.shutdown(serverNotifications);
       yield* Queue.shutdown(events);
     });

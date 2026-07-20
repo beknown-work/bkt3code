@@ -93,7 +93,7 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
       if (!resolved) return AsyncResult.success(undefined);
       const { thread, threadRef } = resolved;
-      if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+      if (thread.execution?.canStop === true) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadArchiveBlockedError({

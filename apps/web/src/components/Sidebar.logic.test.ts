@@ -27,6 +27,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
@@ -566,6 +567,35 @@ describe("isContextMenuPointerDown", () => {
 });
 
 describe("resolveThreadStatusPill", () => {
+  const makeExecution = (
+    activity: ThreadExecutionSnapshot["activity"],
+    state: NonNullable<ThreadExecutionSnapshot["turn"]>["state"],
+  ): ThreadExecutionSnapshot => ({
+    threadId: ThreadId.make("thread-1"),
+    authorityEpoch: "server-epoch",
+    revision: 1,
+    observedAt: "2026-03-09T10:05:00.000Z",
+    activity,
+    canStop: activity !== "idle",
+    providerSession: {
+      state: activity === "failed" ? "failed" : "ready",
+      generation: 1,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      startedAt: "2026-03-09T10:00:00.000Z",
+      lastObservedAt: "2026-03-09T10:05:00.000Z",
+      lastError: activity === "failed" ? "failed" : null,
+    },
+    turn: {
+      executionId: "execution-1",
+      providerTurnId: "turn-1" as never,
+      state,
+      startedAt: "2026-03-09T10:00:00.000Z",
+      stopRequestedAt: null,
+      completedAt: activity === "idle" ? "2026-03-09T10:05:00.000Z" : null,
+      lastError: activity === "failed" ? "failed" : null,
+    },
+  });
+
   const baseThread = {
     hasActionableProposedPlan: false,
     hasPendingApprovals: false,
@@ -573,6 +603,7 @@ describe("resolveThreadStatusPill", () => {
     interactionMode: "plan" as const,
     latestTurn: null,
     lastVisitedAt: undefined,
+    execution: makeExecution("active", "running"),
     session: {
       threadId: ThreadId.make("thread-1"),
       status: "running" as const,
@@ -592,6 +623,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasPendingApprovals: true,
           hasPendingUserInput: true,
+          execution: makeExecution("blocked", "waiting-for-approval"),
         },
       }),
     ).toMatchObject({ label: "Pending Approval", pulse: false });
@@ -603,6 +635,7 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           hasPendingUserInput: true,
+          execution: makeExecution("blocked", "waiting-for-input"),
         },
       }),
     ).toMatchObject({ label: "Awaiting Input", pulse: false });
@@ -623,6 +656,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasActionableProposedPlan: true,
           latestTurn: makeLatestTurn(),
+          execution: makeExecution("idle", "completed"),
           session: {
             ...baseThread.session,
             status: "ready",
@@ -639,6 +673,7 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           latestTurn: makeLatestTurn(),
+          execution: makeExecution("idle", "completed"),
           session: {
             ...baseThread.session,
             status: "ready",
@@ -657,6 +692,7 @@ describe("resolveThreadStatusPill", () => {
           interactionMode: "default",
           latestTurn: makeLatestTurn(),
           lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          execution: makeExecution("idle", "completed"),
           session: {
             ...baseThread.session,
             status: "ready",
@@ -665,6 +701,14 @@ describe("resolveThreadStatusPill", () => {
         },
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
+  });
+
+  it("shows a checking state until a current authority snapshot arrives", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...baseThread, execution: null },
+      }),
+    ).toMatchObject({ label: "Checking agent status", pulse: true });
   });
 });
 

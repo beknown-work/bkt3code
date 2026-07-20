@@ -6,7 +6,7 @@ import {
   ThreadId,
   TurnId,
   UserId,
-  type OrchestrationSession,
+  type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -33,18 +33,44 @@ const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-07-16T10:00:00.000Z";
 
-function makeSession(overrides: Partial<OrchestrationSession> = {}): OrchestrationSession {
+function makeExecution(overrides: Partial<ThreadExecutionSnapshot> = {}): ThreadExecutionSnapshot {
   return {
     threadId,
-    status: "ready",
-    providerName: "Codex",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    activeTurnId: null,
-    lastError: null,
-    updatedAt: now,
+    authorityEpoch: "server-epoch",
+    revision: 1,
+    observedAt: now,
+    activity: "idle",
+    canStop: false,
+    providerSession: {
+      state: "ready",
+      generation: 1,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      startedAt: now,
+      lastObservedAt: now,
+      lastError: null,
+    },
+    turn: null,
     ...overrides,
   };
+}
+
+function makeActiveExecution(
+  state: NonNullable<ThreadExecutionSnapshot["turn"]>["state"] = "running",
+): ThreadExecutionSnapshot {
+  return makeExecution({
+    activity:
+      state === "waiting-for-approval" || state === "waiting-for-input" ? "blocked" : "active",
+    canStop: true,
+    turn: {
+      executionId: "execution-1",
+      providerTurnId: TurnId.make("turn-1"),
+      state,
+      startedAt: now,
+      stopRequestedAt: null,
+      completedAt: null,
+      lastError: null,
+    },
+  });
 }
 
 function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
@@ -65,6 +91,7 @@ function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
     updatedAt: now,
     archivedAt: null,
     session: null,
+    execution: makeExecution(),
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
@@ -104,7 +131,7 @@ describe("phase sidebar lifecycle", () => {
         makeThread({
           hasPendingApprovals: true,
           hasPendingUserInput: true,
-          session: makeSession({ status: "running", lastError: "stale" }),
+          execution: makeActiveExecution("waiting-for-approval"),
         }),
       ),
     ).toBe("approval_needed");
@@ -112,33 +139,41 @@ describe("phase sidebar lifecycle", () => {
       resolvePhaseSidebarPhase(
         makeThread({
           hasPendingUserInput: true,
-          session: makeSession({ status: "error", lastError: "failed" }),
+          execution: makeActiveExecution("waiting-for-input"),
         }),
       ),
     ).toBe("awaiting_input");
-    expect(
-      resolvePhaseSidebarPhase(
-        makeThread({ session: makeSession({ status: "running", lastError: "stale" }) }),
-      ),
-    ).toBe("implementing");
+    expect(resolvePhaseSidebarPhase(makeThread({ execution: makeActiveExecution() }))).toBe(
+      "implementing",
+    );
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
           interactionMode: "plan",
-          session: makeSession({ status: "starting", lastError: "stale" }),
+          execution: makeActiveExecution("starting"),
         }),
       ),
     ).toBe("drafting_plan");
     expect(
       resolvePhaseSidebarPhase(
-        makeThread({ session: makeSession({ status: "ready", lastError: "failed" }) }),
+        makeThread({
+          execution: makeExecution({
+            activity: "failed",
+            canStop: true,
+            providerSession: {
+              ...makeExecution().providerSession,
+              state: "failed",
+              lastError: "failed",
+            },
+          }),
+        }),
       ),
     ).toBe("failed");
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
           interactionMode: "plan",
-          session: makeSession({ status: "error" }),
+          execution: makeExecution({ activity: "failed", canStop: true }),
           latestTurn: settledTurn,
           hasActionableProposedPlan: true,
         }),
@@ -148,7 +183,7 @@ describe("phase sidebar lifecycle", () => {
       resolvePhaseSidebarPhase(
         makeThread({
           interactionMode: "plan",
-          session: makeSession(),
+          execution: makeExecution(),
           latestTurn: settledTurn,
           hasActionableProposedPlan: true,
         }),
@@ -180,7 +215,11 @@ describe("phase sidebar lifecycle", () => {
       ThreadId.make("thread-b"),
       ThreadId.make("thread-a"),
     ]);
-    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(7);
+    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(8);
+  });
+
+  it("uses checking until an authoritative execution snapshot arrives", () => {
+    expect(resolvePhaseSidebarPhase(makeThread({ execution: null }))).toBe("checking");
   });
 });
 

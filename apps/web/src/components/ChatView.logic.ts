@@ -76,14 +76,15 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   );
 }
 
-export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
+export function buildStopExecutionInput(thread: Pick<Thread, "id" | "execution">): {
   threadId: ThreadId;
-  turnId?: TurnId;
+  expectedExecutionId?: string;
 } {
-  const runningTurnId = thread.session?.status === "running" ? thread.session.activeTurnId : null;
   return {
     threadId: thread.id,
-    ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
+    ...(thread.execution?.turn?.executionId
+      ? { expectedExecutionId: thread.execution.turn.executionId }
+      : {}),
   };
 }
 
@@ -393,8 +394,8 @@ export interface LocalDispatchSnapshot {
   latestTurnRequestedAt: string | null;
   latestTurnStartedAt: string | null;
   latestTurnCompletedAt: string | null;
-  sessionStatus: NonNullable<Thread["session"]>["status"] | null;
-  sessionUpdatedAt: string | null;
+  executionId: string | null;
+  executionRevision: number | null;
 }
 
 export function createLocalDispatchSnapshot(
@@ -402,7 +403,7 @@ export function createLocalDispatchSnapshot(
   options?: { preparingWorktree?: boolean },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
-  const session = activeThread?.session ?? null;
+  const execution = activeThread?.execution ?? null;
   return {
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
@@ -410,8 +411,8 @@ export function createLocalDispatchSnapshot(
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
     latestTurnCompletedAt: latestTurn?.completedAt ?? null,
-    sessionStatus: session?.status ?? null,
-    sessionUpdatedAt: session?.updatedAt ?? null,
+    executionId: execution?.turn?.executionId ?? null,
+    executionRevision: execution?.revision ?? null,
   };
 }
 
@@ -419,7 +420,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   localDispatch: LocalDispatchSnapshot | null;
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
-  session: Thread["session"] | null;
+  execution: Thread["execution"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
   threadError: string | null | undefined;
@@ -432,7 +433,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   }
 
   const latestTurn = input.latestTurn ?? null;
-  const session = input.session ?? null;
+  const execution = input.execution ?? null;
   const latestTurnChanged =
     input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
     input.localDispatch.latestTurnRequestedAt !== (latestTurn?.requestedAt ?? null) ||
@@ -446,19 +447,16 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     if (latestTurn?.startedAt === null || latestTurn === null) {
       return false;
     }
-    if (
-      session?.activeTurnId !== null &&
-      session?.activeTurnId !== undefined &&
-      latestTurn?.turnId !== session.activeTurnId
-    ) {
-      return false;
-    }
-    return true;
+    return (
+      execution?.activity === "active" ||
+      execution?.activity === "blocked" ||
+      execution?.activity === "stopping"
+    );
   }
 
   return (
     latestTurnChanged ||
-    input.localDispatch.sessionStatus !== (session?.status ?? null) ||
-    input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
+    input.localDispatch.executionId !== (execution?.turn?.executionId ?? null) ||
+    input.localDispatch.executionRevision !== (execution?.revision ?? null)
   );
 }

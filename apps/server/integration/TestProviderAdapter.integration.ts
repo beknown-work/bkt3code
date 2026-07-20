@@ -25,6 +25,7 @@ import type {
   ProviderThreadSnapshot,
   ProviderThreadTurnSnapshot,
 } from "../src/provider/Services/ProviderAdapter.ts";
+import { makeObservableLifecycle } from "../src/provider/observableLifecycle.ts";
 
 export interface TestTurnResponse {
   readonly events: ReadonlyArray<FixtureProviderRuntimeEvent>;
@@ -488,10 +489,10 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         sessions.clear();
       });
 
-    const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+    const adapterBase = {
       provider,
       capabilities: {
-        sessionModelSwitch: "in-session",
+        sessionModelSwitch: "in-session" as const,
       },
       startSession,
       sendTurn,
@@ -505,6 +506,10 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       rollbackThread,
       stopAll,
       streamEvents: Stream.fromQueue(runtimeEvents),
+    };
+    const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+      ...adapterBase,
+      ...makeObservableLifecycle(adapterBase),
     };
 
     const queueTurnResponse = (

@@ -50,6 +50,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -1651,10 +1652,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       return;
     }
     session.stopped = true;
+    yield* session.runtime.close.pipe(
+      Effect.andThen(Scope.close(session.scope, Exit.void)),
+      Effect.andThen(Fiber.interrupt(session.eventFiber)),
+      Effect.onError(() => Effect.sync(() => (session.stopped = false))),
+    );
     sessions.delete(session.threadId);
-    yield* session.runtime.close.pipe(Effect.ignore);
-    yield* Effect.ignore(Scope.close(session.scope, Exit.void));
-    yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
@@ -1690,7 +1693,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     ),
   );
 
-  return {
+  const adapter = {
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
@@ -1709,7 +1712,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },
-  } satisfies CodexAdapterShape;
+  } satisfies Omit<
+    CodexAdapterShape,
+    "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+  >;
+  return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies CodexAdapterShape;
 });
 
 // NOTE: the old `CodexAdapterLive` / `makeCodexAdapterLive` singleton Layer

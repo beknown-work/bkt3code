@@ -4,9 +4,9 @@ type LatestTurnTiming = {
   readonly completedAt: string | null;
 };
 
-type SessionActivityState = {
-  readonly orchestrationStatus: string;
-  readonly activeTurnId?: string | null;
+type ExecutionActivityState = {
+  readonly activity: "idle" | "active" | "blocked" | "stopping" | "failed";
+  readonly turn: { readonly startedAt: string } | null;
 };
 
 export function formatDuration(durationMs: number): string {
@@ -33,22 +33,25 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
 
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
+  execution: ExecutionActivityState | null,
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  if (session.orchestrationStatus === "running") return false;
-  return true;
+  return !execution || execution.activity === "idle" || execution.activity === "failed";
 }
 
 export function deriveActiveWorkStartedAt(
   latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
+  execution: ExecutionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? sendStartedAt;
+  if (
+    execution &&
+    (execution.activity === "active" ||
+      execution.activity === "blocked" ||
+      execution.activity === "stopping")
+  ) {
+    return execution.turn?.startedAt ?? sendStartedAt;
   }
   return sendStartedAt;
 }

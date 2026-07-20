@@ -1,7 +1,13 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  MessageId,
+  ThreadExecutionSnapshot,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -128,6 +134,7 @@ export interface ThreadFeedProps {
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
+  readonly execution: ThreadExecutionSnapshot | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -1454,9 +1461,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
   const unsettledTurnId =
-    props.latestTurn &&
-    (props.latestTurn.completedAt === null || props.latestTurn.state === "running")
-      ? props.latestTurn.turnId
+    props.execution?.activity === "active" ||
+    props.execution?.activity === "blocked" ||
+    props.execution?.activity === "stopping"
+      ? (props.execution.turn?.providerTurnId ?? null)
       : null;
 
   useEffect(() => {

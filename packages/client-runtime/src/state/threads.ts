@@ -6,6 +6,7 @@ import {
   type OrchestrationThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
+import { withExecutionSnapshot } from "@t3tools/shared/threadExecution";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -34,16 +35,6 @@ function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): Enviro
   return Option.isSome(data) ? "cached" : "empty";
 }
 
-/**
- * Does this snapshot claim a turn is still in flight? Such a claim cannot be
- * confirmed by replaying events after the snapshot's own sequence, so it is the
- * one that must be re-verified against the server before it is trusted.
- */
-function claimsWorkInFlight(thread: OrchestrationThread): boolean {
-  const status = thread.session?.status;
-  return status === "running" || status === "starting" || thread.latestTurn?.state === "running";
-}
-
 function formatThreadError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
   return error instanceof Error && error.message.trim().length > 0
@@ -70,7 +61,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     ),
   );
-  const cachedThread = Option.map(cached, (snapshot) => snapshot.thread);
+  // Cached execution state belongs to a previous connection/authority epoch.
+  // Keep it historical until the subscription's mandatory fresh snapshot.
+  const cachedThread = Option.map(cached, (snapshot) => ({
+    ...snapshot.thread,
+    execution: null,
+  }));
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
     data: cachedThread,
     status: statusWithoutLiveData(cachedThread),
@@ -121,11 +117,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
   const setDisconnected = SubscriptionRef.update(state, (current) => ({
     ...current,
+    data: Option.map(current.data, (thread) => ({ ...thread, execution: null })),
     status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
   }));
   const setStreamError = (cause: Cause.Cause<unknown>) =>
     SubscriptionRef.update(state, (current) => ({
       ...current,
+      data: Option.map(current.data, (thread) => ({ ...thread, execution: null })),
       status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
       error: Option.some(formatThreadError(cause)),
     }));
@@ -169,6 +167,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* setThread(item.snapshot.thread);
+      return;
+    }
+
+    if (item.kind === "execution") {
+      const current = yield* SubscriptionRef.get(state);
+      if (Option.isSome(current.data)) {
+        yield* setThread(withExecutionSnapshot(current.data.value, item.execution));
+      }
       return;
     }
 
@@ -231,7 +237,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       // is nothing left to stop. Settled snapshots keep the zero-network path.
       if (Option.isSome(cached)) {
         // Paint the cache immediately either way; verification only corrects.
-        yield* applyItem({ kind: "snapshot", snapshot: cached.value });
+        yield* applyItem({
+          kind: "snapshot",
+          snapshot: {
+            ...cached.value,
+            thread: { ...cached.value.thread, execution: null },
+          },
+        });
       }
 
       const loadSnapshotFromServer = Effect.gen(function* () {
@@ -248,11 +260,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           : Option.none<OrchestrationThreadDetailSnapshot>();
       });
 
-      const mustVerifyCache = Option.isSome(cached) && claimsWorkInFlight(cached.value.thread);
-      const loaded =
-        Option.isNone(cached) || mustVerifyCache
-          ? yield* loadSnapshotFromServer
-          : Option.none<OrchestrationThreadDetailSnapshot>();
+      const loaded = Option.isNone(cached)
+        ? yield* loadSnapshotFromServer
+        : Option.none<OrchestrationThreadDetailSnapshot>();
 
       if (Option.isSome(loaded)) {
         yield* applyItem({ kind: "snapshot", snapshot: loaded.value });
