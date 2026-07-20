@@ -3554,6 +3554,13 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return [];
     });
+    // Also clear the in-flight latch. It guards against double-sends within a
+    // single send, but it is component-scoped: a send that never settles (a
+    // dispatch lost on a dead socket, a server bootstrap that hung) used to
+    // leave it stuck true for the life of the tab, and every later send —
+    // including on a brand-new thread — then returned at the guard without
+    // ever issuing an RPC. Switching threads is always a fresh send context.
+    sendInFlightRef.current = false;
     resetLocalDispatch();
     setExpandedImage(null);
   }, [draftId, resetLocalDispatch, threadId]);
@@ -3875,7 +3882,7 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const runSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     if (
       !activeThread ||
@@ -4236,6 +4243,16 @@ function ChatViewContent(props: ChatViewProps) {
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {
       resetLocalDispatch();
+    }
+  };
+
+  // The latch must be released even if the send throws: leaking it disables
+  // every future send in this tab, with no error to explain why.
+  const onSend = async (e?: { preventDefault: () => void }) => {
+    try {
+      await runSend(e);
+    } finally {
+      sendInFlightRef.current = false;
     }
   };
 
