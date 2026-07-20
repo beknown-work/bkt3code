@@ -34,6 +34,16 @@ function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): Enviro
   return Option.isSome(data) ? "cached" : "empty";
 }
 
+/**
+ * Does this snapshot claim a turn is still in flight? Such a claim cannot be
+ * confirmed by replaying events after the snapshot's own sequence, so it is the
+ * one that must be re-verified against the server before it is trusted.
+ */
+function claimsWorkInFlight(thread: OrchestrationThread): boolean {
+  const status = thread.session?.status;
+  return status === "running" || status === "starting" || thread.latestTurn?.state === "running";
+}
+
 function formatThreadError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
   return error instanceof Error && error.message.trim().length > 0
@@ -209,25 +219,48 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       // If no base can be established we fall back to the socket-embedded
       // snapshot so the thread still synchronizes. Overlapping/replayed events
       // are deduped by sequence in applyItem.
-      const base = Option.isSome(cached)
-        ? cached
-        : yield* Effect.gen(function* () {
-            // Cold cache only: wait for a prepared connection so we can
-            // authenticate the HTTP request; this mirrors the socket path, which
-            // likewise waits for a live session.
-            const prepared = yield* SubscriptionRef.changes(supervisor.prepared).pipe(
-              Stream.filter(Option.isSome),
-              Stream.map((current) => current.value),
-              Stream.runHead,
-            );
-            return Option.isSome(prepared)
-              ? yield* snapshotLoader.load(prepared.value, threadId)
-              : Option.none<OrchestrationThreadDetailSnapshot>();
-          });
-
-      if (Option.isSome(base)) {
-        yield* applyItem({ kind: "snapshot", snapshot: base.value });
+      //
+      // Exception: a cached snapshot that claims work is still in flight is
+      // re-verified against the server first. Resuming from the cache is only
+      // sound while its state and its sequence agree; if they ever drift,
+      // `afterSequence` replays only events *newer* than that sequence and
+      // applyItem drops anything at or below it, so the drift is never
+      // corrected — it is written straight back to the cache and survives
+      // reloads. For an in-flight claim that strands the thread: it shows a
+      // turn the server finished long ago, and stop does nothing because there
+      // is nothing left to stop. Settled snapshots keep the zero-network path.
+      if (Option.isSome(cached)) {
+        // Paint the cache immediately either way; verification only corrects.
+        yield* applyItem({ kind: "snapshot", snapshot: cached.value });
       }
+
+      const loadSnapshotFromServer = Effect.gen(function* () {
+        // Wait for a prepared connection so we can authenticate the HTTP
+        // request; this mirrors the socket path, which likewise waits for a
+        // live session.
+        const prepared = yield* SubscriptionRef.changes(supervisor.prepared).pipe(
+          Stream.filter(Option.isSome),
+          Stream.map((current) => current.value),
+          Stream.runHead,
+        );
+        return Option.isSome(prepared)
+          ? yield* snapshotLoader.load(prepared.value, threadId)
+          : Option.none<OrchestrationThreadDetailSnapshot>();
+      });
+
+      const mustVerifyCache = Option.isSome(cached) && claimsWorkInFlight(cached.value.thread);
+      const loaded =
+        Option.isNone(cached) || mustVerifyCache
+          ? yield* loadSnapshotFromServer
+          : Option.none<OrchestrationThreadDetailSnapshot>();
+
+      if (Option.isSome(loaded)) {
+        yield* applyItem({ kind: "snapshot", snapshot: loaded.value });
+      }
+
+      // Prefer the server's snapshot; fall back to the cache when it could not
+      // be loaded (offline), which keeps the previous warm-start behaviour.
+      const base = Option.isSome(loaded) ? loaded : cached;
 
       const subscribeInput = Option.match(base, {
         onNone: () => ({ threadId }),

@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
@@ -263,6 +264,58 @@ describe("EnvironmentThreads", () => {
 
       expect(Option.getOrThrow(state.data)).toEqual(BASE_THREAD);
       expect(Option.isNone(state.error)).toBe(true);
+    }),
+  );
+
+  it.effect("re-verifies a warm cache that claims a turn is still running", () =>
+    Effect.gen(function* () {
+      // A cached snapshot claiming in-flight work cannot be confirmed by
+      // replaying events after its own sequence: anything at or below it is
+      // dropped. Left untrusted-but-unverified, the thread shows a turn the
+      // server finished long ago and stop has nothing to act on.
+      const staleRunningThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.make("turn-from-a-previous-life"),
+          lastError: null,
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+      };
+      const serverSnapshot: OrchestrationThreadDetailSnapshot = {
+        snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 5,
+        thread: { ...BASE_THREAD, title: "Settled by the server" },
+      };
+      const harness = yield* makeHarness({
+        cached: staleRunningThread,
+        httpSnapshot: Option.some(serverSnapshot),
+      });
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.session === null,
+      );
+      expect(Option.getOrThrow(state.data).title).toBe("Settled by the server");
+      expect(yield* Ref.get(harness.loaderCalls)).toBeGreaterThanOrEqual(1);
+
+      // Drive a live event through so the subscription is known to be
+      // established before asserting which sequence it resumed from.
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("Live title", serverSnapshot.snapshotSequence + 1),
+      );
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.title === "Live title",
+      );
+
+      // It resumed from the server's sequence, not the stale cached one.
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(
+        serverSnapshot.snapshotSequence,
+      );
     }),
   );
 
