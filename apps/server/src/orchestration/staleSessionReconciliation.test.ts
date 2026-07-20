@@ -149,6 +149,12 @@ reconciliationLayer("runStaleSessionReconciliation", (it) => {
       const settled = turns.find((turn) => turn.turn_id === TURN_ID);
       assert.strictEqual(settled?.state, "interrupted");
       assert.isNotNull(settled?.completed_at ?? null);
+
+      // The settle must be stamped at the thread's last recorded activity, not
+      // at boot time. session.updatedAt becomes the turn's completedAt, so
+      // stamping "now" would record the whole gap since the crash as turn
+      // duration — a turn orphaned yesterday would read "Worked for 17h".
+      assert.strictEqual(settled?.completed_at, AT);
     }),
   );
 

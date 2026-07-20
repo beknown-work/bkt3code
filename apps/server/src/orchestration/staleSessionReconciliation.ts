@@ -40,7 +40,7 @@ export const runStaleSessionReconciliation = Effect.gen(function* () {
   const snapshot = yield* snapshotQuery.getShellSnapshot();
   const orphaned = snapshot.threads.flatMap((thread) =>
     thread.session !== null && ORPHANABLE_STATUSES.has(thread.session.status)
-      ? [{ threadId: thread.id, session: thread.session }]
+      ? [{ threadId: thread.id, session: thread.session, lastActivityAt: thread.updatedAt }]
       : [],
   );
 
@@ -55,7 +55,15 @@ export const runStaleSessionReconciliation = Effect.gen(function* () {
   const reconcileThread = Effect.fn("reconcileStaleSession")(function* (input: {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
+    readonly lastActivityAt: string;
   }) {
+    // The projector turns session.updatedAt into the settled turn's completedAt.
+    // Stamping "now" would therefore record the whole wall-clock gap since the
+    // crash as turn duration — a turn orphaned yesterday would read "Worked for
+    // 17h". Use the thread's last recorded event instead, so the duration
+    // reflects the work that actually happened.
+    const settleAt = Number.isFinite(Date.parse(input.lastActivityAt)) ? input.lastActivityAt : now;
+
     yield* engine.dispatch({
       type: "thread.session.set",
       commandId: CommandId.make(yield* serverId("stale-session-interrupt")),
@@ -64,9 +72,9 @@ export const runStaleSessionReconciliation = Effect.gen(function* () {
         ...input.session,
         status: "interrupted",
         activeTurnId: null,
-        updatedAt: now,
+        updatedAt: settleAt,
       },
-      createdAt: now,
+      createdAt: settleAt,
     });
 
     // Without this the turn just goes quiet and reads as an unexplained stop.
