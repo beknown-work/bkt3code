@@ -33,6 +33,10 @@ const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
+// Periodic liveness probe while connected, so a socket that dies silently (e.g.
+// the machine slept and no `visibilitychange` fired) is detected and forces a
+// reconnect. Worst-case detection ≈ interval + CONNECTION_PROBE_TIMEOUT ≈ 35s.
+const HEARTBEAT_INTERVAL_MS = 20_000;
 
 interface SupervisorIntent {
   readonly desired: boolean;
@@ -44,7 +48,8 @@ type SupervisorSignal =
   | { readonly _tag: "DisconnectRequested" }
   | { readonly _tag: "RetryRequested" }
   | { readonly _tag: "NetworkChanged"; readonly network: NetworkStatus }
-  | { readonly _tag: "Wakeup"; readonly reason: ConnectionWakeups.ConnectionWakeup };
+  | { readonly _tag: "Wakeup"; readonly reason: ConnectionWakeups.ConnectionWakeup }
+  | { readonly _tag: "HealthCheckRequested" };
 
 interface PendingRetryTrace {
   readonly previousAttempt: Tracer.Span;
@@ -383,6 +388,57 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     }
   });
 
+  // Run a single liveness probe against the connected lease. Returns
+  // "return-lease" when a disconnect/offline signal arrived mid-probe (the
+  // caller should stop monitoring), or "continue-monitoring" when the probe
+  // succeeded. A failed/timed-out probe fails this effect, which propagates out
+  // of `monitorConnectedLease` and ends the attempt so `run()` reconnects.
+  // Shared by the `application-active` wakeup and the periodic heartbeat so a
+  // tick arriving while a probe is already in flight is dropped (single probe).
+  const runLivenessProbe = Effect.fnUntraced(function* (
+    lease: ConnectionDriver.EnvironmentConnectionLease,
+  ) {
+    const probe = yield* lease.session.probe.pipe(
+      Effect.timeoutOrElse({
+        duration: CONNECTION_PROBE_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new ConnectionTransientError({
+              reason: "timeout",
+              detail: `${target.label} did not respond to a connection health check.`,
+            }),
+          ),
+      }),
+      Effect.forkChild,
+    );
+    for (;;) {
+      const probeEvent = yield* Effect.raceFirst(
+        Fiber.await(probe).pipe(Effect.map((exit) => ({ _tag: "ProbeCompleted" as const, exit }))),
+        Queue.take(signals).pipe(Effect.map((signal) => ({ _tag: "Signal" as const, signal }))),
+      );
+      if (probeEvent._tag === "ProbeCompleted") {
+        yield* probeEvent.exit;
+        return "continue-monitoring" as const;
+      }
+      switch (probeEvent.signal._tag) {
+        case "DisconnectRequested":
+        case "RetryRequested":
+          yield* Fiber.interrupt(probe);
+          return "return-lease" as const;
+        case "NetworkChanged":
+          if (probeEvent.signal.network === "offline") {
+            yield* Fiber.interrupt(probe);
+            return "return-lease" as const;
+          }
+          break;
+        case "ConnectRequested":
+        case "Wakeup":
+        case "HealthCheckRequested":
+          break;
+      }
+    }
+  });
+
   const monitorConnectedLease = Effect.fnUntraced(function* (
     lease: ConnectionDriver.EnvironmentConnectionLease,
   ) {
@@ -397,53 +453,19 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             return;
           }
           break;
+        case "HealthCheckRequested":
+          if ((yield* runLivenessProbe(lease)) === "return-lease") {
+            return;
+          }
+          break;
         case "Wakeup":
           if (next.reason === "credentials-changed" && target._tag === "RelayConnectionTarget") {
             yield* logManagedRelayAccountChange;
             return;
           }
           if (next.reason === "application-active") {
-            const probe = yield* lease.session.probe.pipe(
-              Effect.timeoutOrElse({
-                duration: CONNECTION_PROBE_TIMEOUT,
-                orElse: () =>
-                  Effect.fail(
-                    new ConnectionTransientError({
-                      reason: "timeout",
-                      detail: `${target.label} did not respond to a connection health check.`,
-                    }),
-                  ),
-              }),
-              Effect.forkChild,
-            );
-            for (;;) {
-              const probeEvent = yield* Effect.raceFirst(
-                Fiber.await(probe).pipe(
-                  Effect.map((exit) => ({ _tag: "ProbeCompleted" as const, exit })),
-                ),
-                Queue.take(signals).pipe(
-                  Effect.map((signal) => ({ _tag: "Signal" as const, signal })),
-                ),
-              );
-              if (probeEvent._tag === "ProbeCompleted") {
-                yield* probeEvent.exit;
-                break;
-              }
-              switch (probeEvent.signal._tag) {
-                case "DisconnectRequested":
-                case "RetryRequested":
-                  yield* Fiber.interrupt(probe);
-                  return;
-                case "NetworkChanged":
-                  if (probeEvent.signal.network === "offline") {
-                    yield* Fiber.interrupt(probe);
-                    return;
-                  }
-                  break;
-                case "ConnectRequested":
-                case "Wakeup":
-                  break;
-              }
+            if ((yield* runLivenessProbe(lease)) === "return-lease") {
+              return;
             }
           }
           break;
@@ -540,6 +562,16 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       lastFailure: null,
       retryAt: null,
     });
+
+    // Periodic heartbeat, scoped to this connected attempt: emit a health-check
+    // signal every HEARTBEAT_INTERVAL_MS (first tick after the interval, not
+    // immediately). `runAttempt` runs under `Effect.scoped`, so this fiber is
+    // interrupted when the attempt ends — ticks fire only while connected.
+    yield* signal({ _tag: "HealthCheckRequested" }).pipe(
+      Effect.delay(HEARTBEAT_INTERVAL_MS),
+      Effect.forever,
+      Effect.forkScoped,
+    );
 
     const connectedExit = yield* Effect.raceFirst(
       active.lease.session.closed.pipe(
