@@ -23,6 +23,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, vi } from "@effect/vitest";
 
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -846,6 +847,49 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("exposes and can terminate a session while the adapter is still starting", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-slow-start");
+      const adapterEntered = yield* Deferred.make<void>();
+      const releaseAdapter = yield* Deferred.make<ProviderSession>();
+      routing.codex.startSession.mockImplementationOnce(() =>
+        Deferred.succeed(adapterEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseAdapter)),
+        ),
+      );
+
+      const startFiber = yield* provider
+        .startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(adapterEntered);
+
+      const inspection = yield* provider.inspectSession(threadId);
+      assert.deepEqual(inspection, {
+        threadId,
+        generation: 1,
+        state: "starting",
+        activeProviderTurnId: null,
+        runtimeAlive: true,
+      });
+
+      const termination = yield* provider.terminateSession({ threadId });
+      assert.deepEqual(termination, {
+        verified: true,
+        graceful: true,
+        processTreeExited: true,
+      });
+      assert.equal(yield* provider.inspectSession(threadId), null);
+      assert.equal(Exit.isFailure(yield* Fiber.await(startFiber)), true);
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

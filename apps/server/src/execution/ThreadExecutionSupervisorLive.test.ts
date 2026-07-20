@@ -189,6 +189,86 @@ layer("ThreadExecutionSupervisor", (it) => {
     }),
   );
 
+  it.effect("does not reap an execution while its provider session is still starting", () =>
+    Effect.gen(function* () {
+      const inspectionCount = yield* Ref.make(0);
+      const providerService = {
+        inspectSession: () =>
+          Ref.update(inspectionCount, (count) => count + 1).pipe(
+            Effect.as({
+              threadId,
+              generation: 1,
+              state: "starting" as const,
+              activeProviderTurnId: null,
+              runtimeAlive: true,
+            }),
+          ),
+        streamEvents: Stream.empty,
+      } as unknown as ProviderServiceShape;
+      const orchestration = {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.empty,
+      } as OrchestrationEngineService["Service"];
+      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+        Layer.provide(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const prepared = yield* supervisor.prepareExecution(startEvent("slow-start"));
+        assert.strictEqual(prepared.providerSession.state, "starting");
+
+        yield* TestClock.adjust("16 seconds");
+        yield* Effect.yieldNow;
+
+        const audited = yield* supervisor.getSnapshot(threadId);
+        assert.strictEqual(audited.activity, "active");
+        assert.strictEqual(audited.turn?.state, "starting");
+        assert.strictEqual(audited.providerSession.state, "starting");
+        assert.isAtLeast(yield* Ref.get(inspectionCount), 1);
+      }).pipe(Effect.provide(supervisorLayer));
+    }),
+  );
+
+  it.effect("publishes provider startup failures as authoritative execution errors", () =>
+    Effect.gen(function* () {
+      const providerService = {
+        inspectSession: () => Effect.succeed(null),
+        streamEvents: Stream.empty,
+      } as unknown as ProviderServiceShape;
+      const orchestration = {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.empty,
+      } as OrchestrationEngineService["Service"];
+      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+        Layer.provide(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const prepared = yield* supervisor.prepareExecution(startEvent("failed-start"));
+        const failed = yield* supervisor.failExecution(
+          threadId,
+          prepared.turn?.executionId ?? "missing",
+          "Codex failed to start.",
+        );
+
+        assert.strictEqual(failed?.activity, "failed");
+        assert.strictEqual(failed?.canStop, false);
+        assert.strictEqual(failed?.providerSession.state, "failed");
+        assert.strictEqual(failed?.providerSession.lastError, "Codex failed to start.");
+        assert.strictEqual(failed?.turn?.state, "failed");
+        assert.strictEqual(failed?.turn?.lastError, "Codex failed to start.");
+      }).pipe(Effect.provide(supervisorLayer));
+    }),
+  );
+
   it.effect("keeps unverifiable termination stoppable and permits a verified retry", () =>
     Effect.gen(function* () {
       const terminationAttempts = yield* Ref.make(0);

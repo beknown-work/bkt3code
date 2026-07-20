@@ -750,6 +750,7 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
+      workingStatusLabel: "Starting Codex session",
       turnDiffSummaryByAssistantMessageId: new Map(),
       revertTurnCountByUserMessageId: new Map(),
     });
@@ -762,6 +763,8 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
     const finalRow = rows.find((row) => row.id === "assistant-final-entry");
     expect(finalRow?.kind === "message" && finalRow.showAssistantMeta).toBe(true);
+    const workingRow = rows.find((row) => row.id === "working-indicator-row");
+    expect(workingRow?.kind === "working" && workingRow.label).toBe("Starting Codex session");
   });
 
   it("does not fold the active in-progress turn", () => {

@@ -40,6 +40,7 @@ import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+import { describeThreadExecution } from "@t3tools/shared/threadExecution";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -2144,6 +2145,27 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const providerExecutionLabel = activeProviderStatus?.displayName?.trim() || "agent";
+  const backendExecutionStatus = describeThreadExecution(
+    activeThread?.execution,
+    providerExecutionLabel,
+  );
+  const workingStatusLabel = isPreparingWorktree
+    ? "Preparing worktree"
+    : (backendExecutionStatus ??
+      (routeKind === "draft" && isSendBusy
+        ? "Creating thread"
+        : isRevertingCheckpoint
+          ? "Restoring checkpoint"
+          : isConnecting
+            ? "Connecting to server"
+            : "Agent is working"));
+  const backendExecutionError =
+    activeThread?.execution?.activity === "failed"
+      ? (activeThread.execution.turn?.lastError ??
+        activeThread.execution.providerSession.lastError ??
+        "Agent execution failed.")
+      : null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -4109,8 +4131,31 @@ function ChatViewContent(props: ChatViewProps) {
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
+    // Promote a local draft to a durable thread before any worktree or provider
+    // startup. This makes the sidebar row and canonical route available
+    // immediately while the slower execution setup continues independently.
+    if (isLocalDraftThread) {
+      beginLocalDispatch({ preparingWorktree: false });
+      const createResult = await createThread({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          projectId: activeProject.id,
+          title,
+          modelSelection: threadCreateModelSelection,
+          runtimeMode,
+          interactionMode,
+          branch: activeThreadBranch,
+          worktreePath: activeThread.worktreePath,
+          createdAt: activeThread.createdAt,
+        },
+      });
+      if (createResult._tag === "Failure") {
+        failure = createResult;
+      }
+    }
     // Auto-title from first message
-    if (isFirstMessage && isServerThread) {
+    if (failure === null && isFirstMessage && isServerThread) {
       const titleResult = await updateThreadMetadata({
         environmentId,
         input: {
@@ -4143,37 +4188,18 @@ function ChatViewContent(props: ChatViewProps) {
 
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
-      const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
-          ? {
-              ...(isLocalDraftThread
-                ? {
-                    createThread: {
-                      projectId: activeProject.id,
-                      title,
-                      modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
-                      createdAt: activeThread.createdAt,
-                    },
-                  }
-                : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
-            }
-          : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
+      const bootstrap = baseBranchForWorktree
+        ? {
+            prepareWorktree: {
+              projectCwd: activeProject.workspaceRoot,
+              baseBranch: baseBranchForWorktree,
+              branch: buildTemporaryWorktreeBranchName(randomHex),
+              ...(startFromOrigin ? { startFromOrigin: true } : {}),
+            },
+            runSetupScript: true,
+          }
+        : undefined;
+      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
       const startResult = await startThreadTurn({
         environmentId,
         input: {
@@ -5081,8 +5107,8 @@ function ChatViewContent(props: ChatViewProps) {
         {/* Error banner */}
         <ProviderStatusBanner status={activeProviderStatus} />
         <ThreadErrorBanner
-          error={threadError}
-          onDismiss={() => setThreadError(activeThread.id, null)}
+          error={threadError ?? backendExecutionError}
+          {...(threadError ? { onDismiss: () => setThreadError(activeThread.id, null) } : {})}
         />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -5096,6 +5122,7 @@ function ChatViewContent(props: ChatViewProps) {
                 isWorking={isWorking}
                 activeTurnInProgress={phase === "running"}
                 activeTurnStartedAt={phase === "running" ? activeWorkStartedAt : null}
+                workingStatusLabel={workingStatusLabel}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
                 latestTurn={activeLatestTurn}

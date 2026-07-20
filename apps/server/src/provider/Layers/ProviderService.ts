@@ -27,6 +27,7 @@ import {
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -214,6 +215,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const sessionGenerations = new Map<string, number>();
+  interface ProviderSessionStartup {
+    readonly instanceId: ProviderInstanceId;
+    readonly generation: number;
+    readonly fiber: Fiber.Fiber<ProviderSession, ProviderAdapterError>;
+  }
+  const sessionStartups = new Map<ThreadId, ProviderSessionStartup>();
   const sessionGenerationKey = (instanceId: ProviderInstanceId, threadId: ThreadId) =>
     `${instanceId}\u0000${threadId}`;
   const bumpSessionGeneration = (instanceId: ProviderInstanceId, threadId: ThreadId) => {
@@ -607,14 +614,33 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
-        const session = yield* adapter
+        const generation = bumpSessionGeneration(resolvedInstanceId, threadId);
+        const startupFiber = yield* adapter
           .startSession({
             ...input,
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
           })
-          .pipe(Effect.onError(() => clearMcpSession(threadId)));
+          .pipe(
+            Effect.onError(() => clearMcpSession(threadId)),
+            Effect.forkChild({ startImmediately: false }),
+          );
+        const startup: ProviderSessionStartup = {
+          instanceId: resolvedInstanceId,
+          generation,
+          fiber: startupFiber,
+        };
+        sessionStartups.set(threadId, startup);
+        const session = yield* Fiber.join(startupFiber).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (sessionStartups.get(threadId) === startup) {
+                sessionStartups.delete(threadId);
+              }
+            }),
+          ),
+        );
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
@@ -627,8 +653,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...session,
           providerInstanceId: resolvedInstanceId,
         };
-        bumpSessionGeneration(resolvedInstanceId, threadId);
-
         yield* stopStaleSessionsForThread({
           threadId,
           currentInstanceId: resolvedInstanceId,
@@ -773,6 +797,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const inspectSession: ProviderServiceMethod<"inspectSession"> = Effect.fn("inspectSession")(
     function* (threadId) {
+      const startup = sessionStartups.get(threadId);
+      if (startup) {
+        const adapter = yield* registry.getByInstance(startup.instanceId);
+        const inspected = yield* adapter.inspectSession(threadId);
+        if (inspected !== null) {
+          return { ...inspected, generation: startup.generation };
+        }
+        return {
+          threadId,
+          generation: startup.generation,
+          state: "starting",
+          activeProviderTurnId: null,
+          runtimeAlive: true,
+        } as const;
+      }
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       if (!binding?.providerInstanceId) return null;
       const adapter = yield* registry.getByInstance(binding.providerInstanceId);
@@ -802,12 +841,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const terminateSession: ProviderServiceMethod<"terminateSession"> = Effect.fn("terminateSession")(
     function* (input) {
+      const startup = sessionStartups.get(input.threadId);
+      if (startup) {
+        yield* Fiber.interrupt(startup.fiber);
+        if (sessionStartups.get(input.threadId) === startup) {
+          sessionStartups.delete(input.threadId);
+        }
+      }
       const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
-      if (!binding?.providerInstanceId) {
+      const providerInstanceId = startup?.instanceId ?? binding?.providerInstanceId;
+      if (!providerInstanceId) {
         return { verified: true, graceful: true, processTreeExited: true };
       }
-      const adapter = yield* registry.getByInstance(binding.providerInstanceId);
+      const adapter = yield* registry.getByInstance(providerInstanceId);
       if (!(yield* adapter.hasSession(input.threadId))) {
+        yield* clearMcpSession(input.threadId);
         return { verified: true, graceful: true, processTreeExited: true };
       }
       const termination = yield* adapter.terminateSession(input.threadId);
@@ -821,7 +869,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* directory.upsert({
         threadId: input.threadId,
         provider: adapter.provider,
-        providerInstanceId: binding.providerInstanceId,
+        providerInstanceId,
         status: "stopped",
         runtimePayload: { activeTurnId: null },
       });
@@ -1084,6 +1132,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
+    yield* Effect.forEach(
+      Array.from(sessionStartups.values()),
+      (startup) => Fiber.interrupt(startup.fiber),
+      { discard: true },
+    );
+    sessionStartups.clear();
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
     const activeSessions = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>

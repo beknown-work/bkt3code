@@ -813,11 +813,14 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }
       const detail = formatFailureDetail(cause);
-      return setThreadSessionErrorOnTurnStartFailure({
-        threadId: event.payload.threadId,
-        detail,
-        createdAt: event.payload.createdAt,
-      }).pipe(
+      return executionSupervisor.failExecution(event.payload.threadId, executionId, detail).pipe(
+        Effect.andThen(
+          setThreadSessionErrorOnTurnStartFailure({
+            threadId: event.payload.threadId,
+            detail,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
         Effect.flatMap(() =>
           appendProviderFailureActivity({
             threadId: event.payload.threadId,
@@ -871,16 +874,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* executionSupervisor
-      .canContinueExecution(event.payload.threadId, executionId)
-      .pipe(
-        Effect.flatMap((canContinue) =>
-          canContinue
-            ? providerService.sendTurn(sendTurnRequest.value).pipe(Effect.asVoid)
-            : Effect.void,
-        ),
-      )
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    yield* executionSupervisor.canContinueExecution(event.payload.threadId, executionId).pipe(
+      Effect.flatMap((canContinue) =>
+        canContinue
+          ? providerService.sendTurn(sendTurnRequest.value).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

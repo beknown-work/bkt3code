@@ -415,6 +415,14 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
       };
       switch (event.type) {
         case "session.started":
+          if (
+            isTerminalTurn(current) &&
+            (current.providerSession.state === "stopped" ||
+              current.providerSession.state === "stopping" ||
+              current.providerSession.state === "failed")
+          ) {
+            return null;
+          }
           return {
             ...current,
             providerSession: {
@@ -436,13 +444,36 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
                   : stateValue === "error"
                     ? "failed"
                     : "stopped";
+          if (
+            (stateValue === "starting" || stateValue === "ready") &&
+            isTerminalTurn(current) &&
+            (current.providerSession.state === "stopped" ||
+              current.providerSession.state === "stopping" ||
+              current.providerSession.state === "failed")
+          ) {
+            return null;
+          }
+          const failed = stateValue === "error";
+          const reason = event.payload.reason ?? "Provider session failed.";
           return {
             ...current,
+            activity:
+              failed && current.turn && !isTerminalTurn(current) ? "failed" : current.activity,
+            canStop: failed ? false : current.canStop,
             providerSession: {
               ...providerSession,
               state: nextState,
-              lastError: event.payload.reason ?? null,
+              lastError: failed ? reason : null,
             },
+            turn:
+              failed && current.turn && !isTerminalTurn(current)
+                ? {
+                    ...current.turn,
+                    state: "failed",
+                    completedAt: observedAt,
+                    lastError: reason,
+                  }
+                : current.turn,
           };
         }
         case "turn.started":
@@ -571,6 +602,32 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           (snapshot.activity === "active" || snapshot.activity === "blocked"),
       ),
     );
+
+  const failExecution: ThreadExecutionSupervisorShape["failExecution"] = (
+    threadId,
+    executionId,
+    error,
+  ) =>
+    transition(threadId, (current, observedAt) => {
+      if (current.turn?.executionId !== executionId || isTerminalTurn(current)) return null;
+      return {
+        ...current,
+        activity: "failed",
+        canStop: false,
+        providerSession: {
+          ...current.providerSession,
+          state: "failed",
+          lastObservedAt: observedAt,
+          lastError: error,
+        },
+        turn: {
+          ...current.turn,
+          state: "failed",
+          completedAt: observedAt,
+          lastError: error,
+        },
+      };
+    });
 
   const awaitTerminal = (threadId: ThreadId, executionId: string, timeoutMs: number) =>
     Effect.gen(function* () {
@@ -928,6 +985,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     getSnapshots,
     prepareExecution,
     canContinueExecution,
+    failExecution,
     stopExecution,
     get streamSnapshots() {
       return Stream.fromPubSub(snapshots);

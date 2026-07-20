@@ -4,6 +4,28 @@ import {
   type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 
+export function describeThreadExecution(
+  execution: ThreadExecutionSnapshot | null | undefined,
+  providerLabel = "agent",
+): string | null {
+  if (!execution) return null;
+  const turn = execution.turn;
+  if (execution.activity === "failed") {
+    return turn?.lastError ?? execution.providerSession.lastError ?? "Agent execution failed.";
+  }
+  if (execution.activity === "stopping" || turn?.state === "stopping") {
+    return "Stopping agent";
+  }
+  if (turn?.state === "waiting-for-approval") return "Waiting for approval";
+  if (turn?.state === "waiting-for-input") return "Waiting for your input";
+  if (execution.providerSession.state === "starting") {
+    return `Starting ${providerLabel} session`;
+  }
+  if (turn?.state === "starting") return "Sending prompt to agent";
+  if (turn?.state === "running") return "Agent is working";
+  return null;
+}
+
 const latestTurnState = (
   state: NonNullable<ThreadExecutionSnapshot["turn"]>["state"],
 ): OrchestrationLatestTurn["state"] => {

@@ -24,6 +24,11 @@ export interface ThreadExecutionSupervisorShape {
     threadId: ThreadId,
     executionId: string,
   ) => Effect.Effect<boolean>;
+  readonly failExecution: (
+    threadId: ThreadId,
+    executionId: string,
+    error: string,
+  ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
   readonly stopExecution: (
     input: OrchestrationStopExecutionInput,
   ) => Effect.Effect<OrchestrationStopExecutionResult, ProviderServiceError | SqlError>;
@@ -81,6 +86,23 @@ export class ThreadExecutionSupervisor extends Context.Reference<ThreadExecution
         });
       },
       canContinueExecution: () => Effect.succeed(true),
+      failExecution: (threadId, executionId, error) => {
+        const snapshot = unavailableSnapshot(threadId);
+        return Effect.succeed({
+          ...snapshot,
+          activity: "failed",
+          providerSession: { ...snapshot.providerSession, state: "failed", lastError: error },
+          turn: {
+            executionId,
+            providerTurnId: null,
+            state: "failed",
+            startedAt: snapshot.observedAt,
+            stopRequestedAt: null,
+            completedAt: snapshot.observedAt,
+            lastError: error,
+          },
+        });
+      },
       stopExecution: (input) =>
         Effect.succeed({
           operationId: "unavailable",
