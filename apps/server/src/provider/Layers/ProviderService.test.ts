@@ -879,7 +879,20 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeAlive: true,
       });
 
-      const termination = yield* provider.terminateSession({ threadId });
+      const terminationFiber = yield* provider
+        .terminateSession({ threadId })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(releaseAdapter, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "ready",
+        runtimeMode: "full-access",
+        threadId,
+        cwd: "/tmp/project",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      const termination = yield* Fiber.join(terminationFiber);
       assert.deepEqual(termination, {
         verified: true,
         graceful: true,

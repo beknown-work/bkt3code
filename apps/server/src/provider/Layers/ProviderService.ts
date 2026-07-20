@@ -26,8 +26,8 @@ import {
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -46,7 +46,11 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import {
+  type ProviderAdapterError,
+  ProviderAdapterRequestError,
+  ProviderValidationError,
+} from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -218,7 +222,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   interface ProviderSessionStartup {
     readonly instanceId: ProviderInstanceId;
     readonly generation: number;
-    readonly fiber: Fiber.Fiber<ProviderSession, ProviderAdapterError>;
+    readonly settled: Deferred.Deferred<void>;
+    cancelRequested: boolean;
   }
   const sessionStartups = new Map<ThreadId, ProviderSessionStartup>();
   const sessionGenerationKey = (instanceId: ProviderInstanceId, threadId: ThreadId) =>
@@ -615,7 +620,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
         const generation = bumpSessionGeneration(resolvedInstanceId, threadId);
-        const startupFiber = yield* adapter
+        const settled = yield* Deferred.make<void>();
+        const startup: ProviderSessionStartup = {
+          instanceId: resolvedInstanceId,
+          generation,
+          settled,
+          cancelRequested: false,
+        };
+        sessionStartups.set(threadId, startup);
+        const session = yield* adapter
           .startSession({
             ...input,
             providerInstanceId: resolvedInstanceId,
@@ -624,23 +637,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           })
           .pipe(
             Effect.onError(() => clearMcpSession(threadId)),
-            Effect.forkChild({ startImmediately: false }),
+            Effect.flatMap((session) =>
+              startup.cancelRequested
+                ? adapter.terminateSession(threadId).pipe(
+                    Effect.andThen(clearMcpSession(threadId)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new ProviderAdapterRequestError({
+                          provider: resolvedProvider,
+                          method: "startSession",
+                          detail: "Provider session startup was cancelled.",
+                        }),
+                      ),
+                    ),
+                  )
+                : Effect.succeed(session),
+            ),
+            Effect.ensuring(
+              Effect.sync(() => sessionStartups.get(threadId) === startup).pipe(
+                Effect.tap((isCurrent) =>
+                  isCurrent ? Effect.sync(() => sessionStartups.delete(threadId)) : Effect.void,
+                ),
+                Effect.andThen(Deferred.succeed(settled, undefined)),
+                Effect.asVoid,
+              ),
+            ),
           );
-        const startup: ProviderSessionStartup = {
-          instanceId: resolvedInstanceId,
-          generation,
-          fiber: startupFiber,
-        };
-        sessionStartups.set(threadId, startup);
-        const session = yield* Fiber.join(startupFiber).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (sessionStartups.get(threadId) === startup) {
-                sessionStartups.delete(threadId);
-              }
-            }),
-          ),
-        );
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
@@ -843,10 +865,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     function* (input) {
       const startup = sessionStartups.get(input.threadId);
       if (startup) {
-        yield* Fiber.interrupt(startup.fiber);
-        if (sessionStartups.get(input.threadId) === startup) {
-          sessionStartups.delete(input.threadId);
-        }
+        startup.cancelRequested = true;
+        yield* Deferred.await(startup.settled);
       }
       const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
       const providerInstanceId = startup?.instanceId ?? binding?.providerInstanceId;
@@ -1132,11 +1152,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
-    yield* Effect.forEach(
-      Array.from(sessionStartups.values()),
-      (startup) => Fiber.interrupt(startup.fiber),
-      { discard: true },
-    );
+    for (const startup of sessionStartups.values()) startup.cancelRequested = true;
     sessionStartups.clear();
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
