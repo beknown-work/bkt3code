@@ -1365,6 +1365,18 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.deepEqual(settledRows, [
         { state: "completed", completedAt: "2026-01-01T00:01:00.000Z" },
       ]);
+
+      // A settling session carries activeTurnId: null. Assigning that straight
+      // to latest_turn_id wiped the thread's reference to the turn that just
+      // finished, which both dropped its state/duration from the UI and made a
+      // completed thread look like a half-finished bootstrap to a retried
+      // turn-start (which then "resumed" it and ran a fresh turn).
+      const threadRows = yield* sql<{ readonly latestTurnId: string | null }>`
+        SELECT latest_turn_id AS "latestTurnId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(threadRows, [{ latestTurnId: turnId }]);
     }),
   );
 

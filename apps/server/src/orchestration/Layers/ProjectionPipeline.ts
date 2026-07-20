@@ -778,7 +778,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: event.payload.session.activeTurnId,
+            // "Latest turn" is the most recent turn, not the currently-active
+            // one. A settling session carries activeTurnId: null, so assigning
+            // it directly wiped the reference as soon as a turn finished —
+            // leaving completed threads indistinguishable from a half-finished
+            // bootstrap (which then got wrongly "resumed"), and dropping the
+            // turn's duration/state from the UI. Only advance on a real turn.
+            latestTurnId: event.payload.session.activeTurnId ?? existingRow.value.latestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
