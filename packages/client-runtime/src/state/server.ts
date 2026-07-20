@@ -299,6 +299,13 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
     configProjection,
+    // Live host/process resource samples. Short idle TTL so the ws
+    // subscription tears down promptly once the monitor panel unmounts.
+    resources: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:resources",
+      tag: WS_METHODS.subscribeServerResources,
+      idleTtlMs: 5_000,
+    }),
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
       tag: WS_METHODS.subscribeServerLifecycle,

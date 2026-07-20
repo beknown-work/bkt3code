@@ -21,6 +21,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
+import { SidebarResourceMonitorPill } from "./SidebarResourceMonitorPill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -89,6 +90,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   return (
     <SidebarFooter className="p-2">
+      <SidebarResourceMonitorPill />
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>

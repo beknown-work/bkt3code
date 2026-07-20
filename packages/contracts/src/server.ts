@@ -392,6 +392,58 @@ export const ServerProcessResourceHistoryResult = Schema.Struct({
 });
 export type ServerProcessResourceHistoryResult = typeof ServerProcessResourceHistoryResult.Type;
 
+// ── Live system resource monitor ──────────────────────────────────────
+
+export const ServerResourceProcessSample = Schema.Struct({
+  rssBytes: NonNegativeInt,
+  heapUsedBytes: NonNegativeInt,
+  heapTotalBytes: NonNegativeInt,
+  externalBytes: NonNegativeInt,
+  cpuPercent: Schema.Number,
+});
+export type ServerResourceProcessSample = typeof ServerResourceProcessSample.Type;
+
+export const ServerResourceSystemSample = Schema.Struct({
+  totalMemoryBytes: NonNegativeInt,
+  freeMemoryBytes: NonNegativeInt,
+  loadAverage1m: Schema.Number,
+  loadAverage5m: Schema.Number,
+  loadAverage15m: Schema.Number,
+  cpuCount: NonNegativeInt,
+});
+export type ServerResourceSystemSample = typeof ServerResourceSystemSample.Type;
+
+/**
+ * Cgroup v2 limits for the service running the server. All fields are
+ * best-effort: `memory.high`/`memory.max` decode to null when set to "max",
+ * and the whole sample is null on hosts without cgroup v2 (e.g. macOS).
+ */
+export const ServerResourceCgroupSample = Schema.Struct({
+  memoryCurrentBytes: Schema.NullOr(NonNegativeInt),
+  memoryHighBytes: Schema.NullOr(NonNegativeInt),
+  memoryMaxBytes: Schema.NullOr(NonNegativeInt),
+  memoryPeakBytes: Schema.NullOr(NonNegativeInt),
+  cpuPercent: Schema.NullOr(Schema.Number),
+});
+export type ServerResourceCgroupSample = typeof ServerResourceCgroupSample.Type;
+
+export const ServerResourceDiskSample = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  freeBytes: NonNegativeInt,
+  totalBytes: NonNegativeInt,
+});
+export type ServerResourceDiskSample = typeof ServerResourceDiskSample.Type;
+
+export const ServerResourceSample = Schema.Struct({
+  version: Schema.Literal(1),
+  sampledAt: Schema.DateTimeUtc,
+  process: ServerResourceProcessSample,
+  system: ServerResourceSystemSample,
+  cgroup: Schema.NullOr(ServerResourceCgroupSample),
+  disk: Schema.NullOr(ServerResourceDiskSample),
+});
+export type ServerResourceSample = typeof ServerResourceSample.Type;
+
 export const ServerSignalProcessInput = Schema.Struct({
   pid: PositiveInt,
   signal: ServerProcessSignal,

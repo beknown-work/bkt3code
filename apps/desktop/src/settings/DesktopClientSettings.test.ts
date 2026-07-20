@@ -21,6 +21,7 @@ const clientSettings: ClientSettings = {
   favorites: [],
   phaseGroupedSidebarEnabled: true,
   providerModelPreferences: {},
+  resourceMonitorEnabled: false,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",

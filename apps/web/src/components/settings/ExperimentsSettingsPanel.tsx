@@ -13,6 +13,7 @@ export function ExperimentsSettingsPanel() {
   const phaseGroupedSidebarEnabled = useClientSettings(
     (settings) => settings.phaseGroupedSidebarEnabled,
   );
+  const resourceMonitorEnabled = useClientSettings((settings) => settings.resourceMonitorEnabled);
   const updateSettings = useUpdateClientSettings();
 
   return (
@@ -40,6 +41,31 @@ export function ExperimentsSettingsPanel() {
                 updateSettings({ phaseGroupedSidebarEnabled: Boolean(checked) })
               }
               aria-label="Enable the phase-grouped sidebar"
+            />
+          }
+        />
+        <SettingsRow
+          title="Live resource monitor"
+          description="Show live CPU, memory, and disk usage of the T3 Code server."
+          resetAction={
+            resourceMonitorEnabled !== DEFAULT_UNIFIED_SETTINGS.resourceMonitorEnabled ? (
+              <SettingResetButton
+                label="live resource monitor"
+                onClick={() =>
+                  updateSettings({
+                    resourceMonitorEnabled: DEFAULT_UNIFIED_SETTINGS.resourceMonitorEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={resourceMonitorEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ resourceMonitorEnabled: Boolean(checked) })
+              }
+              aria-label="Enable the live resource monitor"
             />
           }
         />

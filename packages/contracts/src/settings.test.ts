@@ -48,6 +48,21 @@ describe("ClientSettings phase-grouped sidebar", () => {
   });
 });
 
+describe("ClientSettings resource monitor", () => {
+  it("defaults the experiment off for legacy settings", () => {
+    expect(decodeClientSettings({}).resourceMonitorEnabled).toBe(false);
+  });
+
+  it("accepts persisted values and client patches", () => {
+    expect(decodeClientSettings({ resourceMonitorEnabled: true }).resourceMonitorEnabled).toBe(
+      true,
+    );
+    expect(decodeClientSettingsPatch({ resourceMonitorEnabled: true }).resourceMonitorEnabled).toBe(
+      true,
+    );
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
