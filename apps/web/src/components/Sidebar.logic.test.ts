@@ -644,7 +644,7 @@ describe("resolveThreadStatusPill", () => {
   it("shows the implementation phase when the default-mode agent is active", () => {
     expect(
       resolveThreadStatusPill({
-        thread: baseThread,
+        thread: { ...baseThread, interactionMode: "default" },
       }),
     ).toMatchObject({ label: "Implementing", pulse: true });
   });
