@@ -34,7 +34,18 @@ export function applyShellStreamEvent(
       };
     case "thread-upserted": {
       const threads = snapshot.threads.some((t) => t.id === event.thread.id)
-        ? Arr.map(snapshot.threads, (t) => (t.id === event.thread.id ? event.thread : t))
+        ? Arr.map(snapshot.threads, (t) =>
+            t.id === event.thread.id
+              ? {
+                  ...event.thread,
+                  // Execution is delivered on its own backend-authoritative
+                  // stream. Projection upserts intentionally omit it, so a
+                  // normal title/message update must not erase the fresher
+                  // execution overlay and send the sidebar back to Checking.
+                  execution: event.thread.execution ?? t.execution,
+                }
+              : t,
+          )
         : Arr.append(snapshot.threads, event.thread);
       return { ...snapshot, threads, snapshotSequence: event.sequence };
     }

@@ -196,6 +196,14 @@ const VcsStatusChangeRequest = Schema.Struct({
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
+  isDraft: Schema.optional(Schema.Boolean),
+  mergeability: Schema.optional(Schema.Literals(["mergeable", "conflicting", "unknown"])),
+  mergeStateStatus: Schema.optional(TrimmedNonEmptyStringSchema),
+  reviewDecision: Schema.optional(
+    Schema.Literals(["approved", "changes-requested", "review-required", "unknown"]),
+  ),
+  checksStatus: Schema.optional(Schema.Literals(["pass", "fail", "pending", "unknown"])),
+  autoMergeEnabled: Schema.optional(Schema.Boolean),
 });
 
 const VcsStatusLocalShape = {

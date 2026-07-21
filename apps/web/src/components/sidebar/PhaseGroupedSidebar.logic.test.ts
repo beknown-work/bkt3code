@@ -111,12 +111,14 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     providerKind: "codex",
     providerName: "Codex",
     isAssignedToMe: false,
+    attentionPriority: 5,
+    unreadPriority: 1,
     ...overrides,
   };
 }
 
 describe("phase sidebar lifecycle", () => {
-  it("applies attention, active, failure, and plan-ready precedence", () => {
+  it("derives paired planning and implementation handoff states", () => {
     const settledTurn = {
       turnId: TurnId.make("turn-1"),
       state: "completed" as const,
@@ -127,23 +129,6 @@ describe("phase sidebar lifecycle", () => {
       durationMs: null,
     };
 
-    expect(
-      resolvePhaseSidebarPhase(
-        makeThread({
-          hasPendingApprovals: true,
-          hasPendingUserInput: true,
-          execution: makeActiveExecution("waiting-for-approval"),
-        }),
-      ),
-    ).toBe("approval_needed");
-    expect(
-      resolvePhaseSidebarPhase(
-        makeThread({
-          hasPendingUserInput: true,
-          execution: makeActiveExecution("waiting-for-input"),
-        }),
-      ),
-    ).toBe("awaiting_input");
     expect(resolvePhaseSidebarPhase(makeThread({ execution: makeActiveExecution() }))).toBe(
       "implementing",
     );
@@ -154,32 +139,7 @@ describe("phase sidebar lifecycle", () => {
           execution: makeActiveExecution("starting"),
         }),
       ),
-    ).toBe("drafting_plan");
-    expect(
-      resolvePhaseSidebarPhase(
-        makeThread({
-          execution: makeExecution({
-            activity: "failed",
-            canStop: true,
-            providerSession: {
-              ...makeExecution().providerSession,
-              state: "failed",
-              lastError: "failed",
-            },
-          }),
-        }),
-      ),
-    ).toBe("failed");
-    expect(
-      resolvePhaseSidebarPhase(
-        makeThread({
-          interactionMode: "plan",
-          execution: makeExecution({ activity: "failed", canStop: true }),
-          latestTurn: settledTurn,
-          hasActionableProposedPlan: true,
-        }),
-      ),
-    ).toBe("failed");
+    ).toBe("planning");
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
@@ -193,11 +153,71 @@ describe("phase sidebar lifecycle", () => {
     expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
   });
 
+  it("advances review and merge states only from repository evidence", () => {
+    const settledThread = makeThread({
+      latestTurn: {
+        turnId: TurnId.make("turn-1"),
+        state: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        assistantMessageId: null,
+        durationMs: null,
+      },
+    });
+    const status = {
+      isRepo: true,
+      sourceControlProvider: { kind: "github", name: "GitHub", baseUrl: "https://github.com" },
+      hasPrimaryRemote: true,
+      isDefaultRef: false,
+      refName: "feature/work",
+      hasWorkingTreeChanges: true,
+      workingTree: { files: [], insertions: 1, deletions: 0 },
+      hasUpstream: true,
+      aheadCount: 1,
+      behindCount: 0,
+      aheadOfDefaultCount: 1,
+      pr: null,
+    } as const;
+    expect(resolvePhaseSidebarPhase(settledThread, status)).toBe("ready_for_review");
+    expect(
+      resolvePhaseSidebarPhase(settledThread, {
+        ...status,
+        pr: {
+          number: 1,
+          title: "Review",
+          url: "https://github.com/acme/repo/pull/1",
+          baseRef: "main",
+          headRef: "feature/work",
+          state: "open",
+          isDraft: false,
+          mergeability: "mergeable",
+          mergeStateStatus: "CLEAN",
+          reviewDecision: "approved",
+          checksStatus: "pass",
+        },
+      }),
+    ).toBe("ready_to_merge");
+    expect(
+      resolvePhaseSidebarPhase(settledThread, {
+        ...status,
+        pr: {
+          number: 1,
+          title: "Review",
+          url: "https://github.com/acme/repo/pull/1",
+          baseRef: "main",
+          headRef: "feature/work",
+          state: "merged",
+        },
+      }),
+    ).toBe("merged");
+  });
+
   it("excludes archived threads, uses fixed group order, and sorts by thread id on ties", () => {
     const rows = [
       makeRow({
         thread: makeThread({ id: ThreadId.make("thread-a"), archivedAt: now }),
-        phaseId: "approval_needed",
+        phaseId: "plan_ready",
       }),
       makeRow({ thread: makeThread({ id: ThreadId.make("thread-a") }), phaseId: "ready" }),
       makeRow({ thread: makeThread({ id: ThreadId.make("thread-b") }), phaseId: "ready" }),
@@ -205,18 +225,21 @@ describe("phase sidebar lifecycle", () => {
         thread: makeThread({ id: ThreadId.make("thread-c") }),
         phaseId: "implementing",
       }),
-      makeRow({ thread: makeThread({ id: ThreadId.make("thread-d") }), phaseId: "failed" }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-d") }),
+        phaseId: "ready_for_review",
+      }),
     ];
 
     const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
-    expect(groups.map((group) => group.id)).toEqual(["failed", "implementing", "ready"]);
+    expect(groups.map((group) => group.id)).toEqual(["ready_for_review", "implementing", "ready"]);
     expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
       ThreadId.make("thread-d"),
       ThreadId.make("thread-c"),
-      ThreadId.make("thread-b"),
       ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
     ]);
-    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(8);
+    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(10);
   });
 
   it("uses checking until an authoritative execution snapshot arrives", () => {
@@ -343,7 +366,7 @@ describe("phase sidebar metadata and filters", () => {
     expect(
       matchesPhaseSidebarFilters(row, {
         repositoryKeys: ["repo-2", "repo-1"],
-        phaseIds: ["ready", "failed"],
+        phaseIds: ["ready", "ready_for_review"],
         providerKinds: ["codex"],
         assignedToMe: false,
       }),

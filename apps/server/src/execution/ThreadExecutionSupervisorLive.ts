@@ -61,6 +61,10 @@ interface ExecutionRow {
 const isActiveActivity = (activity: ThreadExecutionSnapshot["activity"]) =>
   activity === "active" || activity === "blocked" || activity === "stopping";
 
+const inspectionProviderState = (
+  state: "starting" | "ready" | "running" | "stopping" | "stopped" | "failed",
+): ThreadExecutionSnapshot["providerSession"]["state"] => (state === "running" ? "ready" : state);
+
 const isTerminalTurn = (snapshot: ThreadExecutionSnapshot) =>
   snapshot.turn === null ||
   snapshot.turn.state === "completed" ||
@@ -365,9 +369,11 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           providerInstanceId:
             event.payload.modelSelection?.instanceId ?? current.providerSession.providerInstanceId,
           state: replaceProvider ? "starting" : current.providerSession.state,
-          generation: replaceProvider
-            ? current.providerSession.generation + 1
-            : current.providerSession.generation,
+          // ProviderService owns the adapter generation. Do not predict its
+          // next value here: its counter can legitimately differ after a
+          // server restart or recovered session. The first observation from
+          // the selected provider adopts the actual generation below.
+          generation: current.providerSession.generation,
           startedAt: replaceProvider ? observedAt : current.providerSession.startedAt,
           lastObservedAt: observedAt,
           lastError: null,
@@ -386,10 +392,21 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
 
   const observeProviderEvent = (event: ProviderRuntimeEvent) => {
     const currentSnapshot = state.get(event.threadId);
+    const mayAdoptStartingGeneration =
+      currentSnapshot?.providerSession.state === "starting" &&
+      currentSnapshot.turn?.state === "starting" &&
+      (event.type === "session.started" ||
+        event.type === "session.state.changed" ||
+        event.type === "turn.started") &&
+      Date.parse(event.createdAt) >= Date.parse(currentSnapshot.turn.startedAt) &&
+      (currentSnapshot.providerSession.providerInstanceId === null ||
+        event.providerInstanceId === undefined ||
+        event.providerInstanceId === currentSnapshot.providerSession.providerInstanceId);
     if (
       currentSnapshot &&
       event.sessionGeneration !== undefined &&
-      event.sessionGeneration !== currentSnapshot.providerSession.generation
+      event.sessionGeneration !== currentSnapshot.providerSession.generation &&
+      !mayAdoptStartingGeneration
     ) {
       return increment(threadExecutionGenerationRejectionsTotal, {
         provider: event.provider,
@@ -410,6 +427,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         event.providerInstanceId ?? current.providerSession.providerInstanceId;
       const providerSession = {
         ...current.providerSession,
+        generation: event.sessionGeneration ?? current.providerSession.generation,
         providerInstanceId: providerInstanceId ?? null,
         lastObservedAt: observedAt,
       };
@@ -944,11 +962,31 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
             inspection.generation > 0 &&
             inspection.generation !== snapshot.providerSession.generation
           ) {
+            yield* increment(threadExecutionInvariantRepairsTotal, {
+              mismatch: "provider-generation",
+            });
             yield* Effect.logWarning("provider generation mismatch detected", {
               threadId: snapshot.threadId,
               supervisorGeneration: snapshot.providerSession.generation,
               adapterGeneration: inspection.generation,
             });
+            yield* transition(snapshot.threadId, (current, observedAt) => ({
+              ...current,
+              providerSession: {
+                ...current.providerSession,
+                generation: inspection.generation,
+                state: inspectionProviderState(inspection.state),
+                lastObservedAt: observedAt,
+              },
+              turn:
+                current.turn && !isTerminalTurn(current) && inspection.activeProviderTurnId !== null
+                  ? {
+                      ...current.turn,
+                      providerTurnId: inspection.activeProviderTurnId,
+                      state: current.turn.state === "stopping" ? "stopping" : "running",
+                    }
+                  : current.turn,
+            }));
           }
           const legacyRows = yield* sql<{ readonly status: string }>`
             SELECT status FROM projection_thread_sessions WHERE thread_id = ${snapshot.threadId}

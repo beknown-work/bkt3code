@@ -114,6 +114,12 @@ interface OpenPrInfo {
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   updatedAt: Option.Option<DateTime.Utc>;
+  isDraft?: boolean;
+  mergeability?: "mergeable" | "conflicting" | "unknown";
+  mergeStateStatus?: string;
+  reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown";
+  checksStatus?: "pass" | "fail" | "pending" | "unknown";
+  autoMergeEnabled?: boolean;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -308,6 +314,16 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: summary.updatedAt,
+    ...(summary.isDraft !== undefined ? { isDraft: summary.isDraft } : {}),
+    ...(summary.mergeability !== undefined ? { mergeability: summary.mergeability } : {}),
+    ...(summary.mergeStateStatus !== undefined
+      ? { mergeStateStatus: summary.mergeStateStatus }
+      : {}),
+    ...(summary.reviewDecision !== undefined ? { reviewDecision: summary.reviewDecision } : {}),
+    ...(summary.checksStatus !== undefined ? { checksStatus: summary.checksStatus } : {}),
+    ...(summary.autoMergeEnabled !== undefined
+      ? { autoMergeEnabled: summary.autoMergeEnabled }
+      : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -461,6 +477,12 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  mergeability?: "mergeable" | "conflicting" | "unknown";
+  mergeStateStatus?: string;
+  reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown";
+  checksStatus?: "pass" | "fail" | "pending" | "unknown";
+  autoMergeEnabled?: boolean;
 } {
   return {
     number: pr.number,
@@ -469,6 +491,12 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.isDraft !== undefined ? { isDraft: pr.isDraft } : {}),
+    ...(pr.mergeability !== undefined ? { mergeability: pr.mergeability } : {}),
+    ...(pr.mergeStateStatus !== undefined ? { mergeStateStatus: pr.mergeStateStatus } : {}),
+    ...(pr.reviewDecision !== undefined ? { reviewDecision: pr.reviewDecision } : {}),
+    ...(pr.checksStatus !== undefined ? { checksStatus: pr.checksStatus } : {}),
+    ...(pr.autoMergeEnabled !== undefined ? { autoMergeEnabled: pr.autoMergeEnabled } : {}),
   };
 }
 

@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck
         run: pnpm exec vp run typecheck
 
+      - name: Test
+        run: pnpm exec vp run test
+
       - name: Build web client
         run: pnpm exec vp run --filter @t3tools/web build
 

@@ -1,18 +1,20 @@
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
-import type { UserId } from "@t3tools/contracts";
+import type { UserId, VcsStatusResult } from "@t3tools/contracts";
 
 import { deriveLogicalProjectKey } from "../../logicalProject";
 import { isLatestTurnSettled } from "../../session-logic";
 import type { Project, ThreadShell } from "../../types";
-import { sortThreads } from "../../lib/threadSort";
+import { getThreadSortTimestamp } from "../../lib/threadSort";
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
-  "approval_needed",
-  "awaiting_input",
-  "failed",
   "plan_ready",
-  "drafting_plan",
+  "ready_for_review",
+  "ready_to_merge",
+  "planning",
   "implementing",
+  "in_review",
+  "merging",
+  "merged",
   "checking",
   "ready",
 ] as const;
@@ -26,12 +28,14 @@ export interface PhaseSidebarPhaseDefinition {
 }
 
 export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = [
-  { id: "approval_needed", label: "Approval Needed", helperText: "Needs a tool decision" },
-  { id: "awaiting_input", label: "Awaiting Input", helperText: "Needs your response" },
-  { id: "failed", label: "Failed", helperText: "Needs attention" },
-  { id: "plan_ready", label: "Plan Ready", helperText: "Ready for review" },
-  { id: "drafting_plan", label: "Drafting Plan", helperText: "Agent is planning" },
-  { id: "implementing", label: "Implementing", helperText: "Agent is working" },
+  { id: "plan_ready", label: "Plan Ready", helperText: "Plan awaits approval" },
+  { id: "ready_for_review", label: "Ready for Review", helperText: "Changes await review" },
+  { id: "ready_to_merge", label: "Ready to Merge", helperText: "Approved and checks passing" },
+  { id: "planning", label: "Planning", helperText: "Agent is preparing a plan" },
+  { id: "implementing", label: "Implementing", helperText: "Agent is changing code" },
+  { id: "in_review", label: "In Review", helperText: "Pull request needs review or checks" },
+  { id: "merging", label: "Merging", helperText: "Merge is queued or automatic" },
+  { id: "merged", label: "Merged", helperText: "Changes landed" },
   { id: "checking", label: "Checking", helperText: "Checking agent status" },
   { id: "ready", label: "Ready", helperText: "No active agent work" },
 ];
@@ -89,6 +93,8 @@ export interface PhaseSidebarRow {
   readonly providerKind: string;
   readonly providerName: string;
   readonly isAssignedToMe: boolean;
+  readonly attentionPriority: number;
+  readonly unreadPriority: number;
 }
 
 export interface PhaseSidebarRepositoryOption {
@@ -108,28 +114,80 @@ export interface PhaseSidebarFilterChip {
   readonly label: string;
 }
 
-export function resolvePhaseSidebarPhase(thread: ThreadShell): PhaseSidebarPhaseId {
+export function isStrictlyMergeReady(status: VcsStatusResult | null | undefined): boolean {
+  const pr = status?.pr;
+  if (!pr || pr.state !== "open" || status?.sourceControlProvider?.kind !== "github") return false;
+  if (pr.isDraft !== false || pr.mergeability !== "mergeable") return false;
+  if (pr.mergeStateStatus?.toUpperCase() !== "CLEAN") return false;
+  if (pr.reviewDecision === "changes-requested" || pr.reviewDecision === "review-required") {
+    return false;
+  }
+  return pr.checksStatus === "pass";
+}
+
+function hasReviewableChanges(thread: ThreadShell, status: VcsStatusResult | null | undefined) {
+  return (
+    thread.execution?.activity !== "failed" &&
+    thread.latestTurn?.state === "completed" &&
+    thread.latestTurn.completedAt !== null &&
+    status !== null &&
+    status !== undefined &&
+    (status.hasWorkingTreeChanges || status.aheadCount > 0 || (status.aheadOfDefaultCount ?? 0) > 0)
+  );
+}
+
+export function resolvePhaseSidebarAttentionPriority(
+  thread: ThreadShell,
+  status?: VcsStatusResult | null,
+): number {
+  if (thread.execution?.turn?.state === "waiting-for-approval") return 0;
+  if (thread.execution?.turn?.state === "waiting-for-input") return 1;
+  if (thread.execution?.activity === "failed") return 2;
+  if (
+    status?.pr?.state === "open" &&
+    (status.pr.mergeability === "conflicting" ||
+      status.pr.checksStatus === "fail" ||
+      status.pr.reviewDecision === "changes-requested")
+  ) {
+    return 3;
+  }
+  if (thread.execution === null || thread.execution === undefined) return 4;
+  return 5;
+}
+
+export function resolvePhaseSidebarPhase(
+  thread: ThreadShell,
+  status?: VcsStatusResult | null,
+): PhaseSidebarPhaseId {
   if (thread.execution === null || thread.execution === undefined) return "checking";
-  if (thread.execution?.turn?.state === "waiting-for-approval") return "approval_needed";
-  if (thread.execution?.turn?.state === "waiting-for-input") return "awaiting_input";
 
   const isActive =
     thread.execution?.activity === "active" ||
     thread.execution?.activity === "blocked" ||
     thread.execution?.activity === "stopping";
   if (isActive) {
-    return thread.interactionMode === "plan" ? "drafting_plan" : "implementing";
+    if (thread.interactionMode === "plan") return "planning";
+    if (status?.pr?.state === "open") {
+      return status.pr.autoMergeEnabled === true ? "merging" : "in_review";
+    }
+    return "implementing";
   }
-
-  if (thread.execution?.activity === "failed") return "failed";
 
   if (
     thread.interactionMode === "plan" &&
+    thread.execution.activity !== "failed" &&
     thread.hasActionableProposedPlan &&
     isLatestTurnSettled(thread.latestTurn, thread.execution ?? null)
   ) {
     return "plan_ready";
   }
+
+  if (status?.pr?.state === "merged") return "merged";
+  if (status?.pr?.state === "open") {
+    if (status.pr.autoMergeEnabled === true) return "merging";
+    return isStrictlyMergeReady(status) ? "ready_to_merge" : "in_review";
+  }
+  if (hasReviewableChanges(thread, status)) return "ready_for_review";
 
   return "ready";
 }
@@ -233,18 +291,17 @@ export function buildPhaseSidebarGroups(
   );
 
   return PHASE_SIDEBAR_PHASES.flatMap((phase) => {
-    const phaseRows = sortThreads(
-      visibleRows
-        .filter((row) => row.phaseId === phase.id)
-        .map((row) => ({
-          row,
-          id: row.thread.id,
-          createdAt: row.thread.createdAt,
-          updatedAt: row.thread.updatedAt,
-          latestUserMessageAt: row.thread.latestUserMessageAt,
-        })),
-      sortOrder,
-    ).map(({ row }) => row);
+    const phaseRows = visibleRows
+      .filter((row) => row.phaseId === phase.id)
+      .toSorted(
+        (left, right) =>
+          left.attentionPriority - right.attentionPriority ||
+          left.unreadPriority - right.unreadPriority ||
+          getThreadSortTimestamp(right.thread, sortOrder) -
+            getThreadSortTimestamp(left.thread, sortOrder) ||
+          left.thread.title.localeCompare(right.thread.title) ||
+          String(left.thread.id).localeCompare(String(right.thread.id)),
+      );
     return phaseRows.length > 0 ? [{ ...phase, rows: phaseRows }] : [];
   });
 }

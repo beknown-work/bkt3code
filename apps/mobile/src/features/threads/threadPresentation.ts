@@ -10,7 +10,8 @@ export function threadSortValue(thread: EnvironmentThreadShell): number {
 export type ThreadStatusKind =
   | "pending-approval"
   | "awaiting-input"
-  | "working"
+  | "planning"
+  | "implementing"
   | "connecting"
   | "checking"
   | "error"
@@ -86,8 +87,8 @@ export function resolveThreadStatus(
 
   if (thread.execution?.activity === "active" || thread.execution?.activity === "stopping") {
     return {
-      kind: "working",
-      label: "Working",
+      kind: thread.interactionMode === "plan" ? "planning" : "implementing",
+      label: thread.interactionMode === "plan" ? "Planning" : "Implementing",
       pillClassName: "bg-sky-500/12 dark:bg-sky-500/16",
       textClassName: "text-sky-700 dark:text-sky-300",
       iconColor: "#0a84ff",

@@ -72,7 +72,7 @@ export class ThreadExecutionSupervisor extends Context.Reference<ThreadExecution
           providerSession: {
             ...snapshot.providerSession,
             state: "starting",
-            generation: 1,
+            generation: 0,
           },
           turn: {
             executionId: String(event.commandId ?? event.eventId),

@@ -21,6 +21,18 @@ export type SourceControlProviderInfo = typeof SourceControlProviderInfo.Type;
 export const ChangeRequestState = Schema.Literals(["open", "closed", "merged"]);
 export type ChangeRequestState = typeof ChangeRequestState.Type;
 
+export const ChangeRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
+export type ChangeRequestMergeability = typeof ChangeRequestMergeability.Type;
+export const ChangeRequestReviewDecision = Schema.Literals([
+  "approved",
+  "changes-requested",
+  "review-required",
+  "unknown",
+]);
+export type ChangeRequestReviewDecision = typeof ChangeRequestReviewDecision.Type;
+export const ChangeRequestChecksStatus = Schema.Literals(["pass", "fail", "pending", "unknown"]);
+export type ChangeRequestChecksStatus = typeof ChangeRequestChecksStatus.Type;
+
 export const ChangeRequest = Schema.Struct({
   provider: SourceControlProviderKind,
   number: PositiveInt,
@@ -30,6 +42,12 @@ export const ChangeRequest = Schema.Struct({
   headRefName: TrimmedNonEmptyString,
   state: ChangeRequestState,
   updatedAt: Schema.Option(Schema.DateTimeUtc),
+  isDraft: Schema.optional(Schema.Boolean),
+  mergeability: Schema.optional(ChangeRequestMergeability),
+  mergeStateStatus: Schema.optional(TrimmedNonEmptyString),
+  reviewDecision: Schema.optional(ChangeRequestReviewDecision),
+  checksStatus: Schema.optional(ChangeRequestChecksStatus),
+  autoMergeEnabled: Schema.optional(Schema.Boolean),
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepositoryNameWithOwner: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   headRepositoryOwnerLogin: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

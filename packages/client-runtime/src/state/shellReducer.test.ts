@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -171,6 +171,47 @@ describe("applyShellStreamEvent", () => {
 
       expect(next.threads).toHaveLength(1);
       expect(next.threads[0]?.title).toBe("Updated Thread");
+    });
+
+    it("preserves the authoritative execution overlay when a domain upsert omits it", () => {
+      const execution = {
+        threadId: stubThread.id,
+        authorityEpoch: "epoch-1",
+        revision: 2,
+        observedAt: "2026-04-01T00:00:01.000Z",
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          state: "ready" as const,
+          generation: 1,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          startedAt: "2026-04-01T00:00:00.000Z",
+          lastObservedAt: "2026-04-01T00:00:01.000Z",
+          lastError: null,
+        },
+        turn: {
+          executionId: "execution-1",
+          providerTurnId: TurnId.make("turn-1"),
+          state: "running" as const,
+          startedAt: "2026-04-01T00:00:01.000Z",
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const snapshotWithExecution: OrchestrationShellSnapshot = {
+        ...baseSnapshot,
+        threads: [{ ...stubThread, execution }],
+      };
+
+      const next = applyShellStreamEvent(snapshotWithExecution, {
+        kind: "thread-upserted",
+        sequence: 5,
+        thread: { ...stubThread, title: "Updated while running" },
+      });
+
+      expect(next.threads[0]?.title).toBe("Updated while running");
+      expect(next.threads[0]?.execution).toEqual(execution);
     });
   });
 

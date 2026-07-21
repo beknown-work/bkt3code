@@ -10,7 +10,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ProviderDriverKind, type ScopedThreadRef } from "@t3tools/contracts";
+import { ProviderDriverKind, type ScopedThreadRef, type VcsStatusResult } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
   ArchiveIcon,
@@ -56,6 +56,8 @@ import { useProjects, useServerConfigs, useThreadShells } from "../state/entitie
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import { useEnvironmentQuery } from "../state/query";
+import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useThreadSelectionStore } from "../threadSelectionStore";
@@ -79,6 +81,7 @@ import {
   derivePhaseSidebarRepositoryKey,
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
+  resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarProviderCode,
@@ -120,12 +123,14 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
-  approval_needed: "bg-warning",
-  awaiting_input: "bg-info",
-  failed: "bg-destructive",
   plan_ready: "bg-primary",
-  drafting_plan: "bg-info",
+  ready_for_review: "bg-emerald-500",
+  ready_to_merge: "bg-violet-500",
+  planning: "bg-info",
   implementing: "bg-success",
+  in_review: "bg-amber-500",
+  merging: "bg-violet-500",
+  merged: "bg-purple-500",
   checking: "bg-muted-foreground/45",
   ready: "bg-muted-foreground/45",
 };
@@ -140,6 +145,27 @@ interface ProviderOption {
 
 function SidebarThreadDetailPrewarmer({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
+  return null;
+}
+
+function ThreadWorkflowProbe({
+  thread,
+  project,
+  onStatus,
+}: {
+  readonly thread: PhaseSidebarRow["thread"];
+  readonly project: Project | null;
+  readonly onStatus: (threadKey: string, status: VcsStatusResult | null) => void;
+}) {
+  const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const cwd = thread.worktreePath ?? project?.workspaceRoot ?? null;
+  const result = useEnvironmentQuery(
+    thread.branch !== null && cwd !== null
+      ? vcsEnvironment.status({ environmentId: thread.environmentId, input: { cwd } })
+      : null,
+  );
+
+  useEffect(() => onStatus(threadKey, result.data), [onStatus, result.data, threadKey]);
   return null;
 }
 
@@ -750,6 +776,7 @@ export function PhaseGroupedSidebar() {
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const currentUserId = useCurrentUserId();
+  const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const filters = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
@@ -761,6 +788,9 @@ export function PhaseGroupedSidebar() {
   const clearFilters = usePhaseSidebarFilterStore((state) => state.clearAll);
   const reconcileFilters = usePhaseSidebarFilterStore((state) => state.reconcile);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [vcsStatusByThreadKey, setVcsStatusByThreadKey] = useState<
+    ReadonlyMap<string, VcsStatusResult | null>
+  >(() => new Map());
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
   const renameCommitInFlightRef = useRef(false);
@@ -818,6 +848,14 @@ export function PhaseGroupedSidebar() {
     () => new Map(providerOptions.map((option) => [option.kind, option.name])),
     [providerOptions],
   );
+  const recordWorkflowStatus = useCallback((threadKey: string, status: VcsStatusResult | null) => {
+    setVcsStatusByThreadKey((current) => {
+      if (current.get(threadKey) === status) return current;
+      const next = new Map(current);
+      next.set(threadKey, status);
+      return next;
+    });
+  }, []);
   const allRows = useMemo<ReadonlyArray<PhaseSidebarRow>>(
     () =>
       threads.map((thread) => {
@@ -832,18 +870,35 @@ export function PhaseGroupedSidebar() {
           .get(thread.environmentId)
           ?.providers.find((candidate) => candidate.instanceId === instanceId);
         const providerKind = String(provider?.driver ?? instanceId);
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const vcsStatus = vcsStatusByThreadKey.get(threadKey);
+        const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
+        const lastVisitedAt = Date.parse(lastVisitedAtByThreadKey[threadKey] ?? "");
+        const isUnreadCompletion =
+          Number.isFinite(completedAt) &&
+          (!Number.isFinite(lastVisitedAt) || completedAt > lastVisitedAt);
         return {
           thread,
-          phaseId: resolvePhaseSidebarPhase(thread),
+          phaseId: resolvePhaseSidebarPhase(thread, vcsStatus),
           repositoryKey,
           repositoryLabel:
             project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
           providerKind,
           providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
           isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
+          attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
+          unreadPriority: isUnreadCompletion ? 0 : 1,
         };
       }),
-    [projectByKey, repositoryLabels, serverConfigs, threads, currentUserId],
+    [
+      projectByKey,
+      repositoryLabels,
+      serverConfigs,
+      threads,
+      currentUserId,
+      lastVisitedAtByThreadKey,
+      vcsStatusByThreadKey,
+    ],
   );
   const groups = useMemo(
     () => buildPhaseSidebarGroups(allRows, filters, sortOrder),
@@ -1105,6 +1160,21 @@ export function PhaseGroupedSidebar() {
 
   return (
     <>
+      {threads.map((thread) => {
+        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const project =
+          projectByKey.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          ) ?? null;
+        return (
+          <ThreadWorkflowProbe
+            key={`workflow:${key}`}
+            thread={thread}
+            project={project}
+            onStatus={recordWorkflowStatus}
+          />
+        );
+      })}
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent className="gap-0">
         <SidebarGroup className="px-2 pt-2 pb-1">

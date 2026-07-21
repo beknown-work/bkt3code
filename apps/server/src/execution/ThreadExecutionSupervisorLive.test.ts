@@ -111,7 +111,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         const first = yield* supervisor.prepareExecution(firstEvent);
         assert.strictEqual(first.activity, "active");
         assert.strictEqual(first.providerSession.state, "starting");
-        assert.strictEqual(first.providerSession.generation, 1);
+        assert.strictEqual(first.providerSession.generation, 0);
         assert.strictEqual(first.turn?.executionId, "command-one");
 
         yield* PubSub.publish(runtimeEvents, {
@@ -358,17 +358,36 @@ layer("ThreadExecutionSupervisor", (it) => {
 
         yield* PubSub.publish(runtimeEvents, {
           type: "turn.started",
+          eventId: EventId.make("current-turn-started"),
+          provider,
+          providerInstanceId,
+          threadId,
+          sessionGeneration: 7,
+          turnId: TurnId.make("provider-turn"),
+          createdAt,
+          payload: {},
+        });
+        for (let attempt = 0; attempt < 10; attempt += 1) yield* Effect.yieldNow;
+        const adopted = yield* supervisor.getSnapshot(threadId);
+        assert.strictEqual(adopted.providerSession.generation, 7);
+        assert.strictEqual(adopted.turn?.providerTurnId, TurnId.make("provider-turn"));
+
+        yield* PubSub.publish(runtimeEvents, {
+          type: "turn.started",
           eventId: EventId.make("stale-turn-started"),
           provider,
           providerInstanceId,
           threadId,
-          sessionGeneration: prepared.providerSession.generation + 1,
+          sessionGeneration: 6,
           turnId: TurnId.make("stale-provider-turn"),
           createdAt,
           payload: {},
         });
         yield* Effect.yieldNow;
-        assert.strictEqual((yield* supervisor.getSnapshot(threadId)).turn?.providerTurnId, null);
+        assert.strictEqual(
+          (yield* supervisor.getSnapshot(threadId)).turn?.providerTurnId,
+          TurnId.make("provider-turn"),
+        );
 
         yield* PubSub.publish(runtimeEvents, {
           type: "session.exited",
@@ -376,7 +395,7 @@ layer("ThreadExecutionSupervisor", (it) => {
           provider,
           providerInstanceId,
           threadId,
-          sessionGeneration: prepared.providerSession.generation,
+          sessionGeneration: 7,
           createdAt,
           payload: { exitKind: "error", reason: "process crashed" },
         });

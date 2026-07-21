@@ -28,8 +28,10 @@ export type ThreadTraversalDirection = "previous" | "next";
 
 export interface ThreadStatusPill {
   label:
-    | "Working"
+    | "Planning"
+    | "Implementing"
     | "Connecting"
+    | "Error"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
@@ -42,8 +44,10 @@ export interface ThreadStatusPill {
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
+  Error: 5,
   "Awaiting Input": 4,
-  Working: 3,
+  Planning: 3,
+  Implementing: 3,
   Connecting: 3,
   "Plan Ready": 2,
   Completed: 1,
@@ -398,7 +402,7 @@ export function resolveThreadStatusPill(input: {
     thread.execution?.activity === "stopping"
   ) {
     return {
-      label: "Working",
+      label: thread.interactionMode === "plan" ? "Planning" : "Implementing",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
@@ -411,6 +415,15 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+    };
+  }
+
+  if (thread.execution?.activity === "failed") {
+    return {
+      label: "Error",
+      colorClass: "text-destructive",
+      dotClass: "bg-destructive",
+      pulse: false,
     };
   }
 
