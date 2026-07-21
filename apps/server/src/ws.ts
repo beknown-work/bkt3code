@@ -78,6 +78,7 @@ import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessCon
 import { ClerkDirectory, ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import { filterShellSnapshot, isOwnerOrMember } from "./orchestration/accessRules.ts";
 import { checkCommandAccess } from "./orchestration/commandAccess.ts";
+import { awaitShellProjectionSequence } from "./orchestration/shellProjectionBarrier.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -597,7 +598,7 @@ const makeWsRpcLayer = (
       const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
         Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
-      const toShellStreamEvent = (
+      const toUnfencedShellStreamEvent = (
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
         switch (event.type) {
@@ -661,6 +662,23 @@ const makeWsRpcLayer = (
               );
         }
       };
+
+      const toShellStreamEvent = Effect.fn("Ws.toShellStreamEvent")(function* (
+        event: OrchestrationEvent,
+      ) {
+        // Domain events and projection updates are independent subscribers to
+        // the event stream. Without this barrier, a fast shell subscriber can
+        // observe thread.created first, query a projection that does not yet
+        // contain the thread, and permanently drop the sidebar upsert. A page
+        // reload appeared to fix it only because its fresh snapshot was read
+        // after projection catch-up.
+        yield* awaitShellProjectionSequence({
+          eventSequence: event.sequence,
+          eventType: event.type,
+          readSnapshotSequence: projectionSnapshotQuery.getSnapshotSequence,
+        });
+        return yield* toUnfencedShellStreamEvent(event);
+      });
 
       // Team mode: transform a global shell delta into what the operating user
       // may see. A thread/project that becomes visible (e.g. the user is tagged)

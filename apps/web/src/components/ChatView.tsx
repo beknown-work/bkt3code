@@ -195,7 +195,6 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
-  readThreadShell,
   useProject,
   useProjects,
   useThread,
@@ -337,7 +336,6 @@ function formatOutgoingPrompt(params: {
 }
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
-const CREATED_THREAD_SHELL_RECONCILIATION_DELAY_MS = 750;
 
 type ChatViewProps =
   | {
@@ -4304,24 +4302,15 @@ function ChatViewContent(props: ChatViewProps) {
       // exists. Do not leave promotion entirely dependent on observing the
       // matching shell delta: a dropped delta used to strand the draft route on
       // "Creating thread…" until a full page reload rebuilt the shell snapshot.
+      // The server now projection-fences shell events, so this promotion never
+      // needs to restart the healthy environment connection (which previously
+      // flashed a false "not connected" warning above the composer).
       markPromotedDraftThreadByRef(createdThreadRef);
       await navigate({
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(createdThreadRef),
         replace: true,
       });
-
-      // The canonical route can load its detail snapshot directly by id, while
-      // the sidebar still depends on the shell snapshot. Give the normal live
-      // delta a brief chance to arrive, then reconnect only if the row is still
-      // absent. Every shell subscription starts with a fresh authoritative
-      // snapshot, so this repairs the left navigation without a manual reload.
-      window.setTimeout(() => {
-        if (readThreadShell(createdThreadRef) !== null) {
-          return;
-        }
-        void retryEnvironment(environmentId);
-      }, CREATED_THREAD_SHELL_RECONCILIATION_DELAY_MS);
     }
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {
