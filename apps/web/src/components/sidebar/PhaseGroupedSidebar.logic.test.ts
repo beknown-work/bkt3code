@@ -21,6 +21,7 @@ import {
   isThreadAssignedToUser,
   matchesPhaseSidebarFilters,
   reconcilePhaseSidebarFilters,
+  resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
@@ -224,6 +225,19 @@ describe("phase sidebar lifecycle", () => {
 });
 
 describe("phase sidebar metadata and filters", () => {
+  it("resolves bridge-created branches to compact Linear issue links", () => {
+    expect(resolvePhaseSidebarLinearIssue("linear/tec-145-improve-the-sidebar")).toEqual({
+      identifier: "TEC-145",
+      url: "https://linear.app/beknown/issue/TEC-145",
+    });
+    expect(resolvePhaseSidebarLinearIssue("linear/TEC-658")).toEqual({
+      identifier: "TEC-658",
+      url: "https://linear.app/beknown/issue/TEC-658",
+    });
+    expect(resolvePhaseSidebarLinearIssue("feature/tec-145")).toBeNull();
+    expect(resolvePhaseSidebarLinearIssue(null)).toBeNull();
+  });
+
   it("maps known provider codes and creates deterministic unknown codes", () => {
     expect(resolvePhaseSidebarProviderCode("claudeAgent")).toBe("cc");
     expect(resolvePhaseSidebarProviderCode("codex")).toBe("cx");

@@ -37,6 +37,24 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
 ];
 
 const PHASE_ID_SET = new Set<string>(PHASE_SIDEBAR_PHASE_IDS);
+const LINEAR_BRANCH_PATTERN = /^linear\/([a-z][a-z0-9]*-\d+)(?:-|$)/i;
+
+export interface PhaseSidebarLinearIssue {
+  readonly identifier: string;
+  readonly url: string;
+}
+
+export function resolvePhaseSidebarLinearIssue(
+  branch: string | null,
+): PhaseSidebarLinearIssue | null {
+  if (branch === null) return null;
+  const identifier = LINEAR_BRANCH_PATTERN.exec(branch)?.[1]?.toUpperCase();
+  if (!identifier) return null;
+  return {
+    identifier,
+    url: `https://linear.app/beknown/issue/${identifier}`,
+  };
+}
 
 export interface PhaseSidebarFilters {
   readonly repositoryKeys: ReadonlyArray<string>;

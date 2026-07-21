@@ -63,6 +63,7 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { Project } from "../types";
 import { useUiStateStore } from "../uiStateStore";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { LinearIcon } from "./Icons";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import {
   isTrailingDoubleClick,
@@ -79,6 +80,7 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   resolvePhaseSidebarPhase,
+  resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
   type PhaseSidebarPhaseId,
@@ -468,8 +470,29 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const status = resolveThreadStatusPill({ thread: { ...row.thread, lastVisitedAt } });
-  const branchLabel = row.thread.branch ?? (row.thread.worktreePath ? "WT" : null);
+  const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch);
+  const branchLabel = linearIssue
+    ? null
+    : (row.thread.branch ?? (row.thread.worktreePath ? "WT" : null));
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
+
+  const openLinearIssue = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!linearIssue) return;
+    const api = readLocalApi();
+    if (!api) return;
+    void api.shell.openExternal(linearIssue.url).catch((error: unknown) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to open ${linearIssue.identifier}`,
+          description:
+            error instanceof Error ? error.message : "The Linear issue could not be opened.",
+        }),
+      );
+    });
+  };
 
   const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
     const modifierClick = isMacPlatform(navigator.platform) ? event.metaKey : event.ctrlKey;
@@ -552,7 +575,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           )}
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-none text-muted-foreground/65">
             <Tooltip>
-              <TooltipTrigger render={<span className="inline-flex min-w-0 items-center gap-1" />}>
+              <TooltipTrigger
+                render={<span className="inline-flex min-w-0 flex-1 items-center gap-1" />}
+              >
                 {project ? (
                   <ProjectFavicon
                     environmentId={project.environmentId}
@@ -560,11 +585,35 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                     className="size-2.5"
                   />
                 ) : null}
-                <span className="max-w-24 truncate">{row.repositoryLabel}</span>
+                <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
               <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
             </Tooltip>
-            {branchLabel ? (
+            {linearIssue ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      data-testid={`linear-issue-${row.thread.id}`}
+                      aria-label={`Open ${linearIssue.identifier} in Linear`}
+                      className="inline-flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      onClick={openLinearIssue}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        openLinearIssue(event);
+                      }}
+                    />
+                  }
+                >
+                  <LinearIcon aria-hidden className="size-2.5 shrink-0" />
+                  <span>{linearIssue.identifier}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">Open {linearIssue.identifier} in Linear</TooltipPopup>
+              </Tooltip>
+            ) : branchLabel ? (
               <Tooltip>
                 <TooltipTrigger
                   render={<span className="inline-flex min-w-0 items-center gap-0.5" />}
