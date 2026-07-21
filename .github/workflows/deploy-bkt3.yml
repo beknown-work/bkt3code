@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck
         run: pnpm exec vp run typecheck
 
+      - name: Ensure Electron runtime is installed
+        run: pnpm exec vp run --filter @t3tools/desktop ensure:electron
+
       - name: Test
         run: pnpm exec vp run test
 
