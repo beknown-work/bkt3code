@@ -163,10 +163,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         ? item.snapshot
         : Option.match(current.snapshot, {
             onNone: () => null,
-            onSome: (snapshot) =>
-              item.sequence > snapshot.snapshotSequence
-                ? applyShellStreamEvent(snapshot, item)
-                : snapshot,
+            // The reducer accepts equal-sequence derived frames. Team-mode
+            // visibility emits a parent-project upsert followed by its thread
+            // upsert at the same durable sequence; filtering here previously
+            // discarded the thread and left the sidebar stale until refresh.
+            onSome: (snapshot) => applyShellStreamEvent(snapshot, item),
           });
     if (nextSnapshot === null) {
       return;
