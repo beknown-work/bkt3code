@@ -308,6 +308,38 @@ describe("derivePendingUserInputs", () => {
 
     expect(derivePendingUserInputs(activities)).toEqual([]);
   });
+
+  it("does not keep a user-input prompt open after its turn settles", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-terminal-turn",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        turnId: "turn-terminal",
+        payload: {
+          requestId: "req-user-input-terminal",
+          questions: [
+            {
+              id: "approval",
+              header: "Approval",
+              question: "Continue?",
+              options: [
+                {
+                  label: "yes",
+                  description: "Continue execution",
+                },
+              ],
+              multiSelect: false,
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities, new Set(["turn-terminal"]))).toEqual([]);
+  });
 });
 
 describe("deriveActivePlanState", () => {

@@ -2022,6 +2022,112 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         WHERE thread_id = 'thread-stale-user-input'
       `;
       assert.deepEqual(threadRows, [{ pendingUserInputCount: 0 }]);
+
+      const turnId = TurnId.make("turn-stale-user-input");
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-stale-user-input-5"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:04.000Z",
+        commandId: CommandId.make("cmd-stale-user-input-5"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-user-input-5"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-user-input"),
+          session: {
+            threadId: ThreadId.make("thread-stale-user-input"),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-26T12:35:04.000Z",
+          },
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-stale-user-input-6"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:05.000Z",
+        commandId: CommandId.make("cmd-stale-user-input-6"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-user-input-6"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-user-input"),
+          activity: {
+            id: EventId.make("activity-terminal-user-input-requested"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "User input requested",
+            payload: {
+              requestId: "user-input-request-terminal-1",
+              questions: [
+                {
+                  id: "activation",
+                  header: "Activation",
+                  question: "How should this be activated?",
+                  options: [
+                    {
+                      label: "PR label",
+                      description: "Activate with a pull request label",
+                    },
+                  ],
+                },
+              ],
+            },
+            turnId,
+            createdAt: "2026-02-26T12:35:05.000Z",
+          },
+        },
+      });
+
+      const openThreadRows = yield* sql<{
+        readonly pendingUserInputCount: number;
+      }>`
+        SELECT pending_user_input_count AS "pendingUserInputCount"
+        FROM projection_threads
+        WHERE thread_id = 'thread-stale-user-input'
+      `;
+      assert.deepEqual(openThreadRows, [{ pendingUserInputCount: 1 }]);
+
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-stale-user-input-7"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:06.000Z",
+        commandId: CommandId.make("cmd-stale-user-input-7"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-user-input-7"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-user-input"),
+          session: {
+            threadId: ThreadId.make("thread-stale-user-input"),
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "Session stopped",
+            updatedAt: "2026-02-26T12:35:06.000Z",
+          },
+        },
+      });
+
+      const settledThreadRows = yield* sql<{
+        readonly pendingUserInputCount: number;
+      }>`
+        SELECT pending_user_input_count AS "pendingUserInputCount"
+        FROM projection_threads
+        WHERE thread_id = 'thread-stale-user-input'
+      `;
+      assert.deepEqual(settledThreadRows, [{ pendingUserInputCount: 0 }]);
     }),
   );
 

@@ -461,6 +461,7 @@ function parseUserInputQuestions(
 
 export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  terminalTurnIds: ReadonlySet<string> = new Set(),
 ): PendingUserInput[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
@@ -477,6 +478,9 @@ export function derivePendingUserInputs(
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
 
     if (activity.kind === "user-input.requested" && requestId) {
+      if (activity.turnId !== null && terminalTurnIds.has(activity.turnId)) {
+        continue;
+      }
       const questions = parseUserInputQuestions(payload);
       if (!questions) {
         continue;

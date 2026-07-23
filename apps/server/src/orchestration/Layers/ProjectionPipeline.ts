@@ -134,6 +134,7 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
 
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,
+  terminalTurnIds: ReadonlySet<string>,
 ): number {
   const openRequestIds = new Set<string>();
   const ordered = [...activities].toSorted(
@@ -154,6 +155,9 @@ function derivePendingUserInputCountFromActivities(
     const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
 
     if (activity.kind === "user-input.requested") {
+      if (activity.turnId !== null && terminalTurnIds.has(activity.turnId)) {
+        continue;
+      }
       openRequestIds.add(requestId);
       continue;
     }
@@ -574,11 +578,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         return;
       }
 
-      const [messages, proposedPlans, activities, pendingApprovals] = yield* Effect.all([
+      const [messages, proposedPlans, activities, pendingApprovals, turns] = yield* Effect.all([
         projectionThreadMessageRepository.listByThreadId({ threadId }),
         projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
         projectionThreadActivityRepository.listByThreadId({ threadId }),
         projectionPendingApprovalRepository.listByThreadId({ threadId }),
+        projectionTurnRepository.listByThreadId({ threadId }),
       ]);
 
       let latestUserMessageAt: string | null = null;
@@ -594,7 +599,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       const pendingApprovalCount = pendingApprovals.filter(
         (approval) => approval.status === "pending",
       ).length;
-      const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
+      const terminalTurnIds = new Set<string>();
+      for (const turn of turns) {
+        if (
+          turn.turnId !== null &&
+          (turn.state === "completed" || turn.state === "interrupted" || turn.state === "error")
+        ) {
+          terminalTurnIds.add(turn.turnId);
+        }
+      }
+      const pendingUserInputCount = derivePendingUserInputCountFromActivities(
+        activities,
+        terminalTurnIds,
+      );
       const hasActionableProposedPlan = deriveHasActionableProposedPlan({
         latestTurnId: existingRow.value.latestTurnId,
         proposedPlans,

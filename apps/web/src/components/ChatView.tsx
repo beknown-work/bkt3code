@@ -260,6 +260,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_TERMINAL_TURN_IDS: ReadonlySet<string> = new Set();
 const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
@@ -1735,9 +1736,15 @@ function ChatViewContent(props: ChatViewProps) {
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
   );
+  const terminalTurnIds = useMemo<ReadonlySet<string>>(() => {
+    if (!activeLatestTurn || activeLatestTurn.state === "running") {
+      return EMPTY_TERMINAL_TURN_IDS;
+    }
+    return new Set([activeLatestTurn.turnId]);
+  }, [activeLatestTurn]);
   const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities),
-    [threadActivities],
+    () => derivePendingUserInputs(threadActivities, terminalTurnIds),
+    [terminalTurnIds, threadActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
