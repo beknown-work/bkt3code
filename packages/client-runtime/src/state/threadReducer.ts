@@ -144,8 +144,29 @@ export function applyThreadDetailEvent(
           }
         : { kind: "unchanged" };
 
+    case "thread.owner-transferred": {
+      const memberUserIds = thread.memberUserIds.filter((id) => id !== event.payload.ownerUserId);
+      if (
+        event.payload.previousOwnerUserId !== null &&
+        event.payload.previousOwnerUserId !== event.payload.ownerUserId &&
+        !memberUserIds.includes(event.payload.previousOwnerUserId)
+      ) {
+        memberUserIds.push(event.payload.previousOwnerUserId);
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          ownerUserId: event.payload.ownerUserId,
+          memberUserIds,
+          updatedAt: event.payload.transferredAt,
+        },
+      };
+    }
+
     case "project.member-added":
     case "project.member-removed":
+    case "project.owner-transferred":
       return { kind: "unchanged" };
 
     case "thread.runtime-mode-set":

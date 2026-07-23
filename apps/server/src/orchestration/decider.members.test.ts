@@ -280,4 +280,63 @@ it.layer(NodeServices.layer)("decider membership invariants", (it) => {
       expect(afterAdd.threads.find((entry) => entry.id === THREAD)?.memberUserIds).toEqual([ALICE]);
     }),
   );
+
+  it.effect("transfers thread ownership and retains the previous owner as a member", () =>
+    Effect.gen(function* () {
+      const seeded = yield* seedReadModel;
+      const added = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.member.add",
+          commandId: asCommandId("cmd-add-transfer-target"),
+          threadId: THREAD,
+          userId: ALICE,
+        },
+        readModel: seeded,
+        actor: OWNER,
+      });
+      const withMember = yield* applyPlanned(seeded, added);
+      const transferred = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.owner.transfer",
+          commandId: asCommandId("cmd-transfer-thread-owner"),
+          threadId: THREAD,
+          userId: ALICE,
+        },
+        readModel: withMember,
+        actor: OWNER,
+      });
+      const event = Array.isArray(transferred) ? transferred[0] : transferred;
+      expect(event.type).toBe("thread.owner-transferred");
+      if (event.type === "thread.owner-transferred") {
+        expect(event.payload.previousOwnerUserId).toBe(OWNER);
+        expect(event.payload.ownerUserId).toBe(ALICE);
+        expect(event.payload.transferredByUserId).toBe(OWNER);
+      }
+
+      const projected = yield* applyPlanned(withMember, transferred);
+      const thread = projected.threads.find((entry) => entry.id === THREAD);
+      expect(thread?.ownerUserId).toBe(ALICE);
+      expect(thread?.memberUserIds).toEqual([OWNER]);
+    }),
+  );
+
+  it.effect("transfers project ownership and retains the previous owner as a member", () =>
+    Effect.gen(function* () {
+      const seeded = yield* seedReadModel;
+      const transferred = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.owner.transfer",
+          commandId: asCommandId("cmd-transfer-project-owner"),
+          projectId: PROJECT,
+          userId: BOB,
+        },
+        readModel: seeded,
+        actor: OWNER,
+      });
+      const projected = yield* applyPlanned(seeded, transferred);
+      const project = projected.projects.find((entry) => entry.id === PROJECT);
+      expect(project?.ownerUserId).toBe(BOB);
+      expect(project?.memberUserIds).toEqual([OWNER]);
+    }),
+  );
 });

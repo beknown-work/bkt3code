@@ -68,6 +68,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "project.delete":
     case "project.member.add":
     case "project.member.remove":
+    case "project.owner.transfer":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,

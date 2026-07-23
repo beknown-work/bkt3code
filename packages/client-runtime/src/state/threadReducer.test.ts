@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import type { OrchestrationThread } from "@t3tools/contracts";
 
@@ -189,6 +190,39 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.branch).toBe("feature/demo");
         // Model selection should be unchanged since it wasn't in the payload
         expect(result.thread.modelSelection).toEqual(baseThread.modelSelection);
+      }
+    });
+  });
+
+  describe("thread.owner-transferred", () => {
+    it("moves the new owner out of members and keeps the previous owner assigned", () => {
+      const previousOwner = UserId.make("user-previous-owner");
+      const nextOwner = UserId.make("user-next-owner");
+      const thread = {
+        ...baseThread,
+        ownerUserId: previousOwner,
+        memberUserIds: [nextOwner],
+      };
+      const result = applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: "2026-04-01T06:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.owner-transferred",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          previousOwnerUserId: previousOwner,
+          ownerUserId: nextOwner,
+          transferredByUserId: previousOwner,
+          transferredAt: "2026-04-01T06:00:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.ownerUserId).toBe(nextOwner);
+        expect(result.thread.memberUserIds).toEqual([previousOwner]);
       }
     });
   });

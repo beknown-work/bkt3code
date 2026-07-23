@@ -17,6 +17,101 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ClerkDirectory } from "../auth/ClerkDirectory.ts";
 import { ServerConfig } from "../config.ts";
 
+/**
+ * Repairs the legacy relay shape where the historical assignee was persisted
+ * as a member on an ownerless entity, then assigns the default owner only to
+ * entities that truly have no owner or assignee.
+ */
+export const backfillProjectionOwnership = Effect.fn("backfillProjectionOwnership")(function* (
+  adminUserId: UserId,
+) {
+  const sql = yield* SqlClient.SqlClient;
+
+  // Earlier startup backfills assigned the configured default owner to every
+  // null owner. Relay-imported entities already had their historical assignee
+  // represented by a system-added member row, so that default owner displaced
+  // the visible assignee after a restart. Restore those exact legacy rows to
+  // ownerless + assigned; their member record remains the durable assignment.
+  const restoredThreadResult = yield* sql`
+    UPDATE projection_threads AS thread
+    SET owner_user_id = NULL
+    WHERE owner_user_id = ${adminUserId}
+      AND EXISTS (
+        SELECT 1
+        FROM orchestration_events AS created
+        WHERE created.event_type = 'thread.created'
+          AND created.stream_id = thread.thread_id
+          AND json_extract(created.payload_json, '$.createdByUserId') IS NULL
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM projection_thread_members AS member
+        WHERE member.thread_id = thread.thread_id
+          AND member.added_by_user_id IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM orchestration_events AS transferred
+        WHERE transferred.event_type = 'thread.owner-transferred'
+          AND transferred.stream_id = thread.thread_id
+      )
+  `;
+  const restoredProjectResult = yield* sql`
+    UPDATE projection_projects AS project
+    SET owner_user_id = NULL
+    WHERE owner_user_id = ${adminUserId}
+      AND EXISTS (
+        SELECT 1
+        FROM orchestration_events AS created
+        WHERE created.event_type = 'project.created'
+          AND created.stream_id = project.project_id
+          AND json_extract(created.payload_json, '$.createdByUserId') IS NULL
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM projection_project_members AS member
+        WHERE member.project_id = project.project_id
+          AND member.added_by_user_id IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM orchestration_events AS transferred
+        WHERE transferred.event_type = 'project.owner-transferred'
+          AND transferred.stream_id = project.project_id
+      )
+  `;
+
+  const threadResult = yield* sql`
+    UPDATE projection_threads AS thread
+    SET owner_user_id = ${adminUserId}
+    WHERE owner_user_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM projection_thread_members AS member
+        WHERE member.thread_id = thread.thread_id
+      )
+  `;
+  const projectResult = yield* sql`
+    UPDATE projection_projects AS project
+    SET owner_user_id = ${adminUserId}
+    WHERE owner_user_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM projection_project_members AS member
+        WHERE member.project_id = project.project_id
+      )
+  `;
+
+  return {
+    restoredThreads:
+      (restoredThreadResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+    restoredProjects:
+      (restoredProjectResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+    threadsUpdated: (threadResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+    projectsUpdated: (projectResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+  };
+});
+
 export const runOwnershipBackfill = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const clerkAuth = config.clerkAuth;
@@ -26,8 +121,6 @@ export const runOwnershipBackfill = Effect.gen(function* () {
   }
 
   const clerkDirectory = yield* ClerkDirectory;
-  const sql = yield* SqlClient.SqlClient;
-
   const explicitOwnerId =
     clerkAuth.defaultOwnerUserId !== undefined ? (clerkAuth.defaultOwnerUserId as UserId) : null;
   const adminUserId: UserId | null =
@@ -49,21 +142,11 @@ export const runOwnershipBackfill = Effect.gen(function* () {
     return;
   }
 
-  const threadResult = yield* sql`
-    UPDATE projection_threads
-    SET owner_user_id = ${adminUserId}
-    WHERE owner_user_id IS NULL
-  `;
-  const projectResult = yield* sql`
-    UPDATE projection_projects
-    SET owner_user_id = ${adminUserId}
-    WHERE owner_user_id IS NULL
-  `;
+  const result = yield* backfillProjectionOwnership(adminUserId);
 
   yield* Effect.logInfo("ownership backfill complete", {
     adminUserId,
-    threadsUpdated: (threadResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
-    projectsUpdated: (projectResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+    ...result,
   });
 }).pipe(
   // Fail-soft: never block startup on backfill; converge on a later boot.

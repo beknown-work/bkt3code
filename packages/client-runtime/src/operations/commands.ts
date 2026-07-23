@@ -50,8 +50,10 @@ export type RestartThreadSessionInput = CommandInput<"thread.session.restart">;
 export type StopThreadExecutionInput = OrchestrationStopExecutionInput;
 export type AddThreadMemberInput = CommandInput<"thread.member.add">;
 export type RemoveThreadMemberInput = CommandInput<"thread.member.remove">;
+export type TransferThreadOwnershipInput = CommandInput<"thread.owner.transfer">;
 export type AddProjectMemberInput = CommandInput<"project.member.add">;
 export type RemoveProjectMemberInput = CommandInput<"project.member.remove">;
+export type TransferProjectOwnershipInput = CommandInput<"project.owner.transfer">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 const ORCHESTRATION_COMMAND_ACK_TIMEOUT = "10 seconds";
@@ -217,6 +219,15 @@ export const removeThreadMember: (input: RemoveThreadMemberInput) => CommandEffe
   });
 });
 
+export const transferThreadOwnership: (input: TransferThreadOwnershipInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.transferThreadOwnership")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "thread.owner.transfer",
+      commandId: yield* commandId(input),
+    });
+  });
+
 export const addProjectMember: (input: AddProjectMemberInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.addProjectMember",
 )(function* (input) {
@@ -236,6 +247,15 @@ export const removeProjectMember: (input: RemoveProjectMemberInput) => CommandEf
     commandId: yield* commandId(input),
   });
 });
+
+export const transferProjectOwnership: (input: TransferProjectOwnershipInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.transferProjectOwnership")(function* (input) {
+    return yield* dispatch({
+      ...input,
+      type: "project.owner.transfer",
+      commandId: yield* commandId(input),
+    });
+  });
 
 export const updateThreadMetadata: (input: UpdateThreadMetadataInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.updateThreadMetadata",

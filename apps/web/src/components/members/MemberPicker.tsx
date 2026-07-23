@@ -3,9 +3,10 @@
  *
  * Presentational: the parent (ThreadMembersControl / project-access settings)
  * owns the popover/dialog shell and the command wiring. The owner row is checked
- * + disabled with an "Owner" badge (creator permanence). Rows are disabled while
- * their toggle is pending. Structure follows the phase sidebar's search +
- * checkbox-row popover.
+ * + disabled with an "Owner" badge. Rows are disabled while their toggle is
+ * pending. Structure follows the phase sidebar's search + checkbox-row popover.
+ * Owners/admins may also promote any organization user
+ * to owner; ownership transfer is handled by the parent.
  *
  * @module components/members/MemberPicker
  */
@@ -24,6 +25,8 @@ export function MemberPicker({
   memberUserIds,
   pendingUserIds,
   onToggle,
+  canTransferOwnership = false,
+  onTransferOwnership,
   resolveUser,
 }: {
   readonly users: ReadonlyArray<OrchestrationUser>;
@@ -31,6 +34,8 @@ export function MemberPicker({
   readonly memberUserIds: ReadonlyArray<UserId>;
   readonly pendingUserIds: ReadonlySet<UserId>;
   readonly onToggle: (userId: UserId, nextChecked: boolean) => void;
+  readonly canTransferOwnership?: boolean;
+  readonly onTransferOwnership?: (userId: UserId) => void;
   readonly resolveUser: (id: UserId) => OrchestrationUser;
 }) {
   const [search, setSearch] = useState("");
@@ -93,6 +98,19 @@ export function MemberPicker({
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                     Owner
                   </span>
+                ) : canTransferOwnership && onTransferOwnership ? (
+                  <button
+                    type="button"
+                    disabled={isPending}
+                    className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onTransferOwnership(user.id);
+                    }}
+                  >
+                    Make owner
+                  </button>
                 ) : null}
               </label>
             );

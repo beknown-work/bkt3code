@@ -41,6 +41,11 @@ export const checkCommandAccess = (
     case "project.member.remove":
       return Effect.succeed(actorIsAdmin);
 
+    case "project.owner.transfer":
+      return actorIsAdmin
+        ? Effect.succeed(true)
+        : accessControl.canTransferProjectOwnership(actorUserId, command.projectId);
+
     case "project.meta.update":
     case "project.delete":
       return accessControl.canAccessProject(actorUserId, command.projectId);
@@ -74,6 +79,11 @@ export const checkCommandAccess = (
     case "thread.session.stop":
     case "thread.session.restart":
       return accessControl.canAccessThread(actorUserId, command.threadId);
+
+    case "thread.owner.transfer":
+      return actorIsAdmin
+        ? Effect.succeed(true)
+        : accessControl.canTransferThreadOwnership(actorUserId, command.threadId);
 
     // Internal commands are dispatched by the server/providers, never a client
     // operator; they carry no actor and are always allowed.

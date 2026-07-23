@@ -3,9 +3,9 @@
  *
  * Mounted in the chat header (team mode only — renders null otherwise). Reads
  * its own atoms; no prop threading from ChatView. Shows the owner + tagged
- * members as an avatar stack; clicking opens a picker to tag/untag people on the
- * thread (per-thread sharing). Project-level access is managed separately by
- * admins in Settings. Self-removal asks for confirmation and navigates home.
+ * members as an avatar stack; clicking opens a picker to tag/untag people or
+ * transfer ownership. Project-level access is managed separately by admins in
+ * Settings. Self-removal asks for confirmation and navigates home.
  *
  * @module components/members/ThreadMembersControl
  */
@@ -17,7 +17,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { useThreadShell } from "../../state/entities";
 import { useCurrentUserId } from "../../state/identity";
-import { useOrgMembers } from "../../state/orgMembers";
+import { useIsTeamAdmin, useOrgMembers } from "../../state/orgMembers";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AvatarStack } from "../ui/avatar";
@@ -36,9 +36,11 @@ export function ThreadMembersControl({
   const threadRef = scopeThreadRef(environmentId, threadId);
   const thread = useThreadShell(threadRef);
   const { users, resolveUser } = useOrgMembers();
+  const isAdmin = useIsTeamAdmin();
   const navigate = useNavigate();
   const addMember = useAtomCommand(threadEnvironment.addMember, { reportFailure: false });
   const removeMember = useAtomCommand(threadEnvironment.removeMember, { reportFailure: false });
+  const transferOwnership = useAtomCommand(threadEnvironment.transferOwnership);
   const [pending, setPending] = useState<ReadonlySet<UserId>>(() => new Set());
 
   const settlePending = useCallback((userId: UserId) => {
@@ -79,6 +81,29 @@ export function ThreadMembersControl({
     for (const id of thread.memberUserIds) if (!ids.includes(id)) ids.push(id);
     return ids.map((id) => resolveUser(id));
   }, [thread, resolveUser]);
+  const canTransferOwnership =
+    isAdmin ||
+    thread?.ownerUserId === currentUserId ||
+    (thread?.ownerUserId === null &&
+      currentUserId !== null &&
+      thread.memberUserIds.includes(currentUserId));
+  const onTransferOwnership = useCallback(
+    (userId: UserId) => {
+      const user = resolveUser(userId);
+      const label = user.name ?? user.email ?? user.id;
+      const confirmed = window.confirm(
+        `Transfer thread ownership to ${label}?${
+          thread?.ownerUserId === null ? "" : " The previous owner will remain a member."
+        }`,
+      );
+      if (!confirmed) return;
+      setPending((prev) => new Set(prev).add(userId));
+      void transferOwnership({ environmentId, input: { threadId, userId } }).finally(() =>
+        settlePending(userId),
+      );
+    },
+    [environmentId, resolveUser, settlePending, thread?.ownerUserId, threadId, transferOwnership],
+  );
 
   // Team mode only.
   if (currentUserId === null || thread === null) {
@@ -105,6 +130,8 @@ export function ThreadMembersControl({
           memberUserIds={thread.memberUserIds}
           pendingUserIds={pending}
           onToggle={onToggle}
+          canTransferOwnership={canTransferOwnership}
+          onTransferOwnership={onTransferOwnership}
           resolveUser={resolveUser}
         />
       </PopoverPopup>

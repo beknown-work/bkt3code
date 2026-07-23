@@ -13,11 +13,13 @@ import {
   type CreateProjectInput,
   type DeleteProjectInput,
   type RemoveProjectMemberInput,
+  type TransferProjectOwnershipInput,
   type UpdateProjectInput,
   addProjectMember,
   createProject,
   deleteProject,
   removeProjectMember,
+  transferProjectOwnership,
   updateProject,
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -29,6 +31,7 @@ export type {
   CreateProjectInput,
   DeleteProjectInput,
   RemoveProjectMemberInput,
+  TransferProjectOwnershipInput,
   UpdateProjectInput,
 } from "../operations/commands.ts";
 
@@ -109,6 +112,12 @@ export function createProjectEnvironmentAtoms<R, E>(
     removeMember: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:remove-member",
       execute: (input: RemoveProjectMemberInput) => removeProjectMember(input),
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+    }),
+    transferOwnership: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:transfer-ownership",
+      execute: (input: TransferProjectOwnershipInput) => transferProjectOwnership(input),
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),

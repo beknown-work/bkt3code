@@ -23,8 +23,10 @@ import {
   ThreadSessionRestartRequestedPayload as ContractsThreadSessionRestartRequestedPayloadSchema,
   ThreadMemberAddedPayload as ContractsThreadMemberAddedPayloadSchema,
   ThreadMemberRemovedPayload as ContractsThreadMemberRemovedPayloadSchema,
+  ThreadOwnerTransferredPayload as ContractsThreadOwnerTransferredPayloadSchema,
   ProjectMemberAddedPayload as ContractsProjectMemberAddedPayloadSchema,
   ProjectMemberRemovedPayload as ContractsProjectMemberRemovedPayloadSchema,
+  ProjectOwnerTransferredPayload as ContractsProjectOwnerTransferredPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -60,5 +62,7 @@ export const ThreadSessionRestartRequestedPayload =
 
 export const ThreadMemberAddedPayload = ContractsThreadMemberAddedPayloadSchema;
 export const ThreadMemberRemovedPayload = ContractsThreadMemberRemovedPayloadSchema;
+export const ThreadOwnerTransferredPayload = ContractsThreadOwnerTransferredPayloadSchema;
 export const ProjectMemberAddedPayload = ContractsProjectMemberAddedPayloadSchema;
 export const ProjectMemberRemovedPayload = ContractsProjectMemberRemovedPayloadSchema;
+export const ProjectOwnerTransferredPayload = ContractsProjectOwnerTransferredPayloadSchema;

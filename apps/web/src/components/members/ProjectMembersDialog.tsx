@@ -1,8 +1,8 @@
 /**
  * ProjectMembersDialog - manage members of a project (team mode).
  *
- * A project tag grants visibility to ALL of the project's threads (current and
- * future). Owner is permanent. Renders null outside team mode.
+ * A project tag grants workspace access, and an owner/admin can transfer
+ * ownership. Renders null outside team mode.
  *
  * @module components/members/ProjectMembersDialog
  */
@@ -12,7 +12,7 @@ import { useCallback, useState } from "react";
 
 import { useProject } from "../../state/entities";
 import { useCurrentUserId } from "../../state/identity";
-import { useOrgMembers } from "../../state/orgMembers";
+import { useIsTeamAdmin, useOrgMembers } from "../../state/orgMembers";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -39,8 +39,10 @@ export function ProjectMembersDialog({
   const currentUserId = useCurrentUserId();
   const project = useProject(scopeProjectRef(environmentId, projectId));
   const { users, resolveUser } = useOrgMembers();
+  const isAdmin = useIsTeamAdmin();
   const addMember = useAtomCommand(projectEnvironment.addMember, { reportFailure: false });
   const removeMember = useAtomCommand(projectEnvironment.removeMember, { reportFailure: false });
+  const transferOwnership = useAtomCommand(projectEnvironment.transferOwnership);
   const [pending, setPending] = useState<ReadonlySet<UserId>>(() => new Set());
 
   const onToggle = useCallback(
@@ -59,6 +61,33 @@ export function ProjectMembersDialog({
     },
     [addMember, removeMember, environmentId, projectId],
   );
+  const canTransferOwnership =
+    isAdmin ||
+    project?.ownerUserId === currentUserId ||
+    (project?.ownerUserId === null &&
+      currentUserId !== null &&
+      project.memberUserIds.includes(currentUserId));
+  const onTransferOwnership = useCallback(
+    (userId: UserId) => {
+      const user = resolveUser(userId);
+      const label = user.name ?? user.email ?? user.id;
+      const confirmed = window.confirm(
+        `Transfer project ownership to ${label}?${
+          project?.ownerUserId === null ? "" : " The previous owner will remain a member."
+        }`,
+      );
+      if (!confirmed) return;
+      setPending((prev) => new Set(prev).add(userId));
+      void transferOwnership({ environmentId, input: { projectId, userId } }).finally(() => {
+        setPending((prev) => {
+          const next = new Set(prev);
+          next.delete(userId);
+          return next;
+        });
+      });
+    },
+    [environmentId, project?.ownerUserId, projectId, resolveUser, transferOwnership],
+  );
 
   if (currentUserId === null) {
     return null;
@@ -70,7 +99,8 @@ export function ProjectMembersDialog({
         <DialogHeader>
           <DialogTitle>Project members</DialogTitle>
           <DialogDescription>
-            Members see every thread in this project — current and future.
+            Members can access this project and create threads. Existing threads are shared
+            separately.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="p-0">
@@ -80,6 +110,8 @@ export function ProjectMembersDialog({
             memberUserIds={project?.memberUserIds ?? []}
             pendingUserIds={pending}
             onToggle={onToggle}
+            canTransferOwnership={canTransferOwnership}
+            onTransferOwnership={onTransferOwnership}
             resolveUser={resolveUser}
           />
         </DialogPanel>

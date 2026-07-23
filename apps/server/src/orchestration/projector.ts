@@ -29,8 +29,10 @@ import {
   ThreadTurnDiffCompletedPayload,
   ThreadMemberAddedPayload,
   ThreadMemberRemovedPayload,
+  ThreadOwnerTransferredPayload,
   ProjectMemberAddedPayload,
   ProjectMemberRemovedPayload,
+  ProjectOwnerTransferredPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -400,6 +402,37 @@ export function projectEvent(
         }),
       );
 
+    case "thread.owner-transferred":
+      return decodeForEvent(
+        ThreadOwnerTransferredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const memberUserIds = thread.memberUserIds.filter((id) => id !== payload.ownerUserId);
+          if (
+            payload.previousOwnerUserId !== null &&
+            payload.previousOwnerUserId !== payload.ownerUserId &&
+            !memberUserIds.includes(payload.previousOwnerUserId)
+          ) {
+            memberUserIds.push(payload.previousOwnerUserId);
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              ownerUserId: payload.ownerUserId,
+              memberUserIds,
+              updatedAt: payload.transferredAt,
+            }),
+          };
+        }),
+      );
+
     case "project.member-added":
       return decodeForEvent(ProjectMemberAddedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -437,6 +470,42 @@ export function projectEvent(
                     ...entry,
                     memberUserIds: entry.memberUserIds.filter((id) => id !== payload.userId),
                     updatedAt: payload.removedAt,
+                  }
+                : entry,
+            ),
+          };
+        }),
+      );
+
+    case "project.owner-transferred":
+      return decodeForEvent(
+        ProjectOwnerTransferredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
+          if (!project) {
+            return nextBase;
+          }
+          const memberUserIds = project.memberUserIds.filter((id) => id !== payload.ownerUserId);
+          if (
+            payload.previousOwnerUserId !== null &&
+            payload.previousOwnerUserId !== payload.ownerUserId &&
+            !memberUserIds.includes(payload.previousOwnerUserId)
+          ) {
+            memberUserIds.push(payload.previousOwnerUserId);
+          }
+          return {
+            ...nextBase,
+            projects: nextBase.projects.map((entry) =>
+              entry.id === payload.projectId
+                ? {
+                    ...entry,
+                    ownerUserId: payload.ownerUserId,
+                    memberUserIds,
+                    updatedAt: payload.transferredAt,
                   }
                 : entry,
             ),

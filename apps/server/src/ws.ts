@@ -247,7 +247,8 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.reverted"
       | "thread.session-set"
       | "thread.member-added"
-      | "thread.member-removed";
+      | "thread.member-removed"
+      | "thread.owner-transferred";
   }
 > {
   return (
@@ -258,7 +259,8 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.reverted" ||
     event.type === "thread.session-set" ||
     event.type === "thread.member-added" ||
-    event.type === "thread.member-removed"
+    event.type === "thread.member-removed" ||
+    event.type === "thread.owner-transferred"
   );
 }
 
@@ -606,6 +608,7 @@ const makeWsRpcLayer = (
           case "project.meta-updated":
           case "project.member-added":
           case "project.member-removed":
+          case "project.owner-transferred":
             return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
               Effect.map((project) =>
                 Option.map(project, (nextProject) => ({

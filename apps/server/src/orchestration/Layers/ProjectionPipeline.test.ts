@@ -7,6 +7,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  UserId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -171,6 +172,98 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       for (const row of stateRows) {
         assert.equal(row.lastAppliedSequence, 3);
       }
+    }),
+  );
+
+  it.effect("projects ownership transfers without dropping the previous owner's access", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-owner-transfer");
+      const previousOwner = UserId.make("user-owner-before");
+      const ownerUserId = UserId.make("user-owner-after");
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-owner-transfer-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-23T00:00:00.000Z",
+        commandId: CommandId.make("cmd-owner-transfer-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-owner-transfer-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-owner-transfer"),
+          title: "Ownership transfer",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdByUserId: previousOwner,
+          createdAt: "2026-07-23T00:00:00.000Z",
+          updatedAt: "2026-07-23T00:00:00.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.member-added",
+        eventId: EventId.make("evt-owner-transfer-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-23T00:00:01.000Z",
+        commandId: CommandId.make("cmd-owner-transfer-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-owner-transfer-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          userId: ownerUserId,
+          addedByUserId: previousOwner,
+          addedAt: "2026-07-23T00:00:01.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.owner-transferred",
+        eventId: EventId.make("evt-owner-transfer-3"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-23T00:00:02.000Z",
+        commandId: CommandId.make("cmd-owner-transfer-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-owner-transfer-3"),
+        metadata: {},
+        payload: {
+          threadId,
+          previousOwnerUserId: previousOwner,
+          ownerUserId,
+          transferredByUserId: previousOwner,
+          transferredAt: "2026-07-23T00:00:02.000Z",
+        },
+      });
+
+      const threadRows = yield* sql<{ readonly ownerUserId: string | null }>`
+        SELECT owner_user_id AS "ownerUserId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const memberRows = yield* sql<{ readonly userId: string }>`
+        SELECT user_id AS "userId"
+        FROM projection_thread_members
+        WHERE thread_id = ${threadId}
+        ORDER BY user_id
+      `;
+      assert.deepEqual(threadRows, [{ ownerUserId }]);
+      assert.deepEqual(memberRows, [{ userId: previousOwner }]);
     }),
   );
 });

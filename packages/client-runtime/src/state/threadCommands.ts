@@ -18,6 +18,7 @@ import {
   type StartThreadTurnInput,
   type StopThreadSessionInput,
   type StopThreadExecutionInput,
+  type TransferThreadOwnershipInput,
   type UnarchiveThreadInput,
   type UpdateThreadMetadataInput,
   addThreadMember,
@@ -35,6 +36,7 @@ import {
   startThreadTurn,
   stopThreadSession,
   stopThreadExecution,
+  transferThreadOwnership,
   unarchiveThread,
   updateThreadMetadata,
 } from "../operations/commands.ts";
@@ -58,6 +60,7 @@ export type {
   StartThreadTurnInput,
   StopThreadSessionInput,
   StopThreadExecutionInput,
+  TransferThreadOwnershipInput,
   UnarchiveThreadInput,
   UpdateThreadMetadataInput,
 } from "../operations/commands.ts";
@@ -171,6 +174,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     removeMember: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:remove-member",
       execute: (input: RemoveThreadMemberInput) => removeThreadMember(input),
+      scheduler,
+      concurrency,
+    }),
+    transferOwnership: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:transfer-ownership",
+      execute: (input: TransferThreadOwnershipInput) => transferThreadOwnership(input),
       scheduler,
       concurrency,
     }),

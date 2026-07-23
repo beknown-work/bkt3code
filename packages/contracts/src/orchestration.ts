@@ -703,6 +703,13 @@ const ThreadMemberRemoveCommand = Schema.Struct({
   userId: UserId,
 });
 
+const ThreadOwnerTransferCommand = Schema.Struct({
+  type: Schema.Literal("thread.owner.transfer"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  userId: UserId,
+});
+
 const ProjectMemberAddCommand = Schema.Struct({
   type: Schema.Literal("project.member.add"),
   commandId: CommandId,
@@ -712,6 +719,13 @@ const ProjectMemberAddCommand = Schema.Struct({
 
 const ProjectMemberRemoveCommand = Schema.Struct({
   type: Schema.Literal("project.member.remove"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  userId: UserId,
+});
+
+const ProjectOwnerTransferCommand = Schema.Struct({
+  type: Schema.Literal("project.owner.transfer"),
   commandId: CommandId,
   projectId: ProjectId,
   userId: UserId,
@@ -853,6 +867,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectDeleteCommand,
   ProjectMemberAddCommand,
   ProjectMemberRemoveCommand,
+  ProjectOwnerTransferCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -860,6 +875,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadMemberAddCommand,
   ThreadMemberRemoveCommand,
+  ThreadOwnerTransferCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
@@ -879,6 +895,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectDeleteCommand,
   ProjectMemberAddCommand,
   ProjectMemberRemoveCommand,
+  ProjectOwnerTransferCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -886,6 +903,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadMemberAddCommand,
   ThreadMemberRemoveCommand,
+  ThreadOwnerTransferCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
@@ -986,6 +1004,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "project.member-added",
   "project.member-removed",
+  "project.owner-transferred",
   "thread.created",
   "thread.deleted",
   "thread.archived",
@@ -993,6 +1012,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.member-added",
   "thread.member-removed",
+  "thread.owner-transferred",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
@@ -1204,6 +1224,14 @@ export const ThreadMemberRemovedPayload = Schema.Struct({
   removedAt: IsoDateTime,
 });
 
+export const ThreadOwnerTransferredPayload = Schema.Struct({
+  threadId: ThreadId,
+  previousOwnerUserId: Schema.NullOr(UserId),
+  ownerUserId: UserId,
+  transferredByUserId: Schema.NullOr(UserId),
+  transferredAt: IsoDateTime,
+});
+
 export const ProjectMemberAddedPayload = Schema.Struct({
   projectId: ProjectId,
   userId: UserId,
@@ -1216,6 +1244,14 @@ export const ProjectMemberRemovedPayload = Schema.Struct({
   userId: UserId,
   removedByUserId: Schema.NullOr(UserId),
   removedAt: IsoDateTime,
+});
+
+export const ProjectOwnerTransferredPayload = Schema.Struct({
+  projectId: ProjectId,
+  previousOwnerUserId: Schema.NullOr(UserId),
+  ownerUserId: UserId,
+  transferredByUserId: Schema.NullOr(UserId),
+  transferredAt: IsoDateTime,
 });
 
 export const OrchestrationEventMetadata = Schema.Struct({
@@ -1294,6 +1330,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.owner-transferred"),
+    payload: ThreadOwnerTransferredPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("project.member-added"),
     payload: ProjectMemberAddedPayload,
   }),
@@ -1301,6 +1342,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("project.member-removed"),
     payload: ProjectMemberRemovedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.owner-transferred"),
+    payload: ProjectOwnerTransferredPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

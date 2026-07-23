@@ -47,10 +47,38 @@ const makeAccessControl = Effect.gen(function* () {
       return threads.some((thread) => isOwnerOrMember(thread, userId));
     });
 
+  const canTransferThreadOwnership: OrchestrationAccessControlShape["canTransferThreadOwnership"] =
+    (userId, threadId) =>
+      snapshotQuery.getThreadShellById(threadId).pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => false,
+            onSome: (thread) =>
+              thread.ownerUserId === userId ||
+              (thread.ownerUserId === null && thread.memberUserIds.includes(userId)),
+          }),
+        ),
+      );
+
+  const canTransferProjectOwnership: OrchestrationAccessControlShape["canTransferProjectOwnership"] =
+    (userId, projectId) =>
+      snapshotQuery.getProjectShellById(projectId).pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => false,
+            onSome: (project) =>
+              project.ownerUserId === userId ||
+              (project.ownerUserId === null && project.memberUserIds.includes(userId)),
+          }),
+        ),
+      );
+
   return {
     actorFor,
     canAccessThread,
     canAccessProject,
+    canTransferThreadOwnership,
+    canTransferProjectOwnership,
   } satisfies OrchestrationAccessControlShape;
 });
 

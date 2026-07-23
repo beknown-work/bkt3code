@@ -526,6 +526,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
 
+        case "project.owner-transferred": {
+          const existingRow = yield* projectionProjectRepository.getById({
+            projectId: event.payload.projectId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionProjectRepository.upsert({
+            ...existingRow.value,
+            ownerUserId: event.payload.ownerUserId,
+            updatedAt: event.payload.transferredAt,
+          });
+          yield* projectionMembershipRepository.removeProjectMember({
+            projectId: event.payload.projectId,
+            userId: event.payload.ownerUserId,
+          });
+          if (
+            event.payload.previousOwnerUserId !== null &&
+            event.payload.previousOwnerUserId !== event.payload.ownerUserId
+          ) {
+            yield* projectionMembershipRepository.upsertProjectMember({
+              projectId: event.payload.projectId,
+              userId: event.payload.previousOwnerUserId,
+              addedByUserId: event.payload.transferredByUserId,
+              addedAt: event.payload.transferredAt,
+            });
+          }
+          return;
+        }
+
         case "project.meta-updated": {
           const existingRow = yield* projectionProjectRepository.getById({
             projectId: event.payload.projectId,
@@ -668,6 +698,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             userId: event.payload.userId,
           });
           return;
+
+        case "thread.owner-transferred": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            ownerUserId: event.payload.ownerUserId,
+            updatedAt: event.payload.transferredAt,
+          });
+          yield* projectionMembershipRepository.removeThreadMember({
+            threadId: event.payload.threadId,
+            userId: event.payload.ownerUserId,
+          });
+          if (
+            event.payload.previousOwnerUserId !== null &&
+            event.payload.previousOwnerUserId !== event.payload.ownerUserId
+          ) {
+            yield* projectionMembershipRepository.upsertThreadMember({
+              threadId: event.payload.threadId,
+              userId: event.payload.previousOwnerUserId,
+              addedByUserId: event.payload.transferredByUserId,
+              addedAt: event.payload.transferredAt,
+            });
+          }
+          return;
+        }
 
         case "thread.archived": {
           const existingRow = yield* projectionThreadRepository.getById({

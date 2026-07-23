@@ -16,6 +16,7 @@ import {
   requireActiveProjectWorkspaceRootAbsent,
   requireMemberAddable,
   requireMemberRemovable,
+  requireOwnershipTransferable,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -438,6 +439,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.owner.transfer": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* requireOwnershipTransferable({
+        commandType: command.type,
+        entityLabel: `thread '${command.threadId}'`,
+        ownerUserId: thread.ownerUserId,
+        userId: command.userId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.owner-transferred",
+        payload: {
+          threadId: command.threadId,
+          previousOwnerUserId: thread.ownerUserId,
+          ownerUserId: command.userId,
+          transferredByUserId: actor,
+          transferredAt: occurredAt,
+        },
+      };
+    }
+
     case "project.member.add": {
       const project = yield* requireProject({
         readModel,
@@ -496,6 +528,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           userId: command.userId,
           removedByUserId: actor,
           removedAt: occurredAt,
+        },
+      };
+    }
+
+    case "project.owner.transfer": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireOwnershipTransferable({
+        commandType: command.type,
+        entityLabel: `project '${command.projectId}'`,
+        ownerUserId: project.ownerUserId,
+        userId: command.userId,
+      });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.owner-transferred",
+        payload: {
+          projectId: command.projectId,
+          previousOwnerUserId: project.ownerUserId,
+          ownerUserId: command.userId,
+          transferredByUserId: actor,
+          transferredAt: occurredAt,
         },
       };
     }

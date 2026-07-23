@@ -114,6 +114,22 @@ export function requireThread(input: {
   );
 }
 
+export function requireOwnershipTransferable(input: {
+  readonly commandType: string;
+  readonly entityLabel: string;
+  readonly ownerUserId: UserId | null;
+  readonly userId: UserId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  return input.ownerUserId === input.userId
+    ? Effect.fail(
+        invariantError(
+          input.commandType,
+          `${input.entityLabel} is already owned by user '${input.userId}'.`,
+        ),
+      )
+    : Effect.void;
+}
+
 export function requireThreadArchived(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;

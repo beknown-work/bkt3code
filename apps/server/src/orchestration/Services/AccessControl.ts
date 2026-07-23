@@ -32,6 +32,16 @@ export interface OrchestrationAccessControlShape {
     userId: UserId,
     projectId: ProjectId,
   ) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  /** Whether `userId` may transfer thread ownership. */
+  readonly canTransferThreadOwnership: (
+    userId: UserId,
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  /** Whether `userId` may transfer project ownership. */
+  readonly canTransferProjectOwnership: (
+    userId: UserId,
+    projectId: ProjectId,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
 }
 
 export class OrchestrationAccessControl extends Context.Service<
