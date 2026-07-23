@@ -59,6 +59,7 @@ import {
   type ThreadTerminalGroup,
 } from "../types";
 import { readLocalApi } from "~/localApi";
+import { TerminalOutputWriter } from "~/lib/terminalOutputWriter";
 import { useAttachedTerminalSession } from "../state/terminalSessions";
 import { serverEnvironment } from "../state/server";
 import { previewEnvironment } from "../state/preview";
@@ -81,15 +82,8 @@ function clampDrawerHeight(height: number): number {
   return Math.min(Math.max(Math.round(safeHeight), MIN_DRAWER_HEIGHT), maxHeight);
 }
 
-function writeSystemMessage(terminal: Terminal, message: string): void {
-  terminal.write(`\r\n[terminal] ${message}\r\n`);
-}
-
-function writeTerminalBuffer(terminal: Terminal, buffer: string): void {
-  terminal.write("\u001bc");
-  if (buffer.length > 0) {
-    terminal.write(buffer);
-  }
+function writeSystemMessage(writer: TerminalOutputWriter, message: string): void {
+  writer.writeRaw(`\r\n[terminal] ${message}\r\n`);
 }
 
 function fitTerminalSafely(fitAddon: FitAddon): boolean {
@@ -309,6 +303,7 @@ export function TerminalViewport({
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const terminalWriterRef = useRef<TerminalOutputWriter | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const environmentId = threadRef.environmentId;
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
@@ -364,11 +359,13 @@ export function TerminalViewport({
     }),
   );
   const terminalBuffer = terminalSession.buffer;
+  const terminalBufferEpoch = terminalSession.bufferEpoch;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
   const terminalVersion = terminalSession.version;
   const previousSessionRef = useRef({
     buffer: terminalBuffer,
+    bufferEpoch: terminalBufferEpoch,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -397,11 +394,14 @@ export function TerminalViewport({
     terminal.loadAddon(fitAddon);
     terminal.open(mount);
     fitTerminalSafely(fitAddon);
+    const terminalWriter = new TerminalOutputWriter(terminal);
 
     terminalRef.current = terminal;
+    terminalWriterRef.current = terminalWriter;
     fitAddonRef.current = fitAddon;
     previousSessionRef.current = {
       buffer: "",
+      bufferEpoch: 0,
       status: "closed",
       error: null,
       version: 0,
@@ -492,7 +492,7 @@ export function TerminalViewport({
       const result = await writeTerminal(data);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
-        writeSystemMessage(activeTerminal, error instanceof Error ? error.message : fallbackError);
+        writeSystemMessage(terminalWriter, error instanceof Error ? error.message : fallbackError);
       }
     };
 
@@ -575,7 +575,7 @@ export function TerminalViewport({
               if (match.kind === "url") {
                 if (!localApi) {
                   writeSystemMessage(
-                    latestTerminal,
+                    terminalWriter,
                     "Opening links is unavailable in this browser.",
                   );
                   return;
@@ -583,7 +583,7 @@ export function TerminalViewport({
                 const fallbackToBrowser = () => {
                   void localApi.shell.openExternal(match.text).catch((error: unknown) => {
                     writeSystemMessage(
-                      latestTerminal,
+                      terminalWriter,
                       error instanceof Error ? error.message : "Unable to open link",
                     );
                   });
@@ -607,7 +607,7 @@ export function TerminalViewport({
                 }
                 const error = squashAtomCommandFailure(result);
                 writeSystemMessage(
-                  latestTerminal,
+                  terminalWriter,
                   error instanceof Error ? error.message : "Unable to open path",
                 );
               })();
@@ -625,7 +625,7 @@ export function TerminalViewport({
         }
         const error = squashAtomCommandFailure(result);
         writeSystemMessage(
-          terminal,
+          terminalWriter,
           error instanceof Error ? error.message : "Terminal write failed",
         );
       })();
@@ -698,7 +698,9 @@ export function TerminalViewport({
       window.removeEventListener("mouseup", handleMouseUp);
       mount.removeEventListener("pointerdown", handlePointerDown);
       themeObserver.disconnect();
+      terminalWriter.dispose();
       terminalRef.current = null;
+      terminalWriterRef.current = null;
       fitAddonRef.current = null;
       terminal.dispose();
     };
@@ -709,13 +711,15 @@ export function TerminalViewport({
 
   useEffect(() => {
     const terminal = terminalRef.current;
+    const terminalWriter = terminalWriterRef.current;
     const current = {
       buffer: terminalBuffer,
+      bufferEpoch: terminalBufferEpoch,
       error: terminalError,
       status: terminalStatus,
       version: terminalVersion,
     };
-    if (!terminal) {
+    if (!terminal || !terminalWriter) {
       previousSessionRef.current = current;
       return;
     }
@@ -725,18 +729,11 @@ export function TerminalViewport({
       return;
     }
 
-    if (
-      current.buffer.length >= previous.buffer.length &&
-      current.buffer.startsWith(previous.buffer)
-    ) {
-      terminal.write(current.buffer.slice(previous.buffer.length));
-    } else {
-      writeTerminalBuffer(terminal, current.buffer);
-    }
+    terminalWriter.syncBuffer(current.buffer, current.bufferEpoch);
     terminal.clearSelection();
 
     if (current.error !== null && current.error !== previous.error) {
-      writeSystemMessage(terminal, current.error);
+      writeSystemMessage(terminalWriter, current.error);
     }
 
     if (current.status === "running") {
@@ -748,7 +745,7 @@ export function TerminalViewport({
     ) {
       hasHandledExitRef.current = true;
       writeSystemMessage(
-        terminal,
+        terminalWriter,
         current.status === "closed" ? "Terminal closed" : "Process exited",
       );
       window.setTimeout(() => {
@@ -764,7 +761,14 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+  }, [
+    autoFocus,
+    terminalBuffer,
+    terminalBufferEpoch,
+    terminalError,
+    terminalStatus,
+    terminalVersion,
+  ]);
 
   useEffect(() => {
     if (!autoFocus) return;

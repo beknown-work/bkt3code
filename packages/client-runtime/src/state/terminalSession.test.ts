@@ -127,8 +127,26 @@ describe("terminal session reducers", () => {
 
     expect(output).toMatchObject({
       buffer: "lo world",
+      bufferEpoch: 1,
       status: "running",
       error: null,
+      version: 2,
+    });
+  });
+
+  it("advances the version and buffer epoch when a snapshot replaces terminal history", () => {
+    const initial = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: BASE_SNAPSHOT,
+    });
+    const restarted = applyTerminalAttachStreamEvent(initial, {
+      type: "restarted",
+      snapshot: { ...BASE_SNAPSHOT, history: "replacement" },
+    });
+
+    expect(restarted).toMatchObject({
+      buffer: "replacement",
+      bufferEpoch: 2,
       version: 2,
     });
   });
