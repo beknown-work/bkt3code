@@ -141,6 +141,8 @@ describe("terminal session reducers", () => {
     });
     const restarted = applyTerminalAttachStreamEvent(initial, {
       type: "restarted",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
       snapshot: { ...BASE_SNAPSHOT, history: "replacement" },
     });
 
