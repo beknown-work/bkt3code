@@ -1658,10 +1658,11 @@ function ChatViewContent(props: ChatViewProps) {
       : "server";
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
-    if (activeEnvironmentUnavailableState) {
+    const transientlyReconnecting =
+      activeEnvironmentUnavailableState?.connection.phase === "connecting" ||
+      activeEnvironmentUnavailableState?.connection.phase === "reconnecting";
+    if (activeEnvironmentUnavailableState && !transientlyReconnecting) {
       const connection = activeEnvironmentUnavailableState.connection;
-      const isReconnecting =
-        connection.phase === "connecting" || connection.phase === "reconnecting";
       items.push({
         id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
         variant: connection.phase === "error" ? "error" : "warning",
@@ -1674,14 +1675,13 @@ function ChatViewContent(props: ChatViewProps) {
           <>
             <Button
               size="xs"
-              disabled={isReconnecting}
               onClick={() =>
                 void handleReconnectActiveEnvironment(
                   activeEnvironmentUnavailableState.environmentId,
                 )
               }
             >
-              {isReconnecting ? "Reconnecting..." : "Reconnect"}
+              Reconnect
             </Button>
             <Button
               size="xs"

@@ -84,6 +84,7 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   resolvePhaseSidebarAttentionPriority,
+  resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarProviderCode,
@@ -813,6 +814,7 @@ export function PhaseGroupedSidebar() {
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
   const renameCommitInFlightRef = useRef(false);
+  const lastKnownPhaseByThreadKeyRef = useRef(new Map<string, PhaseSidebarPhaseId>());
   const shortcutModifiers = useShortcutModifierState();
   const routeRef = resolveThreadRouteRef(routeParams);
   const routeThreadKey = routeRef ? scopedThreadKey(routeRef) : null;
@@ -891,6 +893,7 @@ export function PhaseGroupedSidebar() {
         const providerKind = String(provider?.driver ?? instanceId);
         const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
         const vcsStatus = vcsStatusByThreadKey.get(threadKey);
+        const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
         const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
         const lastVisitedAt = Date.parse(lastVisitedAtByThreadKey[threadKey] ?? "");
         const isUnreadCompletion =
@@ -898,7 +901,12 @@ export function PhaseGroupedSidebar() {
           (!Number.isFinite(lastVisitedAt) || completedAt > lastVisitedAt);
         return {
           thread,
-          phaseId: resolvePhaseSidebarPhase(thread, vcsStatus),
+          phaseId: resolvePhaseSidebarDisplayPhase(
+            currentPhase,
+            allEnvironmentShellsLive
+              ? null
+              : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
+          ),
           repositoryKey,
           repositoryLabel:
             project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
@@ -914,6 +922,7 @@ export function PhaseGroupedSidebar() {
       repositoryLabels,
       serverConfigs,
       threads,
+      allEnvironmentShellsLive,
       currentUserId,
       lastVisitedAtByThreadKey,
       vcsStatusByThreadKey,
@@ -924,6 +933,29 @@ export function PhaseGroupedSidebar() {
     [allRows, filters, sortOrder],
   );
   const visibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
+
+  useEffect(() => {
+    const next = new Map(lastKnownPhaseByThreadKeyRef.current);
+    for (const row of allRows) {
+      if (allEnvironmentShellsLive || row.phaseId !== "checking") {
+        next.set(
+          scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
+          row.phaseId,
+        );
+      }
+    }
+    if (allEnvironmentShellsLive) {
+      const currentKeys = new Set(
+        allRows.map((row) =>
+          scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
+        ),
+      );
+      for (const threadKey of next.keys()) {
+        if (!currentKeys.has(threadKey)) next.delete(threadKey);
+      }
+    }
+    lastKnownPhaseByThreadKeyRef.current = next;
+  }, [allEnvironmentShellsLive, allRows]);
   const visibleThreadKeys = useMemo(
     () =>
       visibleRows.map((row) =>

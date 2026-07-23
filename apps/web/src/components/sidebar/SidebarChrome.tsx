@@ -40,27 +40,45 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 });
 
 function SidebarBrand() {
+  const { environments } = useEnvironments();
   const primaryServerVersion =
     useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
   const stageLabel = resolveSidebarStageBadgeLabel({
     primaryServerVersion,
     fallbackStageLabel: APP_STAGE_LABEL,
   });
+  const syncing = environments.some(
+    (environment) =>
+      environment.connection.phase === "connecting" ||
+      environment.connection.phase === "reconnecting",
+  );
 
   return (
-    <Link
-      aria-label="Go to threads"
-      className="sidebar-brand ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2"
-      to="/"
-    >
-      <T3Wordmark />
-      <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-        Code
-      </span>
-      <span className="sidebar-brand-stage shrink-0 items-center whitespace-nowrap rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
-        {stageLabel}
-      </span>
-    </Link>
+    <div className="ml-[var(--workspace-titlebar-content-left)] flex min-w-0 items-center gap-1.5">
+      <Link
+        aria-label="Go to threads"
+        className="sidebar-brand h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2"
+        to="/"
+      >
+        <T3Wordmark />
+        <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
+          Code
+        </span>
+        <span className="sidebar-brand-stage shrink-0 items-center whitespace-nowrap rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+          {stageLabel}
+        </span>
+      </Link>
+      {syncing ? (
+        <span
+          aria-label="Connection interrupted; syncing"
+          className="inline-flex"
+          role="status"
+          title="Connection interrupted. Syncing…"
+        >
+          <LoaderIcon className="size-3 animate-spin text-muted-foreground/70" />
+        </span>
+      ) : null}
+    </div>
   );
 }
 

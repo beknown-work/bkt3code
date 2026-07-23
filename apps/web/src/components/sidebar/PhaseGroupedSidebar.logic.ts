@@ -192,6 +192,21 @@ export function resolvePhaseSidebarPhase(
   return "ready";
 }
 
+/**
+ * Keep a thread in its last rendered lifecycle group while live execution
+ * authority is temporarily unavailable. The underlying execution snapshot is
+ * still cleared on disconnect; this only stabilizes sidebar presentation until
+ * a fresh execution frame arrives.
+ */
+export function resolvePhaseSidebarDisplayPhase(
+  currentPhase: PhaseSidebarPhaseId,
+  previousPhase: PhaseSidebarPhaseId | null,
+): PhaseSidebarPhaseId {
+  return currentPhase === "checking" && previousPhase !== null && previousPhase !== "checking"
+    ? previousPhase
+    : currentPhase;
+}
+
 export function derivePhaseSidebarRepositoryKey(project: Project): string {
   return deriveLogicalProjectKey(project, { groupingMode: "repository" });
 }

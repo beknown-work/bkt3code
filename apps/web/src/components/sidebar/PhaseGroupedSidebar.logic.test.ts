@@ -21,6 +21,7 @@ import {
   isThreadAssignedToUser,
   matchesPhaseSidebarFilters,
   reconcilePhaseSidebarFilters,
+  resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarProviderCode,
@@ -244,6 +245,15 @@ describe("phase sidebar lifecycle", () => {
 
   it("uses checking until an authoritative execution snapshot arrives", () => {
     expect(resolvePhaseSidebarPhase(makeThread({ execution: null }))).toBe("checking");
+  });
+
+  it("keeps the last known lifecycle phase while execution is resynchronizing", () => {
+    expect(resolvePhaseSidebarDisplayPhase("checking", "implementing")).toBe("implementing");
+    expect(resolvePhaseSidebarDisplayPhase("checking", "ready_for_review")).toBe(
+      "ready_for_review",
+    );
+    expect(resolvePhaseSidebarDisplayPhase("checking", null)).toBe("checking");
+    expect(resolvePhaseSidebarDisplayPhase("ready", "implementing")).toBe("ready");
   });
 });
 
