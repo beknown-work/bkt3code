@@ -310,6 +310,7 @@ export function applyThreadDetailEvent(
     }
 
     case "thread.session-stop-requested":
+    case "thread.session-restart-requested":
       // An intent receipt is not a lifecycle observation. The execution
       // snapshot (and, for internal cleanup, a later session-set event) owns
       // the visible state transition.

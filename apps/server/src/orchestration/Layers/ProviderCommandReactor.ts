@@ -54,7 +54,8 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.session-restart-requested";
   }
 >;
 
@@ -503,6 +504,7 @@ const make = Effect.gen(function* () {
             status: mapProviderSessionStatusToOrchestrationStatus(session.status),
             providerName: session.provider,
             providerInstanceId: session.providerInstanceId,
+            providerThreadId: thread.session?.providerThreadId ?? null,
             runtimeMode: desiredRuntimeMode,
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
@@ -1018,6 +1020,7 @@ const make = Effect.gen(function* () {
         ...(thread.session?.providerInstanceId !== undefined
           ? { providerInstanceId: thread.session.providerInstanceId }
           : {}),
+        providerThreadId: thread.session?.providerThreadId ?? null,
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
@@ -1025,6 +1028,28 @@ const make = Effect.gen(function* () {
       },
       createdAt: now,
     });
+  });
+
+  const processSessionRestartRequested = Effect.fn("processSessionRestartRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.session-restart-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread?.session) {
+      return yield* new ProviderAdapterRequestError({
+        provider: "unknown",
+        method: "thread.session.restart",
+        detail: `Thread '${event.payload.threadId}' does not have a provider session to reconnect.`,
+      });
+    }
+
+    const modelSelection =
+      thread.session.providerInstanceId !== undefined
+        ? {
+            ...thread.modelSelection,
+            instanceId: thread.session.providerInstanceId,
+          }
+        : thread.modelSelection;
+    yield* ensureSessionForThread(thread.id, event.payload.createdAt, { modelSelection });
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
@@ -1067,6 +1092,9 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.session-restart-requested":
+        yield* processSessionRestartRequested(event);
+        return;
     }
   });
 
@@ -1093,7 +1121,8 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.session-restart-requested"
       ) {
         return yield* worker.enqueue(event);
       }

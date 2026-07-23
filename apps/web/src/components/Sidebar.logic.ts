@@ -42,6 +42,21 @@ export interface ThreadStatusPill {
   pulse: boolean;
 }
 
+export function canReconnectThreadSession(
+  thread: Pick<SidebarThreadSummary, "execution" | "session">,
+): boolean {
+  if (thread.session === null) return false;
+
+  const executionState = thread.execution?.providerSession.state;
+  if (executionState !== undefined) {
+    return (
+      executionState === "absent" || executionState === "stopped" || executionState === "failed"
+    );
+  }
+
+  return thread.session.status === "stopped" || thread.session.status === "error";
+}
+
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   Error: 5,

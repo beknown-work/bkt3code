@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  canReconnectThreadSession,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -709,6 +710,79 @@ describe("resolveThreadStatusPill", () => {
         thread: { ...baseThread, execution: null },
       }),
     ).toMatchObject({ label: "Checking agent status", pulse: true });
+  });
+});
+
+describe("canReconnectThreadSession", () => {
+  const stoppedSession = {
+    threadId: ThreadId.make("thread-1"),
+    status: "stopped" as const,
+    providerName: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerThreadId: "provider-thread-1",
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    activeTurnId: null,
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+
+  it("allows a stopped provider conversation to reconnect", () => {
+    expect(
+      canReconnectThreadSession({
+        session: stoppedSession,
+        execution: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("uses the execution snapshot as the lifecycle authority", () => {
+    expect(
+      canReconnectThreadSession({
+        session: { ...stoppedSession, status: "ready" },
+        execution: {
+          threadId: ThreadId.make("thread-1"),
+          authorityEpoch: "server-epoch",
+          revision: 1,
+          observedAt: "2026-03-09T10:05:00.000Z",
+          activity: "idle",
+          canStop: false,
+          providerSession: {
+            state: "failed",
+            generation: 1,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            startedAt: "2026-03-09T10:00:00.000Z",
+            lastObservedAt: "2026-03-09T10:05:00.000Z",
+            lastError: "Provider exited",
+          },
+          turn: null,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not replace a healthy provider session", () => {
+    expect(
+      canReconnectThreadSession({
+        session: { ...stoppedSession, status: "ready" },
+        execution: {
+          threadId: ThreadId.make("thread-1"),
+          authorityEpoch: "server-epoch",
+          revision: 1,
+          observedAt: "2026-03-09T10:05:00.000Z",
+          activity: "idle",
+          canStop: false,
+          providerSession: {
+            state: "ready",
+            generation: 1,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            startedAt: "2026-03-09T10:00:00.000Z",
+            lastObservedAt: "2026-03-09T10:05:00.000Z",
+            lastError: null,
+          },
+          turn: null,
+        },
+      }),
+    ).toBe(false);
   });
 });
 

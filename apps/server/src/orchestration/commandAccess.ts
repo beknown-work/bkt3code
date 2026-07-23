@@ -72,6 +72,7 @@ export const checkCommandAccess = (
     case "thread.user-input.respond":
     case "thread.checkpoint.revert":
     case "thread.session.stop":
+    case "thread.session.restart":
       return accessControl.canAccessThread(actorUserId, command.threadId);
 
     // Internal commands are dispatched by the server/providers, never a client

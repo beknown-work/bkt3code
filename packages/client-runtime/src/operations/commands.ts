@@ -46,6 +46,7 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type RestartThreadSessionInput = CommandInput<"thread.session.restart">;
 export type StopThreadExecutionInput = OrchestrationStopExecutionInput;
 export type AddThreadMemberInput = CommandInput<"thread.member.add">;
 export type RemoveThreadMemberInput = CommandInput<"thread.member.remove">;
@@ -333,6 +334,18 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
   return yield* dispatch({
     ...input,
     type: "thread.session.stop",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const restartThreadSession: (input: RestartThreadSessionInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.restartThreadSession",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.session.restart",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

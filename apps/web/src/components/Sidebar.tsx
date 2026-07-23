@@ -174,7 +174,9 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
+import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import {
+  canReconnectThreadSession,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -1113,6 +1115,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const reconnectThreadSession = useReconnectThreadSession();
   const updateSettings = useUpdateClientSettings();
   const sidebarThreadPreviewCount = useClientSettings<SidebarThreadPreviewCount>(
     (settings) => settings.sidebarThreadPreviewCount,
@@ -2121,7 +2124,17 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         [
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
+          {
+            id: "reconnect-session",
+            label: "Reconnect session",
+            disabled: !canReconnectThreadSession(thread),
+          },
           { id: "copy-path", label: "Copy Path" },
+          {
+            id: "copy-session-id",
+            label: "Copy Session ID",
+            disabled: !thread.session?.providerThreadId,
+          },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],
@@ -2137,6 +2150,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         markThreadUnread(threadKey, thread.latestTurn?.completedAt);
         return;
       }
+      if (clicked === "reconnect-session") {
+        await reconnectThreadSession(threadRef);
+        return;
+      }
       if (clicked === "copy-path") {
         if (!threadWorkspacePath) {
           toastManager.add(
@@ -2149,6 +2166,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
         copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
+        return;
+      }
+      if (clicked === "copy-session-id" && thread.session?.providerThreadId) {
+        await navigator.clipboard.writeText(thread.session.providerThreadId);
         return;
       }
       if (clicked === "copy-thread-id") {
@@ -2187,6 +2208,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.workspaceRoot,
+      reconnectThreadSession,
       startThreadRename,
     ],
   );

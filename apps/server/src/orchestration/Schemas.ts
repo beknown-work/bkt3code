@@ -20,6 +20,7 @@ import {
   ThreadApprovalResponseRequestedPayload as ContractsThreadApprovalResponseRequestedPayloadSchema,
   ThreadCheckpointRevertRequestedPayload as ContractsThreadCheckpointRevertRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
+  ThreadSessionRestartRequestedPayload as ContractsThreadSessionRestartRequestedPayloadSchema,
   ThreadMemberAddedPayload as ContractsThreadMemberAddedPayloadSchema,
   ThreadMemberRemovedPayload as ContractsThreadMemberRemovedPayloadSchema,
   ProjectMemberAddedPayload as ContractsProjectMemberAddedPayloadSchema,
@@ -54,6 +55,8 @@ export const ThreadApprovalResponseRequestedPayload =
 export const ThreadCheckpointRevertRequestedPayload =
   ContractsThreadCheckpointRevertRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+export const ThreadSessionRestartRequestedPayload =
+  ContractsThreadSessionRestartRequestedPayloadSchema;
 
 export const ThreadMemberAddedPayload = ContractsThreadMemberAddedPayloadSchema;
 export const ThreadMemberRemovedPayload = ContractsThreadMemberRemovedPayloadSchema;

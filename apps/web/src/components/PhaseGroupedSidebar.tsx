@@ -37,6 +37,7 @@ import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
 import { useClientSettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -68,6 +69,7 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { LinearIcon } from "./Icons";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import {
+  canReconnectThreadSession,
   isTrailingDoubleClick,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
@@ -465,6 +467,7 @@ interface PhaseThreadRowProps {
   readonly onCommitRename: (row: PhaseSidebarRow) => void;
   readonly onCancelRename: () => void;
   readonly onNavigate: (threadRef: ScopedThreadRef) => void;
+  readonly onReconnect: (threadRef: ScopedThreadRef) => Promise<void>;
   readonly onArchive: (row: PhaseSidebarRow) => void;
   readonly onDelete: (row: PhaseSidebarRow) => void;
 }
@@ -483,6 +486,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onCommitRename,
     onCancelRename,
     onNavigate,
+    onReconnect,
     onArchive,
     onDelete,
   } = props;
@@ -546,7 +550,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       [
         { id: "rename", label: "Rename" },
         { id: "mark-unread", label: "Mark unread" },
+        {
+          id: "reconnect-session",
+          label: "Reconnect session",
+          disabled: !canReconnectThreadSession(row.thread),
+        },
         { id: "copy-path", label: "Copy Path", disabled: workspacePath === null },
+        {
+          id: "copy-session-id",
+          label: "Copy session ID",
+          disabled: !row.thread.session?.providerThreadId,
+        },
         { id: "copy-id", label: "Copy thread ID" },
         { id: "archive", label: "Archive" },
         { id: "delete", label: "Delete", destructive: true },
@@ -555,8 +569,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     );
     if (action === "rename") onStartRename(row);
     if (action === "mark-unread") markThreadUnread(threadKey, row.thread.latestTurn?.completedAt);
+    if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
       await navigator.clipboard.writeText(workspacePath);
+    }
+    if (action === "copy-session-id" && row.thread.session?.providerThreadId) {
+      await navigator.clipboard.writeText(row.thread.session.providerThreadId);
     }
     if (action === "copy-id") await navigator.clipboard.writeText(row.thread.id);
     if (action === "archive") onArchive(row);
@@ -769,6 +787,7 @@ export function PhaseGroupedSidebar() {
   const handleNewThread = useNewThreadHandler();
   const openAddProject = useOpenAddProjectCommandPalette();
   const { archiveThread, confirmAndDeleteThread } = useThreadActions();
+  const reconnectThreadSession = useReconnectThreadSession();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -1265,6 +1284,7 @@ export function PhaseGroupedSidebar() {
                       onCommitRename={commitRename}
                       onCancelRename={cancelRename}
                       onNavigate={navigateToRow}
+                      onReconnect={reconnectThreadSession}
                       onArchive={(target) => void requestArchive(target)}
                       onDelete={requestDelete}
                     />
