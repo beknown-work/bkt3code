@@ -7,6 +7,7 @@ import {
   TurnId,
   UserId,
   type ThreadExecutionSnapshot,
+  type VcsStatusResult,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -119,7 +120,7 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
 }
 
 describe("phase sidebar lifecycle", () => {
-  it("derives paired planning and implementation handoff states", () => {
+  it("keeps every active execution in the trailing agent-work groups", () => {
     const settledTurn = {
       turnId: TurnId.make("turn-1"),
       state: "completed" as const,
@@ -141,6 +142,19 @@ describe("phase sidebar lifecycle", () => {
         }),
       ),
     ).toBe("planning");
+    expect(
+      resolvePhaseSidebarPhase(makeThread({ execution: makeActiveExecution() }), {
+        pr: {
+          number: 1,
+          title: "Review",
+          url: "https://github.com/acme/repo/pull/1",
+          baseRef: "main",
+          headRef: "feature/work",
+          state: "open",
+          autoMergeEnabled: true,
+        },
+      } as VcsStatusResult),
+    ).toBe("implementing");
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
@@ -214,7 +228,7 @@ describe("phase sidebar lifecycle", () => {
     ).toBe("merged");
   });
 
-  it("excludes archived threads, uses fixed group order, and sorts by thread id on ties", () => {
+  it("puts non-running lifecycle groups before agent work and sorts by thread id on ties", () => {
     const rows = [
       makeRow({
         thread: makeThread({ id: ThreadId.make("thread-a"), archivedAt: now }),
@@ -230,17 +244,41 @@ describe("phase sidebar lifecycle", () => {
         thread: makeThread({ id: ThreadId.make("thread-d") }),
         phaseId: "ready_for_review",
       }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-e") }),
+        phaseId: "ready_to_merge",
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-f") }),
+        phaseId: "merged",
+      }),
     ];
 
     const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
-    expect(groups.map((group) => group.id)).toEqual(["ready_for_review", "implementing", "ready"]);
+    expect(groups.map((group) => group.id)).toEqual([
+      "ready",
+      "ready_for_review",
+      "ready_to_merge",
+      "merged",
+      "implementing",
+    ]);
     expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
-      ThreadId.make("thread-d"),
-      ThreadId.make("thread-c"),
       ThreadId.make("thread-a"),
       ThreadId.make("thread-b"),
+      ThreadId.make("thread-d"),
+      ThreadId.make("thread-e"),
+      ThreadId.make("thread-f"),
+      ThreadId.make("thread-c"),
     ]);
     expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(10);
+  });
+
+  it("uses ready only as the non-running fallback", () => {
+    expect(resolvePhaseSidebarPhase(makeThread())).toBe("ready");
+    expect(resolvePhaseSidebarPhase(makeThread({ execution: makeActiveExecution() }))).not.toBe(
+      "ready",
+    );
+    expect(resolvePhaseSidebarPhase(makeThread({ execution: null }))).not.toBe("ready");
   });
 
   it("uses checking until an authoritative execution snapshot arrives", () => {

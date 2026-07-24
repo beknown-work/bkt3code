@@ -8,15 +8,15 @@ import { getThreadSortTimestamp } from "../../lib/threadSort";
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
   "plan_ready",
+  "ready",
   "ready_for_review",
-  "ready_to_merge",
-  "planning",
-  "implementing",
   "in_review",
+  "ready_to_merge",
   "merging",
   "merged",
   "checking",
-  "ready",
+  "planning",
+  "implementing",
 ] as const;
 
 export type PhaseSidebarPhaseId = (typeof PHASE_SIDEBAR_PHASE_IDS)[number];
@@ -29,15 +29,15 @@ export interface PhaseSidebarPhaseDefinition {
 
 export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = [
   { id: "plan_ready", label: "Plan Ready", helperText: "Plan awaits approval" },
+  { id: "ready", label: "Ready", helperText: "No active agent work" },
   { id: "ready_for_review", label: "Ready for Review", helperText: "Changes await review" },
-  { id: "ready_to_merge", label: "Ready to Merge", helperText: "Approved and checks passing" },
-  { id: "planning", label: "Planning", helperText: "Agent is preparing a plan" },
-  { id: "implementing", label: "Implementing", helperText: "Agent is changing code" },
   { id: "in_review", label: "In Review", helperText: "Pull request needs review or checks" },
+  { id: "ready_to_merge", label: "Ready to Merge", helperText: "Approved and checks passing" },
   { id: "merging", label: "Merging", helperText: "Merge is queued or automatic" },
   { id: "merged", label: "Merged", helperText: "Changes landed" },
   { id: "checking", label: "Checking", helperText: "Checking agent status" },
-  { id: "ready", label: "Ready", helperText: "No active agent work" },
+  { id: "planning", label: "Planning", helperText: "Agent is preparing a plan" },
+  { id: "implementing", label: "Implementing", helperText: "Agent is changing code" },
 ];
 
 const PHASE_ID_SET = new Set<string>(PHASE_SIDEBAR_PHASE_IDS);
@@ -166,11 +166,7 @@ export function resolvePhaseSidebarPhase(
     thread.execution?.activity === "blocked" ||
     thread.execution?.activity === "stopping";
   if (isActive) {
-    if (thread.interactionMode === "plan") return "planning";
-    if (status?.pr?.state === "open") {
-      return status.pr.autoMergeEnabled === true ? "merging" : "in_review";
-    }
-    return "implementing";
+    return thread.interactionMode === "plan" ? "planning" : "implementing";
   }
 
   if (
