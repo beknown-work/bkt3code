@@ -11,6 +11,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -574,6 +575,26 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         [ThreadId.make("thread-archived")],
       );
       assert.equal(archivedShellSnapshot.threads[0]?.archivedAt, "2026-04-06T00:00:06.000Z");
+
+      // Archived threads stay authorizable so their owner can unarchive them.
+      const archivedShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-archived"),
+      );
+      assert.equal(Option.isNone(archivedShell), true);
+
+      const archivedAccess = yield* snapshotQuery.getThreadAccessById(
+        ThreadId.make("thread-archived"),
+      );
+      assert.equal(Option.isSome(archivedAccess), true);
+      if (Option.isSome(archivedAccess)) {
+        assert.equal(archivedAccess.value.threadId, ThreadId.make("thread-archived"));
+        assert.equal(archivedAccess.value.projectId, ProjectId.make("project-archive-test"));
+      }
+
+      const missingAccess = yield* snapshotQuery.getThreadAccessById(
+        ThreadId.make("thread-missing"),
+      );
+      assert.equal(Option.isNone(missingAccess), true);
     }),
   );
 

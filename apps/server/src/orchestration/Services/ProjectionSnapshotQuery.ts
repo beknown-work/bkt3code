@@ -18,6 +18,7 @@ import type {
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
@@ -49,6 +50,17 @@ export interface ProjectionFullThreadDiffContext {
   readonly worktreePath: string | null;
   readonly latestCheckpointTurnCount: number;
   readonly toCheckpointRef: CheckpointRef | null;
+}
+
+/**
+ * Ownership/tag fields for a single thread, read without the active-only
+ * filter so archived threads remain authorizable.
+ */
+export interface ProjectionThreadAccess {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly ownerUserId: UserId | null;
+  readonly memberUserIds: ReadonlyArray<UserId>;
 }
 
 /**
@@ -151,6 +163,16 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadShellById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read the ownership/tag fields for a thread regardless of archived state
+   * (team mode authorization). Archived threads are still owned by someone and
+   * must stay actionable — unarchiving, deleting or retagging one would
+   * otherwise be denied as "not found".
+   */
+  readonly getThreadAccessById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionThreadAccess>, ProjectionRepositoryError>;
 
   /**
    * Read active thread shells for a project (team mode: used when a project tag

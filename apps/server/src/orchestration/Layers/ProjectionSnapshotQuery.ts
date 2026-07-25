@@ -58,6 +58,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
   type ProjectionSnapshotCounts,
+  type ProjectionThreadAccess,
   type ProjectionThreadCheckpointContext,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
@@ -112,6 +113,11 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   assistantMessageId: Schema.NullOr(MessageId),
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
+});
+const ProjectionThreadAccessRowSchema = Schema.Struct({
+  threadId: ProjectionThread.fields.threadId,
+  projectId: ProjectionThread.fields.projectId,
+  ownerUserId: ProjectionThread.fields.ownerUserId,
 });
 const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
@@ -865,6 +871,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
           AND archived_at IS NULL
+        LIMIT 1
+      `,
+  });
+
+  // Deliberately not filtered on `archived_at`: authorization must still resolve
+  // for an archived thread so its owner can unarchive/delete/retag it.
+  const getThreadAccessRowById = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadAccessRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          owner_user_id AS "ownerUserId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+          AND deleted_at IS NULL
         LIMIT 1
       `,
   });
@@ -2265,6 +2289,39 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       } satisfies OrchestrationThreadShell);
     });
 
+  const getThreadAccessById: ProjectionSnapshotQueryShape["getThreadAccessById"] = (threadId) =>
+    Effect.gen(function* () {
+      const [threadRow, memberRows] = yield* Effect.all([
+        getThreadAccessRowById({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadAccessById:getThread:query",
+              "ProjectionSnapshotQuery.getThreadAccessById:getThread:decodeRow",
+            ),
+          ),
+        ),
+        listThreadMemberRowsByThreadId({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadAccessById:listMembers:query",
+              "ProjectionSnapshotQuery.getThreadAccessById:listMembers:decodeRows",
+            ),
+          ),
+        ),
+      ]);
+
+      if (Option.isNone(threadRow)) {
+        return Option.none<ProjectionThreadAccess>();
+      }
+
+      return Option.some({
+        threadId: threadRow.value.threadId,
+        projectId: threadRow.value.projectId,
+        ownerUserId: threadRow.value.ownerUserId,
+        memberUserIds: memberRows.map((row) => row.userId),
+      } satisfies ProjectionThreadAccess);
+    });
+
   const listThreadShellsByProjectId: ProjectionSnapshotQueryShape["listThreadShellsByProjectId"] = (
     projectId,
   ) =>
@@ -2492,6 +2549,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,
+    getThreadAccessById,
     listThreadShellsByProjectId,
     getThreadDetailById,
     getThreadDetailSnapshot,

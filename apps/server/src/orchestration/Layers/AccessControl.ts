@@ -20,7 +20,9 @@ const makeAccessControl = Effect.gen(function* () {
 
   const canAccessThread: OrchestrationAccessControlShape["canAccessThread"] = (userId, threadId) =>
     Effect.gen(function* () {
-      const threadOption = yield* snapshotQuery.getThreadShellById(threadId);
+      // Archived threads must stay authorizable — otherwise unarchive/delete on
+      // one's own archived thread reads back as "not found".
+      const threadOption = yield* snapshotQuery.getThreadAccessById(threadId);
       if (Option.isNone(threadOption)) {
         return false;
       }
@@ -49,7 +51,7 @@ const makeAccessControl = Effect.gen(function* () {
 
   const canTransferThreadOwnership: OrchestrationAccessControlShape["canTransferThreadOwnership"] =
     (userId, threadId) =>
-      snapshotQuery.getThreadShellById(threadId).pipe(
+      snapshotQuery.getThreadAccessById(threadId).pipe(
         Effect.map(
           Option.match({
             onNone: () => false,
