@@ -2,6 +2,7 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { Switch } from "../ui/switch";
+import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -70,6 +71,7 @@ export function ExperimentsSettingsPanel() {
           }
         />
       </SettingsSection>
+      <SessionSummarySettingsSection />
     </SettingsPageContainer>
   );
 }

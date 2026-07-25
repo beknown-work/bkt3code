@@ -8,6 +8,7 @@ import type {
   MessageId,
   ModelSelection,
   OrchestrationThreadShell,
+  OrchestrationTurnCatchupSummary,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,
@@ -51,6 +52,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly selectedThreadTurnSummaries: ReadonlyArray<OrchestrationTurnCatchupSummary>;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
@@ -405,6 +407,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}
             execution={props.selectedThread.execution ?? null}
+            turnSummaries={props.selectedThreadTurnSummaries}
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}

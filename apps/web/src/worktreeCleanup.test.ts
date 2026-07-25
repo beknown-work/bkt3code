@@ -23,6 +23,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     activities: [],
     proposedPlans: [],
     createdAt: "2026-02-13T00:00:00.000Z",

@@ -76,6 +76,8 @@ const BASE_THREAD: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  rollingSummary: null,
+  turnSummaries: [],
   session: null,
   execution: null,
 };

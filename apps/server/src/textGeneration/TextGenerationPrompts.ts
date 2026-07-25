@@ -9,7 +9,12 @@
 import * as Schema from "effect/Schema";
 import type { ChatAttachment } from "@t3tools/contracts";
 
-import { limitSection } from "./TextGenerationUtils.ts";
+import {
+  limitSection,
+  limitSectionTail,
+  MAX_CATCHUP_SUMMARY_LINES,
+  MAX_ROLLING_SUMMARY_CHARS,
+} from "./TextGenerationUtils.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
 function policyInstruction(instruction: string | undefined): ReadonlyArray<string> {
@@ -212,6 +217,92 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
   });
   const outputSchema = Schema.Struct({
     title: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
+
+// ---------------------------------------------------------------------------
+// Session catch-up summaries
+// ---------------------------------------------------------------------------
+
+export interface RollingSummaryPromptInput {
+  threadTitle: string;
+  previousSummary: string | null;
+  turnTranscript: string;
+  /** Character budget for the transcript section. */
+  dataLimitChars: number;
+}
+
+/**
+ * Folds the newest turn into a thread's rolling summary. Keeping one bounded
+ * running text (instead of re-reading the whole session) is what keeps
+ * summarization cost flat as a session grows.
+ */
+export function buildRollingSummaryPrompt(input: RollingSummaryPromptInput) {
+  const transcriptBudget = Math.min(Math.max(input.dataLimitChars, 1_000), 60_000);
+
+  const prompt = [
+    "You maintain a running summary of an ongoing coding session.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    `- merge the previous summary with what happened in the new turn`,
+    `- keep the result under ${MAX_ROLLING_SUMMARY_CHARS} characters`,
+    "- preserve the overall goal, key decisions, current state, and what remains",
+    "- prefer concrete specifics (files, features, errors) over vague narration",
+    "- drop detail that no longer matters; this text is rewritten every turn",
+    "- plain prose, no markdown headings or bullets",
+    "",
+    `Session title: ${input.threadTitle}`,
+    "",
+    "Previous summary:",
+    input.previousSummary ? limitSection(input.previousSummary, 4_000) : "(none — first turn)",
+    "",
+    "New turn transcript:",
+    limitSectionTail(input.turnTranscript, transcriptBudget),
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
+
+export interface CatchupSummaryPromptInput {
+  threadTitle: string;
+  rollingSummary: string;
+  turnTail: string;
+}
+
+/**
+ * Writes the short note shown under a long turn's final output, for someone
+ * returning to this tab after working elsewhere.
+ */
+export function buildCatchupSummaryPrompt(input: CatchupSummaryPromptInput) {
+  const prompt = [
+    "You write a very short catch-up note for a developer returning to this tab",
+    "after working in other tabs and repositories.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    `- at most ${MAX_CATCHUP_SUMMARY_LINES} lines, separated by newlines`,
+    "- each line must be a short sentence of roughly 90 characters or less",
+    "- the first line(s) say what just happened at the END of this session",
+    "- the final line says what remains toward the overall goal",
+    "- plain text only: no markdown, no bullets, no headings, no preamble",
+    "- be concrete and specific so 2-3 lines are enough to re-orient",
+    "",
+    `Session title: ${input.threadTitle}`,
+    "",
+    "Session summary so far:",
+    limitSection(input.rollingSummary, 4_000),
+    "",
+    "How the latest turn ended:",
+    limitSectionTail(input.turnTail, 4_000),
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
   });
 
   return { prompt, outputSchema };

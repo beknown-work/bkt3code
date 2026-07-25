@@ -153,6 +153,8 @@ describe("OrchestrationEngine", () => {
           proposedPlans: [],
           activities: [],
           checkpoints: [],
+          rollingSummary: null,
+          turnSummaries: [],
           session: null,
           ownerUserId: null,
           memberUserIds: [],
@@ -167,6 +169,8 @@ describe("OrchestrationEngine", () => {
         proposedPlans: [],
         activities: [],
         checkpoints: [],
+        rollingSummary: null,
+        turnSummaries: [],
       })),
     };
     let fullSnapshotReadCount = 0;

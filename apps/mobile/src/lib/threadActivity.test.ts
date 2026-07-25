@@ -48,6 +48,8 @@ function makeThread(
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     session: null,
     ownerUserId: null,
     memberUserIds: [],

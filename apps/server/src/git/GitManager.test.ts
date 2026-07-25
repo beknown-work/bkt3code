@@ -362,6 +362,11 @@ function createTextGeneration(
             }),
         ),
       ),
+    // Git flows never summarize sessions; fail loudly if that changes.
+    updateRollingSummary: () =>
+      Effect.die("updateRollingSummary is not used by git text generation"),
+    generateCatchupSummary: () =>
+      Effect.die("generateCatchupSummary is not used by git text generation"),
   };
 }
 

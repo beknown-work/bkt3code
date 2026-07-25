@@ -383,6 +383,19 @@ export type OrchestrationCheckpointFile = typeof OrchestrationCheckpointFile.Typ
 export const OrchestrationCheckpointStatus = Schema.Literals(["ready", "missing", "error"]);
 export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus.Type;
 
+/**
+ * Short catch-up summary shown below the final assistant message of a turn
+ * that ran longer than the configured cutoff. Rendered as a helper cue when
+ * returning to a session after a long run.
+ */
+export const OrchestrationTurnCatchupSummary = Schema.Struct({
+  turnId: TurnId,
+  assistantMessageId: Schema.NullOr(MessageId),
+  summary: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+export type OrchestrationTurnCatchupSummary = typeof OrchestrationTurnCatchupSummary.Type;
+
 export const OrchestrationCheckpointSummary = Schema.Struct({
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
@@ -486,6 +499,15 @@ export const OrchestrationThread = Schema.Struct({
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
+  // Rolling per-thread summary maintained incrementally on every turn
+  // completion. Server-side input for the short catch-up summaries; keeps
+  // summarization token cost flat regardless of session length.
+  rollingSummary: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  turnSummaries: Schema.Array(OrchestrationTurnCatchupSummary).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   session: Schema.NullOr(OrchestrationSession),
   execution: Schema.optionalKey(Schema.NullOr(ThreadExecutionSnapshot)),
 });
@@ -965,6 +987,19 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadCatchupSummaryUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.catchup-summary.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  assistantMessageId: Schema.NullOr(MessageId),
+  rollingSummary: Schema.String,
+  // Null when the turn ran shorter than the configured cutoff: the rolling
+  // summary still advances, but no card is shown for this turn.
+  displaySummary: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -987,6 +1022,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
+  ThreadCatchupSummaryUpdateCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
 ]);
@@ -1027,6 +1063,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
+  "thread.catchup-summary-updated",
   "thread.activity-appended",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
@@ -1203,6 +1240,15 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
+});
+
+export const ThreadCatchupSummaryUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  assistantMessageId: Schema.NullOr(MessageId),
+  rollingSummary: Schema.String,
+  displaySummary: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
 });
 
 export const ThreadActivityAppendedPayload = Schema.Struct({
@@ -1417,6 +1463,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-diff-completed"),
     payload: ThreadTurnDiffCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.catchup-summary-updated"),
+    payload: ThreadCatchupSummaryUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

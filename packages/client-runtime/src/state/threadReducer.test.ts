@@ -42,6 +42,8 @@ const baseThread: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  rollingSummary: null,
+  turnSummaries: [],
   session: null,
 };
 
@@ -628,6 +630,66 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.checkpoints).toHaveLength(1);
         expect(result.thread.latestTurn).toBeNull();
+      }
+    });
+  });
+
+  describe("thread.catchup-summary-updated", () => {
+    const catchupEvent = (displaySummary: string | null) =>
+      ({
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-04-01T12:05:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.catchup-summary-updated",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          turnId: TurnId.make("turn-1"),
+          assistantMessageId: MessageId.make("msg-3"),
+          rollingSummary: "Rolling summary text.",
+          displaySummary,
+          createdAt: "2026-04-01T12:05:00.000Z",
+        },
+      }) as const;
+
+    it("stores the rolling summary without a card when there is no display summary", () => {
+      const result = applyThreadDetailEvent(baseThread, catchupEvent(null));
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.rollingSummary).toBe("Rolling summary text.");
+        expect(result.thread.turnSummaries).toEqual([]);
+      }
+    });
+
+    it("adds a turn summary when a display summary is present", () => {
+      const result = applyThreadDetailEvent(baseThread, catchupEvent("Line one.\nLine two."));
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.rollingSummary).toBe("Rolling summary text.");
+        expect(result.thread.turnSummaries).toEqual([
+          {
+            turnId: TurnId.make("turn-1"),
+            assistantMessageId: MessageId.make("msg-3"),
+            summary: "Line one.\nLine two.",
+            createdAt: "2026-04-01T12:05:00.000Z",
+          },
+        ]);
+      }
+    });
+
+    it("replaces an existing summary for the same turn", () => {
+      const first = applyThreadDetailEvent(baseThread, catchupEvent("First note."));
+      expect(first.kind).toBe("updated");
+      if (first.kind !== "updated") return;
+
+      const second = applyThreadDetailEvent(first.thread, catchupEvent("Second note."));
+      expect(second.kind).toBe("updated");
+      if (second.kind === "updated") {
+        expect(second.thread.turnSummaries).toHaveLength(1);
+        expect(second.thread.turnSummaries[0]?.summary).toBe("Second note.");
       }
     });
   });

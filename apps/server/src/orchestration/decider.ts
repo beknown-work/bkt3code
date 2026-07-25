@@ -947,6 +947,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.catchup-summary.update": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.catchup-summary-updated",
+        payload: {
+          threadId: command.threadId,
+          turnId: command.turnId,
+          assistantMessageId: command.assistantMessageId,
+          rollingSummary: command.rollingSummary,
+          displaySummary: command.displaySummary,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.revert.complete": {
       yield* requireThread({
         readModel,

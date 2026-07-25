@@ -36,7 +36,7 @@ import {
   workEntryIndicatesToolSuccess,
   workLogEntryIsToolLike,
 } from "../../session-logic";
-import { type TurnDiffSummary } from "../../types";
+import { type CatchupSummary, type TurnDiffSummary } from "../../types";
 import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import {
   getRenderablePatch,
@@ -53,6 +53,7 @@ import {
   EyeIcon,
   GlobeIcon,
   HammerIcon,
+  HistoryIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -181,6 +182,7 @@ interface MessagesTimelineProps {
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  catchupSummaryByAssistantMessageId?: ReadonlyMap<MessageId, CatchupSummary> | undefined;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -215,6 +217,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   latestTurn,
   runningTurnId,
   turnDiffSummaryByAssistantMessageId,
+  catchupSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
@@ -324,6 +327,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         workingStatusLabel,
         turnDiffSummaryByAssistantMessageId,
+        catchupSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
       }),
     [
@@ -336,6 +340,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       workingStatusLabel,
       turnDiffSummaryByAssistantMessageId,
+      catchupSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
     ],
   );
@@ -1052,6 +1057,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           resolvedTheme={ctx.resolvedTheme}
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
+        <SessionCatchupCard catchupSummary={row.assistantCatchupSummary} />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
@@ -1247,6 +1253,34 @@ function WorkGroupToggleTimelineRow({
 
 /** Subscribes directly to the UI state store for expand/collapse state,
  *  so toggling re-renders only this component — not the entire list. */
+/**
+ * Short catch-up note rendered under the final output of a turn that ran longer
+ * than the configured cutoff. Scrolls inline with the conversation (never
+ * sticky) and is tinted apart from normal message content so it reads as a
+ * helper cue when returning to a session after working elsewhere.
+ */
+const SessionCatchupCard = memo(function SessionCatchupCard({
+  catchupSummary,
+}: {
+  catchupSummary: CatchupSummary | undefined;
+}) {
+  if (!catchupSummary) return null;
+  const summary = catchupSummary.summary.trim();
+  if (summary.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-2xl border border-input/60 bg-accent/40 p-3 shadow-xs/5 not-dark:bg-clip-padding dark:bg-accent/20">
+      <p className="mb-1.5 flex items-center gap-1.5 font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
+        <HistoryIcon className="size-3" />
+        <span>Catch-up</span>
+      </p>
+      <p className="line-clamp-3 whitespace-pre-line text-[13px] text-foreground leading-snug">
+        {summary}
+      </p>
+    </div>
+  );
+});
+
 const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({
   turnSummary,
   routeThreadKey,

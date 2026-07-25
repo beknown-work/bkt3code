@@ -67,6 +67,37 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface RollingSummaryGenerationInput {
+  cwd: string;
+  threadTitle: string;
+  /** Previous rolling summary for the thread, or null on the first turn. */
+  previousSummary: string | null;
+  /** Transcript of the turn that just completed. */
+  turnTranscript: string;
+  /** Upper bound on transcript characters sent to the model. */
+  dataLimitChars: number;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface RollingSummaryGenerationResult {
+  summary: string;
+}
+
+export interface CatchupSummaryGenerationInput {
+  cwd: string;
+  threadTitle: string;
+  rollingSummary: string;
+  /** Tail of the latest turn, so the note leans on how the session ended. */
+  turnTail: string;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface CatchupSummaryGenerationResult {
+  summary: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -74,6 +105,12 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  updateRollingSummary(
+    input: RollingSummaryGenerationInput,
+  ): Promise<RollingSummaryGenerationResult>;
+  generateCatchupSummary(
+    input: CatchupSummaryGenerationInput,
+  ): Promise<CatchupSummaryGenerationResult>;
 }
 
 /**
@@ -109,17 +146,33 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Fold a completed turn into the thread's rolling catch-up summary.
+     */
+    readonly updateRollingSummary: (
+      input: RollingSummaryGenerationInput,
+    ) => Effect.Effect<RollingSummaryGenerationResult, TextGenerationError>;
+
+    /**
+     * Write the short catch-up note shown under a long turn's final output.
+     */
+    readonly generateCatchupSummary: (
+      input: CatchupSummaryGenerationInput,
+    ) => Effect.Effect<CatchupSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
 /** @deprecated Use `TextGeneration["Service"]`. */
 export type TextGenerationShape = TextGeneration["Service"];
 
-type TextGenerationOp =
+export type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "updateRollingSummary"
+  | "generateCatchupSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -158,6 +211,14 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    updateRollingSummary: (input) =>
+      resolveInstance(registry, "updateRollingSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.updateRollingSummary(input)),
+      ),
+    generateCatchupSummary: (input) =>
+      resolveInstance(registry, "generateCatchupSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateCatchupSummary(input)),
       ),
   });
 

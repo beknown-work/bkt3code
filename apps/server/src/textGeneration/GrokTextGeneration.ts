@@ -15,11 +15,15 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildCatchupSummaryPrompt,
+  buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeCatchupSummary,
+  sanitizeRollingSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import {
@@ -50,7 +54,9 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "updateRollingSummary"
+      | "generateCatchupSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -245,10 +251,55 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const updateRollingSummary: TextGeneration.TextGeneration["Service"]["updateRollingSummary"] =
+    Effect.fn("GrokTextGeneration.updateRollingSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRollingSummaryPrompt({
+        threadTitle: input.threadTitle,
+        previousSummary: input.previousSummary,
+        turnTranscript: input.turnTranscript,
+        dataLimitChars: input.dataLimitChars,
+      });
+
+      const generated = yield* runGrokJson({
+        operation: "updateRollingSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeRollingSummary(generated.summary),
+      } satisfies TextGeneration.RollingSummaryGenerationResult;
+    });
+
+  const generateCatchupSummary: TextGeneration.TextGeneration["Service"]["generateCatchupSummary"] =
+    Effect.fn("GrokTextGeneration.generateCatchupSummary")(function* (input) {
+      const { prompt, outputSchema } = buildCatchupSummaryPrompt({
+        threadTitle: input.threadTitle,
+        rollingSummary: input.rollingSummary,
+        turnTail: input.turnTail,
+      });
+
+      const generated = yield* runGrokJson({
+        operation: "generateCatchupSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeCatchupSummary(generated.summary),
+      } satisfies TextGeneration.CatchupSummaryGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    updateRollingSummary,
+    generateCatchupSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

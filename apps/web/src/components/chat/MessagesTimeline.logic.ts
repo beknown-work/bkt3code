@@ -6,7 +6,12 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import {
+  type CatchupSummary,
+  type ChatMessage,
+  type ProposedPlan,
+  type TurnDiffSummary,
+} from "../../types";
 import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -128,6 +133,7 @@ export type MessagesTimelineRow =
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
+      assistantCatchupSummary?: CatchupSummary | undefined;
       revertTurnCount?: number | undefined;
     }
   | {
@@ -378,6 +384,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   workingStatusLabel?: string;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
+  catchupSummaryByAssistantMessageId?: ReadonlyMap<MessageId, CatchupSummary> | undefined;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
@@ -523,6 +530,10 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "assistant"
           ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
           : undefined,
+      // Only the terminal assistant message of a turn carries the catch-up card.
+      assistantCatchupSummary: showAssistantMeta
+        ? input.catchupSummaryByAssistantMessageId?.get(timelineEntry.message.id)
+        : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"
           ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
@@ -601,6 +612,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
+        a.assistantCatchupSummary === bm.assistantCatchupSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );
     }

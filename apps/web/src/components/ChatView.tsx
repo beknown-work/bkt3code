@@ -111,6 +111,7 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
+import { useCatchupSummaries } from "../hooks/useCatchupSummaries";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteContext";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -2076,6 +2077,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
+  const catchupSummaryByAssistantMessageId = useCatchupSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {
@@ -5178,6 +5180,7 @@ function ChatViewContent(props: ChatViewProps) {
                 latestTurn={activeLatestTurn}
                 runningTurnId={activeThread.execution?.turn?.providerTurnId ?? null}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                catchupSummaryByAssistantMessageId={catchupSummaryByAssistantMessageId}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}

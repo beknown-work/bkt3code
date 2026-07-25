@@ -6,6 +6,7 @@ import {
   MessageId,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationTurnCatchupSummary,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
@@ -72,6 +73,8 @@ export function useThreadDraftForThread(input: {
   };
 }
 
+const EMPTY_TURN_SUMMARIES: ReadonlyArray<OrchestrationTurnCatchupSummary> = Object.freeze([]);
+
 export function useThreadComposerState() {
   const { selectedThread: selectedThreadShell } = useThreadSelection();
   const selectedThreadDetail = useSelectedThreadDetail();
@@ -93,6 +96,8 @@ export function useThreadComposerState() {
     () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
     [selectedThreadDetail],
   );
+  // Catch-up summaries live on the thread detail, not the shell.
+  const selectedThreadTurnSummaries = selectedThreadDetail?.turnSummaries ?? EMPTY_TURN_SUMMARIES;
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -281,6 +286,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    selectedThreadTurnSummaries,
     selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,

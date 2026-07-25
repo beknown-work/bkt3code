@@ -4,6 +4,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type {
   EnvironmentId,
   MessageId,
+  OrchestrationTurnCatchupSummary,
   ThreadExecutionSnapshot,
   ThreadId,
   TurnId,
@@ -135,6 +136,7 @@ export interface ThreadFeedProps {
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
   readonly execution: ThreadExecutionSnapshot | null;
+  readonly turnSummaries?: ReadonlyArray<OrchestrationTurnCatchupSummary> | undefined;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -146,6 +148,32 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+}
+
+/**
+ * Short catch-up note shown under the final output of a long-running turn, so
+ * returning to a thread after working elsewhere re-orients in a couple of lines.
+ * Scrolls inline with the feed and is clamped to three lines.
+ */
+function CatchupSummaryCard(props: { readonly summary: string | undefined }) {
+  const summary = props.summary?.trim();
+  if (!summary) {
+    return null;
+  }
+
+  return (
+    <View className="mt-2.5 gap-1 rounded-[18px] border border-neutral-200 bg-neutral-100/80 p-3 dark:border-white/6 dark:bg-neutral-900/80">
+      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
+        Catch-up
+      </Text>
+      <Text
+        className="font-sans text-sm leading-normal text-neutral-700 dark:text-neutral-300"
+        numberOfLines={3}
+      >
+        {summary}
+      </Text>
+    </View>
+  );
 }
 
 function MessageAttachmentImage(props: {
@@ -805,6 +833,7 @@ function renderFeedEntry(
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
+    readonly catchupSummaryByAssistantMessageId: ReadonlyMap<string, string>;
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
@@ -983,6 +1012,9 @@ function renderFeedEntry(
               {timestampLabel}
             </Text>
           </View>
+        ) : null}
+        {showAssistantMeta ? (
+          <CatchupSummaryCard summary={props.catchupSummaryByAssistantMessageId.get(message.id)} />
         ) : null}
       </Animated.View>
     );
@@ -1460,6 +1492,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
+  const catchupSummaryByAssistantMessageId = useMemo(() => {
+    const byMessageId = new Map<string, string>();
+    for (const summary of props.turnSummaries ?? []) {
+      if (!summary.assistantMessageId) continue;
+      byMessageId.set(summary.assistantMessageId, summary.summary);
+    }
+    return byMessageId;
+  }, [props.turnSummaries]);
   const unsettledTurnId =
     props.execution?.activity === "active" ||
     props.execution?.activity === "blocked" ||
@@ -1612,6 +1652,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
+        catchupSummaryByAssistantMessageId,
         unsettledTurnId,
         onCopyWorkRow,
         onToggleWorkGroup,
@@ -1631,6 +1672,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copiedRowId,
       expandedWorkRows,
       terminalAssistantMessageIds,
+      catchupSummaryByAssistantMessageId,
       unsettledTurnId,
       iconSubtleColor,
       userBubbleColor,

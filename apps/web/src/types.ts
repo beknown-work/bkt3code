@@ -2,6 +2,7 @@ import type {
   ChatImageAttachment as ContractChatImageAttachment,
   OrchestrationCheckpointFile,
   OrchestrationCheckpointSummary,
+  OrchestrationTurnCatchupSummary,
   OrchestrationLatestTurn,
   OrchestrationMessage,
   OrchestrationProposedPlan,
@@ -44,6 +45,7 @@ export interface ChatMessage extends Omit<OrchestrationMessage, "attachments"> {
 export type ProposedPlan = OrchestrationProposedPlan;
 export type TurnDiffFileChange = OrchestrationCheckpointFile;
 export type TurnDiffSummary = OrchestrationCheckpointSummary;
+export type CatchupSummary = OrchestrationTurnCatchupSummary;
 
 export type Project = EnvironmentProject;
 export type Thread = EnvironmentThread;

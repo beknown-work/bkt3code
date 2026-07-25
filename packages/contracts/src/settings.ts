@@ -365,6 +365,54 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+export const MIN_SESSION_SUMMARY_DATA_LIMIT_CHARS = 4_000;
+export const MAX_SESSION_SUMMARY_DATA_LIMIT_CHARS = 100_000;
+export const DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS = 24_000;
+export const SessionSummaryDataLimitChars = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_SESSION_SUMMARY_DATA_LIMIT_CHARS,
+    maximum: MAX_SESSION_SUMMARY_DATA_LIMIT_CHARS,
+  }),
+);
+
+export const MIN_SESSION_SUMMARY_TURN_DURATION_MINUTES = 0;
+export const MAX_SESSION_SUMMARY_TURN_DURATION_MINUTES = 120;
+export const DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES = 5;
+export const SessionSummaryTurnDurationMinutes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_SESSION_SUMMARY_TURN_DURATION_MINUTES,
+    maximum: MAX_SESSION_SUMMARY_TURN_DURATION_MINUTES,
+  }),
+);
+
+/**
+ * Catch-up summary settings. Summarization runs entirely on the server, so
+ * every knob lives in `ServerSettings` rather than the client tier.
+ */
+export const SessionSummarySettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  modelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      }),
+    ),
+  ),
+  dataLimitChars: SessionSummaryDataLimitChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  minTurnDurationMinutes: SessionSummaryTurnDurationMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES)),
+  ),
+});
+export type SessionSummarySettings = typeof SessionSummarySettings.Type;
+
+export const ExperimentalSettings = Schema.Struct({
+  sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type ExperimentalSettings = typeof ExperimentalSettings.Type;
+
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.seconds(30);
 
 export const ServerSettings = Schema.Struct({
@@ -413,6 +461,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  experimental: ExperimentalSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -518,6 +567,18 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  experimental: Schema.optionalKey(
+    Schema.Struct({
+      sessionSummary: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          modelSelection: Schema.optionalKey(ModelSelectionPatch),
+          dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          minTurnDurationMinutes: Schema.optionalKey(SessionSummaryTurnDurationMinutes),
+        }),
+      ),
     }),
   ),
   providers: Schema.optionalKey(

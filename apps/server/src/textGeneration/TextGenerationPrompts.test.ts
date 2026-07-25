@@ -2,11 +2,19 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildBranchNamePrompt,
+  buildCatchupSummaryPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
-import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
+import {
+  normalizeCliError,
+  sanitizeCatchupSummary,
+  sanitizeRollingSummary,
+  sanitizeThreadTitle,
+  MAX_ROLLING_SUMMARY_CHARS,
+} from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 
 describe("buildCommitMessagePrompt", () => {
@@ -201,5 +209,77 @@ describe("normalizeCliError", () => {
 
     expect(result.detail).toBe("Failed to generate a commit message");
     expect(result.message).not.toContain("secret-token");
+  });
+});
+
+describe("buildRollingSummaryPrompt", () => {
+  it("marks the first turn when there is no previous summary", () => {
+    const result = buildRollingSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      previousSummary: null,
+      turnTranscript: "user: do the thing\nassistant: did the thing",
+      dataLimitChars: 24_000,
+    });
+
+    expect(result.prompt).toContain("(none — first turn)");
+    expect(result.prompt).toContain("did the thing");
+    expect(Object.keys(result.outputSchema.fields)).toEqual(["summary"]);
+  });
+
+  it("keeps the tail of an oversized transcript and drops the head", () => {
+    const transcript = `HEAD_MARKER${"x".repeat(20_000)}TAIL_MARKER`;
+    const result = buildRollingSummaryPrompt({
+      threadTitle: "Long session",
+      previousSummary: "Earlier work.",
+      turnTranscript: transcript,
+      dataLimitChars: 4_000,
+    });
+
+    expect(result.prompt).toContain("TAIL_MARKER");
+    expect(result.prompt).not.toContain("HEAD_MARKER");
+    expect(result.prompt).toContain("Earlier work.");
+  });
+});
+
+describe("buildCatchupSummaryPrompt", () => {
+  it("asks for a bounded plain-text note built from the rolling summary", () => {
+    const result = buildCatchupSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      rollingSummary: "Wiring the reactor.",
+      turnTail: "Finished the projector case.",
+    });
+
+    expect(result.prompt).toContain("at most 3 lines");
+    expect(result.prompt).toContain("Wiring the reactor.");
+    expect(result.prompt).toContain("Finished the projector case.");
+    expect(result.prompt).toContain("no markdown");
+    expect(Object.keys(result.outputSchema.fields)).toEqual(["summary"]);
+  });
+});
+
+describe("sanitizeCatchupSummary", () => {
+  it("clamps to three lines and strips markdown markers", () => {
+    const result = sanitizeCatchupSummary(
+      "- first line\n* second line\n1. third line\n- fourth line",
+    );
+
+    expect(result).toBe("first line\nsecond line\nthird line");
+  });
+
+  it("drops blank lines and surrounding whitespace", () => {
+    expect(sanitizeCatchupSummary("  \n only line \n\n ")).toBe("only line");
+  });
+});
+
+describe("sanitizeRollingSummary", () => {
+  it("truncates summaries past the stored bound", () => {
+    const result = sanitizeRollingSummary("y".repeat(MAX_ROLLING_SUMMARY_CHARS + 500));
+
+    expect(result.length).toBeLessThanOrEqual(MAX_ROLLING_SUMMARY_CHARS + 3);
+    expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("leaves a short summary untouched", () => {
+    expect(sanitizeRollingSummary("  short summary  ")).toBe("short summary");
   });
 });

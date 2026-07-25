@@ -10,6 +10,7 @@ import type {
   OrchestrationMessage,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  OrchestrationTurnCatchupSummary,
   TurnId,
 } from "@t3tools/contracts";
 
@@ -27,6 +28,11 @@ const checkpointOrder = O.mapInput(
   O.Number,
   (cp: OrchestrationThread["checkpoints"][number]) =>
     cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
+);
+
+const turnSummaryOrder = O.mapInput(
+  O.String,
+  (summary: OrchestrationTurnCatchupSummary) => summary.createdAt,
 );
 
 const activityOrder = O.combineAll<OrchestrationThreadActivity>([
@@ -79,6 +85,8 @@ export function applyThreadDetailEvent(
           proposedPlans: [],
           activities: [],
           checkpoints: [],
+          rollingSummary: null,
+          turnSummaries: [],
           session: null,
         },
       };
@@ -407,6 +415,11 @@ export function applyThreadDetailEvent(
         thread.activities,
         Arr.filter((activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId)),
       );
+      // Drop catch-up cards for turns the revert removed.
+      const turnSummaries = pipe(
+        thread.turnSummaries,
+        Arr.filter((entry) => retainedTurnIds.has(entry.turnId)),
+      );
       const latestCheckpoint = checkpoints.at(-1) ?? null;
 
       return {
@@ -417,6 +430,7 @@ export function applyThreadDetailEvent(
           messages,
           proposedPlans,
           activities,
+          turnSummaries,
           latestTurn:
             latestCheckpoint === null
               ? null
@@ -434,6 +448,34 @@ export function applyThreadDetailEvent(
                 },
           updatedAt: event.occurredAt,
         },
+      };
+    }
+
+    // ── Catch-up summaries ──────────────────────────────────────────
+    case "thread.catchup-summary-updated": {
+      const rollingSummary = event.payload.rollingSummary;
+      if (event.payload.displaySummary === null) {
+        return {
+          kind: "updated",
+          thread: { ...thread, rollingSummary },
+        };
+      }
+
+      const turnSummaries = pipe(
+        thread.turnSummaries,
+        Arr.filter((entry) => entry.turnId !== event.payload.turnId),
+        Arr.append({
+          turnId: event.payload.turnId,
+          assistantMessageId: event.payload.assistantMessageId,
+          summary: event.payload.displaySummary,
+          createdAt: event.payload.createdAt,
+        }),
+        Arr.sort(turnSummaryOrder),
+      );
+
+      return {
+        kind: "updated",
+        thread: { ...thread, rollingSummary, turnSummaries },
       };
     }
 

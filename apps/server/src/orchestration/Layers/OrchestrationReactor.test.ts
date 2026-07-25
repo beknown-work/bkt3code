@@ -5,6 +5,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { CatchupSummaryReactor } from "../Services/CatchupSummaryReactor.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -23,7 +24,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and thread deletion reactors", async () => {
+  it("starts provider ingestion, provider command, checkpoint, catch-up summary, and thread deletion reactors", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -50,6 +51,15 @@ describe("OrchestrationReactor", () => {
           Layer.succeed(CheckpointReactor, {
             start: () => {
               started.push("checkpoint-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(CatchupSummaryReactor, {
+            start: () => {
+              started.push("catchup-summary-reactor");
               return Effect.void;
             },
             drain: Effect.void,
@@ -84,6 +94,7 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
+      "catchup-summary-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
     ]);

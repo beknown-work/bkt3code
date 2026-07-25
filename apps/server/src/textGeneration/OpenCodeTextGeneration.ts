@@ -22,12 +22,16 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildCatchupSummaryPrompt,
+  buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeCatchupSummary,
+  sanitizeRollingSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
@@ -39,6 +43,8 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generatePrContent",
   "generateBranchName",
   "generateThreadTitle",
+  "updateRollingSummary",
+  "generateCatchupSummary",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -253,7 +259,9 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "updateRollingSummary"
+      | "generateCatchupSummary";
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -611,10 +619,55 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       };
     });
 
+  const updateRollingSummary: TextGeneration.TextGeneration["Service"]["updateRollingSummary"] =
+    Effect.fn("OpenCodeTextGeneration.updateRollingSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRollingSummaryPrompt({
+        threadTitle: input.threadTitle,
+        previousSummary: input.previousSummary,
+        turnTranscript: input.turnTranscript,
+        dataLimitChars: input.dataLimitChars,
+      });
+
+      const generated = yield* runOpenCodeJson({
+        operation: "updateRollingSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeRollingSummary(generated.summary),
+      } satisfies TextGeneration.RollingSummaryGenerationResult;
+    });
+
+  const generateCatchupSummary: TextGeneration.TextGeneration["Service"]["generateCatchupSummary"] =
+    Effect.fn("OpenCodeTextGeneration.generateCatchupSummary")(function* (input) {
+      const { prompt, outputSchema } = buildCatchupSummaryPrompt({
+        threadTitle: input.threadTitle,
+        rollingSummary: input.rollingSummary,
+        turnTail: input.turnTail,
+      });
+
+      const generated = yield* runOpenCodeJson({
+        operation: "generateCatchupSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeCatchupSummary(generated.summary),
+      } satisfies TextGeneration.CatchupSummaryGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    updateRollingSummary,
+    generateCatchupSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

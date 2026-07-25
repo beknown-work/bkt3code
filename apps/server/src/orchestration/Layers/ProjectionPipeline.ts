@@ -679,6 +679,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
+            rollingSummary: null,
             deletedAt: null,
           });
           return;
@@ -881,6 +882,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
+          return;
+        }
+
+        case "thread.catchup-summary-updated": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            rollingSummary: event.payload.rollingSummary,
+          });
           return;
         }
 
@@ -1419,6 +1434,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointRef: event.payload.checkpointRef,
             checkpointStatus: event.payload.status,
             checkpointFiles: event.payload.files,
+          });
+          return;
+        }
+
+        case "thread.catchup-summary-updated": {
+          if (event.payload.displaySummary === null) {
+            return;
+          }
+          yield* projectionTurnRepository.upsertCatchupSummary({
+            threadId: event.payload.threadId,
+            turnId: event.payload.turnId,
+            summary: event.payload.displaySummary,
+            createdAt: event.payload.createdAt,
           });
           return;
         }

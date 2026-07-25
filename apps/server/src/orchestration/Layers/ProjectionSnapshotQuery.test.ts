@@ -357,6 +357,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               completedAt: "2026-02-24T00:00:08.000Z",
             },
           ],
+          rollingSummary: null,
+          turnSummaries: [],
           session: {
             threadId: ThreadId.make("thread-1"),
             status: "running",

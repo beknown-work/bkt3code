@@ -5,6 +5,7 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  OrchestrationTurnCatchupSummary,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -33,11 +34,13 @@ import {
   ProjectMemberAddedPayload,
   ProjectMemberRemovedPayload,
   ProjectOwnerTransferredPayload,
+  ThreadCatchupSummaryUpdatedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+const MAX_THREAD_TURN_SUMMARIES = 200;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -306,6 +309,8 @@ export function projectEvent(
             messages: [],
             activities: [],
             checkpoints: [],
+            rollingSummary: null,
+            turnSummaries: [],
             session: null,
           },
           event.type,
@@ -783,6 +788,56 @@ export function projectEvent(
         };
       });
 
+    case "thread.catchup-summary-updated":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadCatchupSummaryUpdatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        // The rolling summary always advances; the per-turn display summary is
+        // only present for turns that crossed the configured duration cutoff.
+        const turnSummary =
+          payload.displaySummary === null
+            ? null
+            : yield* decodeForEvent(
+                OrchestrationTurnCatchupSummary,
+                {
+                  turnId: payload.turnId,
+                  assistantMessageId: payload.assistantMessageId,
+                  summary: payload.displaySummary,
+                  createdAt: payload.createdAt,
+                },
+                event.type,
+                "turnSummary",
+              );
+
+        const patch: ThreadPatch = {
+          rollingSummary: payload.rollingSummary,
+          ...(turnSummary === null
+            ? {}
+            : {
+                turnSummaries: [
+                  ...thread.turnSummaries.filter((entry) => entry.turnId !== turnSummary.turnId),
+                  turnSummary,
+                ]
+                  .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+                  .slice(-MAX_THREAD_TURN_SUMMARIES),
+              }),
+        };
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, patch),
+        };
+      });
+
     case "thread.reverted":
       return decodeForEvent(ThreadRevertedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -806,6 +861,10 @@ export function projectEvent(
             retainedTurnIds,
           ).slice(-200);
           const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+          // Drop catch-up cards for turns that no longer exist after the revert.
+          const turnSummaries = thread.turnSummaries.filter((entry) =>
+            retainedTurnIds.has(entry.turnId),
+          );
 
           const latestCheckpoint = checkpoints.at(-1) ?? null;
           const latestTurn =
@@ -829,6 +888,7 @@ export function projectEvent(
               messages,
               proposedPlans,
               activities,
+              turnSummaries,
               latestTurn,
               updatedAt: event.occurredAt,
             }),

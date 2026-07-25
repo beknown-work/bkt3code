@@ -113,6 +113,8 @@ function makeReadModel(
       activities: [],
       proposedPlans: [],
       checkpoints: [],
+      rollingSummary: null,
+      turnSummaries: [],
       deletedAt: null,
       ownerUserId: null,
       memberUserIds: [],

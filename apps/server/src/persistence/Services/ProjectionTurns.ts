@@ -99,6 +99,29 @@ export const DeleteProjectionTurnsByThreadInput = Schema.Struct({
 });
 export type DeleteProjectionTurnsByThreadInput = typeof DeleteProjectionTurnsByThreadInput.Type;
 
+export const ProjectionTurnCatchupSummary = Schema.Struct({
+  turnId: TurnId,
+  assistantMessageId: Schema.NullOr(MessageId),
+  summary: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type ProjectionTurnCatchupSummary = typeof ProjectionTurnCatchupSummary.Type;
+
+export const UpsertProjectionTurnCatchupSummaryInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  summary: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type UpsertProjectionTurnCatchupSummaryInput =
+  typeof UpsertProjectionTurnCatchupSummaryInput.Type;
+
+export const ListProjectionTurnCatchupSummariesInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ListProjectionTurnCatchupSummariesInput =
+  typeof ListProjectionTurnCatchupSummariesInput.Type;
+
 export const ClearCheckpointTurnConflictInput = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
@@ -148,6 +171,21 @@ export interface ProjectionTurnRepositoryShape {
   readonly getByTurnId: (
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
+
+  /**
+   * Stores the short catch-up summary for an already-recorded turn row. Rows are
+   * only written by turn lifecycle projection, so a missing row is a no-op.
+   */
+  readonly upsertCatchupSummary: (
+    input: UpsertProjectionTurnCatchupSummaryInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Lists catch-up summaries recorded for a thread, oldest first.
+   */
+  readonly listCatchupSummariesByThreadId: (
+    input: ListProjectionTurnCatchupSummariesInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTurnCatchupSummary>, ProjectionRepositoryError>;
 
   /**
    * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.

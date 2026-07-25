@@ -51,6 +51,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     createdAt: now,
     updatedAt: now,
     archivedAt: null,

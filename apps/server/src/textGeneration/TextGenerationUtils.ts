@@ -19,6 +19,47 @@ export function limitSection(value: string, maxChars: number): string {
   return `${truncated}\n\n[truncated]`;
 }
 
+/**
+ * Like {@link limitSection}, but keeps the END of the value. Used for session
+ * transcripts, where the most recent work matters more than the opening.
+ */
+export function limitSectionTail(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `[truncated]\n\n${value.slice(value.length - maxChars)}`;
+}
+
+export const MAX_CATCHUP_SUMMARY_LINES = 3;
+export const MAX_ROLLING_SUMMARY_CHARS = 1_500;
+
+/**
+ * Clamp a catch-up note to at most three plain-text lines. The prompt asks for
+ * this shape, but the cap is enforced here so a chatty model can never grow the
+ * card beyond the space the UI reserves for it.
+ */
+export function sanitizeCatchupSummary(raw: string): string {
+  const lines = raw
+    .trim()
+    .split(/\r?\n/g)
+    .map((line) =>
+      line
+        .trim()
+        // Strip markdown list/heading markers; the card renders plain text.
+        .replace(/^([-*+]|\d+[.)]|#{1,6})\s+/, "")
+        .trim(),
+    )
+    .filter((line) => line.length > 0);
+
+  return lines.slice(0, MAX_CATCHUP_SUMMARY_LINES).join("\n");
+}
+
+/** Keep the stored rolling summary bounded regardless of model behavior. */
+export function sanitizeRollingSummary(raw: string): string {
+  const normalized = raw.trim();
+  return normalized.length <= MAX_ROLLING_SUMMARY_CHARS
+    ? normalized
+    : `${normalized.slice(0, MAX_ROLLING_SUMMARY_CHARS).trimEnd()}...`;
+}
+
 /** Normalise a raw commit subject to imperative-mood, ≤72 chars, no trailing period. */
 export function sanitizeCommitSubject(raw: string): string {
   const singleLine = raw.trim().split(/\r?\n/g)[0]?.trim() ?? "";
