@@ -833,7 +833,7 @@ function renderFeedEntry(
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
-    readonly catchupSummaryByAssistantMessageId: ReadonlyMap<string, string>;
+    readonly catchupSummaryByTurnId: ReadonlyMap<TurnId, string>;
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
@@ -1013,8 +1013,8 @@ function renderFeedEntry(
             </Text>
           </View>
         ) : null}
-        {showAssistantMeta ? (
-          <CatchupSummaryCard summary={props.catchupSummaryByAssistantMessageId.get(message.id)} />
+        {showAssistantMeta && message.turnId ? (
+          <CatchupSummaryCard summary={props.catchupSummaryByTurnId.get(message.turnId)} />
         ) : null}
       </Animated.View>
     );
@@ -1492,13 +1492,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
-  const catchupSummaryByAssistantMessageId = useMemo(() => {
-    const byMessageId = new Map<string, string>();
+  // Keyed by turn: a turn can stream more assistant messages after its summary
+  // is written, so the recorded assistant message id is not reliably terminal.
+  const catchupSummaryByTurnId = useMemo(() => {
+    const byTurnId = new Map<TurnId, string>();
     for (const summary of props.turnSummaries ?? []) {
-      if (!summary.assistantMessageId) continue;
-      byMessageId.set(summary.assistantMessageId, summary.summary);
+      byTurnId.set(summary.turnId, summary.summary);
     }
-    return byMessageId;
+    return byTurnId;
   }, [props.turnSummaries]);
   const unsettledTurnId =
     props.execution?.activity === "active" ||
@@ -1652,7 +1653,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
-        catchupSummaryByAssistantMessageId,
+        catchupSummaryByTurnId,
         unsettledTurnId,
         onCopyWorkRow,
         onToggleWorkGroup,
@@ -1672,7 +1673,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copiedRowId,
       expandedWorkRows,
       terminalAssistantMessageIds,
-      catchupSummaryByAssistantMessageId,
+      catchupSummaryByTurnId,
       unsettledTurnId,
       iconSubtleColor,
       userBubbleColor,

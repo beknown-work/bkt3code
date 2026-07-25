@@ -2077,7 +2077,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const catchupSummaryByAssistantMessageId = useCatchupSummaries(activeThread);
+  const catchupSummaryByTurnId = useCatchupSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {
@@ -5180,7 +5180,7 @@ function ChatViewContent(props: ChatViewProps) {
                 latestTurn={activeLatestTurn}
                 runningTurnId={activeThread.execution?.turn?.providerTurnId ?? null}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                catchupSummaryByAssistantMessageId={catchupSummaryByAssistantMessageId}
+                catchupSummaryByTurnId={catchupSummaryByTurnId}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}

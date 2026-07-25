@@ -327,6 +327,74 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
   });
 
+  it("anchors the catch-up card to the terminal assistant message of its turn", () => {
+    // Regression: summaries were keyed by the assistant message id recorded when
+    // the summary was written, which is not the terminal message when a turn
+    // streams further assistant messages afterwards.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-interim-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-interim" as never,
+            role: "assistant",
+            text: "Working on it.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            updatedAt: "2026-01-01T00:00:11Z",
+            streaming: false,
+            sentByUserId: null,
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "All done.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:30Z",
+            streaming: false,
+            sentByUserId: null,
+          },
+        },
+      ],
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      catchupSummaryByTurnId: new Map([
+        [
+          "turn-1" as never,
+          {
+            turnId: "turn-1" as never,
+            // Deliberately an earlier, non-terminal message id.
+            assistantMessageId: "assistant-interim" as never,
+            summary: "Shipped the card.\nRemains: verify in prod.",
+            createdAt: "2026-01-01T00:00:25Z",
+          },
+        ],
+      ]),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const assistantRows = rows.filter(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+
+    expect(assistantRows).toHaveLength(2);
+    expect(assistantRows[0]?.assistantCatchupSummary).toBeUndefined();
+    expect(assistantRows[1]?.assistantCatchupSummary?.summary).toBe(
+      "Shipped the card.\nRemains: verify in prod.",
+    );
+  });
+
   it("marks only the active assistant turn as streaming for copy controls", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

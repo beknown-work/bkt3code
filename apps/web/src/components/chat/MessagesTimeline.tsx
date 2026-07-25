@@ -182,7 +182,7 @@ interface MessagesTimelineProps {
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
-  catchupSummaryByAssistantMessageId?: ReadonlyMap<MessageId, CatchupSummary> | undefined;
+  catchupSummaryByTurnId?: ReadonlyMap<TurnId, CatchupSummary> | undefined;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -217,7 +217,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   latestTurn,
   runningTurnId,
   turnDiffSummaryByAssistantMessageId,
-  catchupSummaryByAssistantMessageId,
+  catchupSummaryByTurnId,
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
@@ -327,7 +327,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         workingStatusLabel,
         turnDiffSummaryByAssistantMessageId,
-        catchupSummaryByAssistantMessageId,
+        catchupSummaryByTurnId,
         revertTurnCountByUserMessageId,
       }),
     [
@@ -340,7 +340,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       workingStatusLabel,
       turnDiffSummaryByAssistantMessageId,
-      catchupSummaryByAssistantMessageId,
+      catchupSummaryByTurnId,
       revertTurnCountByUserMessageId,
     ],
   );

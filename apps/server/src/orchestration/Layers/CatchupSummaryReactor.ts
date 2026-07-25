@@ -164,6 +164,8 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
     readonly completedAt: string;
+    /** Assistant message the settling event anchored the turn to, when known. */
+    readonly assistantMessageId?: MessageId | null | undefined;
   }) {
     const settings = yield* serverSettingsService.getSettings;
     const sessionSummary: SessionSummarySettings = settings.experimental.sessionSummary;
@@ -248,7 +250,9 @@ const make = Effect.gen(function* () {
       commandId: yield* serverCommandId("catchup-summary"),
       threadId: input.threadId,
       turnId: input.turnId,
-      assistantMessageId: lastAssistant?.id ?? null,
+      // Prefer the settling event's anchor; the projection snapshot can still
+      // be missing assistant messages that arrived late in the turn.
+      assistantMessageId: input.assistantMessageId ?? lastAssistant?.id ?? null,
       rollingSummary: rolling.summary,
       displaySummary:
         displaySummary !== null && displaySummary.trim().length > 0 ? displaySummary : null,
@@ -265,6 +269,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         turnId: event.payload.turnId,
         completedAt: event.payload.completedAt,
+        assistantMessageId: event.payload.assistantMessageId,
       });
     }
   });

@@ -384,7 +384,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   workingStatusLabel?: string;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
-  catchupSummaryByAssistantMessageId?: ReadonlyMap<MessageId, CatchupSummary> | undefined;
+  catchupSummaryByTurnId?: ReadonlyMap<TurnId, CatchupSummary> | undefined;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
@@ -530,10 +530,12 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "assistant"
           ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
           : undefined,
-      // Only the terminal assistant message of a turn carries the catch-up card.
-      assistantCatchupSummary: showAssistantMeta
-        ? input.catchupSummaryByAssistantMessageId?.get(timelineEntry.message.id)
-        : undefined,
+      // The catch-up card belongs to the turn and hangs off whichever
+      // assistant message ends up terminal for it.
+      assistantCatchupSummary:
+        showAssistantMeta && timelineEntry.message.turnId !== null
+          ? input.catchupSummaryByTurnId?.get(timelineEntry.message.turnId)
+          : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"
           ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
