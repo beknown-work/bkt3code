@@ -194,10 +194,10 @@ function CatchupSummaryCard(props: {
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
         Catch-up
       </Text>
-      <Text
-        className="font-sans text-sm leading-normal text-neutral-700 dark:text-neutral-300"
-        numberOfLines={3}
-      >
+      {/* No numberOfLines cap: the note is already capped at three lines
+          server-side, and clamping again truncated the last line whenever it
+          wrapped on a narrow screen. */}
+      <Text className="font-sans text-sm leading-normal text-neutral-700 dark:text-neutral-300">
         {summary}
       </Text>
     </View>

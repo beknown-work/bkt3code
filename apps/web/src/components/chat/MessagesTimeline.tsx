@@ -1353,9 +1353,10 @@ const SessionCatchupCard = memo(function SessionCatchupCard({
         </p>
         {regenerateButton}
       </div>
-      <p className="line-clamp-3 whitespace-pre-line text-[13px] text-foreground leading-snug">
-        {summary}
-      </p>
+      {/* No line clamp: the note is already capped at three lines server-side,
+          and clamping again truncated the last line whenever it wrapped on a
+          narrow viewport. */}
+      <p className="whitespace-pre-line text-[13px] text-foreground leading-snug">{summary}</p>
     </div>
   );
 });

@@ -34,7 +34,9 @@ export const MAX_ROLLING_SUMMARY_CHARS = 1_500;
 /**
  * Clamp a catch-up note to at most three plain-text lines. The prompt asks for
  * this shape, but the cap is enforced here so a chatty model can never grow the
- * card beyond the space the UI reserves for it.
+ * card without bound. This is the only place the note is shortened — the cards
+ * render it in full, so truncating in CSS as well would clip the last line
+ * whenever it wrapped on a narrow viewport.
  */
 export function sanitizeCatchupSummary(raw: string): string {
   const lines = raw
