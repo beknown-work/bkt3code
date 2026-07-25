@@ -801,40 +801,38 @@ export function projectEvent(
           return nextBase;
         }
 
-        // The rolling summary always advances; the per-turn display summary is
-        // only present for turns that crossed the configured duration cutoff.
-        const turnSummary =
-          payload.displaySummary === null
-            ? null
-            : yield* decodeForEvent(
-                OrchestrationTurnCatchupSummary,
-                {
-                  turnId: payload.turnId,
-                  assistantMessageId: payload.assistantMessageId,
-                  summary: payload.displaySummary,
-                  createdAt: payload.createdAt,
-                },
-                event.type,
-                "turnSummary",
-              );
+        const withoutTurn = thread.turnSummaries.filter((entry) => entry.turnId !== payload.turnId);
 
-        const patch: ThreadPatch = {
-          rollingSummary: payload.rollingSummary,
-          ...(turnSummary === null
-            ? {}
-            : {
-                turnSummaries: [
-                  ...thread.turnSummaries.filter((entry) => entry.turnId !== turnSummary.turnId),
-                  turnSummary,
-                ]
-                  .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
-                  .slice(-MAX_THREAD_TURN_SUMMARIES),
-              }),
-        };
+        // "cleared" removes any card (and any spinner) for the turn: the turn
+        // was under the cutoff, or summarization failed.
+        const turnSummaries =
+          payload.progress === "cleared"
+            ? withoutTurn
+            : [
+                ...withoutTurn,
+                yield* decodeForEvent(
+                  OrchestrationTurnCatchupSummary,
+                  {
+                    turnId: payload.turnId,
+                    assistantMessageId: payload.assistantMessageId,
+                    summary: payload.displaySummary,
+                    status: payload.progress,
+                    createdAt: payload.createdAt,
+                  },
+                  event.type,
+                  "turnSummary",
+                ),
+              ]
+                .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+                .slice(-MAX_THREAD_TURN_SUMMARIES);
 
         return {
           ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, patch),
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            // A null rolling summary means "unchanged" (e.g. the pending marker).
+            ...(payload.rollingSummary === null ? {} : { rollingSummary: payload.rollingSummary }),
+            turnSummaries,
+          }),
         };
       });
 

@@ -99,10 +99,13 @@ export const DeleteProjectionTurnsByThreadInput = Schema.Struct({
 });
 export type DeleteProjectionTurnsByThreadInput = typeof DeleteProjectionTurnsByThreadInput.Type;
 
+export const ProjectionTurnCatchupSummaryStatus = Schema.Literals(["pending", "ready"]);
+
 export const ProjectionTurnCatchupSummary = Schema.Struct({
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
-  summary: Schema.String,
+  summary: Schema.NullOr(Schema.String),
+  status: ProjectionTurnCatchupSummaryStatus,
   createdAt: IsoDateTime,
 });
 export type ProjectionTurnCatchupSummary = typeof ProjectionTurnCatchupSummary.Type;
@@ -110,11 +113,19 @@ export type ProjectionTurnCatchupSummary = typeof ProjectionTurnCatchupSummary.T
 export const UpsertProjectionTurnCatchupSummaryInput = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
-  summary: Schema.String,
+  summary: Schema.NullOr(Schema.String),
+  status: ProjectionTurnCatchupSummaryStatus,
   createdAt: IsoDateTime,
 });
 export type UpsertProjectionTurnCatchupSummaryInput =
   typeof UpsertProjectionTurnCatchupSummaryInput.Type;
+
+export const ClearProjectionTurnCatchupSummaryInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+export type ClearProjectionTurnCatchupSummaryInput =
+  typeof ClearProjectionTurnCatchupSummaryInput.Type;
 
 export const ListProjectionTurnCatchupSummariesInput = Schema.Struct({
   threadId: ThreadId,
@@ -178,6 +189,13 @@ export interface ProjectionTurnRepositoryShape {
    */
   readonly upsertCatchupSummary: (
     input: UpsertProjectionTurnCatchupSummaryInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Removes any catch-up summary (and pending marker) recorded for a turn.
+   */
+  readonly clearCatchupSummary: (
+    input: ClearProjectionTurnCatchupSummaryInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**

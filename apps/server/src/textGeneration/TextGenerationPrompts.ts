@@ -273,24 +273,33 @@ export interface CatchupSummaryPromptInput {
   threadTitle: string;
   rollingSummary: string;
   turnTail: string;
+  /** Optional user-supplied instructions appended to the prompt. */
+  customInstructions?: string | undefined;
 }
 
 /**
- * Writes the short note shown under a long turn's final output, for someone
- * returning to this tab after working elsewhere.
+ * Writes the short note shown under a long turn's final output.
+ *
+ * The first line deliberately restates what the session is *for*: the reader is
+ * coming back from other tabs and repositories and needs the goal before the
+ * detail. Progress and remaining work follow.
  */
 export function buildCatchupSummaryPrompt(input: CatchupSummaryPromptInput) {
   const prompt = [
     "You write a very short catch-up note for a developer returning to this tab",
-    "after working in other tabs and repositories.",
+    "after working in other tabs and repositories. They have lost the thread and",
+    "need to be reminded what this session is actually about.",
     "Return a JSON object with key: summary.",
     "Rules:",
-    `- at most ${MAX_CATCHUP_SUMMARY_LINES} lines, separated by newlines`,
+    `- exactly ${MAX_CATCHUP_SUMMARY_LINES} lines, separated by newlines`,
+    "- line 1: what this session is working on overall (the goal), in plain terms",
+    "- line 2: where it just got to at the END of the latest turn",
+    "- line 3: what still remains to reach the goal",
     "- each line must be a short sentence of roughly 90 characters or less",
-    "- the first line(s) say what just happened at the END of this session",
-    "- the final line says what remains toward the overall goal",
-    "- plain text only: no markdown, no bullets, no headings, no preamble",
-    "- be concrete and specific so 2-3 lines are enough to re-orient",
+    "- plain text only: no markdown, no bullets, no headings, no labels, no preamble",
+    "- be concrete and specific: name the feature, files, or errors involved",
+    '- never start a line with words like "Line 1" or "Goal:"',
+    ...policyInstruction(input.customInstructions),
     "",
     `Session title: ${input.threadTitle}`,
     "",

@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  TextGenerationError,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -54,6 +55,7 @@ const DISPLAY_SUMMARY = "Wired the reactor.\nRemains: ship the card.";
 const makeHarness = (options: {
   readonly enabled?: boolean;
   readonly minTurnDurationMinutes?: number;
+  readonly failCatchup?: boolean;
 }) =>
   Effect.gen(function* () {
     const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>({ replay: 1 });
@@ -72,7 +74,16 @@ const makeHarness = (options: {
         ),
       generateCatchupSummary: () =>
         Ref.update(catchupCalls, (count) => count + 1).pipe(
-          Effect.as({ summary: DISPLAY_SUMMARY }),
+          Effect.andThen(
+            options.failCatchup
+              ? Effect.fail(
+                  new TextGenerationError({
+                    operation: "generateCatchupSummary",
+                    detail: "summarizer unavailable in test",
+                  }),
+                )
+              : Effect.succeed({ summary: DISPLAY_SUMMARY }),
+          ),
         ),
     } as unknown as TextGeneration["Service"];
 
@@ -276,6 +287,7 @@ layer("CatchupSummaryReactor", (it) => {
         assert.strictEqual(thread?.turnSummaries[0]?.turnId, TURN_ID);
         assert.strictEqual(thread?.turnSummaries[0]?.assistantMessageId, ASSISTANT_MESSAGE_ID);
         assert.strictEqual(thread?.turnSummaries[0]?.summary, DISPLAY_SUMMARY);
+        assert.strictEqual(thread?.turnSummaries[0]?.status, "ready");
       }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
     }),
   );

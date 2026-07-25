@@ -376,6 +376,7 @@ describe("deriveMessagesTimelineRows", () => {
             // Deliberately an earlier, non-terminal message id.
             assistantMessageId: "assistant-interim" as never,
             summary: "Shipped the card.\nRemains: verify in prod.",
+            status: "ready" as const,
             createdAt: "2026-01-01T00:00:25Z",
           },
         ],

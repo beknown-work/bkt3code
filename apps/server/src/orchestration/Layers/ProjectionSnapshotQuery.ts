@@ -100,7 +100,8 @@ const ProjectionCatchupSummaryDbRowSchema = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
-  summary: Schema.String,
+  summary: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["pending", "ready"]),
   createdAt: IsoDateTime,
 });
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
@@ -1049,10 +1050,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           turn_id AS "turnId",
           assistant_message_id AS "assistantMessageId",
           catchup_summary AS "summary",
+          catchup_summary_status AS "status",
           catchup_summary_created_at AS "createdAt"
         FROM projection_turns
         WHERE turn_id IS NOT NULL
-          AND catchup_summary IS NOT NULL
+          AND catchup_summary_status IS NOT NULL
           AND catchup_summary_created_at IS NOT NULL
         ORDER BY thread_id ASC, catchup_summary_created_at ASC
       `,
@@ -1068,11 +1070,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           turn_id AS "turnId",
           assistant_message_id AS "assistantMessageId",
           catchup_summary AS "summary",
+          catchup_summary_status AS "status",
           catchup_summary_created_at AS "createdAt"
         FROM projection_turns
         WHERE thread_id = ${threadId}
           AND turn_id IS NOT NULL
-          AND catchup_summary IS NOT NULL
+          AND catchup_summary_status IS NOT NULL
           AND catchup_summary_created_at IS NOT NULL
         ORDER BY catchup_summary_created_at ASC
       `,
@@ -1345,6 +1348,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   turnId: row.turnId,
                   assistantMessageId: row.assistantMessageId,
                   summary: row.summary,
+                  status: row.status,
                   createdAt: row.createdAt,
                 });
                 turnSummariesByThread.set(row.threadId, threadTurnSummaries);
@@ -2493,6 +2497,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           turnId: row.turnId,
           assistantMessageId: row.assistantMessageId,
           summary: row.summary,
+          status: row.status,
           createdAt: row.createdAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,

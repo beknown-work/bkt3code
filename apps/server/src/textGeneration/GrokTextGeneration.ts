@@ -279,6 +279,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         threadTitle: input.threadTitle,
         rollingSummary: input.rollingSummary,
         turnTail: input.turnTail,
+        customInstructions: input.customInstructions,
       });
 
       const generated = yield* runGrokJson({

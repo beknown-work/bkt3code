@@ -635,7 +635,11 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.catchup-summary-updated", () => {
-    const catchupEvent = (displaySummary: string | null) =>
+    const catchupEvent = (input: {
+      readonly progress: "pending" | "ready" | "cleared";
+      readonly rollingSummary?: string | null;
+      readonly displaySummary?: string | null;
+    }) =>
       ({
         ...baseEventFields,
         sequence: 14,
@@ -647,49 +651,68 @@ describe("applyThreadDetailEvent", () => {
           threadId: ThreadId.make("thread-1"),
           turnId: TurnId.make("turn-1"),
           assistantMessageId: MessageId.make("msg-3"),
-          rollingSummary: "Rolling summary text.",
-          displaySummary,
+          rollingSummary: input.rollingSummary ?? null,
+          displaySummary: input.displaySummary ?? null,
+          progress: input.progress,
           createdAt: "2026-04-01T12:05:00.000Z",
         },
       }) as const;
 
-    it("stores the rolling summary without a card when there is no display summary", () => {
-      const result = applyThreadDetailEvent(baseThread, catchupEvent(null));
+    it("records a pending marker without touching the rolling summary", () => {
+      const result = applyThreadDetailEvent(baseThread, catchupEvent({ progress: "pending" }));
 
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
-        expect(result.thread.rollingSummary).toBe("Rolling summary text.");
-        expect(result.thread.turnSummaries).toEqual([]);
-      }
-    });
-
-    it("adds a turn summary when a display summary is present", () => {
-      const result = applyThreadDetailEvent(baseThread, catchupEvent("Line one.\nLine two."));
-
-      expect(result.kind).toBe("updated");
-      if (result.kind === "updated") {
-        expect(result.thread.rollingSummary).toBe("Rolling summary text.");
+        expect(result.thread.rollingSummary).toBeNull();
         expect(result.thread.turnSummaries).toEqual([
           {
             turnId: TurnId.make("turn-1"),
             assistantMessageId: MessageId.make("msg-3"),
-            summary: "Line one.\nLine two.",
+            summary: null,
+            status: "pending",
             createdAt: "2026-04-01T12:05:00.000Z",
           },
         ]);
       }
     });
 
-    it("replaces an existing summary for the same turn", () => {
-      const first = applyThreadDetailEvent(baseThread, catchupEvent("First note."));
-      expect(first.kind).toBe("updated");
-      if (first.kind !== "updated") return;
+    it("replaces the pending marker with the ready summary", () => {
+      const pending = applyThreadDetailEvent(baseThread, catchupEvent({ progress: "pending" }));
+      expect(pending.kind).toBe("updated");
+      if (pending.kind !== "updated") return;
 
-      const second = applyThreadDetailEvent(first.thread, catchupEvent("Second note."));
-      expect(second.kind).toBe("updated");
-      if (second.kind === "updated") {
-        expect(second.thread.turnSummaries).toHaveLength(1);
-        expect(second.thread.turnSummaries[0]?.summary).toBe("Second note.");
+      const ready = applyThreadDetailEvent(
+        pending.thread,
+        catchupEvent({
+          progress: "ready",
+          rollingSummary: "Rolling summary text.",
+          displaySummary: "Line one.\nLine two.",
+        }),
+      );
+
+      expect(ready.kind).toBe("updated");
+      if (ready.kind === "updated") {
+        expect(ready.thread.rollingSummary).toBe("Rolling summary text.");
+        expect(ready.thread.turnSummaries).toHaveLength(1);
+        expect(ready.thread.turnSummaries[0]?.status).toBe("ready");
+        expect(ready.thread.turnSummaries[0]?.summary).toBe("Line one.\nLine two.");
+      }
+    });
+
+    it("retracts the card when summarization is cleared", () => {
+      const pending = applyThreadDetailEvent(baseThread, catchupEvent({ progress: "pending" }));
+      expect(pending.kind).toBe("updated");
+      if (pending.kind !== "updated") return;
+
+      const cleared = applyThreadDetailEvent(
+        pending.thread,
+        catchupEvent({ progress: "cleared", rollingSummary: "Rolling summary text." }),
+      );
+
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind === "updated") {
+        expect(cleared.thread.turnSummaries).toEqual([]);
+        expect(cleared.thread.rollingSummary).toBe("Rolling summary text.");
       }
     });
   });

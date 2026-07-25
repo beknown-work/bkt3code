@@ -206,16 +206,10 @@ const make = Effect.gen(function* () {
     // mid-flight cannot start a second summarization for the same turn.
     trackBounded(summarizedTurns, key);
 
-    const rolling = yield* textGeneration
-      .updateRollingSummary({
-        cwd,
-        threadTitle: thread.title,
-        previousSummary: thread.rollingSummary,
-        turnTranscript,
-        dataLimitChars: sessionSummary.dataLimitChars,
-        modelSelection: sessionSummary.modelSelection,
-      })
-      .pipe(Effect.timeout(SUMMARIZATION_TIMEOUT));
+    const lastAssistant = lastAssistantMessageForTurn(thread, input.turnId);
+    // Prefer the settling event's anchor; the projection snapshot can still be
+    // missing assistant messages that arrived late in the turn.
+    const assistantMessageId = input.assistantMessageId ?? lastAssistant?.id ?? null;
 
     const completedAtMs = parseIsoMs(input.completedAt) ?? (yield* Clock.currentTimeMillis);
     const durationMs = resolveTurnDurationMs({
@@ -227,37 +221,84 @@ const make = Effect.gen(function* () {
     const cutoffMs = sessionSummary.minTurnDurationMinutes * 60_000;
     const qualifies = durationMs !== null && durationMs >= cutoffMs;
 
-    const lastAssistant = lastAssistantMessageForTurn(thread, input.turnId);
-    const displaySummary =
-      qualifies && rolling.summary.trim().length > 0
-        ? yield* textGeneration
-            .generateCatchupSummary({
-              cwd,
-              threadTitle: thread.title,
-              rollingSummary: rolling.summary,
-              turnTail: lastAssistant?.text ?? turnTranscript.slice(-TURN_TAIL_CHARS),
-              modelSelection: sessionSummary.modelSelection,
-            })
-            .pipe(
-              Effect.timeout(SUMMARIZATION_TIMEOUT),
-              Effect.map((generated) => generated.summary),
-            )
-        : null;
+    const dispatchProgress = (progress: {
+      readonly progress: "pending" | "ready" | "cleared";
+      readonly rollingSummary: string | null;
+      readonly displaySummary: string | null;
+    }) =>
+      Effect.gen(function* () {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.catchup-summary.update",
+          commandId: yield* serverCommandId("catchup-summary"),
+          threadId: input.threadId,
+          turnId: input.turnId,
+          assistantMessageId,
+          rollingSummary: progress.rollingSummary,
+          displaySummary: progress.displaySummary,
+          progress: progress.progress,
+          createdAt: yield* nowIso,
+        });
+      });
 
-    const createdAt = yield* nowIso;
-    yield* orchestrationEngine.dispatch({
-      type: "thread.catchup-summary.update",
-      commandId: yield* serverCommandId("catchup-summary"),
-      threadId: input.threadId,
-      turnId: input.turnId,
-      // Prefer the settling event's anchor; the projection snapshot can still
-      // be missing assistant messages that arrived late in the turn.
-      assistantMessageId: input.assistantMessageId ?? lastAssistant?.id ?? null,
-      rollingSummary: rolling.summary,
-      displaySummary:
-        displaySummary !== null && displaySummary.trim().length > 0 ? displaySummary : null,
-      createdAt,
-    });
+    // Show the spinner immediately for qualifying turns: the rolling-summary
+    // call below can take many seconds, and the user is looking at the output now.
+    if (qualifies) {
+      yield* dispatchProgress({ progress: "pending", rollingSummary: null, displaySummary: null });
+    }
+
+    // From here on a failure must retract the spinner rather than leave it spinning.
+    yield* Effect.gen(function* () {
+      const rolling = yield* textGeneration
+        .updateRollingSummary({
+          cwd,
+          threadTitle: thread.title,
+          previousSummary: thread.rollingSummary,
+          turnTranscript,
+          dataLimitChars: sessionSummary.dataLimitChars,
+          modelSelection: sessionSummary.modelSelection,
+        })
+        .pipe(Effect.timeout(SUMMARIZATION_TIMEOUT));
+
+      if (!qualifies || rolling.summary.trim().length === 0) {
+        yield* dispatchProgress({
+          progress: "cleared",
+          rollingSummary: rolling.summary,
+          displaySummary: null,
+        });
+        return;
+      }
+
+      const generated = yield* textGeneration
+        .generateCatchupSummary({
+          cwd,
+          threadTitle: thread.title,
+          rollingSummary: rolling.summary,
+          turnTail: lastAssistant?.text ?? turnTranscript.slice(-TURN_TAIL_CHARS),
+          modelSelection: sessionSummary.modelSelection,
+          ...(sessionSummary.promptInstructions.trim().length > 0
+            ? { customInstructions: sessionSummary.promptInstructions }
+            : {}),
+        })
+        .pipe(Effect.timeout(SUMMARIZATION_TIMEOUT));
+
+      const displaySummary = generated.summary.trim();
+      yield* dispatchProgress({
+        progress: displaySummary.length > 0 ? "ready" : "cleared",
+        rollingSummary: rolling.summary,
+        displaySummary: displaySummary.length > 0 ? displaySummary : null,
+      });
+    }).pipe(
+      Effect.tapCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : // Retract the spinner, then let the worker log the failure.
+            dispatchProgress({
+              progress: "cleared",
+              rollingSummary: null,
+              displaySummary: null,
+            }).pipe(Effect.catch(() => Effect.void)),
+      ),
+    );
 
     turnStartedAtMs.delete(key);
   });

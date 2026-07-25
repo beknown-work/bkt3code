@@ -51,6 +51,7 @@ import Migration0035 from "./Migrations/035_BackfillProjectionThreadLatestTurn.t
 import Migration0036 from "./Migrations/036_BackfillLatestTurnSkipPendingRows.ts";
 import Migration0037 from "./Migrations/037_ThreadExecutions.ts";
 import Migration0038 from "./Migrations/038_CatchupSummaries.ts";
+import Migration0039 from "./Migrations/039_CatchupSummaryStatus.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -101,6 +102,7 @@ export const migrationEntries = [
   [36, "BackfillLatestTurnSkipPendingRows", Migration0036],
   [37, "ThreadExecutions", Migration0037],
   [38, "CatchupSummaries", Migration0038],
+  [39, "CatchupSummaryStatus", Migration0039],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

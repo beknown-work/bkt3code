@@ -967,6 +967,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           assistantMessageId: command.assistantMessageId,
           rollingSummary: command.rollingSummary,
           displaySummary: command.displaySummary,
+          progress: command.progress,
           createdAt: command.createdAt,
         },
       };

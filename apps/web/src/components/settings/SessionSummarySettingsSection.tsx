@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useState } from "react";
 import * as Equal from "effect/Equal";
 import {
   DEFAULT_UNIFIED_SETTINGS,
@@ -22,6 +23,7 @@ import {
 import { primaryServerProvidersAtom } from "../../state/server";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Switch } from "../ui/switch";
+import { Textarea } from "../ui/textarea";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -122,6 +124,8 @@ export function SessionSummarySettingsSection() {
     DEFAULT_SESSION_SUMMARY.modelSelection ?? null,
   );
   const isDataLimitDirty = sessionSummary.dataLimitChars !== DEFAULT_SESSION_SUMMARY.dataLimitChars;
+  const isPromptDirty =
+    sessionSummary.promptInstructions !== DEFAULT_SESSION_SUMMARY.promptInstructions;
   const isCutoffDirty =
     sessionSummary.minTurnDurationMinutes !== DEFAULT_SESSION_SUMMARY.minTurnDurationMinutes;
 
@@ -134,6 +138,10 @@ export function SessionSummarySettingsSection() {
       },
     });
   };
+
+  // Buffer keystrokes so each character does not round-trip to the server.
+  // Commits on blur only — Enter must insert a newline in a prompt field.
+  const [promptDraft, setPromptDraft] = useState<string | null>(null);
 
   return (
     <SettingsSection title="Session catch-up summary">
@@ -250,6 +258,40 @@ export function SessionSummarySettingsSection() {
           </div>
         }
       />
+      <SettingsRow
+        title="Extra prompt instructions"
+        description="Appended to the catch-up prompt. Use it to steer tone, language, or what to emphasize — for example: always name the files touched, or write in Hindi."
+        resetAction={
+          isPromptDirty ? (
+            <SettingResetButton
+              label="prompt instructions"
+              onClick={() =>
+                patchSessionSummary({
+                  promptInstructions: DEFAULT_SESSION_SUMMARY.promptInstructions,
+                })
+              }
+            />
+          ) : null
+        }
+      >
+        <Textarea
+          value={promptDraft ?? sessionSummary.promptInstructions}
+          onChange={(event) => setPromptDraft(event.target.value)}
+          onFocus={() => setPromptDraft(sessionSummary.promptInstructions)}
+          onBlur={() => {
+            const next = promptDraft ?? sessionSummary.promptInstructions;
+            setPromptDraft(null);
+            if (next !== sessionSummary.promptInstructions) {
+              patchSessionSummary({ promptInstructions: next });
+            }
+          }}
+          className="mb-3.5 min-h-20 w-full text-[13px]"
+          disabled={!enabled}
+          placeholder="Optional. Leave empty to use the default prompt."
+          spellCheck={false}
+          aria-label="Extra catch-up prompt instructions"
+        />
+      </SettingsRow>
     </SettingsSection>
   );
 }

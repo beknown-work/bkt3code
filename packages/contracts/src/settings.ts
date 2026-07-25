@@ -405,6 +405,9 @@ export const SessionSummarySettings = Schema.Struct({
   minTurnDurationMinutes: SessionSummaryTurnDurationMinutes.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES)),
   ),
+  // Appended to the catch-up prompt so the note can be tailored (tone, what to
+  // emphasize, language). Empty means "use the built-in prompt as-is".
+  promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 });
 export type SessionSummarySettings = typeof SessionSummarySettings.Type;
 
@@ -577,6 +580,7 @@ export const ServerSettingsPatch = Schema.Struct({
           modelSelection: Schema.optionalKey(ModelSelectionPatch),
           dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
           minTurnDurationMinutes: Schema.optionalKey(SessionSummaryTurnDurationMinutes),
+          promptInstructions: Schema.optionalKey(TrimmedString),
         }),
       ),
     }),

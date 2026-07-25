@@ -388,10 +388,19 @@ export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus
  * that ran longer than the configured cutoff. Rendered as a helper cue when
  * returning to a session after a long run.
  */
+/** "pending" while the summarizer is running; "ready" once text exists. */
+export const OrchestrationTurnCatchupSummaryStatus = Schema.Literals(["pending", "ready"]);
+export type OrchestrationTurnCatchupSummaryStatus =
+  typeof OrchestrationTurnCatchupSummaryStatus.Type;
+
 export const OrchestrationTurnCatchupSummary = Schema.Struct({
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
-  summary: TrimmedNonEmptyString,
+  // Null while pending — the card shows a spinner until the text lands.
+  summary: Schema.NullOr(TrimmedNonEmptyString),
+  status: OrchestrationTurnCatchupSummaryStatus.pipe(
+    Schema.withDecodingDefault(Effect.succeed("ready" as const)),
+  ),
   createdAt: IsoDateTime,
 });
 export type OrchestrationTurnCatchupSummary = typeof OrchestrationTurnCatchupSummary.Type;
@@ -987,16 +996,27 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Progress of one turn's catch-up summarization.
+ *
+ * - `pending`  — summarization started; show a spinner on the card.
+ * - `ready`    — text produced.
+ * - `cleared`  — no card for this turn (below cutoff, or summarization failed).
+ */
+export const ThreadCatchupSummaryProgress = Schema.Literals(["pending", "ready", "cleared"]);
+export type ThreadCatchupSummaryProgress = typeof ThreadCatchupSummaryProgress.Type;
+
 const ThreadCatchupSummaryUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.catchup-summary.update"),
   commandId: CommandId,
   threadId: ThreadId,
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
-  rollingSummary: Schema.String,
-  // Null when the turn ran shorter than the configured cutoff: the rolling
-  // summary still advances, but no card is shown for this turn.
+  // Null leaves the thread's rolling summary untouched (e.g. the pending marker,
+  // which is dispatched before the summarizer runs).
+  rollingSummary: Schema.NullOr(Schema.String),
   displaySummary: Schema.NullOr(TrimmedNonEmptyString),
+  progress: ThreadCatchupSummaryProgress,
   createdAt: IsoDateTime,
 });
 
@@ -1246,8 +1266,13 @@ export const ThreadCatchupSummaryUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
-  rollingSummary: Schema.String,
+  rollingSummary: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   displaySummary: Schema.NullOr(TrimmedNonEmptyString),
+  progress: ThreadCatchupSummaryProgress.pipe(
+    Schema.withDecodingDefault(Effect.succeed("ready" as const)),
+  ),
   createdAt: IsoDateTime,
 });
 

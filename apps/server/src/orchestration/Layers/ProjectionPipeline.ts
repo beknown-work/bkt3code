@@ -892,6 +892,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          if (event.payload.rollingSummary === null) {
+            return;
+          }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             rollingSummary: event.payload.rollingSummary,
@@ -1439,13 +1442,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.catchup-summary-updated": {
-          if (event.payload.displaySummary === null) {
+          if (event.payload.progress === "cleared") {
+            yield* projectionTurnRepository.clearCatchupSummary({
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+            });
             return;
           }
           yield* projectionTurnRepository.upsertCatchupSummary({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
             summary: event.payload.displaySummary,
+            status: event.payload.progress,
             createdAt: event.payload.createdAt,
           });
           return;

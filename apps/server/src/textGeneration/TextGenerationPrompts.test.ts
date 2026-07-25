@@ -242,6 +242,28 @@ describe("buildRollingSummaryPrompt", () => {
 });
 
 describe("buildCatchupSummaryPrompt", () => {
+  it("appends user-supplied instructions when configured", () => {
+    const result = buildCatchupSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      rollingSummary: "Wiring the reactor.",
+      turnTail: "Finished the projector case.",
+      customInstructions: "Always name the files touched.",
+    });
+
+    expect(result.prompt).toContain("Additional instructions:");
+    expect(result.prompt).toContain("Always name the files touched.");
+  });
+
+  it("omits the instructions block when none is configured", () => {
+    const result = buildCatchupSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      rollingSummary: "Wiring the reactor.",
+      turnTail: "Finished the projector case.",
+    });
+
+    expect(result.prompt).not.toContain("Additional instructions:");
+  });
+
   it("asks for a bounded plain-text note built from the rolling summary", () => {
     const result = buildCatchupSummaryPrompt({
       threadTitle: "Add catch-up card",
@@ -249,7 +271,10 @@ describe("buildCatchupSummaryPrompt", () => {
       turnTail: "Finished the projector case.",
     });
 
-    expect(result.prompt).toContain("at most 3 lines");
+    expect(result.prompt).toContain("exactly 3 lines");
+    // Line 1 must re-establish what the session is for.
+    expect(result.prompt).toContain("what this session is working on overall");
+    expect(result.prompt).toContain("what still remains");
     expect(result.prompt).toContain("Wiring the reactor.");
     expect(result.prompt).toContain("Finished the projector case.");
     expect(result.prompt).toContain("no markdown");

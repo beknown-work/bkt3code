@@ -54,6 +54,7 @@ import {
   GlobeIcon,
   HammerIcon,
   HistoryIcon,
+  LoaderIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -1259,13 +1260,35 @@ function WorkGroupToggleTimelineRow({
  * sticky) and is tinted apart from normal message content so it reads as a
  * helper cue when returning to a session after working elsewhere.
  */
+/**
+ * A pending marker older than this is treated as abandoned (server restarted
+ * mid-summarization), so the spinner cannot hang around forever.
+ */
+const CATCHUP_PENDING_STALE_MS = 3 * 60_000;
+
 const SessionCatchupCard = memo(function SessionCatchupCard({
   catchupSummary,
 }: {
   catchupSummary: CatchupSummary | undefined;
 }) {
   if (!catchupSummary) return null;
-  const summary = catchupSummary.summary.trim();
+
+  if (catchupSummary.status === "pending") {
+    const startedAtMs = Date.parse(catchupSummary.createdAt);
+    if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > CATCHUP_PENDING_STALE_MS) {
+      return null;
+    }
+    return (
+      <div className="mt-3 rounded-2xl border border-input/60 bg-accent/40 p-3 shadow-xs/5 not-dark:bg-clip-padding dark:bg-accent/20">
+        <p className="flex items-center gap-1.5 font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
+          <LoaderIcon className="size-3 animate-spin" />
+          <span>Writing catch-up…</span>
+        </p>
+      </div>
+    );
+  }
+
+  const summary = catchupSummary.summary?.trim() ?? "";
   if (summary.length === 0) return null;
 
   return (

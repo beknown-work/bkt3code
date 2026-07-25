@@ -453,21 +453,28 @@ export function applyThreadDetailEvent(
 
     // ── Catch-up summaries ──────────────────────────────────────────
     case "thread.catchup-summary-updated": {
-      const rollingSummary = event.payload.rollingSummary;
-      if (event.payload.displaySummary === null) {
+      // A null rolling summary means "unchanged" (e.g. the pending marker).
+      const rollingSummary = event.payload.rollingSummary ?? thread.rollingSummary;
+      const withoutTurn = pipe(
+        thread.turnSummaries,
+        Arr.filter((entry) => entry.turnId !== event.payload.turnId),
+      );
+
+      // "cleared" retracts the card (and any spinner) for this turn.
+      if (event.payload.progress === "cleared") {
         return {
           kind: "updated",
-          thread: { ...thread, rollingSummary },
+          thread: { ...thread, rollingSummary, turnSummaries: withoutTurn },
         };
       }
 
       const turnSummaries = pipe(
-        thread.turnSummaries,
-        Arr.filter((entry) => entry.turnId !== event.payload.turnId),
+        withoutTurn,
         Arr.append({
           turnId: event.payload.turnId,
           assistantMessageId: event.payload.assistantMessageId,
           summary: event.payload.displaySummary,
+          status: event.payload.progress,
           createdAt: event.payload.createdAt,
         }),
         Arr.sort(turnSummaryOrder),

@@ -433,6 +433,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         threadTitle: input.threadTitle,
         rollingSummary: input.rollingSummary,
         turnTail: input.turnTail,
+        customInstructions: input.customInstructions,
       });
 
       const generated = yield* runCodexJson({

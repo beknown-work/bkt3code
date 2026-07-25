@@ -90,6 +90,8 @@ export interface CatchupSummaryGenerationInput {
   rollingSummary: string;
   /** Tail of the latest turn, so the note leans on how the session ended. */
   turnTail: string;
+  /** Optional user-supplied prompt instructions from settings. */
+  customInstructions?: string | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }

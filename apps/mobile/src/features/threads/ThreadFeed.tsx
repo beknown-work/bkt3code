@@ -155,8 +155,36 @@ export interface ThreadFeedProps {
  * returning to a thread after working elsewhere re-orients in a couple of lines.
  * Scrolls inline with the feed and is clamped to three lines.
  */
-function CatchupSummaryCard(props: { readonly summary: string | undefined }) {
-  const summary = props.summary?.trim();
+/**
+ * A pending marker older than this is treated as abandoned (server restarted
+ * mid-summarization), so the spinner cannot hang around forever.
+ */
+const CATCHUP_PENDING_STALE_MS = 3 * 60_000;
+
+function CatchupSummaryCard(props: {
+  readonly catchupSummary: OrchestrationTurnCatchupSummary | undefined;
+}) {
+  const catchupSummary = props.catchupSummary;
+  if (!catchupSummary) {
+    return null;
+  }
+
+  if (catchupSummary.status === "pending") {
+    const startedAtMs = Date.parse(catchupSummary.createdAt);
+    if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > CATCHUP_PENDING_STALE_MS) {
+      return null;
+    }
+    return (
+      <View className="mt-2.5 flex-row items-center gap-2 rounded-[18px] border border-neutral-200 bg-neutral-100/80 p-3 dark:border-white/6 dark:bg-neutral-900/80">
+        <ActivityIndicator size="small" />
+        <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
+          Writing catch-up…
+        </Text>
+      </View>
+    );
+  }
+
+  const summary = catchupSummary.summary?.trim();
   if (!summary) {
     return null;
   }
@@ -833,7 +861,7 @@ function renderFeedEntry(
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
-    readonly catchupSummaryByTurnId: ReadonlyMap<TurnId, string>;
+    readonly catchupSummaryByTurnId: ReadonlyMap<TurnId, OrchestrationTurnCatchupSummary>;
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
@@ -1014,7 +1042,7 @@ function renderFeedEntry(
           </View>
         ) : null}
         {showAssistantMeta && message.turnId ? (
-          <CatchupSummaryCard summary={props.catchupSummaryByTurnId.get(message.turnId)} />
+          <CatchupSummaryCard catchupSummary={props.catchupSummaryByTurnId.get(message.turnId)} />
         ) : null}
       </Animated.View>
     );
@@ -1495,9 +1523,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // Keyed by turn: a turn can stream more assistant messages after its summary
   // is written, so the recorded assistant message id is not reliably terminal.
   const catchupSummaryByTurnId = useMemo(() => {
-    const byTurnId = new Map<TurnId, string>();
+    const byTurnId = new Map<TurnId, OrchestrationTurnCatchupSummary>();
     for (const summary of props.turnSummaries ?? []) {
-      byTurnId.set(summary.turnId, summary.summary);
+      byTurnId.set(summary.turnId, summary);
     }
     return byTurnId;
   }, [props.turnSummaries]);

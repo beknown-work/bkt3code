@@ -19,6 +19,7 @@ import {
   ProjectionTurnById,
   ProjectionTurnCatchupSummary,
   ProjectionTurnRepository,
+  ClearProjectionTurnCatchupSummaryInput,
   ListProjectionTurnCatchupSummariesInput,
   UpsertProjectionTurnCatchupSummaryInput,
   type ProjectionTurnRepositoryShape,
@@ -236,12 +237,27 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
   // existing row, so a missing row silently updates nothing.
   const upsertCatchupSummaryRow = SqlSchema.void({
     Request: UpsertProjectionTurnCatchupSummaryInput,
-    execute: ({ threadId, turnId, summary, createdAt }) =>
+    execute: ({ threadId, turnId, summary, status, createdAt }) =>
       sql`
         UPDATE projection_turns
         SET
           catchup_summary = ${summary},
+          catchup_summary_status = ${status},
           catchup_summary_created_at = ${createdAt}
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+      `,
+  });
+
+  const clearCatchupSummaryRow = SqlSchema.void({
+    Request: ClearProjectionTurnCatchupSummaryInput,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        UPDATE projection_turns
+        SET
+          catchup_summary = NULL,
+          catchup_summary_status = NULL,
+          catchup_summary_created_at = NULL
         WHERE thread_id = ${threadId}
           AND turn_id = ${turnId}
       `,
@@ -256,11 +272,12 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           assistant_message_id AS "assistantMessageId",
           catchup_summary AS "summary",
+          catchup_summary_status AS "status",
           catchup_summary_created_at AS "createdAt"
         FROM projection_turns
         WHERE thread_id = ${threadId}
           AND turn_id IS NOT NULL
-          AND catchup_summary IS NOT NULL
+          AND catchup_summary_status IS NOT NULL
           AND catchup_summary_created_at IS NOT NULL
         ORDER BY catchup_summary_created_at ASC
       `,
@@ -371,6 +388,16 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
+  const clearCatchupSummary: ProjectionTurnRepositoryShape["clearCatchupSummary"] = (input) =>
+    clearCatchupSummaryRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTurnRepository.clearCatchupSummary:query",
+          "ProjectionTurnRepository.clearCatchupSummary:encodeRequest",
+        ),
+      ),
+    );
+
   const listCatchupSummariesByThreadId: ProjectionTurnRepositoryShape["listCatchupSummariesByThreadId"] =
     (input) =>
       listCatchupSummaryRows(input).pipe(
@@ -403,6 +430,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     listByThreadId,
     getByTurnId,
     upsertCatchupSummary,
+    clearCatchupSummary,
     listCatchupSummariesByThreadId,
     clearCheckpointTurnConflict,
     deleteByThreadId,
