@@ -45,6 +45,7 @@ export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
+export type RequestThreadCatchupSummaryInput = CommandInput<"thread.catchup-summary.request">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 export type RestartThreadSessionInput = CommandInput<"thread.session.restart">;
 export type StopThreadExecutionInput = OrchestrationStopExecutionInput;
@@ -346,6 +347,20 @@ export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => Com
       createdAt: metadata.createdAt,
     });
   });
+
+export const requestThreadCatchupSummary: (
+  input: RequestThreadCatchupSummaryInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.requestThreadCatchupSummary")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.catchup-summary.request",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
 
 export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.stopThreadSession",

@@ -134,6 +134,8 @@ export type MessagesTimelineRow =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       assistantCatchupSummary?: CatchupSummary | undefined;
+      /** True on the terminal assistant message of a settled turn. */
+      assistantCatchupTurnId?: TurnId | undefined;
       revertTurnCount?: number | undefined;
     }
   | {
@@ -530,11 +532,21 @@ export function deriveMessagesTimelineRows(input: {
         timelineEntry.message.role === "assistant"
           ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
           : undefined,
-      // The catch-up card belongs to the turn and hangs off whichever
-      // assistant message ends up terminal for it.
+      // The catch-up card belongs to the turn and hangs off whichever assistant
+      // message is terminal for it. Deliberately NOT gated on showAssistantMeta:
+      // that flag is withheld while a turn reads as in-progress, which on reload
+      // briefly hides the newest card and makes the note jump to an older turn.
       assistantCatchupSummary:
-        showAssistantMeta && timelineEntry.message.turnId !== null
+        timelineEntry.message.role === "assistant" &&
+        terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+        timelineEntry.message.turnId !== null
           ? input.catchupSummaryByTurnId?.get(timelineEntry.message.turnId)
+          : undefined,
+      assistantCatchupTurnId:
+        timelineEntry.message.role === "assistant" &&
+        terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+        timelineEntry.message.turnId !== null
+          ? timelineEntry.message.turnId
           : undefined,
       revertTurnCount:
         timelineEntry.message.role === "user"
@@ -615,6 +627,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.assistantCatchupSummary === bm.assistantCatchupSummary &&
+        a.assistantCatchupTurnId === bm.assistantCatchupTurnId &&
         a.revertTurnCount === bm.revertTurnCount
       );
     }

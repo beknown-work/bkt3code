@@ -166,6 +166,8 @@ const make = Effect.gen(function* () {
     readonly completedAt: string;
     /** Assistant message the settling event anchored the turn to, when known. */
     readonly assistantMessageId?: MessageId | null | undefined;
+    /** Operator-triggered: ignore the duration cutoff and re-summarize. */
+    readonly force?: boolean | undefined;
   }) {
     const settings = yield* serverSettingsService.getSettings;
     const sessionSummary: SessionSummarySettings = settings.experimental.sessionSummary;
@@ -175,7 +177,7 @@ const make = Effect.gen(function* () {
     }
 
     const key = turnKey(input.threadId, input.turnId);
-    if (summarizedTurns.has(key)) {
+    if (summarizedTurns.has(key) && input.force !== true) {
       return;
     }
 
@@ -219,7 +221,7 @@ const make = Effect.gen(function* () {
       completedAtMs,
     });
     const cutoffMs = sessionSummary.minTurnDurationMinutes * 60_000;
-    const qualifies = durationMs !== null && durationMs >= cutoffMs;
+    const qualifies = input.force === true || (durationMs !== null && durationMs >= cutoffMs);
 
     const dispatchProgress = (progress: {
       readonly progress: "pending" | "ready" | "cleared";
@@ -304,6 +306,17 @@ const make = Effect.gen(function* () {
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (event: OrchestrationEvent) {
+    // Operator pressed "regenerate": always summarize, cutoff or not.
+    if (event.type === "thread.catchup-summary-requested") {
+      yield* summarizeTurn({
+        threadId: event.payload.threadId,
+        turnId: event.payload.turnId,
+        completedAt: event.payload.createdAt,
+        force: true,
+      });
+      return;
+    }
+
     // A "missing" checkpoint is a mid-turn placeholder, not a settled turn.
     if (event.type === "thread.turn-diff-completed" && event.payload.status !== "missing") {
       yield* summarizeTurn({
@@ -371,7 +384,10 @@ const make = Effect.gen(function* () {
   const start: CatchupSummaryReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.turn-diff-completed") {
+        if (
+          event.type !== "thread.turn-diff-completed" &&
+          event.type !== "thread.catchup-summary-requested"
+        ) {
           return Effect.void;
         }
         return worker.enqueue({ source: "domain", event });

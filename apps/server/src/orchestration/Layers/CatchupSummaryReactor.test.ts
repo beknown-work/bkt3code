@@ -292,6 +292,58 @@ layer("CatchupSummaryReactor", (it) => {
     }),
   );
 
+  it.effect("regenerates on request even for a turn under the cutoff", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ minTurnDurationMinutes: 5 });
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const reactor = yield* CatchupSummaryReactor;
+        yield* reactor.start();
+        yield* seedThread();
+        yield* emitTurnStarted(harness.emit);
+        yield* completeTurn("short", SHORT_TURN_COMPLETED_AT);
+        yield* reactor.drain;
+
+        // Under the cutoff: no card yet.
+        assert.strictEqual(yield* Ref.get(harness.catchupCalls), 0);
+
+        yield* engine.dispatch({
+          type: "thread.catchup-summary.request",
+          commandId: CommandId.make("cmd-catchup-request"),
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+          createdAt: SHORT_TURN_COMPLETED_AT,
+        });
+        yield* reactor.drain;
+
+        assert.strictEqual(yield* Ref.get(harness.catchupCalls), 1);
+        const thread = yield* readThread;
+        assert.strictEqual(thread?.turnSummaries[0]?.summary, DISPLAY_SUMMARY);
+        assert.strictEqual(thread?.turnSummaries[0]?.status, "ready");
+      }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
+    }),
+  );
+
+  it.effect("clears the pending marker when summarization fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ minTurnDurationMinutes: 5, failCatchup: true });
+
+      yield* Effect.gen(function* () {
+        const reactor = yield* CatchupSummaryReactor;
+        yield* reactor.start();
+        yield* seedThread();
+        yield* emitTurnStarted(harness.emit);
+        yield* completeTurn("failing", LONG_TURN_COMPLETED_AT);
+        yield* reactor.drain;
+
+        // No spinner left behind, and no card.
+        const thread = yield* readThread;
+        assert.deepEqual(thread?.turnSummaries ?? [], []);
+      }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
+    }),
+  );
+
   it.effect("summarizes a turn once even when completion is signalled twice", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ minTurnDurationMinutes: 5 });

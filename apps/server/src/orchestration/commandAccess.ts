@@ -76,6 +76,7 @@ export const checkCommandAccess = (
     case "thread.approval.respond":
     case "thread.user-input.respond":
     case "thread.checkpoint.revert":
+    case "thread.catchup-summary.request":
     case "thread.session.stop":
     case "thread.session.restart":
       return accessControl.canAccessThread(actorUserId, command.threadId);

@@ -55,6 +55,7 @@ import {
   HammerIcon,
   HistoryIcon,
   LoaderIcon,
+  RefreshCwIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -144,6 +145,7 @@ interface TimelineRowSharedState {
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorElement?: HTMLElement) => void;
 }
@@ -186,6 +188,7 @@ interface MessagesTimelineProps {
   catchupSummaryByTurnId?: ReadonlyMap<TurnId, CatchupSummary> | undefined;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
@@ -221,6 +224,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   catchupSummaryByTurnId,
   routeThreadKey,
   onOpenTurnDiff,
+  onRegenerateCatchupSummary,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   isRevertingCheckpoint,
@@ -477,6 +481,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onRegenerateCatchupSummary,
       onToggleTurnFold,
       onToggleWorkGroup,
     }),
@@ -493,6 +498,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onRegenerateCatchupSummary,
       onToggleTurnFold,
       onToggleWorkGroup,
     ],
@@ -1058,7 +1064,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           resolvedTheme={ctx.resolvedTheme}
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
-        <SessionCatchupCard catchupSummary={row.assistantCatchupSummary} />
+        <SessionCatchupCard
+          catchupSummary={row.assistantCatchupSummary}
+          turnId={row.assistantCatchupTurnId}
+          onRegenerate={ctx.onRegenerateCatchupSummary}
+        />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
@@ -1266,18 +1276,54 @@ function WorkGroupToggleTimelineRow({
  */
 const CATCHUP_PENDING_STALE_MS = 3 * 60_000;
 
+function isStaleCatchupPending(createdAt: string): boolean {
+  const startedAtMs = Date.parse(createdAt);
+  return Number.isFinite(startedAtMs) && Date.now() - startedAtMs > CATCHUP_PENDING_STALE_MS;
+}
+
 const SessionCatchupCard = memo(function SessionCatchupCard({
   catchupSummary,
+  turnId,
+  onRegenerate,
 }: {
   catchupSummary: CatchupSummary | undefined;
+  turnId: TurnId | undefined;
+  onRegenerate: ((turnId: TurnId) => void) | undefined;
 }) {
-  if (!catchupSummary) return null;
+  // Nothing to anchor to (not the terminal message of a settled turn).
+  if (turnId === undefined) return null;
 
-  if (catchupSummary.status === "pending") {
-    const startedAtMs = Date.parse(catchupSummary.createdAt);
-    if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > CATCHUP_PENDING_STALE_MS) {
-      return null;
-    }
+  const isPending =
+    catchupSummary?.status === "pending" && !isStaleCatchupPending(catchupSummary.createdAt);
+  const summary = catchupSummary?.status === "ready" ? (catchupSummary.summary?.trim() ?? "") : "";
+
+  const regenerateButton =
+    onRegenerate === undefined ? null : (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={summary.length > 0 ? "Regenerate catch-up" : "Generate catch-up"}
+              className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+              disabled={isPending}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRegenerate(turnId);
+              }}
+            >
+              <RefreshCwIcon className="size-3" />
+            </Button>
+          }
+        />
+        <TooltipPopup>
+          {summary.length > 0 ? "Regenerate catch-up" : "Generate catch-up for this turn"}
+        </TooltipPopup>
+      </Tooltip>
+    );
+
+  if (isPending) {
     return (
       <div className="mt-3 rounded-2xl border border-input/60 bg-accent/40 p-3 shadow-xs/5 not-dark:bg-clip-padding dark:bg-accent/20">
         <p className="flex items-center gap-1.5 font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
@@ -1288,15 +1334,25 @@ const SessionCatchupCard = memo(function SessionCatchupCard({
     );
   }
 
-  const summary = catchupSummary.summary?.trim() ?? "";
-  if (summary.length === 0) return null;
+  // No summary yet: offer generation without occupying card-sized space.
+  if (summary.length === 0) {
+    return regenerateButton === null ? null : (
+      <div className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+        {regenerateButton}
+        <span>Catch-up</span>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-3 rounded-2xl border border-input/60 bg-accent/40 p-3 shadow-xs/5 not-dark:bg-clip-padding dark:bg-accent/20">
-      <p className="mb-1.5 flex items-center gap-1.5 font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
-        <HistoryIcon className="size-3" />
-        <span>Catch-up</span>
-      </p>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 font-medium text-[11px] text-muted-foreground uppercase tracking-wide">
+          <HistoryIcon className="size-3" />
+          <span>Catch-up</span>
+        </p>
+        {regenerateButton}
+      </div>
       <p className="line-clamp-3 whitespace-pre-line text-[13px] text-foreground leading-snug">
         {summary}
       </p>

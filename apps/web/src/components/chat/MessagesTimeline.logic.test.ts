@@ -396,6 +396,61 @@ describe("deriveMessagesTimelineRows", () => {
     );
   });
 
+  it("keeps the catch-up card attached while the turn still reads as in progress", () => {
+    // Regression: the card used to be gated on showAssistantMeta, which is
+    // withheld for an unsettled turn. On reload latestTurn briefly hydrates as
+    // unsettled, so the newest card vanished and the note appeared to jump to
+    // an older turn.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "All done.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:30Z",
+            streaming: false,
+            sentByUserId: null,
+          },
+        },
+      ],
+      // Turn reads as unsettled, as it momentarily does during hydration.
+      runningTurnId: "turn-1" as never,
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      catchupSummaryByTurnId: new Map([
+        [
+          "turn-1" as never,
+          {
+            turnId: "turn-1" as never,
+            assistantMessageId: "assistant-final" as never,
+            summary: "Still visible.",
+            status: "ready" as const,
+            createdAt: "2026-01-01T00:00:25Z",
+          },
+        ],
+      ]),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const assistantRow = rows.find(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+
+    // Metadata row stays withheld, but the card does not.
+    expect(assistantRow?.showAssistantMeta).toBe(false);
+    expect(assistantRow?.assistantCatchupSummary?.summary).toBe("Still visible.");
+    expect(assistantRow?.assistantCatchupTurnId).toBe("turn-1");
+  });
+
   it("marks only the active assistant turn as streaming for copy controls", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

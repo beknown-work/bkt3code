@@ -2078,6 +2078,20 @@ function ChatViewContent(props: ChatViewProps) {
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const catchupSummaryByTurnId = useCatchupSummaries(activeThread);
+  const requestCatchupSummary = useAtomCommand(threadEnvironment.requestCatchupSummary, {
+    reportFailure: false,
+  });
+  const activeThreadIdForCatchup = activeThread?.id ?? null;
+  const onRegenerateCatchupSummary = useCallback(
+    (turnId: TurnId) => {
+      if (!activeThreadIdForCatchup) return;
+      void requestCatchupSummary({
+        environmentId,
+        input: { threadId: activeThreadIdForCatchup, turnId },
+      });
+    },
+    [activeThreadIdForCatchup, environmentId, requestCatchupSummary],
+  );
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {
@@ -5181,6 +5195,7 @@ function ChatViewContent(props: ChatViewProps) {
                 runningTurnId={activeThread.execution?.turn?.providerTurnId ?? null}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 catchupSummaryByTurnId={catchupSummaryByTurnId}
+                onRegenerateCatchupSummary={onRegenerateCatchupSummary}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}

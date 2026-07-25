@@ -878,6 +878,15 @@ const ThreadCheckpointRevertCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/** Operator asked for a catch-up summary, ignoring the duration cutoff. */
+const ThreadCatchupSummaryRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.catchup-summary.request"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadSessionStopCommand = Schema.Struct({
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
@@ -914,6 +923,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
+  ThreadCatchupSummaryRequestCommand,
   ThreadSessionStopCommand,
   ThreadSessionRestartCommand,
 ]);
@@ -942,6 +952,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
+  ThreadCatchupSummaryRequestCommand,
   ThreadSessionStopCommand,
   ThreadSessionRestartCommand,
 ]);
@@ -1083,6 +1094,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
+  "thread.catchup-summary-requested",
   "thread.catchup-summary-updated",
   "thread.activity-appended",
 ]);
@@ -1260,6 +1272,12 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
+});
+
+export const ThreadCatchupSummaryRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
 });
 
 export const ThreadCatchupSummaryUpdatedPayload = Schema.Struct({
@@ -1488,6 +1506,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-diff-completed"),
     payload: ThreadTurnDiffCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.catchup-summary-requested"),
+    payload: ThreadCatchupSummaryRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
