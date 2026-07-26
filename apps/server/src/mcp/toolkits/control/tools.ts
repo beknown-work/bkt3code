@@ -8,6 +8,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
@@ -20,6 +21,7 @@ import {
 } from "../../../plannotator/PlannotatorManager.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../../../serverSettings.ts";
+import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 export class T3ControlToolError extends Schema.TaggedErrorClass<T3ControlToolError>()(
@@ -39,6 +41,7 @@ const dependencies = [
 ];
 const plannotatorDependencies = [...dependencies, PlannotatorManager];
 const configurationDependencies = [...dependencies, ProviderRegistry, ServerSettingsService];
+const projectDependencies = [...dependencies, Path.Path, WorkspacePaths.WorkspacePaths];
 
 const described = <S extends Schema.Top>(schema: S, description: string): S =>
   schema.annotate({ description }) as S;
@@ -280,6 +283,43 @@ export const T3RespondUserInputTool = mutatingTool(
   }).annotate(Tool.Title, "Answer T3 user input"),
 );
 
+export const T3CreateProjectTool = mutatingTool(
+  Tool.make("t3_create_project", {
+    description:
+      "Register a workspace as a T3 Code project so an external operator can bootstrap a fresh server before creating sessions. The workspace must already be a directory unless createWorkspaceRootIfMissing is explicitly enabled. Reusing an active workspace returns that project instead of creating a duplicate.",
+    parameters: Schema.Struct({
+      workspaceRoot: described(
+        Schema.String,
+        "Absolute workspace directory or a path supported by this T3 host, such as ~/repos/example.",
+      ),
+      title: Schema.optional(
+        described(
+          Schema.String,
+          "Concise project title. Defaults to the normalized workspace directory name.",
+        ),
+      ),
+      createWorkspaceRootIfMissing: Schema.optional(
+        described(
+          Schema.Boolean,
+          "Create the directory recursively when it does not exist. Defaults to false.",
+        ),
+      ),
+      defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)).pipe(
+        Schema.annotateKey({
+          description:
+            "Optional project default provider/model selection, or null to inherit the server default. Discover valid values with t3_get_configuration.",
+        }),
+      ),
+    }),
+    success: Schema.Unknown,
+    failure: T3ControlToolError,
+    dependencies: projectDependencies,
+  })
+    .annotate(Tool.Title, "Create T3 project")
+    .annotate(Tool.Destructive, false)
+    .annotate(Tool.Idempotent, true),
+);
+
 export const T3CreateSessionTool = mutatingTool(
   Tool.make("t3_create_session", {
     description:
@@ -421,6 +461,7 @@ export const T3ControlToolkit = Toolkit.make(
   T3SessionActionTool,
   T3RespondApprovalTool,
   T3RespondUserInputTool,
+  T3CreateProjectTool,
   T3CreateSessionTool,
   T3SubmitPlanTool,
   T3ListPlannotatorReviewsTool,

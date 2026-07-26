@@ -18,6 +18,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSupervisor.ts";
@@ -26,6 +27,7 @@ import { ProjectionSnapshotQuery } from "../../../orchestration/Services/Project
 import { PlannotatorManager } from "../../../plannotator/PlannotatorManager.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "../../../serverSettings.ts";
+import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { T3ControlToolkit, T3ControlToolError } from "./tools.ts";
 
@@ -615,6 +617,59 @@ const handlers = {
       })
       .pipe(mapControlError(operation));
     return { accepted: true, sessionId, requestId: input.requestId, sequence: result.sequence };
+  }),
+
+  t3_create_project: Effect.fn("T3ControlToolkit.createProject")(function* (input) {
+    const operation = "create-project";
+    yield* requireExternalOperator(operation);
+    const query = yield* ProjectionSnapshotQuery;
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const path = yield* Path.Path;
+    const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+    const workspaceRoot = yield* workspacePaths
+      .normalizeWorkspaceRoot(input.workspaceRoot, {
+        createIfMissing: input.createWorkspaceRootIfMissing === true,
+      })
+      .pipe(mapControlError(operation));
+    const shell = yield* query.getShellSnapshot().pipe(mapControlError(operation));
+    const existing = shell.projects.find((project) => project.workspaceRoot === workspaceRoot);
+    if (existing) {
+      return {
+        created: false,
+        project: existing,
+        guidance: "This workspace is already registered. Use its id with t3_create_session.",
+      };
+    }
+
+    const uuid = yield* crypto.randomUUIDv4.pipe(mapControlError(operation));
+    const projectId = ProjectId.make(`mcp-project:${uuid}`);
+    const commandId = yield* makeCommandId(crypto, operation);
+    const createdAt = yield* nowIso;
+    const title = input.title?.trim() || path.basename(workspaceRoot) || "New MCP project";
+    const result = yield* dispatcher
+      .dispatch({
+        type: "project.create",
+        commandId,
+        projectId,
+        title,
+        workspaceRoot,
+        createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing === true,
+        defaultModelSelection: input.defaultModelSelection ?? null,
+        createdAt,
+      })
+      .pipe(mapControlError(operation));
+    return {
+      created: true,
+      project: {
+        id: projectId,
+        title,
+        workspaceRoot,
+        defaultModelSelection: input.defaultModelSelection ?? null,
+      },
+      sequence: result.sequence,
+      guidance: "Use this project id with t3_create_session.",
+    };
   }),
 
   t3_create_session: Effect.fn("T3ControlToolkit.createSession")(function* (input) {

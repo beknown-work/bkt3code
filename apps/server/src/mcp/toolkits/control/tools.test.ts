@@ -14,7 +14,8 @@ const schemaHasDescription = (schema: unknown): boolean => {
 
 it("exports self-documenting, provider-compatible T3 control tools", () => {
   const tools = Object.values(T3ControlToolkit.tools);
-  expect(tools.length).toBeGreaterThanOrEqual(14);
+  expect(tools.length).toBeGreaterThanOrEqual(15);
+  expect(T3ControlToolkit.tools.t3_create_project).toBeDefined();
 
   for (const tool of tools) {
     const schema = Tool.getJsonSchema(tool) as {
