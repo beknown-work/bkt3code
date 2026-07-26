@@ -5,6 +5,8 @@ import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
   buildProposedPlanMarkdownFilename,
+  normalizePlanMarkdownForExport,
+  plannotatorProxyPathFromPlan,
   proposedPlanTitle,
   resolvePlanFollowUpSubmission,
   stripDisplayedPlanMarkdown,
@@ -25,6 +27,14 @@ describe("buildPlanImplementationPrompt", () => {
     expect(buildPlanImplementationPrompt("## Ship it\n\n- step 1\n")).toBe(
       "PLEASE IMPLEMENT THIS PLAN:\n## Ship it\n\n- step 1",
     );
+  });
+
+  it("does not expose a Plannotator review token to the implementation prompt", () => {
+    expect(
+      buildPlanImplementationPrompt(
+        "## Ship it\n\n- step 1\n\n<!-- t3-plannotator:/plannotator/private-token/ -->",
+      ),
+    ).toBe("PLEASE IMPLEMENT THIS PLAN:\n## Ship it\n\n- step 1");
   });
 });
 
@@ -110,5 +120,14 @@ describe("buildProposedPlanMarkdownFilename", () => {
 
   it("falls back to a generic filename when the plan has no heading", () => {
     expect(buildProposedPlanMarkdownFilename("- step 1")).toBe("plan.md");
+  });
+});
+
+describe("Plannotator plan metadata", () => {
+  it("finds the review path but strips the opaque token from exported plans", () => {
+    const markdown = "# Review me\n\n- step\n\n<!-- t3-plannotator:/plannotator/token_123/ -->";
+
+    expect(plannotatorProxyPathFromPlan(markdown)).toBe("/plannotator/token_123/");
+    expect(normalizePlanMarkdownForExport(markdown)).toBe("# Review me\n\n- step\n");
   });
 });

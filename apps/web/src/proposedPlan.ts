@@ -1,10 +1,17 @@
+import {
+  plannotatorProxyPathFromPlan,
+  withoutPlannotatorPlanMarker,
+} from "@t3tools/shared/plannotator";
+
+export { plannotatorProxyPathFromPlan };
+
 export function proposedPlanTitle(planMarkdown: string): string | null {
   const heading = planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim();
   return heading && heading.length > 0 ? heading : null;
 }
 
 export function stripDisplayedPlanMarkdown(planMarkdown: string): string {
-  const lines = planMarkdown.trimEnd().split(/\r?\n/);
+  const lines = withoutPlannotatorPlanMarker(planMarkdown).trimEnd().split(/\r?\n/);
   const sourceLines = lines[0] && /^\s{0,3}#{1,6}\s+/.test(lines[0]) ? lines.slice(1) : [...lines];
   while (sourceLines[0]?.trim().length === 0) {
     sourceLines.shift();
@@ -71,7 +78,7 @@ function sanitizePlanFileSegment(input: string): string {
 }
 
 export function buildPlanImplementationPrompt(planMarkdown: string): string {
-  return `PLEASE IMPLEMENT THIS PLAN:\n${planMarkdown.trim()}`;
+  return `PLEASE IMPLEMENT THIS PLAN:\n${withoutPlannotatorPlanMarker(planMarkdown).trim()}`;
 }
 
 export function resolvePlanFollowUpSubmission(input: { draftText: string; planMarkdown: string }): {
@@ -106,7 +113,7 @@ export function buildProposedPlanMarkdownFilename(planMarkdown: string): string 
 }
 
 export function normalizePlanMarkdownForExport(planMarkdown: string): string {
-  return `${planMarkdown.trimEnd()}\n`;
+  return `${withoutPlannotatorPlanMarker(planMarkdown)}\n`;
 }
 
 export function downloadPlanAsTextFile(filename: string, contents: string): void {

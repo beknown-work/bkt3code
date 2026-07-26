@@ -6,7 +6,9 @@ import { memo, useCallback, useMemo } from "react";
 import { APP_STAGE_LABEL } from "../../branding";
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../../connection/useDesktopLocalBootstraps";
+import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 import { cn } from "../../lib/utils";
+import { useThreadShells } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { primaryServerConfigAtom } from "../../state/server";
 import { resolveSidebarStageBadgeLabel } from "../Sidebar.logic";
@@ -25,6 +27,7 @@ import {
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarResourceMonitorPill } from "./SidebarResourceMonitorPill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { summarizeSidebarSessions } from "./sidebarSessionCounters";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -56,7 +59,9 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const { environments } = useEnvironments();
+  const threads = useThreadShells();
   const stageLabel = useSidebarStageLabel();
+  const counts = useMemo(() => summarizeSidebarSessions(threads), [threads]);
   const syncing = environments.some(
     (environment) =>
       environment.connection.phase === "connecting" ||
@@ -91,6 +96,37 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           {stageLabel}
         </span>
       </Link>
+      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
+        <div className="flex shrink-0 items-center gap-1" aria-label="Session status summary">
+          <span
+            className={cn(
+              "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+              counts.attention > 0
+                ? onBackdrop
+                  ? "animate-pulse border-white/70 bg-white text-red-600 shadow-[0_0_18px_rgba(255,255,255,0.9)]"
+                  : "animate-pulse border-red-500 bg-red-500 text-white shadow-[0_0_18px_rgba(239,68,68,0.75)]"
+                : onBackdrop
+                  ? "border-white/20 bg-white/10 text-white/55"
+                  : "border-border/60 bg-muted/50 text-muted-foreground/60",
+            )}
+            role="status"
+            title={`${counts.attention} session${counts.attention === 1 ? "" : "s"} need human attention`}
+          >
+            {counts.attention}
+          </span>
+          <span
+            className={cn(
+              "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+              onBackdrop
+                ? "border-white/25 bg-white/12 text-white"
+                : "border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
+            )}
+            title={`${counts.running} session${counts.running === 1 ? "" : "s"} running`}
+          >
+            {counts.running}
+          </span>
+        </div>
+      ) : null}
       {syncing ? (
         <span
           aria-label="Connection interrupted; syncing"

@@ -37,6 +37,8 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
+import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -366,9 +368,17 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
 const RuntimeBaseServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
-const RuntimeServicesLive = Layer.mergeAll(
+const RuntimeServicesWithoutPlannotatorLive = Layer.mergeAll(
   RuntimeBaseServicesLive,
   OrchestrationCommandDispatcher.layer.pipe(Layer.provide(RuntimeBaseServicesLive)),
+);
+const RuntimeServicesLive = PlannotatorManager.layer.pipe(
+  Layer.provideMerge(RuntimeServicesWithoutPlannotatorLive),
+);
+
+const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
+  plannotatorProxyRouteLayer,
+  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
@@ -390,7 +400,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
+  PlannotatorAndMcpRoutesLive,
 ).pipe(
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),

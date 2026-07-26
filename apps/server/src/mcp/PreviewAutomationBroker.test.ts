@@ -25,6 +25,7 @@ import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
 
 const scope = {
+  principal: "provider-session" as const,
   environmentId: EnvironmentId.make("environment-1"),
   threadId: ThreadId.make("thread-1"),
   providerSessionId: "provider-session-1",

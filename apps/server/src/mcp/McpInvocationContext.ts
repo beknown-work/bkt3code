@@ -7,9 +7,10 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview";
+export type McpCapability = "preview" | "t3.read" | "t3.control" | "t3.plan";
 
 export interface McpInvocationScope {
+  readonly principal: "provider-session" | "external-operator";
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
@@ -19,13 +20,17 @@ export interface McpInvocationScope {
   readonly expiresAt: number;
 }
 
+export function isExternalMcpOperator(scope: McpInvocationScope): boolean {
+  return scope.principal === "external-operator";
+}
+
 export class McpInvocationContext extends Context.Service<
   McpInvocationContext,
   McpInvocationScope
 >()("t3/mcp/McpInvocationContext") {}
 
 export const requireMcpCapability = Effect.fn("mcp.requireCapability")(function* (
-  capability: McpCapability,
+  capability: "preview",
 ) {
   const invocation = yield* McpInvocationContext;
   if (!invocation.capabilities.has(capability)) {

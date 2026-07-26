@@ -17,6 +17,8 @@ import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
 } from "./toolkits/preview/handlers.ts";
+import { T3ControlToolkitHandlersLive } from "./toolkits/control/handlers.ts";
+import { T3ControlToolkit } from "./toolkits/control/tools.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -26,7 +28,8 @@ import {
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
     error: "invalid_mcp_credential",
-    message: "A valid provider-scoped MCP bearer credential is required.",
+    message:
+      "A valid provider-scoped or Settings-issued external MCP bearer credential is required.",
   },
   {
     status: 401,
@@ -208,10 +211,17 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+export const T3ControlToolkitRegistrationLive = McpServer.toolkit(T3ControlToolkit).pipe(
+  Layer.provide(T3ControlToolkitHandlersLive),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  T3ControlToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

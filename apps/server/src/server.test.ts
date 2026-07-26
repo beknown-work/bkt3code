@@ -91,6 +91,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -543,7 +544,10 @@ const buildAppUnderTest = (options?: {
     const servedRoutesWithDispatcherLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
       disableLogger: true,
-    }).pipe(Layer.provide(OrchestrationCommandDispatcher.layer));
+    }).pipe(
+      Layer.provide(PlannotatorManager.layer),
+      Layer.provide(OrchestrationCommandDispatcher.layer),
+    );
     const servedRoutesLayer = servedRoutesWithDispatcherLayer.pipe(
       Layer.provide(
         Layer.mock(Keybindings.Keybindings)({
@@ -725,7 +729,10 @@ const buildAppUnderTest = (options?: {
               threads: [],
               updatedAt: "1970-01-01T00:00:00.000Z",
             }),
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+          // Unless a test explicitly models projection lag, keep the shell
+          // projection barrier open. Event-stream seams often use synthetic
+          // sequences while overriding only the projection read under test.
+          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: Number.MAX_SAFE_INTEGER }),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
           getThreadDetailById: () => Effect.succeed(Option.none()),

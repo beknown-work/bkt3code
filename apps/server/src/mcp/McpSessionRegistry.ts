@@ -1,4 +1,5 @@
 import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -8,6 +9,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/unstable/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
 
@@ -50,6 +52,10 @@ export interface McpSessionRegistryOptions {
   readonly idleTimeoutMs?: number;
   readonly maximumLifetimeMs?: number;
   readonly now?: () => number;
+  readonly loadExternalMcpSettings?: () => Effect.Effect<{
+    readonly enabled: boolean;
+    readonly apiKey: string;
+  }>;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
@@ -59,6 +65,15 @@ const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const tokenFromBytes = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64url");
+
+const tokenHashesMatch = (left: string, right: string): boolean => {
+  const leftBytes = Buffer.from(left, "hex");
+  const rightBytes = Buffer.from(right, "hex");
+  return (
+    leftBytes.byteLength === rightBytes.byteLength &&
+    NodeCrypto.timingSafeEqual(leftBytes, rightBytes)
+  );
+};
 
 const getHttpMcpEndpointHost = (hostname: string): string => {
   const normalized = hostname.toLowerCase();
@@ -110,11 +125,12 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const tokenHash = yield* hashToken(rawToken);
       const expiresAt = issuedAt + maximumLifetimeMs;
       const scope: McpInvocationContext.McpInvocationScope = {
+        principal: "provider-session",
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview"]),
+        capabilities: new Set(["preview", "t3.read", "t3.control", "t3.plan"]),
         issuedAt,
         expiresAt,
       };
@@ -142,7 +158,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       if (rawToken.length === 0) return undefined;
       const tokenHash = yield* hashToken(rawToken);
       const timestamp = yield* currentTimeMillis;
-      return yield* SynchronizedRef.modify(state, ({ records }) => {
+      const providerScope = yield* SynchronizedRef.modify(state, ({ records }) => {
         const current = pruneExpired(records, timestamp);
         const record = current.get(tokenHash);
         if (!record) return [undefined, { records: current }] as const;
@@ -150,6 +166,28 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         next.set(tokenHash, { ...record, lastUsedAt: timestamp });
         return [record.scope, { records: next }] as const;
       });
+      if (providerScope) return providerScope;
+
+      const externalSettings = yield* (
+        options.loadExternalMcpSettings?.() ?? Effect.succeed({ enabled: false, apiKey: "" })
+      );
+      if (
+        !externalSettings.enabled ||
+        externalSettings.apiKey.length < 24 ||
+        !tokenHashesMatch(yield* hashToken(externalSettings.apiKey), tokenHash)
+      ) {
+        return undefined;
+      }
+      return {
+        principal: "external-operator",
+        environmentId,
+        threadId: ThreadId.make("external-operator"),
+        providerSessionId: "external-operator",
+        providerInstanceId: ProviderInstanceId.make("external-operator"),
+        capabilities: new Set(["t3.read", "t3.control", "t3.plan"]),
+        issuedAt: timestamp,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      } satisfies McpInvocationContext.McpInvocationScope;
     },
   );
 
@@ -176,7 +214,16 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 let activeMcpSessionRegistry: McpSessionRegistryShape | undefined;
 
 const make = Effect.acquireRelease(
-  makeWithOptions().pipe(
+  Effect.gen(function* () {
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
+    return yield* makeWithOptions({
+      loadExternalMcpSettings: () =>
+        serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.experimental.externalMcp),
+          Effect.orElseSucceed(() => ({ enabled: false, apiKey: "" })),
+        ),
+    });
+  }).pipe(
     Effect.tap((registry) =>
       Effect.sync(() => {
         activeMcpSessionRegistry = registry;

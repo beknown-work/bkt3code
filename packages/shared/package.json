@@ -198,6 +198,10 @@
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
+    },
+    "./plannotator": {
+      "types": "./src/plannotator.ts",
+      "import": "./src/plannotator.ts"
     }
   },
   "scripts": {

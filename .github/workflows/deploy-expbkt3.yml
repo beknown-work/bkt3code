@@ -1,0 +1,55 @@
+name: Validate and deploy experimental T3
+
+on:
+  push:
+    branches: ["t3code/exp-t3-mcp-plannator"]
+  pull_request:
+    branches: ["t3code/exp-t3-mcp-plannator"]
+  workflow_dispatch:
+
+concurrency:
+  group: expbkt3-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.10.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting and lint
+        run: pnpm exec vp check
+
+      - name: Typecheck
+        run: pnpm exec vp run typecheck
+
+      - name: Test
+        run: pnpm exec vp run test
+
+      - name: Build experimental web client
+        run: pnpm exec vp run --filter @t3tools/web build
+        env:
+          VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true"
+
+      - name: Build server bundle
+        run: pnpm exec vp run --filter t3 build:bundle

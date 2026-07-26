@@ -3076,6 +3076,13 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeProject, activeThreadRef],
   );
+  const openPlannotatorSurface = useCallback(
+    (url: `/plannotator/${string}/`) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openPlannotator(activeThreadRef, url);
+    },
+    [activeThreadRef],
+  );
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
     if (previewPanelOpen) {
@@ -5664,6 +5671,15 @@ function ChatViewContent(props: ChatViewProps) {
           visible
         />
       </Suspense>
+    ) : activeRightPanelSurface?.kind === "plannotator" ? (
+      <iframe
+        key={activeRightPanelSurface.url}
+        src={activeRightPanelSurface.url}
+        title="Plannotator plan review"
+        className="h-full min-h-0 w-full border-0 bg-background"
+        sandbox="allow-downloads allow-forms allow-modals allow-scripts"
+        referrerPolicy="no-referrer"
+      />
     ) : activeRightPanelSurface?.kind === "terminal" ? (
       <PersistentThreadTerminalPanel
         threadRef={activeThreadRef}
@@ -5702,6 +5718,7 @@ function ChatViewContent(props: ChatViewProps) {
         workspaceRoot={activeWorkspaceRoot}
         timestampFormat={timestampFormat}
         mode="embedded"
+        onOpenPlannotator={openPlannotatorSurface}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&

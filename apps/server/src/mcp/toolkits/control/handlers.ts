@@ -1,0 +1,827 @@
+import {
+  ApprovalRequestId,
+  CommandId,
+  DEFAULT_RUNTIME_MODE,
+  DEFAULT_SERVER_SETTINGS,
+  MessageId,
+  OrchestrationProposedPlanId,
+  OrchestrationCommand as OrchestrationCommandSchema,
+  ProjectId,
+  ThreadId,
+  type OrchestrationCommand,
+  type OrchestrationThread,
+  type OrchestrationThreadShell,
+  type ThreadExecutionSnapshot,
+} from "@t3tools/contracts";
+import { withPlannotatorPlanMarker } from "@t3tools/shared/plannotator";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSupervisor.ts";
+import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
+import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { PlannotatorManager } from "../../../plannotator/PlannotatorManager.ts";
+import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
+import { redactServerSettingsForClient, ServerSettingsService } from "../../../serverSettings.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { T3ControlToolkit, T3ControlToolError } from "./tools.ts";
+
+const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommandSchema);
+
+function boundedLimit(value: number | undefined, fallback: number, maximum: number): number {
+  if (value === undefined || !Number.isSafeInteger(value)) return fallback;
+  return Math.max(0, Math.min(value, maximum));
+}
+
+function errorMessage(cause: unknown): string {
+  if (cause instanceof Error && cause.message.trim().length > 0) return cause.message;
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    "message" in cause &&
+    typeof cause.message === "string"
+  ) {
+    return cause.message;
+  }
+  return "T3 Code could not complete the requested operation.";
+}
+
+const mapControlError =
+  (operation: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, T3ControlToolError, R> =>
+    effect.pipe(
+      Effect.mapError(
+        (cause) =>
+          new T3ControlToolError({
+            operation,
+            message: errorMessage(cause),
+          }),
+      ),
+    );
+
+const requireCapability = Effect.fn("T3ControlToolkit.requireCapability")(function* (
+  operation: string,
+  capability: McpInvocationContext.McpCapability,
+) {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
+  if (!scope.capabilities.has(capability)) {
+    return yield* new T3ControlToolError({
+      operation,
+      message: `This MCP credential does not grant ${capability}.`,
+    });
+  }
+  return scope;
+});
+
+const requireExternalOperator = Effect.fn("T3ControlToolkit.requireExternalOperator")(function* (
+  operation: string,
+) {
+  const scope = yield* requireCapability(operation, "t3.control");
+  if (!McpInvocationContext.isExternalMcpOperator(scope)) {
+    return yield* new T3ControlToolError({
+      operation,
+      message: "This operation requires the Settings-issued external operator credential.",
+    });
+  }
+  return scope;
+});
+
+const resolveSessionId = Effect.fn("T3ControlToolkit.resolveSessionId")(function* (
+  operation: string,
+  requested: ThreadId | undefined,
+  capability: "t3.read" | "t3.control" | "t3.plan" = "t3.read",
+) {
+  const scope = yield* requireCapability(operation, capability);
+  if (McpInvocationContext.isExternalMcpOperator(scope)) {
+    if (requested === undefined) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: "sessionId is required for an external operator call.",
+      });
+    }
+    return requested;
+  }
+  if (requested !== undefined && requested !== scope.threadId) {
+    return yield* new T3ControlToolError({
+      operation,
+      message: "An in-session agent may only control its own T3 session.",
+    });
+  }
+  return scope.threadId;
+});
+
+function attentionReasons(
+  thread: OrchestrationThreadShell | OrchestrationThread,
+  execution: ThreadExecutionSnapshot,
+): ReadonlyArray<string> {
+  const reasons: Array<string> = [];
+  if (
+    ("hasPendingApprovals" in thread && thread.hasPendingApprovals) ||
+    execution.turn?.state === "waiting-for-approval"
+  ) {
+    reasons.push("approval");
+  }
+  if (
+    ("hasPendingUserInput" in thread && thread.hasPendingUserInput) ||
+    execution.turn?.state === "waiting-for-input"
+  ) {
+    reasons.push("user-input");
+  }
+  if (
+    ("hasActionableProposedPlan" in thread && thread.hasActionableProposedPlan) ||
+    ("proposedPlans" in thread && thread.proposedPlans.some((plan) => plan.implementedAt === null))
+  ) {
+    reasons.push("proposed-plan");
+  }
+  if (execution.activity === "failed" || thread.session?.status === "error")
+    reasons.push("failure");
+  return reasons;
+}
+
+function sessionSummary(
+  thread: OrchestrationThreadShell,
+  execution: ThreadExecutionSnapshot,
+  project:
+    | {
+        readonly id: string;
+        readonly title: string;
+        readonly workspaceRoot: string;
+      }
+    | undefined,
+  detail: OrchestrationThread | undefined,
+) {
+  const reasons = attentionReasons(thread, execution);
+  const turnSummaries = detail?.turnSummaries ?? [];
+  return {
+    sessionId: thread.id,
+    title: thread.title,
+    project: project ?? null,
+    modelSelection: thread.modelSelection,
+    runtimeMode: thread.runtimeMode,
+    interactionMode: thread.interactionMode,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    archivedAt: thread.archivedAt,
+    settledAt: thread.settledAt,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    session: thread.session,
+    execution,
+    needsHumanAttention: reasons.length > 0,
+    humanAttentionReasons: reasons,
+    catchup: {
+      rollingSummary: detail?.rollingSummary ?? null,
+      latestTurnSummary: turnSummaries.at(-1) ?? null,
+    },
+    latestTurn: thread.latestTurn,
+    updatedAt: thread.updatedAt,
+  };
+}
+
+function htmlPlanSummary(content: string): string {
+  const heading =
+    content.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ??
+    content.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] ??
+    "HTML plan";
+  const title = heading
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return `# ${title || "HTML plan"}\n\nThis plan was submitted as HTML. Open the Plannotator review to inspect and annotate the full document.`;
+}
+
+function redactMcpConfiguration(settings: Parameters<typeof redactServerSettingsForClient>[0]) {
+  const redacted = redactServerSettingsForClient(settings);
+  return {
+    ...redacted,
+    experimental: {
+      ...redacted.experimental,
+      externalMcp: {
+        ...redacted.experimental.externalMcp,
+        apiKey: "",
+        apiKeyConfigured: redacted.experimental.externalMcp.apiKey.length >= 24,
+      },
+    },
+  };
+}
+
+const makeCommandId = (crypto: Crypto.Crypto, operation: string) =>
+  crypto.randomUUIDv4.pipe(
+    Effect.map((uuid) => CommandId.make(`mcp:${operation}:${uuid}`)),
+    mapControlError(operation),
+  );
+
+const makeMessageId = (crypto: Crypto.Crypto, operation: string) =>
+  crypto.randomUUIDv4.pipe(
+    Effect.map((uuid) => MessageId.make(`mcp:${uuid}`)),
+    mapControlError(operation),
+  );
+
+const handlers = {
+  t3_list_sessions: Effect.fn("T3ControlToolkit.listSessions")(function* (input) {
+    const operation = "list-sessions";
+    const scope = yield* requireCapability(operation, "t3.read");
+    const query = yield* ProjectionSnapshotQuery;
+    const executionSupervisor = yield* ThreadExecutionSupervisor;
+    const [shell, full] = yield* Effect.all([query.getShellSnapshot(), query.getSnapshot()]).pipe(
+      mapControlError(operation),
+    );
+    const archived =
+      input.includeArchived === true && McpInvocationContext.isExternalMcpOperator(scope)
+        ? yield* query.getArchivedShellSnapshot().pipe(mapControlError(operation))
+        : null;
+    const threads = [...shell.threads, ...(archived?.threads ?? [])].filter(
+      (thread) => McpInvocationContext.isExternalMcpOperator(scope) || thread.id === scope.threadId,
+    );
+    const executions = yield* executionSupervisor.getSnapshots(threads.map((thread) => thread.id));
+    const projects = new Map(
+      [...shell.projects, ...(archived?.projects ?? [])].map((project) => [
+        project.id,
+        {
+          id: project.id,
+          title: project.title,
+          workspaceRoot: project.workspaceRoot,
+        },
+      ]),
+    );
+    const details = new Map(full.threads.map((thread) => [thread.id, thread]));
+    const summaries = threads
+      .map((thread) =>
+        sessionSummary(
+          thread,
+          executions.get(thread.id) ??
+            ({
+              threadId: thread.id,
+              authorityEpoch: "unavailable",
+              revision: 0,
+              observedAt: thread.updatedAt,
+              activity: "idle",
+              canStop: false,
+              providerSession: {
+                state: "absent",
+                generation: 0,
+                providerInstanceId: null,
+                startedAt: null,
+                lastObservedAt: null,
+                lastError: null,
+              },
+              turn: null,
+            } satisfies ThreadExecutionSnapshot),
+          projects.get(thread.projectId),
+          details.get(thread.id),
+        ),
+      )
+      .filter((summary) => input.attentionOnly !== true || summary.needsHumanAttention)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, boundedLimit(input.limit, 100, 500));
+    return {
+      totals: {
+        returned: summaries.length,
+        attention: summaries.filter((session) => session.needsHumanAttention).length,
+        running: summaries.filter(
+          (session) =>
+            session.execution.activity === "active" ||
+            session.execution.activity === "blocked" ||
+            session.execution.activity === "stopping",
+        ).length,
+      },
+      sessions: summaries,
+    };
+  }),
+
+  t3_get_session: Effect.fn("T3ControlToolkit.getSession")(function* (input) {
+    const operation = "get-session";
+    const sessionId = yield* resolveSessionId(operation, input.sessionId);
+    const query = yield* ProjectionSnapshotQuery;
+    const executionSupervisor = yield* ThreadExecutionSupervisor;
+    const loaded = yield* query.getThreadDetailSnapshot(sessionId).pipe(mapControlError(operation));
+    if (Option.isNone(loaded)) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: `T3 session ${sessionId} was not found.`,
+      });
+    }
+    const thread = loaded.value.thread;
+    const execution = yield* executionSupervisor.getSnapshot(sessionId);
+    const messageLimit = boundedLimit(input.messageLimit, 30, 200);
+    const activityLimit = boundedLimit(input.activityLimit, 50, 300);
+    return {
+      snapshotSequence: loaded.value.snapshotSequence,
+      thread: {
+        ...thread,
+        messages: thread.messages.slice(-messageLimit),
+        activities: thread.activities.slice(-activityLimit),
+      },
+      execution,
+      humanAttentionReasons: attentionReasons(thread, execution),
+    };
+  }),
+
+  t3_list_projects: Effect.fn("T3ControlToolkit.listProjects")(function* (input) {
+    const operation = "list-projects";
+    const scope = yield* requireCapability(operation, "t3.read");
+    const query = yield* ProjectionSnapshotQuery;
+    const snapshot = yield* query.getShellSnapshot().pipe(mapControlError(operation));
+    const archived =
+      input.includeArchived === true && McpInvocationContext.isExternalMcpOperator(scope)
+        ? yield* query.getArchivedShellSnapshot().pipe(mapControlError(operation))
+        : null;
+    const activeCounts = new Map<string, number>();
+    for (const thread of snapshot.threads) {
+      activeCounts.set(thread.projectId, (activeCounts.get(thread.projectId) ?? 0) + 1);
+    }
+    const projects = new Map(
+      [...snapshot.projects, ...(archived?.projects ?? [])].map((project) => [project.id, project]),
+    );
+    return {
+      projects: [...projects.values()].map((project) => ({
+        ...project,
+        activeSessionCount: activeCounts.get(project.id) ?? 0,
+      })),
+    };
+  }),
+
+  t3_get_configuration: Effect.fn("T3ControlToolkit.getConfiguration")(function* (input) {
+    const operation = "get-configuration";
+    yield* requireCapability(operation, "t3.read");
+    const settingsService = yield* ServerSettingsService;
+    const providerRegistry = yield* ProviderRegistry;
+    const [settings, providers] = yield* Effect.all([
+      settingsService.getSettings,
+      input.refreshProviders === true ? providerRegistry.refresh() : providerRegistry.getProviders,
+    ]).pipe(mapControlError(operation));
+    return {
+      settings: redactMcpConfiguration(settings),
+      providers,
+      guidance: {
+        modelSelection:
+          "Use a provider instanceId and one of that provider's model slugs. Include only supported option selections.",
+        runtimeMode: "Use t3_update_session or t3_send_prompt to select a runtime/sandbox mode.",
+        interactionMode: "Use plan for planning-only turns and default for implementation turns.",
+      },
+    };
+  }),
+
+  t3_send_prompt: Effect.fn("T3ControlToolkit.sendPrompt")(function* (input) {
+    const operation = "send-prompt";
+    const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.control");
+    const query = yield* ProjectionSnapshotQuery;
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const loaded = yield* query.getThreadDetailById(sessionId).pipe(mapControlError(operation));
+    if (Option.isNone(loaded)) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: `T3 session ${sessionId} was not found.`,
+      });
+    }
+    const thread = loaded.value;
+    const [commandId, messageId, createdAt] = yield* Effect.all([
+      makeCommandId(crypto, operation),
+      makeMessageId(crypto, operation),
+      nowIso,
+    ]);
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.turn.start",
+        commandId,
+        threadId: sessionId,
+        message: {
+          messageId,
+          role: "user",
+          text: input.prompt,
+          attachments: [],
+        },
+        modelSelection: input.modelSelection ?? thread.modelSelection,
+        runtimeMode: input.runtimeMode ?? thread.runtimeMode,
+        interactionMode: input.interactionMode ?? thread.interactionMode,
+        createdAt,
+      })
+      .pipe(mapControlError(operation));
+    return { accepted: true, sequence: result.sequence, sessionId, messageId, createdAt };
+  }),
+
+  t3_update_session: Effect.fn("T3ControlToolkit.updateSession")(function* (input) {
+    const operation = "update-session";
+    const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.control");
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const createdAt = yield* nowIso;
+    const results: Array<{ readonly type: string; readonly sequence: number }> = [];
+
+    if (
+      input.title !== undefined ||
+      input.modelSelection !== undefined ||
+      input.branch !== undefined
+    ) {
+      const commandId = yield* makeCommandId(crypto, operation);
+      const result = yield* dispatcher
+        .dispatch({
+          type: "thread.meta.update",
+          commandId,
+          threadId: sessionId,
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+          ...(input.branch === undefined ? {} : { branch: input.branch }),
+        })
+        .pipe(mapControlError(operation));
+      results.push({ type: "thread.meta.update", sequence: result.sequence });
+    }
+    if (input.runtimeMode !== undefined) {
+      const commandId = yield* makeCommandId(crypto, operation);
+      const result = yield* dispatcher
+        .dispatch({
+          type: "thread.runtime-mode.set",
+          commandId,
+          threadId: sessionId,
+          runtimeMode: input.runtimeMode,
+          createdAt,
+        })
+        .pipe(mapControlError(operation));
+      results.push({ type: "thread.runtime-mode.set", sequence: result.sequence });
+    }
+    if (input.interactionMode !== undefined) {
+      const commandId = yield* makeCommandId(crypto, operation);
+      const result = yield* dispatcher
+        .dispatch({
+          type: "thread.interaction-mode.set",
+          commandId,
+          threadId: sessionId,
+          interactionMode: input.interactionMode,
+          createdAt,
+        })
+        .pipe(mapControlError(operation));
+      results.push({ type: "thread.interaction-mode.set", sequence: result.sequence });
+    }
+    if (results.length === 0) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: "Provide at least one session field to update.",
+      });
+    }
+    return { updated: true, sessionId, commands: results };
+  }),
+
+  t3_update_server_settings: Effect.fn("T3ControlToolkit.updateServerSettings")(function* (input) {
+    const operation = "update-server-settings";
+    yield* requireExternalOperator(operation);
+    const settingsService = yield* ServerSettingsService;
+    const settings = yield* settingsService
+      .updateSettings(input.patch)
+      .pipe(mapControlError(operation));
+    return {
+      updated: true,
+      settings: redactMcpConfiguration(settings),
+      warning:
+        "If this patch rotated or disabled external MCP access, use the newly configured credential for future calls.",
+    };
+  }),
+
+  t3_session_action: Effect.fn("T3ControlToolkit.sessionAction")(function* (input) {
+    const operation = `session-${input.action}`;
+    const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.control");
+    const query = yield* ProjectionSnapshotQuery;
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const [commandId, createdAt] = yield* Effect.all([makeCommandId(crypto, operation), nowIso]);
+    let command: OrchestrationCommand;
+    switch (input.action) {
+      case "interrupt":
+        command = {
+          type: "thread.turn.interrupt",
+          commandId,
+          threadId: sessionId,
+          createdAt,
+        };
+        break;
+      case "stop":
+        command = {
+          type: "thread.session.stop",
+          commandId,
+          threadId: sessionId,
+          createdAt,
+        };
+        break;
+      case "restart":
+        command = {
+          type: "thread.session.restart",
+          commandId,
+          threadId: sessionId,
+          createdAt,
+        };
+        break;
+      case "archive":
+        command = { type: "thread.archive", commandId, threadId: sessionId };
+        break;
+      case "unarchive":
+        command = { type: "thread.unarchive", commandId, threadId: sessionId };
+        break;
+      case "settle":
+        command = { type: "thread.settle", commandId, threadId: sessionId };
+        break;
+      case "activate":
+        command = {
+          type: "thread.unsettle",
+          commandId,
+          threadId: sessionId,
+          reason: "user",
+        };
+        break;
+      case "snooze":
+        if (input.snoozedUntil === undefined) {
+          return yield* new T3ControlToolError({
+            operation,
+            message: "snoozedUntil is required for the snooze action.",
+          });
+        }
+        command = {
+          type: "thread.snooze",
+          commandId,
+          threadId: sessionId,
+          snoozedUntil: input.snoozedUntil,
+        };
+        break;
+      case "unsnooze":
+        command = {
+          type: "thread.unsnooze",
+          commandId,
+          threadId: sessionId,
+          reason: "user",
+        };
+        break;
+      case "delete":
+        command = { type: "thread.delete", commandId, threadId: sessionId };
+        break;
+      case "request-catchup": {
+        const thread = yield* query.getThreadDetailById(sessionId).pipe(mapControlError(operation));
+        const turnId = Option.getOrNull(thread)?.latestTurn?.turnId;
+        if (turnId === null || turnId === undefined) {
+          return yield* new T3ControlToolError({
+            operation,
+            message: "This session has no turn to summarize.",
+          });
+        }
+        command = {
+          type: "thread.catchup-summary.request",
+          commandId,
+          threadId: sessionId,
+          turnId,
+          createdAt,
+        };
+        break;
+      }
+    }
+    const result = yield* dispatcher.dispatch(command).pipe(mapControlError(operation));
+    return { accepted: true, action: input.action, sessionId, sequence: result.sequence };
+  }),
+
+  t3_respond_approval: Effect.fn("T3ControlToolkit.respondApproval")(function* (input) {
+    const operation = "respond-approval";
+    const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.control");
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const [commandId, createdAt] = yield* Effect.all([makeCommandId(crypto, operation), nowIso]);
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.approval.respond",
+        commandId,
+        threadId: sessionId,
+        requestId: ApprovalRequestId.make(input.requestId),
+        decision: input.decision,
+        createdAt,
+      })
+      .pipe(mapControlError(operation));
+    return { accepted: true, sessionId, requestId: input.requestId, sequence: result.sequence };
+  }),
+
+  t3_respond_user_input: Effect.fn("T3ControlToolkit.respondUserInput")(function* (input) {
+    const operation = "respond-user-input";
+    const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.control");
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const [commandId, createdAt] = yield* Effect.all([makeCommandId(crypto, operation), nowIso]);
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.user-input.respond",
+        commandId,
+        threadId: sessionId,
+        requestId: ApprovalRequestId.make(input.requestId),
+        answers: input.answers,
+        createdAt,
+      })
+      .pipe(mapControlError(operation));
+    return { accepted: true, sessionId, requestId: input.requestId, sequence: result.sequence };
+  }),
+
+  t3_create_session: Effect.fn("T3ControlToolkit.createSession")(function* (input) {
+    const operation = "create-session";
+    yield* requireExternalOperator(operation);
+    const query = yield* ProjectionSnapshotQuery;
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const shell = yield* query.getShellSnapshot().pipe(mapControlError(operation));
+    const projectId = ProjectId.make(input.projectId);
+    const project = shell.projects.find((candidate) => candidate.id === projectId);
+    if (!project) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: `T3 project ${projectId} was not found.`,
+      });
+    }
+    const uuid = yield* crypto.randomUUIDv4.pipe(mapControlError(operation));
+    const sessionId = ThreadId.make(`mcp:${uuid}`);
+    const modelSelection =
+      input.modelSelection ??
+      project.defaultModelSelection ??
+      DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
+    const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+    const interactionMode = input.interactionMode ?? "default";
+    const title =
+      input.title?.trim() ||
+      input.prompt?.trim().split(/\s+/).slice(0, 10).join(" ").slice(0, 80) ||
+      "New MCP session";
+    const createdAt = yield* nowIso;
+    const commandId = yield* makeCommandId(crypto, operation);
+
+    if (input.prompt !== undefined && input.prompt.trim().length > 0) {
+      const messageId = yield* makeMessageId(crypto, operation);
+      const result = yield* dispatcher
+        .dispatch({
+          type: "thread.turn.start",
+          commandId,
+          threadId: sessionId,
+          message: {
+            messageId,
+            role: "user",
+            text: input.prompt,
+            attachments: [],
+          },
+          modelSelection,
+          runtimeMode,
+          interactionMode,
+          createdAt,
+          bootstrap: {
+            createThread: {
+              projectId,
+              title,
+              modelSelection,
+              runtimeMode,
+              interactionMode,
+              branch: input.branch ?? null,
+              worktreePath: input.worktreePath ?? null,
+              createdAt,
+            },
+          },
+        })
+        .pipe(mapControlError(operation));
+      return {
+        created: true,
+        started: true,
+        sessionId,
+        messageId,
+        sequence: result.sequence,
+      };
+    }
+
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.create",
+        commandId,
+        threadId: sessionId,
+        projectId,
+        title,
+        modelSelection,
+        runtimeMode,
+        interactionMode,
+        branch: input.branch ?? null,
+        worktreePath: input.worktreePath ?? null,
+        createdAt,
+      })
+      .pipe(mapControlError(operation));
+    return { created: true, started: false, sessionId, sequence: result.sequence };
+  }),
+
+  t3_submit_plan: Effect.fn("T3ControlToolkit.submitPlan")(function* (input) {
+    const operation = "submit-plan";
+    const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.plan");
+    const query = yield* ProjectionSnapshotQuery;
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const manager = yield* PlannotatorManager;
+    const crypto = yield* Crypto.Crypto;
+    const thread = yield* query.getThreadDetailById(sessionId).pipe(mapControlError(operation));
+    if (Option.isNone(thread)) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: `T3 session ${sessionId} was not found.`,
+      });
+    }
+    const [uuid, commandId, createdAt] = yield* Effect.all([
+      crypto.randomUUIDv4.pipe(mapControlError(operation)),
+      makeCommandId(crypto, operation),
+      nowIso,
+    ]);
+    const planId = OrchestrationProposedPlanId.make(`plannotator:${uuid}`);
+    const review = yield* manager
+      .start({
+        threadId: sessionId,
+        planId,
+        format: input.format,
+        content: input.content,
+      })
+      .pipe(mapControlError(operation));
+    const planMarkdown = withPlannotatorPlanMarker(
+      input.format === "md" ? input.content : htmlPlanSummary(input.content),
+      review.proxyPath,
+    );
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.proposed-plan.upsert",
+        commandId,
+        threadId: sessionId,
+        proposedPlan: {
+          id: planId,
+          turnId: thread.value.latestTurn?.turnId ?? null,
+          planMarkdown,
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      })
+      .pipe(
+        Effect.tapError(() => manager.discard(review.id)),
+        mapControlError(operation),
+      );
+    return {
+      accepted: true,
+      sessionId,
+      planId,
+      plannotatorSession: review,
+      openInT3: review.proxyPath,
+      sequence: result.sequence,
+      workflow: {
+        annotations: "start a new plan-mode revision turn in this T3 session",
+        approval: "starts a default-mode implementation turn linked to this proposed plan",
+        denial: "records a declined review without starting implementation",
+      },
+    };
+  }),
+
+  t3_list_plannotator_reviews: Effect.fn("T3ControlToolkit.listPlannotatorReviews")(
+    function* (input) {
+      const operation = "list-plannotator-reviews";
+      const scope = yield* requireCapability(operation, "t3.read");
+      const manager = yield* PlannotatorManager;
+      let filterSessionId: ThreadId | undefined;
+      if (McpInvocationContext.isExternalMcpOperator(scope)) {
+        filterSessionId = input.sessionId;
+      } else {
+        if (input.sessionId !== undefined && input.sessionId !== scope.threadId) {
+          return yield* new T3ControlToolError({
+            operation,
+            message: "An in-session agent may only inspect its own Plannotator reviews.",
+          });
+        }
+        filterSessionId = scope.threadId;
+      }
+      const reviews = yield* manager.list(filterSessionId);
+      const filtered =
+        input.plannotatorSessionId === undefined
+          ? reviews
+          : reviews.filter((review) => review.id === input.plannotatorSessionId);
+      return {
+        reviews: filtered,
+        totals: {
+          reviews: filtered.length,
+          waiting: filtered.filter(
+            (review) => review.status === "starting" || review.status === "running",
+          ).length,
+          decided: filtered.filter(
+            (review) =>
+              review.status === "approved" ||
+              review.status === "feedback" ||
+              review.status === "denied",
+          ).length,
+        },
+      };
+    },
+  ),
+
+  t3_dispatch_command: Effect.fn("T3ControlToolkit.dispatchCommand")(function* (input) {
+    const operation = "dispatch-command";
+    yield* requireExternalOperator(operation);
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const command = yield* decodeOrchestrationCommand(input.command).pipe(
+      mapControlError(operation),
+    );
+    const result = yield* dispatcher.dispatch(command).pipe(mapControlError(operation));
+    return { accepted: true, commandType: command.type, sequence: result.sequence };
+  }),
+} satisfies Parameters<typeof T3ControlToolkit.toLayer>[0];
+
+export const T3ControlToolkitHandlersLive = T3ControlToolkit.toLayer(handlers);

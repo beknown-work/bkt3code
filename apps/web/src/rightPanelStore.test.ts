@@ -117,6 +117,44 @@ describe("rightPanelStore", () => {
     ).toHaveLength(2);
   });
 
+  it("opens a token-scoped Plannotator review as its own surface", () => {
+    useRightPanelStore.getState().openPlannotator(refA, "/plannotator/review_token/");
+
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "plannotator:/plannotator/review_token/",
+      kind: "plannotator",
+      url: "/plannotator/review_token/",
+    });
+  });
+
+  it("drops unsafe persisted Plannotator URLs during migration", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "plannotator:https://evil.test/",
+            surfaces: [
+              {
+                id: "plannotator:https://evil.test/",
+                kind: "plannotator",
+                url: "https://evil.test/",
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: null,
+          surfaces: [],
+        },
+      },
+    });
+  });
+
   it("reopening an inactive singleton activates its existing surface", () => {
     useRightPanelStore.getState().open(refA, "diff");
     useRightPanelStore.getState().open(refA, "plan");

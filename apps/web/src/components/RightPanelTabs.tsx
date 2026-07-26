@@ -205,6 +205,8 @@ function surfaceTitle(
       );
     case "plan":
       return "Plan";
+    case "plannotator":
+      return "Plannotator";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -266,6 +268,8 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3.5 shrink-0" />;
     case "plan":
       return <ClipboardList className="size-3.5 shrink-0" />;
+    case "plannotator":
+      return <ClipboardList className="size-3.5 shrink-0 text-violet-500" />;
   }
 }
 

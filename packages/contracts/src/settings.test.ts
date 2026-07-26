@@ -36,6 +36,11 @@ describe("ClientSettings word wrap", () => {
 describe("ClientSettings phase-grouped sidebar", () => {
   it("defaults the experiment off for legacy settings", () => {
     expect(decodeClientSettings({}).phaseGroupedSidebarEnabled).toBe(false);
+    expect(decodeServerSettings({}).experimental.externalMcp).toEqual({
+      enabled: false,
+      apiKey: "",
+      publicUrl: "",
+    });
   });
 
   it("accepts persisted values and client patches", () => {

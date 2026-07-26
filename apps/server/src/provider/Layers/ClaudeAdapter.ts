@@ -3543,7 +3543,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: claudeEnvironment,
+        env: {
+          ...claudeEnvironment,
+          ...(mcpSession
+            ? {
+                T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
+              }
+            : {}),
+        },
         ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
@@ -3553,7 +3560,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                   type: "http",
                   url: mcpSession.endpoint,
                   headers: {
-                    Authorization: mcpSession.authorizationHeader,
+                    // Claude Code expands environment references in HTTP MCP
+                    // headers. Keep the short-lived credential out of process
+                    // arguments and provider diagnostic payloads.
+                    Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
                   },
                 },
               },

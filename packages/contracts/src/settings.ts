@@ -445,8 +445,16 @@ export const SessionSummarySettings = Schema.Struct({
 });
 export type SessionSummarySettings = typeof SessionSummarySettings.Type;
 
+export const ExternalMcpSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  publicUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type ExternalMcpSettings = typeof ExternalMcpSettings.Type;
+
 export const ExperimentalSettings = Schema.Struct({
   sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ExperimentalSettings = typeof ExperimentalSettings.Type;
 
@@ -609,6 +617,13 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   experimental: Schema.optionalKey(
     Schema.Struct({
+      externalMcp: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          apiKey: Schema.optionalKey(TrimmedString),
+          publicUrl: Schema.optionalKey(TrimmedString),
+        }),
+      ),
       sessionSummary: Schema.optionalKey(
         Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),

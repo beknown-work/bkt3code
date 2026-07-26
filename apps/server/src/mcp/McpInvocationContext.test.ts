@@ -11,6 +11,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 it.effect("reports the scoped credential context when preview capability is unavailable", () => {
   const invocation: McpInvocationContext.McpInvocationScope = {
+    principal: "provider-session",
     environmentId: EnvironmentId.make("environment-1"),
     threadId: ThreadId.make("thread-1"),
     providerSessionId: "provider-session-1",

@@ -14,6 +14,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   EllipsisIcon,
+  ExternalLinkIcon,
   LoaderIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
@@ -24,6 +25,7 @@ import {
   proposedPlanTitle,
   buildProposedPlanMarkdownFilename,
   normalizePlanMarkdownForExport,
+  plannotatorProxyPathFromPlan,
   downloadPlanAsTextFile,
   stripDisplayedPlanMarkdown,
 } from "../proposedPlan";
@@ -65,6 +67,7 @@ interface PlanSidebarProps {
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
   mode?: "sheet" | "sidebar" | "embedded";
+  onOpenPlannotator?: ((url: `/plannotator/${string}/`) => void) | undefined;
 }
 
 const PlanSidebar = memo(function PlanSidebar({
@@ -77,6 +80,7 @@ const PlanSidebar = memo(function PlanSidebar({
   workspaceRoot,
   timestampFormat,
   mode = "sidebar",
+  onOpenPlannotator,
 }: PlanSidebarProps) {
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
@@ -88,10 +92,11 @@ const PlanSidebar = memo(function PlanSidebar({
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
+  const plannotatorUrl = planMarkdown ? plannotatorProxyPathFromPlan(planMarkdown) : null;
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
-    copyToClipboard(planMarkdown);
+    copyToClipboard(normalizePlanMarkdownForExport(planMarkdown));
   }, [planMarkdown, copyToClipboard]);
 
   const handleDownload = useCallback(() => {
@@ -161,6 +166,17 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
         </div>
         <div className="flex items-center gap-1">
+          {plannotatorUrl && onOpenPlannotator ? (
+            <Button
+              size="xs"
+              variant="outline"
+              className="gap-1.5 text-[11px]"
+              onClick={() => onOpenPlannotator(plannotatorUrl)}
+            >
+              <ExternalLinkIcon className="size-3" />
+              Review
+            </Button>
+          ) : null}
           {planMarkdown ? (
             <Menu>
               <MenuTrigger

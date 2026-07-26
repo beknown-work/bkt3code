@@ -88,3 +88,27 @@ it.effect("expires credentials after inactivity", () =>
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
 );
+
+it.effect("resolves the enabled external operator key without storing it in the registry", () =>
+  Effect.gen(function* () {
+    const registry = yield* McpSessionRegistry.__testing
+      .make({
+        now: () => 1_000,
+        loadExternalMcpSettings: () =>
+          Effect.succeed({
+            enabled: true,
+            apiKey: "t3exp_12345678901234567890123456789012",
+          }),
+      })
+      .pipe(
+        Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
+        Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+        Effect.provide(NodeServices.layer),
+      );
+
+    const resolved = yield* registry.resolve("t3exp_12345678901234567890123456789012");
+    expect(resolved?.principal).toBe("external-operator");
+    expect(resolved?.capabilities.has("t3.control")).toBe(true);
+    expect(yield* registry.resolve("incorrect_123456789012345678901234567890")).toBeUndefined();
+  }),
+);

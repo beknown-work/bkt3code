@@ -3,6 +3,8 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { Switch } from "../ui/switch";
 import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
+import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
+import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -71,6 +73,7 @@ export function ExperimentsSettingsPanel() {
           }
         />
       </SettingsSection>
+      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? <ExternalMcpSettingsSection /> : null}
       <SessionSummarySettingsSection />
     </SettingsPageContainer>
   );
