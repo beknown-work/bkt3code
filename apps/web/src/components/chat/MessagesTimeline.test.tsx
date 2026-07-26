@@ -1,4 +1,10 @@
-import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EnvironmentId,
+  MessageId,
+  OrchestrationProposedPlanId,
+  TurnId,
+} from "@t3tools/contracts";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -181,6 +187,7 @@ function buildProps() {
     turnDiffSummaryByAssistantMessageId: new Map(),
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
+    onOpenPlannotator: () => {},
     revertTurnCountByUserMessageId: new Map(),
     onRevertUserMessage: () => {},
     isRevertingCheckpoint: false,
@@ -224,6 +231,55 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("shows an inline Review action only for plans attached to Plannotator", () => {
+    const proposedPlan = {
+      id: OrchestrationProposedPlanId.make("plan-review"),
+      turnId: null,
+      planMarkdown:
+        "# Review me\n\nInspect this plan.\n\n<!-- t3-plannotator:/plannotator/review_token/ -->",
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt: MESSAGE_CREATED_AT,
+      updatedAt: MESSAGE_CREATED_AT,
+    };
+    const withReview = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-plan-review",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan,
+          },
+        ]}
+      />,
+    );
+    const withoutReview = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-plan-plain",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan: {
+              ...proposedPlan,
+              id: OrchestrationProposedPlanId.make("plan-plain"),
+              planMarkdown: "# Plain plan\n\nNo attached review.",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(withReview).toContain("data-plannotator-review-trigger");
+    expect(withReview).toContain('aria-label="Review plan in Plannotator"');
+    expect(withReview).toContain(">Review<");
+    expect(withReview).not.toContain("review_token");
+    expect(withoutReview).not.toContain("data-plannotator-review-trigger");
+  });
+
   it("uses the larger leading inset only when the top fade is enabled", () => {
     const timelineEntries = [buildUserTimelineEntry("Hello")];
 

@@ -147,6 +147,7 @@ interface TimelineRowSharedState {
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenPlannotator: (url: `/plannotator/${string}/`) => void;
   onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorElement?: HTMLElement) => void;
@@ -192,6 +193,7 @@ interface MessagesTimelineProps {
   catchupSummaryByTurnId?: ReadonlyMap<TurnId, CatchupSummary> | undefined;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenPlannotator: (url: `/plannotator/${string}/`) => void;
   onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -230,6 +232,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   catchupSummaryByTurnId,
   routeThreadKey,
   onOpenTurnDiff,
+  onOpenPlannotator,
   onRegenerateCatchupSummary,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -491,6 +494,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenPlannotator,
       onRegenerateCatchupSummary,
       onToggleTurnFold,
       onToggleWorkGroup,
@@ -508,6 +512,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenPlannotator,
       onRegenerateCatchupSummary,
       onToggleTurnFold,
       onToggleWorkGroup,
@@ -1162,6 +1167,7 @@ function ProposedPlanTimelineRow({
         threadRef={ctx.threadRef ?? undefined}
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
+        onOpenPlannotator={ctx.onOpenPlannotator}
       />
     </div>
   );

@@ -160,6 +160,14 @@ export default defineConfig(() => {
                 target: devProxyTarget,
                 changeOrigin: true,
               },
+              "/mcp": {
+                target: devProxyTarget,
+                changeOrigin: true,
+              },
+              "/plannotator": {
+                target: devProxyTarget,
+                changeOrigin: true,
+              },
             },
           }
         : {}),

@@ -140,6 +140,7 @@ import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
+import { PlannotatorFocusSurface } from "./PlannotatorFocusSurface";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
@@ -5637,6 +5638,15 @@ function ChatViewContent(props: ChatViewProps) {
     return <NoActiveThreadState />;
   }
 
+  if (activeRightPanelSurface?.kind === "plannotator") {
+    return (
+      <PlannotatorFocusSurface
+        url={activeRightPanelSurface.url}
+        onClose={() => closeRightPanelSurface(activeRightPanelSurface)}
+      />
+    );
+  }
+
   const panelToggleControls = (
     <PanelLayoutControls
       terminalAvailable={activeProject !== null}
@@ -5671,15 +5681,6 @@ function ChatViewContent(props: ChatViewProps) {
           visible
         />
       </Suspense>
-    ) : activeRightPanelSurface?.kind === "plannotator" ? (
-      <iframe
-        key={activeRightPanelSurface.url}
-        src={activeRightPanelSurface.url}
-        title="Plannotator plan review"
-        className="h-full min-h-0 w-full border-0 bg-background"
-        sandbox="allow-downloads allow-forms allow-modals allow-scripts"
-        referrerPolicy="no-referrer"
-      />
     ) : activeRightPanelSurface?.kind === "terminal" ? (
       <PersistentThreadTerminalPanel
         threadRef={activeThreadRef}
@@ -5829,6 +5830,7 @@ function ChatViewContent(props: ChatViewProps) {
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
+                onOpenPlannotator={openPlannotatorSurface}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}

@@ -117,11 +117,12 @@ T3 stores the plan in its private state directory, launches
 proposed plan to the session. The plan carries only an opaque, same-origin review
 path; its private token is removed from copy, download, and export operations.
 
-The Plan panel shows **Review**. Selecting it replaces the normal right-side
-surface with a sandboxed, opaque-origin Plannotator iframe. T3's proxy supplies
-the narrow CORS behavior its bundled review UI needs; reviewed HTML cannot access
-the parent T3 document. Existing right-panel maximize and close controls continue
-to work.
+Eligible plan cards show a prominent **Review →** action beside the existing
+**Expand plan** control. Selecting it keeps the left sidebar in place and replaces
+every other T3 surface with a sandboxed, opaque-origin Plannotator iframe. A
+sticky **Close** action in the upper-right restores the session view. T3's proxy
+supplies the narrow CORS behavior its bundled review UI needs; reviewed HTML
+cannot access the parent T3 document.
 
 Decisions return through T3's proxy and durable command path:
 

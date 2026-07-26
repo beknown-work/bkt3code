@@ -127,6 +127,17 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("restores the previous surface after closing a focused Plannotator review", () => {
+    useRightPanelStore.getState().open(refA, "plan");
+    useRightPanelStore.getState().openPlannotator(refA, "/plannotator/review_token/");
+    const review = selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA);
+
+    expect(review?.kind).toBe("plannotator");
+    useRightPanelStore.getState().closeSurface(refA, review!.id);
+
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("plan");
+  });
+
   it("drops unsafe persisted Plannotator URLs during migration", () => {
     expect(
       migratePersistedRightPanelState({
