@@ -37,7 +37,6 @@ import {
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import { type CatchupSummary, type TurnDiffSummary } from "../../types";
-import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import {
   getRenderablePatch,
   resolveDiffThemeName,
@@ -1168,6 +1167,7 @@ function ProposedPlanTimelineRow({
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
         onOpenPlannotator={ctx.onOpenPlannotator}
+        reviewable={row.proposedPlan.implementedAt === null}
       />
     </div>
   );

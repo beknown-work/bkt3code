@@ -3,7 +3,9 @@
 The experimental control center exposes T3 Code itself as a Streamable HTTP MCP
 server. Trusted agents can triage sessions, inspect their history and live state,
 send prompts, change session defaults, resolve approvals, create sessions, and
-route plans through a dedicated Plannotator review gate.
+route plans through a dedicated Plannotator review gate. Plans produced through
+T3's normal plan mode are detected automatically; the planning agent does not
+need to call a special tool.
 
 This feature is intentionally disabled in normal builds. Build the web client with:
 
@@ -106,7 +108,19 @@ are excluded.
 
 ## Plannotator plan workflow
 
-`t3_submit_plan` accepts:
+Whenever a provider completes a normal T3 plan, the server observes T3's durable
+`proposed-plan-upserted` event, starts a Markdown Plannotator review for that same
+plan ID, and updates the existing plan through the standard orchestration command
+path. This preserves T3's native **Plan Ready**, implementation linkage, timeline,
+projection, and WebSocket behavior.
+
+The server also reconciles the newest actionable plan in every session at startup.
+That gives plans created before this integration a review action and replaces a
+review process that did not survive a restart. Repeated events are coalesced by
+session and plan ID, and an already-running attached review is reused.
+
+`t3_submit_plan` remains available for agents operating outside T3 or for callers
+that need to submit an HTML plan. It accepts:
 
 - the target T3 `sessionId` (optional for an in-session caller);
 - `format`, either `md` or `html`;
@@ -117,12 +131,13 @@ T3 stores the plan in its private state directory, launches
 proposed plan to the session. The plan carries only an opaque, same-origin review
 path; its private token is removed from copy, download, and export operations.
 
-Eligible plan cards show a prominent **Review →** action beside the existing
-**Expand plan** control. Selecting it keeps the left sidebar in place and replaces
-every other T3 surface with a sandboxed, opaque-origin Plannotator iframe. A
-sticky **Close** action in the upper-right restores the session view. T3's proxy
-supplies the narrow CORS behavior its bundled review UI needs; reviewed HTML
-cannot access the parent T3 document.
+Every actionable native plan card shows a prominent **Review →** action beside
+the existing **Expand plan** control. The action briefly shows a preparing state
+while the review process starts. Selecting it keeps the left sidebar in place and
+replaces every other T3 surface with a sandboxed, opaque-origin Plannotator
+iframe. A sticky **Close** action in the upper-right restores the session view.
+T3's proxy supplies the narrow CORS behavior its bundled review UI needs;
+reviewed HTML cannot access the parent T3 document.
 
 Decisions return through T3's proxy and durable command path:
 
@@ -138,8 +153,9 @@ Review manifests and plan files live under
 `<state-dir>/plannotator/{sessions,plans}`. Process logs live under
 `<logs-dir>/plannotator`. Files are created with owner-only permissions. At
 startup, a manifest whose process is no longer reachable is marked `exited`
-instead of silently appearing live. Use `t3_list_plannotator_reviews` to retrieve
-diagnostic paths and status.
+instead of silently appearing live. The newest actionable native plan is then
+reconciled to a fresh review process and receives a new opaque path. Use
+`t3_list_plannotator_reviews` to retrieve diagnostic paths and status.
 
 ## Security and operational notes
 

@@ -231,7 +231,7 @@ function buildUserTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
-  it("shows an inline Review action only for plans attached to Plannotator", () => {
+  it("shows Review for actionable native plans while Plannotator attaches", () => {
     const proposedPlan = {
       id: OrchestrationProposedPlanId.make("plan-review"),
       turnId: null,
@@ -278,6 +278,8 @@ describe("MessagesTimeline", () => {
     expect(withReview).toContain(">Review<");
     expect(withReview).not.toContain("review_token");
     expect(withoutReview).not.toContain("data-plannotator-review-trigger");
+    expect(withoutReview).toContain("data-plannotator-review-pending");
+    expect(withoutReview).toContain('aria-label="Preparing Plannotator review"');
   });
 
   it("uses the larger leading inset only when the top fade is enabled", () => {

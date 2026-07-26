@@ -14,7 +14,7 @@ import {
   stripDisplayedPlanMarkdown,
 } from "../../proposedPlan";
 import ChatMarkdown from "../ChatMarkdown";
-import { ArrowRightIcon, EllipsisIcon } from "lucide-react";
+import { ArrowRightIcon, EllipsisIcon, LoaderCircleIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -41,6 +41,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   cwd,
   workspaceRoot,
   onOpenPlannotator,
+  reviewable = false,
 }: {
   planMarkdown: string;
   environmentId: EnvironmentId;
@@ -48,6 +49,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   cwd: string | undefined;
   workspaceRoot: string | undefined;
   onOpenPlannotator?: ((url: `/plannotator/${string}/`) => void) | undefined;
+  reviewable?: boolean | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
@@ -194,7 +196,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-card/95 via-card/80 to-transparent" />
           ) : null}
         </div>
-        {canCollapse || (plannotatorUrl && onOpenPlannotator) ? (
+        {canCollapse || (reviewable && onOpenPlannotator) ? (
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {canCollapse ? (
               <Button
@@ -206,17 +208,30 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
                 {expanded ? "Collapse plan" : "Expand plan"}
               </Button>
             ) : null}
-            {plannotatorUrl && onOpenPlannotator ? (
-              <Button
-                size="sm"
-                data-scroll-anchor-ignore
-                data-plannotator-review-trigger
-                aria-label="Review plan in Plannotator"
-                onClick={() => onOpenPlannotator(plannotatorUrl)}
-              >
-                Review
-                <ArrowRightIcon className="size-4" />
-              </Button>
+            {reviewable && onOpenPlannotator ? (
+              plannotatorUrl ? (
+                <Button
+                  size="sm"
+                  data-scroll-anchor-ignore
+                  data-plannotator-review-trigger
+                  aria-label="Review plan in Plannotator"
+                  onClick={() => onOpenPlannotator(plannotatorUrl)}
+                >
+                  Review
+                  <ArrowRightIcon className="size-4" />
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled
+                  data-scroll-anchor-ignore
+                  data-plannotator-review-pending
+                  aria-label="Preparing Plannotator review"
+                >
+                  Review
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                </Button>
+              )
             ) : null}
           </div>
         ) : null}

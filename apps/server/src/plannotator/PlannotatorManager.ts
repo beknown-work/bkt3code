@@ -5,6 +5,7 @@ import {
   OrchestrationProposedPlanId,
   ThreadId,
 } from "@t3tools/contracts";
+import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import { plannotatorProxyPath } from "@t3tools/shared/plannotator";
 import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
@@ -26,7 +27,13 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as ServerConfig from "../config.ts";
 import { OrchestrationCommandDispatcher } from "../orchestration/dispatchCommand.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  attachNativePlanReview,
+  latestPlansForNativeReview,
+  type NativePlanBridgeInput,
+} from "./NativePlanBridge.ts";
 import type { PlannotatorDecision } from "./model.ts";
 
 export const PlannotatorPlanFormat = Schema.Literals(["md", "html"]);
@@ -174,6 +181,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const query = yield* ProjectionSnapshotQuery;
   const dispatcher = yield* OrchestrationCommandDispatcher;
+  const orchestrationEngine = yield* OrchestrationEngineService;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -642,7 +650,7 @@ export const make = Effect.gen(function* () {
 
   yield* Effect.addFinalizer(() => Scope.close(childScope, Exit.void));
 
-  return PlannotatorManager.of({
+  const manager = PlannotatorManager.of({
     start,
     discard,
     getByToken: (token) =>
@@ -664,6 +672,81 @@ export const make = Effect.gen(function* () {
       ),
     applyDecision,
   });
+
+  const attachNativePlanSafely = Effect.fn("PlannotatorManager.attachNativePlanSafely")(function* (
+    threadId: ThreadId,
+    proposedPlan: Parameters<typeof attachNativePlanReview>[1]["proposedPlan"],
+  ) {
+    yield* attachNativePlanReview(
+      {
+        manager,
+        dispatcher,
+        randomUuid: crypto.randomUUIDv4.pipe(
+          Effect.mapError(
+            managerError("native-plan", "Could not create a native Plannotator command identifier"),
+          ),
+        ),
+        now: nowIso,
+      },
+      { threadId, proposedPlan },
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("could not attach Plannotator to native proposed plan", {
+          threadId,
+          planId: proposedPlan.id,
+          cause: String(cause),
+        }),
+      ),
+    );
+  });
+
+  const nativePlanAttachmentWorker = yield* makeKeyedCoalescingWorker<
+    string,
+    NativePlanBridgeInput,
+    never,
+    never
+  >({
+    merge: (current, next) =>
+      current.proposedPlan.updatedAt.localeCompare(next.proposedPlan.updatedAt) > 0
+        ? current
+        : next,
+    process: (_key, { threadId, proposedPlan }) => attachNativePlanSafely(threadId, proposedPlan),
+  });
+  const scheduleNativePlanAttachment = (
+    threadId: ThreadId,
+    proposedPlan: Parameters<typeof attachNativePlanReview>[1]["proposedPlan"],
+  ) =>
+    nativePlanAttachmentWorker.enqueue(`${threadId}:${proposedPlan.id}`, {
+      threadId,
+      proposedPlan,
+    });
+
+  // Subscribe before reconciling the snapshot so a plan emitted during startup
+  // cannot fall into the gap between the two operations.
+  yield* Effect.forkScoped(
+    Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+      event.type === "thread.proposed-plan-upserted"
+        ? scheduleNativePlanAttachment(event.payload.threadId, event.payload.proposedPlan)
+        : Effect.void,
+    ),
+  );
+
+  yield* query.getSnapshot().pipe(
+    Effect.flatMap((snapshot) =>
+      Effect.forEach(
+        latestPlansForNativeReview(snapshot.threads),
+        ({ threadId, proposedPlan }) => scheduleNativePlanAttachment(threadId, proposedPlan),
+        { concurrency: 4, discard: true },
+      ),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("could not reconcile native proposed plans with Plannotator", {
+        cause: String(cause),
+      }),
+    ),
+  );
+
+  return manager;
 });
 
 export const layer = Layer.effect(PlannotatorManager, make);

@@ -93,6 +93,7 @@ const PlanSidebar = memo(function PlanSidebar({
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
   const plannotatorUrl = planMarkdown ? plannotatorProxyPathFromPlan(planMarkdown) : null;
+  const reviewable = activeProposedPlan?.implementedAt === null;
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -166,16 +167,29 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
         </div>
         <div className="flex items-center gap-1">
-          {plannotatorUrl && onOpenPlannotator ? (
-            <Button
-              size="xs"
-              variant="outline"
-              className="gap-1.5 text-[11px]"
-              onClick={() => onOpenPlannotator(plannotatorUrl)}
-            >
-              <ExternalLinkIcon className="size-3" />
-              Review
-            </Button>
+          {reviewable && onOpenPlannotator ? (
+            plannotatorUrl ? (
+              <Button
+                size="xs"
+                variant="outline"
+                className="gap-1.5 text-[11px]"
+                onClick={() => onOpenPlannotator(plannotatorUrl)}
+              >
+                <ExternalLinkIcon className="size-3" />
+                Review
+              </Button>
+            ) : (
+              <Button
+                size="xs"
+                variant="outline"
+                className="gap-1.5 text-[11px]"
+                disabled
+                aria-label="Preparing Plannotator review"
+              >
+                <LoaderIcon className="size-3 animate-spin" />
+                Review
+              </Button>
+            )
           ) : null}
           {planMarkdown ? (
             <Menu>
