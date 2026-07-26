@@ -178,10 +178,29 @@ describe("native Plannotator plan bridge", () => {
 
     expect(
       latestPlansForNativeReview([
-        { id: threadId, proposedPlans: [newest, older] },
+        {
+          id: threadId,
+          archivedAt: null,
+          deletedAt: null,
+          proposedPlans: [newest, older],
+        },
         {
           id: ThreadId.make("thread-implemented"),
+          archivedAt: null,
+          deletedAt: null,
           proposedPlans: [older, completedNewest],
+        },
+        {
+          id: ThreadId.make("thread-archived"),
+          archivedAt: ATTACHED_AT,
+          deletedAt: null,
+          proposedPlans: [newest],
+        },
+        {
+          id: ThreadId.make("thread-deleted"),
+          archivedAt: null,
+          deletedAt: ATTACHED_AT,
+          proposedPlans: [newest],
         },
       ]),
     ).toEqual([{ threadId, proposedPlan: newest }]);

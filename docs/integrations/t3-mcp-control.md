@@ -114,10 +114,11 @@ plan ID, and updates the existing plan through the standard orchestration comman
 path. This preserves T3's native **Plan Ready**, implementation linkage, timeline,
 projection, and WebSocket behavior.
 
-The server also reconciles the newest actionable plan in every session at startup.
-That gives plans created before this integration a review action and replaces a
-review process that did not survive a restart. Repeated events are coalesced by
-session and plan ID, and an already-running attached review is reused.
+The server also reconciles the newest actionable plan in every active session at
+startup. That gives plans created before this integration a review action and
+replaces a review process that did not survive a restart. Archived and deleted
+sessions are skipped. Repeated events are coalesced by session and plan ID, and
+an already-running attached review is reused.
 
 `t3_submit_plan` remains available for agents operating outside T3 or for callers
 that need to submit an HTML plan. It accepts:

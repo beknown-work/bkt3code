@@ -118,10 +118,14 @@ export const attachNativePlanReview = EffectRuntime.fn("attachNativePlanReview")
 export function latestPlansForNativeReview(
   threads: ReadonlyArray<{
     readonly id: ThreadId;
+    readonly archivedAt: string | null;
+    readonly deletedAt: string | null;
     readonly proposedPlans: ReadonlyArray<OrchestrationProposedPlan>;
   }>,
 ): ReadonlyArray<NativePlanBridgeInput> {
   return threads.flatMap((thread) => {
+    if (thread.archivedAt !== null || thread.deletedAt !== null) return [];
+
     const proposedPlan = thread.proposedPlans
       .toSorted(
         (left, right) =>
