@@ -37,6 +37,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Ensure Electron runtime is installed
+        run: pnpm exec vp run --filter @t3tools/desktop ensure:electron
+
       - name: Check formatting and lint
         run: pnpm exec vp check
 
