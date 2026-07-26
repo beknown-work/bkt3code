@@ -1,12 +1,20 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { PlannotatorFocusSurface } from "./PlannotatorFocusSurface";
+import {
+  PlannotatorFocusSurface,
+  plannotatorStatusUrl,
+  readPlannotatorDecision,
+} from "./PlannotatorFocusSurface";
 
 describe("PlannotatorFocusSurface", () => {
   it("renders a sidebar-adjacent focus surface with a persistent close action", () => {
     const markup = renderToStaticMarkup(
-      <PlannotatorFocusSurface url="/plannotator/review_token/" onClose={vi.fn()} />,
+      <PlannotatorFocusSurface
+        url="/plannotator/review_token/"
+        onClose={vi.fn()}
+        onDecision={vi.fn()}
+      />,
     );
 
     expect(markup).toContain("data-plannotator-focus-surface");
@@ -14,7 +22,20 @@ describe("PlannotatorFocusSurface", () => {
     expect(markup).toContain('title="Plannotator plan review"');
     expect(markup).toContain('aria-label="Close plan review"');
     expect(markup).toContain("absolute inset-x-0 top-0");
+    expect(markup).toContain("justify-start");
+    expect(markup).not.toContain("justify-end");
     expect(markup).toContain('sandbox="allow-downloads allow-forms allow-modals allow-scripts"');
     expect(markup).not.toContain("allow-same-origin");
+  });
+
+  it("parses only terminal review decisions from the token-scoped status response", () => {
+    expect(plannotatorStatusUrl("/plannotator/review_token/")).toBe(
+      "/plannotator/review_token/__t3/status",
+    );
+    expect(readPlannotatorDecision({ decision: "approved" })).toBe("approved");
+    expect(readPlannotatorDecision({ decision: "feedback" })).toBe("feedback");
+    expect(readPlannotatorDecision({ decision: "denied" })).toBe("denied");
+    expect(readPlannotatorDecision({ decision: null })).toBeNull();
+    expect(readPlannotatorDecision({ decision: "running" })).toBeNull();
   });
 });

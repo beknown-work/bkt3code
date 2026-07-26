@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Experimental external MCP configuration UI. It is
+ * mounted through one feature-flagged seam in ExperimentsSettingsPanel.
+ */
 import { CopyIcon, EyeIcon, EyeOffIcon, RefreshCwIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 

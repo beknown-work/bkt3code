@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Shared, dependency-free Plannotator marker helpers.
+ * Exported through an explicit subpath to avoid changing upstream barrels.
+ */
 const PLANNOTATOR_MARKER_PATTERN = /<!--\s*t3-plannotator:(\/plannotator\/[A-Za-z0-9_-]+\/)\s*-->/g;
 
 export function plannotatorProxyPath(token: string): `/plannotator/${string}/` {

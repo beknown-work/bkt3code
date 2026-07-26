@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Narrow HTTP proxy boundary for dedicated Plannotator
+ * review sessions.
+ */
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import {
@@ -9,10 +13,18 @@ import {
   HttpRouter,
 } from "effect/unstable/http";
 
-import { PlannotatorManager } from "./PlannotatorManager.ts";
+import { PlannotatorManager, type PlannotatorSessionStatus } from "./PlannotatorManager.ts";
 import { parsePlannotatorDecision, rewritePlannotatorHtml } from "./model.ts";
 
 const PLANNOTATOR_PROXY_PATH = /^\/plannotator\/([A-Za-z0-9_-]+)(\/.*)?$/;
+export const PLANNOTATOR_STATUS_PATH = "/__t3/status";
+
+export function plannotatorStatusPayload(status: PlannotatorSessionStatus) {
+  return {
+    status,
+    decision: status === "approved" || status === "feedback" || status === "denied" ? status : null,
+  } as const;
+}
 const PLANNOTATOR_IFRAME_CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -92,11 +104,23 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
     if (!session) {
       return HttpServerResponse.text("Plannotator review not found.", { status: 404 });
     }
+    const proxyPath = match?.[2] || "/";
+    // T3-CUSTOM(expbkt3): The parent T3 surface cannot inspect the sandboxed
+    // iframe. This token-scoped status response lets it close completed reviews
+    // and synchronize Build mode after approval.
+    if (request.method === "GET" && proxyPath === PLANNOTATOR_STATUS_PATH) {
+      return HttpServerResponse.jsonUnsafe(plannotatorStatusPayload(session.status), {
+        status: 200,
+        headers: {
+          ...PLANNOTATOR_IFRAME_CORS_HEADERS,
+          "cache-control": "no-store",
+        },
+      });
+    }
     if (session.port === null) {
       return HttpServerResponse.text("Plannotator review is still starting.", { status: 425 });
     }
     const proxyPrefix = `/plannotator/${token}`;
-    const proxyPath = match?.[2] || "/";
 
     if (request.method === "OPTIONS") {
       return HttpServerResponse.empty({

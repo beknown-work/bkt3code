@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Pure lifecycle aggregation used by the experimental
+ * wordmark counters and kept separate from upstream sidebar grouping.
+ */
 import type { ThreadShell } from "../../types";
 
 export interface SidebarSessionCounts {

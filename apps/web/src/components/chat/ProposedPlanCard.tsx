@@ -208,6 +208,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
                 {expanded ? "Collapse plan" : "Expand plan"}
               </Button>
             ) : null}
+            {/* T3-CUSTOM(expbkt3): BEGIN — native timeline plan review entry point. */}
             {reviewable && onOpenPlannotator ? (
               plannotatorUrl ? (
                 <Button
@@ -233,6 +234,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
                 </Button>
               )
             ) : null}
+            {/* T3-CUSTOM(expbkt3): END */}
           </div>
         ) : null}
       </div>

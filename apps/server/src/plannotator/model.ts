@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Plannotator-specific domain model kept outside upstream
+ * orchestration contracts.
+ */
 export type PlannotatorDecision =
   | { readonly kind: "approved"; readonly feedback: string }
   | { readonly kind: "feedback"; readonly feedback: string }

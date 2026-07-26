@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# T3-CUSTOM(expbkt3): Verified manual deployment entry point for the experimental branch.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

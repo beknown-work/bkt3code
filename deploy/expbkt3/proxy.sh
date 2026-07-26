@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# T3-CUSTOM(expbkt3): Isolated reverse-proxy registration for the experimental domain.
 set -euo pipefail
 
 SERVICE_NAME="expbkt3-proxy"

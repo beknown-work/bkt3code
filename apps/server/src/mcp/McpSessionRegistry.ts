@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Issues and revokes capability-scoped credentials for the
+ * experimental T3 MCP endpoint.
+ */
 import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";

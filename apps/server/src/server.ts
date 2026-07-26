@@ -37,8 +37,10 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+// T3-CUSTOM(expbkt3): BEGIN — experimental native-plan review runtime.
 import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
 import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
+// T3-CUSTOM(expbkt3): END
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -368,6 +370,7 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
 const RuntimeBaseServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
+// T3-CUSTOM(expbkt3): BEGIN — layer Plannotator beside upstream runtime services.
 const RuntimeServicesWithoutPlannotatorLive = Layer.mergeAll(
   RuntimeBaseServicesLive,
   OrchestrationCommandDispatcher.layer.pipe(Layer.provide(RuntimeBaseServicesLive)),
@@ -383,6 +386,7 @@ const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
     Layer.provide(ClerkDirectoryLive),
   ),
 );
+// T3-CUSTOM(expbkt3): END
 
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(

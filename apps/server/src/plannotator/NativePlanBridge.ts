@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Bridges T3's native proposed-plan lifecycle into
+ * Plannotator without requiring an agent-only submission tool.
+ */
 import { CommandId, type OrchestrationProposedPlan, type ThreadId } from "@t3tools/contracts";
 import {
   plannotatorProxyPathFromPlan,

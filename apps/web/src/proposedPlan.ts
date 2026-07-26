@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Plan display helpers understand the hidden Plannotator
+ * marker while preserving T3's native proposed-plan record and UI.
+ */
 import {
   plannotatorProxyPathFromPlan,
   withoutPlannotatorPlanMarker,

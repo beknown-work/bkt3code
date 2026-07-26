@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Streamable HTTP MCP endpoint for scoped native agents
+ * and authenticated external operators.
+ */
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";

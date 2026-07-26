@@ -16,5 +16,6 @@
   - [T3 Code MCP control center](./integrations/t3-mcp-control.md)
 - [Mobile](./mobile/app.md)
 - [Operations](./operations/ci.md)
+  - [expbkt3 customization boundaries](./operations/expbkt3-customizations.md)
 - [Providers](./providers/codex.md)
 - [Reference](./reference/encyclopedia.md)

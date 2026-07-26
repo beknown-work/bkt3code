@@ -1,3 +1,4 @@
+# T3-CUSTOM(expbkt3): Isolated runtime unit for the experimental deployment.
 [Unit]
 Description=T3 Code (experimental MCP control center)
 After=network-online.target docker.service

@@ -167,6 +167,7 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
         </div>
         <div className="flex items-center gap-1">
+          {/* T3-CUSTOM(expbkt3): BEGIN — native plan review entry point. */}
           {reviewable && onOpenPlannotator ? (
             plannotatorUrl ? (
               <Button
@@ -191,6 +192,7 @@ const PlanSidebar = memo(function PlanSidebar({
               </Button>
             )
           ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {planMarkdown ? (
             <Menu>
               <MenuTrigger

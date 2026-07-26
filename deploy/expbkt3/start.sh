@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# T3-CUSTOM(expbkt3): Starts only the isolated experimental T3 service.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

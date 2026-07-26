@@ -73,7 +73,9 @@ export function ExperimentsSettingsPanel() {
           }
         />
       </SettingsSection>
+      {/* T3-CUSTOM(expbkt3): BEGIN — experimental operator MCP settings seam. */}
       {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? <ExternalMcpSettingsSection /> : null}
+      {/* T3-CUSTOM(expbkt3): END */}
       <SessionSummarySettingsSection />
     </SettingsPageContainer>
   );

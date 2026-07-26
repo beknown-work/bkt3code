@@ -21,6 +21,7 @@ import {
   derivePhaseSidebarRepositoryKey,
   isThreadAssignedToUser,
   matchesPhaseSidebarFilters,
+  phaseSidebarNeedsUserInput,
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarLinearIssue,
@@ -122,7 +123,7 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
 }
 
 describe("phase sidebar lifecycle", () => {
-  it("keeps every active execution in the trailing agent-work groups", () => {
+  it("keeps active execution in agent-work groups except urgent structured questions", () => {
     const settledTurn = {
       turnId: TurnId.make("turn-1"),
       state: "completed" as const,
@@ -168,6 +169,46 @@ describe("phase sidebar lifecycle", () => {
       ),
     ).toBe("plan_ready");
     expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          execution: makeActiveExecution("waiting-for-input"),
+        }),
+      ),
+    ).toBe("needs_input");
+  });
+
+  it("promotes durable and live pending questions to the first lifecycle group", () => {
+    const durableInput = makeThread({
+      id: ThreadId.make("thread-durable-input"),
+      hasPendingUserInput: true,
+      execution: null,
+    });
+    const liveInput = makeThread({
+      id: ThreadId.make("thread-live-input"),
+      execution: makeActiveExecution("waiting-for-input"),
+    });
+    const ready = makeThread({ id: ThreadId.make("thread-ready") });
+
+    expect(phaseSidebarNeedsUserInput(durableInput)).toBe(true);
+    expect(phaseSidebarNeedsUserInput(liveInput)).toBe(true);
+    expect(phaseSidebarNeedsUserInput(ready)).toBe(false);
+
+    const groups = buildPhaseSidebarGroups(
+      [
+        makeRow({ thread: ready }),
+        makeRow({ thread: liveInput }),
+        makeRow({ thread: durableInput }),
+      ],
+      EMPTY_PHASE_SIDEBAR_FILTERS,
+      "updated_at",
+    );
+    expect(groups[0]?.id).toBe("needs_input");
+    expect(groups[0]?.rows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-durable-input"),
+      ThreadId.make("thread-live-input"),
+    ]);
   });
 
   it("advances review and merge states only from repository evidence", () => {
@@ -272,7 +313,7 @@ describe("phase sidebar lifecycle", () => {
       ThreadId.make("thread-f"),
       ThreadId.make("thread-c"),
     ]);
-    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(10);
+    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(11);
   });
 
   it("uses ready only as the non-running fallback", () => {

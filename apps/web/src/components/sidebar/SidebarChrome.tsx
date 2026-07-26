@@ -59,9 +59,11 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const { environments } = useEnvironments();
+  // T3-CUSTOM(expbkt3): BEGIN — derive experimental global attention/running counters.
   const threads = useThreadShells();
   const stageLabel = useSidebarStageLabel();
   const counts = useMemo(() => summarizeSidebarSessions(threads), [threads]);
+  // T3-CUSTOM(expbkt3): END
   const syncing = environments.some(
     (environment) =>
       environment.connection.phase === "connecting" ||
@@ -96,6 +98,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           {stageLabel}
         </span>
       </Link>
+      {/* T3-CUSTOM(expbkt3): BEGIN — compact lifecycle counters beside the wordmark. */}
       {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
         <div className="flex shrink-0 items-center gap-1" aria-label="Session status summary">
           <span
@@ -107,8 +110,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
                   : "animate-pulse border-red-500 bg-red-500 text-white shadow-[0_0_18px_rgba(239,68,68,0.75)]"
                 : onBackdrop
                   ? "border-white/20 bg-white/10 text-white/55"
-                  : "border-border/60 bg-muted/50 text-muted-foreground/60",
+                  : "border-border bg-muted text-muted-foreground",
             )}
+            data-attention-state={counts.attention > 0 ? "urgent" : "clear"}
             role="status"
             title={`${counts.attention} session${counts.attention === 1 ? "" : "s"} need human attention`}
           >
@@ -127,6 +131,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           </span>
         </div>
       ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
       {syncing ? (
         <span
           aria-label="Connection interrupted; syncing"

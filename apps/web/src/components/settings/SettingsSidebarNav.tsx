@@ -7,12 +7,14 @@ import {
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
+  FolderCogIcon,
   Settings2Icon,
   UsersIcon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
 
 import { useIsTeamAdmin } from "../../state/orgMembers";
+import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 
 import {
   SidebarContent,
@@ -31,6 +33,7 @@ export type SettingsSectionPath =
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/projects"
   | "/settings/project-access"
   | "/settings/experiments"
   | "/settings/beta"
@@ -48,6 +51,11 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<SettingsNavItem> = [
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
+  // T3-CUSTOM(expbkt3): BEGIN — isolated experimental project-management nav seam.
+  ...(EXPERIMENTAL_CONTROL_CENTER_ENABLED
+    ? [{ label: "Active Projects", to: "/settings/projects" as const, icon: FolderCogIcon }]
+    : []),
+  // T3-CUSTOM(expbkt3): END
   { label: "Experiments", to: "/settings/experiments", icon: FlaskConicalIcon },
   { label: "Beta", to: "/settings/beta", icon: FlaskConicalIcon },
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },

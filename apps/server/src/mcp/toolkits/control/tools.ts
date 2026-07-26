@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Tool definitions for the experimental T3 MCP control
+ * plane. Kept separate from upstream MCP toolkits for clean merges.
+ */
 import {
   ModelSelection,
   ProviderApprovalDecision,

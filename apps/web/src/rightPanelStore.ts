@@ -6,6 +6,9 @@
  * own its durable resource state. Browser surfaces point at preview tab ids,
  * terminal surfaces point at terminal session ids, file surfaces point at
  * workspace paths, and diff/plan/files remain singleton surfaces.
+ *
+ * T3-CUSTOM(expbkt3): The `plannotator` descriptor is the only experimental
+ * addition to this upstream store; it remains thread-scoped and URL-only.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
@@ -115,11 +118,13 @@ const singletonSurface = (
   }
 };
 
+// T3-CUSTOM(expbkt3): BEGIN — construct the persisted Plannotator surface descriptor.
 const plannotatorSurface = (url: `/plannotator/${string}/`): RightPanelSurface => ({
   id: `plannotator:${url}`,
   kind: "plannotator",
   url,
 });
+// T3-CUSTOM(expbkt3): END
 
 const browserSurface = (tabId: string | null): RightPanelSurface =>
   tabId
@@ -295,12 +300,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
           }),
         })),
+      // T3-CUSTOM(expbkt3): BEGIN — one isolated store mutation for plan review.
       openPlannotator: (ref, url) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             upsertSurface(current, plannotatorSurface(url)),
           ),
         })),
+      // T3-CUSTOM(expbkt3): END
       openFile: (ref, relativePath, line) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {

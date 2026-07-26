@@ -1,9 +1,14 @@
+/**
+ * T3-CUSTOM(expbkt3): Dedicated Plannotator process/session lifecycle. See
+ * docs/operations/expbkt3-customizations.md for the upstream merge boundary.
+ */
 import {
   CommandId,
   EventId,
   MessageId,
   OrchestrationProposedPlanId,
   ThreadId,
+  type OrchestrationCommand,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import { plannotatorProxyPath } from "@t3tools/shared/plannotator";
@@ -35,6 +40,37 @@ import {
   type NativePlanBridgeInput,
 } from "./NativePlanBridge.ts";
 import type { PlannotatorDecision } from "./model.ts";
+
+type InteractionModeSetCommand = Extract<
+  OrchestrationCommand,
+  { readonly type: "thread.interaction-mode.set" }
+>;
+
+/**
+ * T3-CUSTOM(expbkt3): T3 resolves turn interaction mode from persisted thread
+ * state. Only approval may leave Plan mode; feedback and denial must preserve
+ * the user's current mode.
+ */
+export function approvedPlanInteractionModeCommand({
+  decision,
+  threadId,
+  commandId,
+  createdAt,
+}: {
+  readonly decision: PlannotatorDecision;
+  readonly threadId: ThreadId;
+  readonly commandId: CommandId;
+  readonly createdAt: string;
+}): InteractionModeSetCommand | null {
+  if (decision.kind !== "approved") return null;
+  return {
+    type: "thread.interaction-mode.set",
+    commandId,
+    threadId,
+    interactionMode: "default",
+    createdAt,
+  };
+}
 
 export const PlannotatorPlanFormat = Schema.Literals(["md", "html"]);
 export type PlannotatorPlanFormat = typeof PlannotatorPlanFormat.Type;
@@ -594,11 +630,21 @@ export const make = Effect.gen(function* () {
                 planContent.trim(),
                 ...(decision.feedback ? ["", "Reviewer notes:", decision.feedback] : []),
               ].join("\n");
-        const [commandUuid, messageUuid, createdAt] = yield* Effect.all([
+        const [commandUuid, messageUuid, modeCommandUuid, createdAt] = yield* Effect.all([
+          crypto.randomUUIDv4,
           crypto.randomUUIDv4,
           crypto.randomUUIDv4,
           nowIso,
         ]);
+        const modeCommand = approvedPlanInteractionModeCommand({
+          decision,
+          threadId: applying.threadId,
+          commandId: CommandId.make(`plannotator:mode:${modeCommandUuid}`),
+          createdAt,
+        });
+        if (modeCommand) {
+          yield* dispatcher.dispatch(modeCommand);
+        }
         yield* dispatcher.dispatch({
           type: "thread.turn.start",
           commandId: CommandId.make(`plannotator:turn:${commandUuid}`),

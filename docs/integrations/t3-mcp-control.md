@@ -1,5 +1,9 @@
 # T3 Code MCP control center
 
+> **T3-CUSTOM(expbkt3):** This integration is maintained as an experimental,
+> upstream-isolated extension. See the
+> [customization boundary registry](../operations/expbkt3-customizations.md).
+
 The experimental control center exposes T3 Code itself as a Streamable HTTP MCP
 server. Trusted agents can triage sessions, inspect their history and live state,
 send prompts, change session defaults, resolve approvals, create sessions, and
@@ -16,6 +20,11 @@ VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true pnpm exec vp run --filter @t3tools/web 
 The server endpoint is always `/mcp`; external operator authentication remains
 disabled until it is enabled in **Settings → Experiments → External T3 MCP
 control**.
+
+Experimental builds also expose **Settings → Active Projects** for editing the
+nickname shown throughout T3, checking per-project running/attention totals,
+opening the latest session, starting a new thread, copying the workspace path,
+and removing a T3 project without deleting its files.
 
 ## Connect an external agent
 
@@ -136,19 +145,22 @@ Every actionable native plan card shows a prominent **Review →** action beside
 the existing **Expand plan** control. The action briefly shows a preparing state
 while the review process starts. Selecting it keeps the left sidebar in place and
 replaces every other T3 surface with a sandboxed, opaque-origin Plannotator
-iframe. A sticky **Close** action in the upper-right restores the session view.
+iframe. A sticky **Close** action in the upper-left restores the session view.
 T3's proxy supplies the narrow CORS behavior its bundled review UI needs;
 reviewed HTML cannot access the parent T3 document.
 
 Decisions return through T3's proxy and durable command path:
 
-- **Approve:** starts a default-mode implementation turn linked to the approved
-  proposed plan, so T3's normal implementation and approval behavior applies.
+- **Approve:** first persists the T3 session in Build/default mode, then starts
+  an implementation turn linked to the approved proposed plan, so T3's normal
+  implementation and approval behavior applies. The focused review surface
+  reads a narrow token-scoped status endpoint so it can clear the browser's
+  sticky Plan composer state and close the completed iframe.
 - **Request changes / annotations:** combines anchored annotations into feedback
-  and starts a plan-mode revision turn. The planning agent is explicitly told not
-  to modify files while revising.
+  and starts a plan-mode revision turn without changing the persisted mode. The
+  planning agent is explicitly told not to modify files while revising.
 - **Deny without feedback:** records the declined review and does not start a
-  turn.
+  turn or change mode.
 
 Review manifests and plan files live under
 `<state-dir>/plannotator/{sessions,plans}`. Process logs live under

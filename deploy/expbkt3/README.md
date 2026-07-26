@@ -1,5 +1,8 @@
 # Experimental T3 Code deployment
 
+> **T3-CUSTOM(expbkt3):** This directory is an isolated deployment unit and
+> does not modify upstream release infrastructure.
+
 This deployment isolates the MCP control-center and Plannotator experiment from
 the normal T3 and `bkmain` instances.
 

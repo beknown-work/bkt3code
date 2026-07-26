@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Per-invocation capability and session-scope enforcement
+ * for the experimental T3 MCP control plane.
+ */
 import {
   type EnvironmentId,
   PreviewAutomationUnavailableError,

@@ -205,8 +205,10 @@ function surfaceTitle(
       );
     case "plan":
       return "Plan";
+    // T3-CUSTOM(expbkt3): BEGIN — label the experimental review surface.
     case "plannotator":
       return "Plannotator";
+    // T3-CUSTOM(expbkt3): END
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -268,8 +270,10 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3.5 shrink-0" />;
     case "plan":
       return <ClipboardList className="size-3.5 shrink-0" />;
+    // T3-CUSTOM(expbkt3): BEGIN — icon for the experimental review surface.
     case "plannotator":
       return <ClipboardList className="size-3.5 shrink-0 text-violet-500" />;
+    // T3-CUSTOM(expbkt3): END
   }
 }
 

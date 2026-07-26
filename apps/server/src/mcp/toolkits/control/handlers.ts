@@ -1,3 +1,7 @@
+/**
+ * T3-CUSTOM(expbkt3): Implementation of external-operator and provider-scoped
+ * T3 control tools. Capability checks remain local to this dedicated toolkit.
+ */
 import {
   ApprovalRequestId,
   CommandId,

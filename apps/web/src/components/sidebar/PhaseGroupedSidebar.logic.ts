@@ -7,6 +7,8 @@ import type { Project, ThreadShell } from "../../types";
 import { getThreadSortTimestamp } from "../../lib/threadSort";
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
+  // T3-CUSTOM(expbkt3): Pending structured questions are an urgent, top-level phase.
+  "needs_input",
   "plan_ready",
   "ready",
   "ready_for_review",
@@ -28,6 +30,11 @@ export interface PhaseSidebarPhaseDefinition {
 }
 
 export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = [
+  {
+    id: "needs_input",
+    label: "Needs Input",
+    helperText: "Agent is waiting for your answer",
+  },
   { id: "plan_ready", label: "Plan Ready", helperText: "Plan awaits approval" },
   { id: "ready", label: "Ready", helperText: "No active agent work" },
   { id: "ready_for_review", label: "Ready for Review", helperText: "Changes await review" },
@@ -140,8 +147,8 @@ export function resolvePhaseSidebarAttentionPriority(
   thread: ThreadShell,
   status?: VcsStatusResult | null,
 ): number {
-  if (thread.execution?.turn?.state === "waiting-for-approval") return 0;
-  if (thread.execution?.turn?.state === "waiting-for-input") return 1;
+  if (phaseSidebarNeedsUserInput(thread)) return 0;
+  if (thread.execution?.turn?.state === "waiting-for-approval") return 1;
   if (thread.execution?.activity === "failed") return 2;
   if (
     status?.pr?.state === "open" &&
@@ -155,10 +162,23 @@ export function resolvePhaseSidebarAttentionPriority(
   return 5;
 }
 
+/**
+ * T3-CUSTOM(expbkt3): Treat both the durable pending-input bit and the live
+ * execution state as authority. This keeps urgent questions promoted even
+ * during short execution-snapshot reconnects.
+ */
+export function phaseSidebarNeedsUserInput(
+  thread: Pick<ThreadShell, "hasPendingUserInput" | "execution">,
+): boolean {
+  return thread.hasPendingUserInput || thread.execution?.turn?.state === "waiting-for-input";
+}
+
 export function resolvePhaseSidebarPhase(
   thread: ThreadShell,
   status?: VcsStatusResult | null,
 ): PhaseSidebarPhaseId {
+  // T3-CUSTOM(expbkt3): Structured questions always render above lifecycle work.
+  if (phaseSidebarNeedsUserInput(thread)) return "needs_input";
   if (thread.execution === null || thread.execution === undefined) return "checking";
 
   const isActive =

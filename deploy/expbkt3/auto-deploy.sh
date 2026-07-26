@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# T3-CUSTOM(expbkt3): Polls for a successful branch workflow before deployment.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

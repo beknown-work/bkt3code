@@ -126,6 +126,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
 const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
+  // T3-CUSTOM(expbkt3): Urgent question phase is visually distinct from lifecycle work.
+  needs_input: "animate-pulse bg-red-500",
   plan_ready: "bg-primary",
   ready_for_review: "bg-emerald-500",
   ready_to_merge: "bg-violet-500",
@@ -172,7 +174,11 @@ function ThreadWorkflowProbe({
   return null;
 }
 
-function phaseRowClassName(isActive: boolean, isSelected: boolean): string {
+function phaseRowClassName(
+  isActive: boolean,
+  isSelected: boolean,
+  needsUserInput: boolean,
+): string {
   return cn(
     "group/phase-row relative flex min-h-11 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
     isActive && isSelected
@@ -182,6 +188,9 @@ function phaseRowClassName(isActive: boolean, isSelected: boolean): string {
         : isActive
           ? "bg-accent/85 text-foreground dark:bg-accent/55"
           : "text-muted-foreground hover:bg-accent hover:text-foreground",
+    // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
+    needsUserInput &&
+      "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
   );
 }
 
@@ -506,6 +515,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     ? null
     : (row.thread.branch ?? (row.thread.worktreePath ? "WT" : null));
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
+  const needsUserInput = row.phaseId === "needs_input";
 
   const openLinearIssue = (event: { preventDefault(): void; stopPropagation(): void }) => {
     event.preventDefault();
@@ -586,7 +596,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseRowClassName(active, selected)}
+        className={phaseRowClassName(active, selected, needsUserInput)}
+        data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
         onDoubleClick={() => onStartRename(row)}
@@ -690,33 +701,40 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </span>
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
+          {needsUserInput ? (
+            <span className="rounded-sm bg-red-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm">
+              INPUT
+            </span>
+          ) : null}
           {jumpLabel ? (
             <Kbd className="h-4 min-w-0 rounded-sm px-1 text-[9px]">{jumpLabel}</Kbd>
           ) : null}
           <span className="text-[9px] tabular-nums text-muted-foreground/50">
             {formatRelativeTimeLabel(row.thread.updatedAt).replace(" ago", "")}
           </span>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Archive ${row.thread.title}`}
-                  className="hidden rounded p-0.5 text-muted-foreground hover:text-foreground group-hover/phase-row:inline-flex group-focus-within/phase-row:inline-flex"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onArchive(row);
-                  }}
-                />
-              }
-            >
-              <ArchiveIcon className="size-3" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">Archive</TooltipPopup>
-          </Tooltip>
         </span>
+        {/* T3-CUSTOM(expbkt3): BEGIN — hover action overlays the row instead of reflowing metadata. */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={`Archive ${row.thread.title}`}
+                className="absolute top-1/2 right-1 z-10 hidden size-7 -translate-y-1/2 items-center justify-center rounded-md border border-border/70 bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm hover:text-foreground group-hover/phase-row:inline-flex group-focus-within/phase-row:inline-flex"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onArchive(row);
+                }}
+              />
+            }
+          >
+            <ArchiveIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">Archive</TooltipPopup>
+        </Tooltip>
+        {/* T3-CUSTOM(expbkt3): END */}
       </button>
     </li>
   );

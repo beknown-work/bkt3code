@@ -146,6 +146,7 @@ interface TimelineRowSharedState {
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  // T3-CUSTOM(expbkt3): Native proposed-plan cards open the focused review surface.
   onOpenPlannotator: (url: `/plannotator/${string}/`) => void;
   onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   onToggleTurnFold: (turnId: TurnId) => void;

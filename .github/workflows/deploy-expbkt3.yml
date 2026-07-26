@@ -1,3 +1,4 @@
+# T3-CUSTOM(expbkt3): Isolated validation/deployment workflow for the experimental branch.
 name: Validate and deploy experimental T3
 
 on:

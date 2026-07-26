@@ -160,6 +160,7 @@ export default defineConfig(() => {
                 target: devProxyTarget,
                 changeOrigin: true,
               },
+              // T3-CUSTOM(expbkt3): BEGIN — development proxies for the control and review planes.
               "/mcp": {
                 target: devProxyTarget,
                 changeOrigin: true,
@@ -168,6 +169,7 @@ export default defineConfig(() => {
                 target: devProxyTarget,
                 changeOrigin: true,
               },
+              // T3-CUSTOM(expbkt3): END
             },
           }
         : {}),
