@@ -8,6 +8,7 @@ import {
   OrchestrationCommand as OrchestrationCommandSchema,
   ProjectId,
   ThreadId,
+  UserId,
   type OrchestrationCommand,
   type OrchestrationThread,
   type OrchestrationThreadShell,
@@ -21,6 +22,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { ClerkDirectory } from "../../../auth/ClerkDirectory.ts";
+import { ServerConfig } from "../../../config.ts";
 import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSupervisor.ts";
 import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -91,6 +94,32 @@ const requireExternalOperator = Effect.fn("T3ControlToolkit.requireExternalOpera
   }
   return scope;
 });
+
+const resolveConfiguredOwnerUserId = Effect.fn("T3ControlToolkit.resolveConfiguredOwnerUserId")(
+  function* (operation: string) {
+    const config = yield* ServerConfig;
+    const clerkAuth = config.clerkAuth;
+    if (clerkAuth === undefined) return null;
+
+    const explicitUserId = clerkAuth.defaultOwnerUserId?.trim();
+    if (explicitUserId) return UserId.make(explicitUserId);
+
+    const defaultOwnerEmail = clerkAuth.defaultOwnerEmail?.trim();
+    if (defaultOwnerEmail) {
+      const clerkDirectory = yield* ClerkDirectory;
+      const resolved = yield* clerkDirectory
+        .findUserIdByEmail(defaultOwnerEmail)
+        .pipe(mapControlError(operation));
+      if (resolved !== null) return resolved;
+    }
+
+    return yield* new T3ControlToolError({
+      operation,
+      message:
+        "Team mode requires a resolvable T3CODE_DEFAULT_OWNER_USER_ID or T3CODE_DEFAULT_OWNER_EMAIL before external MCP can create projects or ownerless sessions.",
+    });
+  },
+);
 
 const resolveSessionId = Effect.fn("T3ControlToolkit.resolveSessionId")(function* (
   operation: string,
@@ -647,17 +676,21 @@ const handlers = {
     const commandId = yield* makeCommandId(crypto, operation);
     const createdAt = yield* nowIso;
     const title = input.title?.trim() || path.basename(workspaceRoot) || "New MCP project";
+    const ownerUserId = yield* resolveConfiguredOwnerUserId(operation);
     const result = yield* dispatcher
-      .dispatch({
-        type: "project.create",
-        commandId,
-        projectId,
-        title,
-        workspaceRoot,
-        createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing === true,
-        defaultModelSelection: input.defaultModelSelection ?? null,
-        createdAt,
-      })
+      .dispatch(
+        {
+          type: "project.create",
+          commandId,
+          projectId,
+          title,
+          workspaceRoot,
+          createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing === true,
+          defaultModelSelection: input.defaultModelSelection ?? null,
+          createdAt,
+        },
+        { actorUserId: ownerUserId },
+      )
       .pipe(mapControlError(operation));
     return {
       created: true,
@@ -695,6 +728,7 @@ const handlers = {
       DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
     const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
     const interactionMode = input.interactionMode ?? "default";
+    const ownerUserId = project.ownerUserId ?? (yield* resolveConfiguredOwnerUserId(operation));
     const title =
       input.title?.trim() ||
       input.prompt?.trim().split(/\s+/).slice(0, 10).join(" ").slice(0, 80) ||
@@ -705,33 +739,36 @@ const handlers = {
     if (input.prompt !== undefined && input.prompt.trim().length > 0) {
       const messageId = yield* makeMessageId(crypto, operation);
       const result = yield* dispatcher
-        .dispatch({
-          type: "thread.turn.start",
-          commandId,
-          threadId: sessionId,
-          message: {
-            messageId,
-            role: "user",
-            text: input.prompt,
-            attachments: [],
-          },
-          modelSelection,
-          runtimeMode,
-          interactionMode,
-          createdAt,
-          bootstrap: {
-            createThread: {
-              projectId,
-              title,
-              modelSelection,
-              runtimeMode,
-              interactionMode,
-              branch: input.branch ?? null,
-              worktreePath: input.worktreePath ?? null,
-              createdAt,
+        .dispatch(
+          {
+            type: "thread.turn.start",
+            commandId,
+            threadId: sessionId,
+            message: {
+              messageId,
+              role: "user",
+              text: input.prompt,
+              attachments: [],
+            },
+            modelSelection,
+            runtimeMode,
+            interactionMode,
+            createdAt,
+            bootstrap: {
+              createThread: {
+                projectId,
+                title,
+                modelSelection,
+                runtimeMode,
+                interactionMode,
+                branch: input.branch ?? null,
+                worktreePath: input.worktreePath ?? null,
+                createdAt,
+              },
             },
           },
-        })
+          { actorUserId: ownerUserId },
+        )
         .pipe(mapControlError(operation));
       return {
         created: true,
@@ -743,19 +780,22 @@ const handlers = {
     }
 
     const result = yield* dispatcher
-      .dispatch({
-        type: "thread.create",
-        commandId,
-        threadId: sessionId,
-        projectId,
-        title,
-        modelSelection,
-        runtimeMode,
-        interactionMode,
-        branch: input.branch ?? null,
-        worktreePath: input.worktreePath ?? null,
-        createdAt,
-      })
+      .dispatch(
+        {
+          type: "thread.create",
+          commandId,
+          threadId: sessionId,
+          projectId,
+          title,
+          modelSelection,
+          runtimeMode,
+          interactionMode,
+          branch: input.branch ?? null,
+          worktreePath: input.worktreePath ?? null,
+          createdAt,
+        },
+        { actorUserId: ownerUserId },
+      )
       .pipe(mapControlError(operation));
     return { created: true, started: false, sessionId, sequence: result.sequence };
   }),

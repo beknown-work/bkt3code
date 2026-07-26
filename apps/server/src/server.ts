@@ -378,7 +378,10 @@ const RuntimeServicesLive = PlannotatorManager.layer.pipe(
 
 const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
   plannotatorProxyRouteLayer,
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
+  McpHttpServer.layer.pipe(
+    Layer.provide(McpSessionRegistry.layer),
+    Layer.provide(ClerkDirectoryLive),
+  ),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(

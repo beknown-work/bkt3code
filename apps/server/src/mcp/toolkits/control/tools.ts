@@ -13,6 +13,8 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSupervisor.ts";
+import { ClerkDirectory } from "../../../auth/ClerkDirectory.ts";
+import { ServerConfig } from "../../../config.ts";
 import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -41,7 +43,14 @@ const dependencies = [
 ];
 const plannotatorDependencies = [...dependencies, PlannotatorManager];
 const configurationDependencies = [...dependencies, ProviderRegistry, ServerSettingsService];
-const projectDependencies = [...dependencies, Path.Path, WorkspacePaths.WorkspacePaths];
+const ownershipDependencies = [ClerkDirectory, ServerConfig];
+const projectDependencies = [
+  ...dependencies,
+  ...ownershipDependencies,
+  Path.Path,
+  WorkspacePaths.WorkspacePaths,
+];
+const sessionDependencies = [...dependencies, ...ownershipDependencies];
 
 const described = <S extends Schema.Top>(schema: S, description: string): S =>
   schema.annotate({ description }) as S;
@@ -359,7 +368,7 @@ export const T3CreateSessionTool = mutatingTool(
     }),
     success: Schema.Unknown,
     failure: T3ControlToolError,
-    dependencies,
+    dependencies: sessionDependencies,
   }).annotate(Tool.Title, "Create T3 session"),
 );
 
