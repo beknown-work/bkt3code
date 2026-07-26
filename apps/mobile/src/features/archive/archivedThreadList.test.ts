@@ -45,6 +45,8 @@ function makeThread(
     ownerUserId: null,
     memberUserIds: [],
     ...input,
+    settledOverride: input.settledOverride ?? null,
+    settledAt: input.settledAt ?? null,
   };
 }
 

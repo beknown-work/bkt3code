@@ -97,6 +97,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         readEvents: () => Stream.empty,
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
         Layer.provide(Layer.succeed(ProviderService, providerService)),
@@ -166,6 +167,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         readEvents: () => Stream.empty,
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
         Layer.provide(Layer.succeed(ProviderService, providerService)),
@@ -209,6 +211,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         readEvents: () => Stream.empty,
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
         Layer.provide(Layer.succeed(ProviderService, providerService)),
@@ -243,6 +246,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         readEvents: () => Stream.empty,
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
         Layer.provide(Layer.succeed(ProviderService, providerService)),
@@ -297,6 +301,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         readEvents: () => Stream.empty,
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
         Layer.provide(Layer.succeed(ProviderService, providerService)),
@@ -344,6 +349,7 @@ layer("ThreadExecutionSupervisor", (it) => {
         readEvents: () => Stream.empty,
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
         Layer.provide(Layer.succeed(ProviderService, providerService)),

@@ -6,9 +6,11 @@ import { memo, useCallback, useMemo } from "react";
 import { APP_STAGE_LABEL } from "../../branding";
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../../connection/useDesktopLocalBootstraps";
+import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
 import { primaryServerConfigAtom } from "../../state/server";
 import { resolveSidebarStageBadgeLabel } from "../Sidebar.logic";
+import { SidebarStageBackdrop, resolveSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import {
   SidebarFooter,
@@ -29,24 +31,32 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }: {
   isElectron: boolean;
 }) {
+  const stageLabel = useSidebarStageLabel();
+  const backdropVariant = resolveSidebarStageBackdropVariant(stageLabel);
+
   return (
     <SidebarHeader
-      className={`@container/sidebar-header h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0 ${isElectron ? "drag-region" : ""}`}
+      className={cn(
+        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        isElectron && "drag-region",
+      )}
     >
-      <SidebarTrigger className="md:hidden" />
-      <SidebarBrand />
+      {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
+      <SidebarTrigger
+        className={cn(
+          "relative z-10 md:hidden",
+          backdropVariant &&
+            "[:hover,[data-pressed]]:bg-white/15 focus-visible:ring-white/90 focus-visible:ring-offset-blue-700 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white!",
+        )}
+      />
+      <SidebarBrand onBackdrop={backdropVariant !== null} />
     </SidebarHeader>
   );
 });
 
-function SidebarBrand() {
+function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const { environments } = useEnvironments();
-  const primaryServerVersion =
-    useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
-  const stageLabel = resolveSidebarStageBadgeLabel({
-    primaryServerVersion,
-    fallbackStageLabel: APP_STAGE_LABEL,
-  });
+  const stageLabel = useSidebarStageLabel();
   const syncing = environments.some(
     (environment) =>
       environment.connection.phase === "connecting" ||
@@ -54,17 +64,30 @@ function SidebarBrand() {
   );
 
   return (
-    <div className="ml-[var(--workspace-titlebar-content-left)] flex min-w-0 items-center gap-1.5">
+    <div className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex min-w-0 items-center gap-1.5">
       <Link
         aria-label="Go to threads"
-        className="sidebar-brand h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2"
+        className={cn(
+          "sidebar-brand h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2",
+          onBackdrop ? "text-white" : "text-foreground",
+        )}
         to="/"
       >
         <T3Wordmark />
-        <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
+        <span
+          className={cn(
+            "truncate text-sm font-medium tracking-tight",
+            onBackdrop ? "text-white/70" : "text-muted-foreground",
+          )}
+        >
           Code
         </span>
-        <span className="sidebar-brand-stage shrink-0 items-center whitespace-nowrap rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+        <span
+          className={cn(
+            "sidebar-brand-stage shrink-0 items-center whitespace-nowrap rounded-full px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em]",
+            onBackdrop ? "bg-white/10 text-white/60" : "bg-muted/50 text-muted-foreground/60",
+          )}
+        >
           {stageLabel}
         </span>
       </Link>
@@ -75,18 +98,33 @@ function SidebarBrand() {
           role="status"
           title="Connection interrupted. Syncing…"
         >
-          <LoaderIcon className="size-3 animate-spin text-muted-foreground/70" />
+          <LoaderIcon
+            className={cn(
+              "size-3 animate-spin",
+              onBackdrop ? "text-white/70" : "text-muted-foreground/70",
+            )}
+          />
         </span>
       ) : null}
     </div>
   );
 }
 
+function useSidebarStageLabel() {
+  const primaryServerVersion =
+    useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
+
+  return resolveSidebarStageBadgeLabel({
+    primaryServerVersion,
+    fallbackStageLabel: APP_STAGE_LABEL,
+  });
+}
+
 function T3Wordmark() {
   return (
     <svg
       aria-label="T3"
-      className="h-2.5 w-auto shrink-0 text-foreground"
+      className="h-2.5 w-auto shrink-0"
       viewBox="15.5309 37 94.3941 56.96"
       xmlns="http://www.w3.org/2000/svg"
     >
@@ -102,7 +140,9 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const handleSettingsClick = useCallback(() => {
-    if (isMobile) setOpenMobile(false);
+    if (isMobile) {
+      setOpenMobile(false);
+    }
     void navigate({ to: "/settings" });
   }, [isMobile, navigate, setOpenMobile]);
 
@@ -115,11 +155,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
         <SidebarMenuItem>
           <SidebarMenuButton
             size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+            className="h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             onClick={handleSettingsClick}
           >
-            <SettingsIcon className="size-3.5" />
-            <span className="text-xs">Settings</span>
+            <SettingsIcon className="size-4.5 shrink-0" />
+            <span>Settings</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>

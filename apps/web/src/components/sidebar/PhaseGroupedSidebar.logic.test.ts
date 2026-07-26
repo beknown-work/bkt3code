@@ -93,6 +93,8 @@ function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
     session: null,
     execution: makeExecution(),
     latestUserMessageAt: null,

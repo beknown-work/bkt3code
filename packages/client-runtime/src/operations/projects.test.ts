@@ -168,10 +168,7 @@ describe("add project shared logic", () => {
       title: "My repository",
       workspaceRoot: "/work/repo",
       createWorkspaceRootIfMissing: true,
-      defaultModelSelection: {
-        instanceId: "codex",
-        model: "gpt-5.4",
-      },
+      defaultModelSelection: null,
     });
   });
 
