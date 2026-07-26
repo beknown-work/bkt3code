@@ -7,6 +7,7 @@ EXPECTED_SHA="${1:-${EXPECTED_SHA:-}}"
 SERVICE_NAME="t3-expbkt3.service"
 HEALTH_URL="http://10.31.39.131:18085/"
 DEPLOYED_SHA_FILE="/home/ubuntu/.t3/expbkt3-dev/deployed-sha"
+BUILD_ENV_FILE="/home/ubuntu/.t3/expbkt3-dev/clerk.env"
 
 exec 9>"/tmp/expbkt3-deploy.lock"
 if ! flock -n 9; then
@@ -39,6 +40,14 @@ echo "==> Fast-forwarding $EXPECTED_BRANCH to $REMOTE_SHA"
 git -C "$REPO_DIR" merge --ff-only "origin/$EXPECTED_BRANCH"
 
 export PATH="/home/ubuntu/.nvm/versions/node/v24.16.0/bin:/home/ubuntu/.local/bin:/home/ubuntu/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+if [[ -f "$BUILD_ENV_FILE" ]]; then
+  echo "==> Loading private experimental build environment"
+  set -a
+  # shellcheck disable=SC1090
+  source "$BUILD_ENV_FILE"
+  set +a
+fi
 
 echo "==> Installing locked dependencies"
 pnpm --dir "$REPO_DIR" install --frozen-lockfile
