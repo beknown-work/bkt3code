@@ -43,7 +43,6 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadExecutionSupervisor } from "../../execution/ThreadExecutionSupervisor.ts";
-import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -218,6 +217,10 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  // T3-CUSTOM(expbkt3): Tracks the identity whose personal MCP credentials
+  // were bound when this reactor started each ACP session. An absent entry
+  // means a pre-existing session has not yet been rebound in this process.
+  const threadCredentialActors = new Map<ThreadId, UserId | null>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -373,6 +376,7 @@ const make = Effect.gen(function* () {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
 
+    const desiredCredentialActor = options?.actorUserId ?? thread.ownerUserId;
     const desiredRuntimeMode = thread.runtimeMode;
     const requestedModelSelection = options?.modelSelection;
     const resolveActiveSession = (threadId: ThreadId) =>
@@ -514,7 +518,7 @@ const make = Effect.gen(function* () {
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         },
-        { actorUserId: options?.actorUserId ?? thread.ownerUserId },
+        { actorUserId: desiredCredentialActor },
       );
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -526,6 +530,7 @@ const make = Effect.gen(function* () {
             detail: `Provider session '${session.threadId}' started without a provider instance id.`,
           });
         }
+        threadCredentialActors.set(threadId, desiredCredentialActor);
         yield* setThreadSession({
           threadId,
           session: {
@@ -570,8 +575,8 @@ const make = Effect.gen(function* () {
       // starts this turn. Resume the ACP under a fresh generation when a
       // different authorized user takes over a shared thread.
       const credentialActorChanged =
-        McpProviderSession.readMcpProviderSession(threadId)?.actorUserId !==
-        (options?.actorUserId ?? thread.ownerUserId);
+        !threadCredentialActors.has(threadId) ||
+        threadCredentialActors.get(threadId) !== desiredCredentialActor;
 
       if (
         !runtimeModeChanged &&
@@ -1052,6 +1057,7 @@ const make = Effect.gen(function* () {
     if (thread.session && thread.session.status !== "stopped") {
       yield* providerService.stopSession({ threadId: thread.id });
     }
+    threadCredentialActors.delete(thread.id);
 
     yield* setThreadSession({
       threadId: thread.id,
