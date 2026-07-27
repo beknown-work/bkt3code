@@ -391,6 +391,7 @@ const buildAppUnderTest = (options?: {
       ...derivedPaths,
       staticDir: undefined,
       devUrl,
+      devAllowedOrigins: [],
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
@@ -687,7 +688,7 @@ const buildAppUnderTest = (options?: {
             reportStatus: () => Effect.void,
             refresh: () => Effect.void,
             close: () => Effect.void,
-            list: () => Effect.succeed({ sessions: [] }),
+            list: () => Effect.succeed({ sessions: [], serverEpoch: "test-server", revision: 0 }),
             events: Stream.empty,
             subscribeEvents: Effect.flatMap(PubSub.unbounded<PreviewEvent>(), (pubsub) =>
               PubSub.subscribe(pubsub),
@@ -1390,6 +1391,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "bearer-access-token",
         "dpop-access-token",
       ]);
+      // Desktop, so port-scoped: instances scan for a free port and share
+      // 127.0.0.1, and cookies are not scoped by port.
       assert.isTrue(body.auth.sessionCookieName.startsWith("t3_session_"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -3303,6 +3306,34 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 204);
       assertBrowserApiCorsPreflightHeaders(response.headers, {
         origin: crossOriginClientOrigin,
+        credentials: true,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("allows configured development origins through ServerConfig", () =>
+    Effect.gen(function* () {
+      const tailnetOrigin = "https://host.example.ts.net";
+      yield* buildAppUnderTest({
+        config: {
+          devUrl: new URL(crossOriginClientOrigin),
+          devAllowedOrigins: [tailnetOrigin],
+        },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const response = yield* fetchEffect(sessionUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: tailnetOrigin,
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "content-type",
+        },
+      });
+
+      assert.equal(response.status, 204);
+      assertBrowserApiCorsPreflightHeaders(response.headers, {
+        origin: tailnetOrigin,
         credentials: true,
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
