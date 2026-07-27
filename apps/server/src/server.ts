@@ -436,7 +436,9 @@ export const makeRoutesLayer = Layer.mergeAll(
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
     staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
+    // T3-CUSTOM(expbkt3): Personal settings RPCs stay self-contained at the
+    // single upstream WebSocket mounting seam.
+    websocketRpcRouteLayer.pipe(Layer.provide(UserMcpProfileStoreLive)),
   ),
   PlannotatorAndMcpRoutesLive,
 ).pipe(
