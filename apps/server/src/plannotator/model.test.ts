@@ -4,6 +4,7 @@ import {
   mergePlannotatorAnnotationHistory,
   parsePlannotatorDecision,
   parsePlannotatorSubmission,
+  plannotatorPreferenceCookies,
   rewritePlannotatorHtml,
 } from "./model.ts";
 
@@ -188,6 +189,7 @@ describe("rewritePlannotatorHtml", () => {
     const rewritten = rewritePlannotatorHtml(
       '<html><head></head><body><script src="/assets/app.js"></script></body></html>',
       "/plannotator/opaque",
+      "t3-auth=secret; plannotator-auto-close=3; plannotator-plan-save-enabled=true",
     );
 
     expect(rewritten).toContain('src="/plannotator/opaque/assets/app.js"');
@@ -195,5 +197,23 @@ describe("rewritePlannotatorHtml", () => {
     expect(rewritten).toContain("window.XMLHttpRequest");
     expect(rewritten).toContain('"sessionStorage":"localStorage"');
     expect(rewritten).toContain("Object.defineProperty(window,sn");
+    expect(rewritten).toContain('Object.defineProperty(document,"cookie"');
+    expect(rewritten).toContain('"plannotator-auto-close":"3"');
+    expect(rewritten).toContain('"plannotator-plan-save-enabled":"true"');
+    expect(rewritten).not.toContain("t3-auth");
+    expect(rewritten).not.toContain("secret");
+    expect(rewritten).toContain("t3:plannotator-preference-cookie");
+    expect(rewritten).toContain("location.hash.match(/^#t3-preferences=");
+  });
+
+  it("filters the browser cookie header to Plannotator preferences", () => {
+    expect(
+      plannotatorPreferenceCookies(
+        "authorization=private; plannotator-auto-close=5; malformed; plannotator-theme=dark",
+      ),
+    ).toEqual({
+      "plannotator-auto-close": "5",
+      "plannotator-theme": "dark",
+    });
   });
 });

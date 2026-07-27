@@ -205,6 +205,12 @@ unsubmitted crash-recovery draft remains available after an interrupted review,
 but a successfully captured round clears that draft so it is not offered as a
 duplicate restoration.
 
+Plannotator UI preferences (including auto-close, quick labels, plan saving, and
+integration choices) persist across focused-review openings. The review remains
+in an opaque-origin iframe: a narrow parent bridge accepts only
+`plannotator-*` preference cookies, while T3 authentication and pairing cookies
+are never exposed to reviewed content.
+
 Review manifests and plan files live under
 `<state-dir>/plannotator/{sessions,plans}`. Process logs live under
 `<logs-dir>/plannotator`. Files are created with owner-only permissions. At

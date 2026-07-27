@@ -216,11 +216,14 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
         if (contentType.includes("text/html")) {
           return response.text.pipe(
             Effect.map((html) =>
-              HttpServerResponse.text(rewritePlannotatorHtml(html, proxyPrefix), {
-                status: response.status,
-                contentType,
-                headers: proxyResponseHeaders(response.headers, proxyPrefix),
-              }),
+              HttpServerResponse.text(
+                rewritePlannotatorHtml(html, proxyPrefix, request.headers.cookie),
+                {
+                  status: response.status,
+                  contentType,
+                  headers: proxyResponseHeaders(response.headers, proxyPrefix),
+                },
+              ),
             ),
           );
         }

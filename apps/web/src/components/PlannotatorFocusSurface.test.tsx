@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  normalizePlannotatorPreferenceCookie,
+  plannotatorPreferenceFragment,
   PlannotatorFocusSurface,
   plannotatorStatusUrl,
   readPlannotatorDecision,
@@ -37,5 +39,34 @@ describe("PlannotatorFocusSurface", () => {
     expect(readPlannotatorDecision({ decision: "denied" })).toBe("denied");
     expect(readPlannotatorDecision({ decision: null })).toBeNull();
     expect(readPlannotatorDecision({ decision: "running" })).toBeNull();
+  });
+
+  it("persists only normalized Plannotator preference cookies", () => {
+    expect(
+      normalizePlannotatorPreferenceCookie(
+        "plannotator-auto-close=3; path=/; max-age=31536000; SameSite=Lax",
+        true,
+      ),
+    ).toBe("plannotator-auto-close=3; path=/; max-age=31536000; SameSite=Lax; Secure");
+    expect(
+      normalizePlannotatorPreferenceCookie("plannotator-auto-close=; path=/; max-age=0", false),
+    ).toBe("plannotator-auto-close=; path=/; max-age=0; SameSite=Lax");
+    expect(normalizePlannotatorPreferenceCookie("t3-auth=secret", true)).toBeNull();
+    expect(
+      normalizePlannotatorPreferenceCookie("plannotator-theme=dark\r\nSet-Cookie: t3=x", true),
+    ).toBeNull();
+  });
+
+  it("passes only Plannotator preferences to the opaque iframe fragment", () => {
+    const fragment = plannotatorPreferenceFragment(
+      "t3-auth=secret; plannotator-auto-close=5; plannotator-theme=dark",
+    );
+    expect(fragment).toMatch(/^#t3-preferences=/);
+    expect(JSON.parse(decodeURIComponent(fragment.slice("#t3-preferences=".length)))).toEqual({
+      "plannotator-auto-close": "5",
+      "plannotator-theme": "dark",
+    });
+    expect(fragment).not.toContain("secret");
+    expect(plannotatorPreferenceFragment("t3-auth=secret")).toBe("");
   });
 });
