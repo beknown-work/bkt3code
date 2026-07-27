@@ -25,7 +25,7 @@ rg 'T3-CUSTOM\\(expbkt3\\)'
 | Area                      | Dedicated implementation                                                                                        | Upstream-facing seams                                                                   |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Active Projects           | `ActiveProjectsSettingsPanel*`, `settings.projects.tsx`                                                         | `SettingsSidebarNav.tsx`, generated route tree                                          |
-| External MCP settings     | `ExternalMcpSettingsSection*`                                                                                   | `ExperimentsSettingsPanel.tsx`                                                          |
+| Personal MCP identity     | `ExternalMcpSettingsSection*`, `UserMcpProfileStore.ts`, `McpUpstreamProxy.ts`, `personalMcp.ts`                | provider adapters, RPC group, server route/layer wiring                                 |
 | MCP operator/native tools | `apps/server/src/mcp/toolkits/control/`                                                                         | MCP toolkit assembly and server route wiring                                            |
 | Plannotator runtime       | `apps/server/src/plannotator/`, `packages/shared/src/plannotator.ts`                                            | server service layers and proxy route                                                   |
 | Native-plan detection     | `NativePlanBridge.ts`                                                                                           | orchestration plan lifecycle hooks                                                      |
@@ -40,8 +40,10 @@ markers; they are regenerated from marked route sources.
 
 ## T3 Conductor lifecycle
 
-T3 Conductor is one durable, primary-environment thread whose id is stored in
-`experimental.t3Conductor.threadId`. When enabled, its fixed sidebar controller:
+T3 Conductor is one durable primary-environment thread per authenticated user.
+Its settings and thread ID live in that user's `user_mcp_profiles` row; the old
+server-wide `experimental.t3Conductor` object remains only as a migration/default
+compatibility seam. When enabled, its fixed sidebar controller:
 
 - provisions the configured workspace as a normal T3 project when needed;
 - initializes the agent with its permanent coordination identity and native T3
@@ -59,7 +61,7 @@ Disabling the feature hides its command-deck card and stops the live provider
 session while preserving the durable conversation for the next enable.
 
 An optional dedicated Linear coordination ticket is stored as the canonical URL
-in `experimental.t3Conductor.linearIssueUrl`. The Experimental settings field
+in the personal Conductor profile. The Experimental settings field
 accepts either `TEAM-123` or a complete `linear.app` issue URL. While the
 Conductor thread is open, its isolated top-bar control can link, update, open,
 or remove that ticket; ordinary session headers are unchanged.

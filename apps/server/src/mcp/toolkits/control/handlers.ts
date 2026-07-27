@@ -30,6 +30,7 @@ import { ClerkDirectory } from "../../../auth/ClerkDirectory.ts";
 import { ServerConfig } from "../../../config.ts";
 import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSupervisor.ts";
 import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
+import { OrchestrationAccessControl } from "../../../orchestration/Services/AccessControl.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PlannotatorManager } from "../../../plannotator/PlannotatorManager.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
@@ -99,6 +100,25 @@ const requireExternalOperator = Effect.fn("T3ControlToolkit.requireExternalOpera
   return scope;
 });
 
+const requireSessionCreator = Effect.fn("T3ControlToolkit.requireSessionCreator")(function* (
+  operation: string,
+) {
+  const scope = yield* requireCapability(operation, "t3.control");
+  if (!McpInvocationContext.canCreateMcpSessions(scope)) {
+    return yield* new T3ControlToolError({
+      operation,
+      message:
+        "Creating sessions requires a personal external token or the delegated T3 Conductor capability.",
+    });
+  }
+  return scope;
+});
+
+const hasUserWideScope = (scope: McpInvocationContext.McpInvocationScope): boolean =>
+  McpInvocationContext.isExternalMcpOperator(scope) ||
+  scope.principal === "external-user" ||
+  scope.capabilities.has("t3.session.create");
+
 const resolveConfiguredOwnerUserId = Effect.fn("T3ControlToolkit.resolveConfiguredOwnerUserId")(
   function* (operation: string) {
     const config = yield* ServerConfig;
@@ -131,12 +151,24 @@ const resolveSessionId = Effect.fn("T3ControlToolkit.resolveSessionId")(function
   capability: "t3.read" | "t3.control" | "t3.plan" = "t3.read",
 ) {
   const scope = yield* requireCapability(operation, capability);
-  if (McpInvocationContext.isExternalMcpOperator(scope)) {
+  if (hasUserWideScope(scope)) {
     if (requested === undefined) {
       return yield* new T3ControlToolError({
         operation,
-        message: "sessionId is required for an external operator call.",
+        message: "sessionId is required for a user-wide MCP call.",
       });
+    }
+    if (!McpInvocationContext.isExternalMcpOperator(scope) && scope.actorUserId !== null) {
+      const accessControl = yield* OrchestrationAccessControl;
+      const allowed = yield* accessControl
+        .canAccessThread(scope.actorUserId, requested)
+        .pipe(mapControlError(operation));
+      if (!allowed) {
+        return yield* new T3ControlToolError({
+          operation,
+          message: `T3 session ${requested} was not found.`,
+        });
+      }
     }
     return requested;
   }
@@ -266,11 +298,16 @@ const handlers = {
       mapControlError(operation),
     );
     const archived =
-      input.includeArchived === true && McpInvocationContext.isExternalMcpOperator(scope)
+      input.includeArchived === true && hasUserWideScope(scope)
         ? yield* query.getArchivedShellSnapshot().pipe(mapControlError(operation))
         : null;
     const threads = [...shell.threads, ...(archived?.threads ?? [])].filter(
-      (thread) => McpInvocationContext.isExternalMcpOperator(scope) || thread.id === scope.threadId,
+      (thread) =>
+        McpInvocationContext.isExternalMcpOperator(scope) ||
+        (scope.actorUserId !== null
+          ? thread.ownerUserId === scope.actorUserId ||
+            thread.memberUserIds.includes(scope.actorUserId)
+          : thread.id === scope.threadId),
     );
     const executions = yield* executionSupervisor.getSnapshots(threads.map((thread) => thread.id));
     const projects = new Map(
@@ -362,7 +399,7 @@ const handlers = {
     const query = yield* ProjectionSnapshotQuery;
     const snapshot = yield* query.getShellSnapshot().pipe(mapControlError(operation));
     const archived =
-      input.includeArchived === true && McpInvocationContext.isExternalMcpOperator(scope)
+      input.includeArchived === true && hasUserWideScope(scope)
         ? yield* query.getArchivedShellSnapshot().pipe(mapControlError(operation))
         : null;
     const activeCounts = new Map<string, number>();
@@ -370,7 +407,24 @@ const handlers = {
       activeCounts.set(thread.projectId, (activeCounts.get(thread.projectId) ?? 0) + 1);
     }
     const projects = new Map(
-      [...snapshot.projects, ...(archived?.projects ?? [])].map((project) => [project.id, project]),
+      [...snapshot.projects, ...(archived?.projects ?? [])]
+        .filter(
+          (project) =>
+            McpInvocationContext.isExternalMcpOperator(scope) ||
+            (scope.actorUserId !== null
+              ? project.ownerUserId === scope.actorUserId ||
+                project.memberUserIds.includes(scope.actorUserId) ||
+                snapshot.threads.some(
+                  (thread) =>
+                    thread.projectId === project.id &&
+                    (thread.ownerUserId === scope.actorUserId ||
+                      thread.memberUserIds.includes(scope.actorUserId)),
+                )
+              : snapshot.threads.some(
+                  (thread) => thread.id === scope.threadId && thread.projectId === project.id,
+                )),
+        )
+        .map((project) => [project.id, project]),
     );
     return {
       projects: [...projects.values()].map((project) => ({
@@ -403,6 +457,7 @@ const handlers = {
 
   t3_send_prompt: Effect.fn("T3ControlToolkit.sendPrompt")(function* (input) {
     const operation = "send-prompt";
+    const scope = yield* requireCapability(operation, "t3.control");
     const sessionId = yield* resolveSessionId(operation, input.sessionId, "t3.control");
     const query = yield* ProjectionSnapshotQuery;
     const dispatcher = yield* OrchestrationCommandDispatcher;
@@ -421,21 +476,24 @@ const handlers = {
       nowIso,
     ]);
     const result = yield* dispatcher
-      .dispatch({
-        type: "thread.turn.start",
-        commandId,
-        threadId: sessionId,
-        message: {
-          messageId,
-          role: "user",
-          text: input.prompt,
-          attachments: [],
+      .dispatch(
+        {
+          type: "thread.turn.start",
+          commandId,
+          threadId: sessionId,
+          message: {
+            messageId,
+            role: "user",
+            text: input.prompt,
+            attachments: [],
+          },
+          modelSelection: input.modelSelection ?? thread.modelSelection,
+          runtimeMode: input.runtimeMode ?? thread.runtimeMode,
+          interactionMode: input.interactionMode ?? thread.interactionMode,
+          createdAt,
         },
-        modelSelection: input.modelSelection ?? thread.modelSelection,
-        runtimeMode: input.runtimeMode ?? thread.runtimeMode,
-        interactionMode: input.interactionMode ?? thread.interactionMode,
-        createdAt,
-      })
+        { actorUserId: scope.actorUserId },
+      )
       .pipe(mapControlError(operation));
     return { accepted: true, sequence: result.sequence, sessionId, messageId, createdAt };
   }),
@@ -711,7 +769,7 @@ const handlers = {
 
   t3_create_session: Effect.fn("T3ControlToolkit.createSession")(function* (input) {
     const operation = "create-session";
-    yield* requireExternalOperator(operation);
+    const scope = yield* requireSessionCreator(operation);
     const query = yield* ProjectionSnapshotQuery;
     const dispatcher = yield* OrchestrationCommandDispatcher;
     const crypto = yield* Crypto.Crypto;
@@ -724,6 +782,18 @@ const handlers = {
         message: `T3 project ${projectId} was not found.`,
       });
     }
+    if (!McpInvocationContext.isExternalMcpOperator(scope) && scope.actorUserId !== null) {
+      const accessControl = yield* OrchestrationAccessControl;
+      const allowed = yield* accessControl
+        .canAccessProject(scope.actorUserId, projectId)
+        .pipe(mapControlError(operation));
+      if (!allowed) {
+        return yield* new T3ControlToolError({
+          operation,
+          message: `T3 project ${projectId} was not found.`,
+        });
+      }
+    }
     const uuid = yield* crypto.randomUUIDv4.pipe(mapControlError(operation));
     const sessionId = ThreadId.make(`mcp:${uuid}`);
     const modelSelection =
@@ -732,7 +802,8 @@ const handlers = {
       DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
     const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
     const interactionMode = input.interactionMode ?? "default";
-    const ownerUserId = project.ownerUserId ?? (yield* resolveConfiguredOwnerUserId(operation));
+    const ownerUserId =
+      scope.actorUserId ?? project.ownerUserId ?? (yield* resolveConfiguredOwnerUserId(operation));
     const title =
       input.title?.trim() ||
       input.prompt?.trim().split(/\s+/).slice(0, 10).join(" ").slice(0, 80) ||
@@ -877,8 +948,24 @@ const handlers = {
       const scope = yield* requireCapability(operation, "t3.read");
       const manager = yield* PlannotatorManager;
       let filterSessionId: ThreadId | undefined;
-      if (McpInvocationContext.isExternalMcpOperator(scope)) {
+      if (hasUserWideScope(scope)) {
         filterSessionId = input.sessionId;
+        if (
+          filterSessionId !== undefined &&
+          !McpInvocationContext.isExternalMcpOperator(scope) &&
+          scope.actorUserId !== null
+        ) {
+          const accessControl = yield* OrchestrationAccessControl;
+          const allowed = yield* accessControl
+            .canAccessThread(scope.actorUserId, filterSessionId)
+            .pipe(mapControlError(operation));
+          if (!allowed) {
+            return yield* new T3ControlToolError({
+              operation,
+              message: `T3 session ${filterSessionId} was not found.`,
+            });
+          }
+        }
       } else {
         if (input.sessionId !== undefined && input.sessionId !== scope.threadId) {
           return yield* new T3ControlToolError({

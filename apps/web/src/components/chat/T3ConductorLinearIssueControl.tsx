@@ -7,7 +7,8 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { ExternalLinkIcon, Link2Icon, UnlinkIcon } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { usePersonalMcpProfile } from "../../hooks/usePersonalMcpProfile";
+import { usePrimarySettings } from "../../hooks/useSettings";
 import { readLocalApi } from "../../localApi";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { LinearIcon } from "../Icons";
@@ -36,9 +37,9 @@ export function T3ConductorLinearIssueControl({
   readonly activeThreadId: ThreadId;
 }) {
   const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const { profile, update } = usePersonalMcpProfile();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const conductor = settings.experimental.t3Conductor;
+  const conductor = profile?.conductor ?? settings.experimental.t3Conductor;
   const linkedIssue = resolveT3ConductorLinearIssue(conductor.linearIssueUrl);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -51,14 +52,11 @@ export function T3ConductorLinearIssueControl({
   if (!visible) return null;
 
   const patchLinearIssue = (linearIssueUrl: string) => {
-    updateSettings({
-      experimental: {
-        ...settings.experimental,
-        t3Conductor: {
-          ...conductor,
-          linearIssueUrl,
-        },
-      },
+    if (!profile) return;
+    void update({
+      conductor: { ...conductor, linearIssueUrl },
+      externalAccessEnabled: profile.externalAccessEnabled,
+      integrations: profile.integrations,
     });
   };
 

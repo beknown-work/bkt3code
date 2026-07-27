@@ -597,6 +597,17 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                         },
                       ],
                     },
+                    ...mcpSession.upstreamServers.map((server) => ({
+                      type: "http" as const,
+                      name: McpProviderSession.upstreamMcpServerName(server),
+                      url: server.endpoint,
+                      headers: [
+                        {
+                          name: "Authorization",
+                          value: mcpSession.authorizationHeader,
+                        },
+                      ],
+                    })),
                   ],
                 }
               : {}),

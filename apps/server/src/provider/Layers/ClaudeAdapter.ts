@@ -3566,6 +3566,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                     Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
                   },
                 },
+                ...Object.fromEntries(
+                  mcpSession.upstreamServers.map((server) => [
+                    McpProviderSession.upstreamMcpServerName(server),
+                    {
+                      type: "http" as const,
+                      url: server.endpoint,
+                      headers: {
+                        Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
+                      },
+                    },
+                  ]),
+                ),
               },
             }
           : {}),

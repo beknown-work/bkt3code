@@ -30,9 +30,11 @@ and removing a T3 project without deleting its files.
 
 1. Open Settings → Experiments.
 2. Enable **External MCP server**.
-3. Generate an operator API key.
-4. Set the public URL, normally `https://your-t3-host.example/mcp`.
-5. Copy the generated agent configuration.
+3. Enable **My external access**.
+4. Rotate your personal API token and copy it immediately. T3 stores only its
+   hash and cannot reveal it again.
+5. Set the public URL, normally `https://your-t3-host.example/mcp`.
+6. Copy the generated agent configuration.
 
 A generic configuration looks like:
 
@@ -43,37 +45,68 @@ A generic configuration looks like:
       "type": "http",
       "url": "https://your-t3-host.example/mcp",
       "headers": {
-        "Authorization": "Bearer <operator-api-key>"
+        "Authorization": "Bearer <personal-api-token>"
       }
     }
   }
 }
 ```
 
-The operator key is a password-equivalent secret. It grants cross-session control,
-including destructive session actions and server setting updates. Rotating the key
-immediately invalidates the previous key. Disabling the setting blocks long-lived
-external access without affecting short-lived credentials issued to agents already
-running inside T3.
+The personal token is a password-equivalent secret. It resolves to the user who
+created it and can see or control only that user's accessible projects and
+sessions. It may create user-owned sessions but cannot update server settings,
+create server-wide projects, or use the raw command escape hatch. Rotating the
+token immediately invalidates the previous token.
 
 Reverse proxies must preserve `Authorization`, support streaming responses, and
 avoid buffering the `/mcp` endpoint.
 
 ## Credential boundaries
 
-T3 has two MCP principals:
+T3 has three MCP principals:
 
 - **Provider session:** automatically created for an agent running inside a T3
-  session. It can read and control only its own session, submit its own plan, and
-  use collaborative browser tools. The credential expires and is revoked with the
-  provider session.
-- **External operator:** created in Settings. It can inspect and operate across
-  sessions, create sessions, update server settings, and use the validated raw
-  orchestration command escape hatch. It does not receive collaborative browser
-  access because there is no owning session.
+  session. The credential carries the authenticated user who started the current
+  ACP generation. A normal session can control only itself; that user's persisted
+  Conductor also receives `t3.session.create` and user-wide visibility.
+- **External user:** created in the user's Experimental settings. It has the same
+  user-scoped visibility as that account and may create user-owned sessions.
+- **Legacy external operator:** retained only for controlled migration and local
+  administration. It has server-wide access, including settings and raw commands.
+  Its key is no longer returned to browser clients.
 
-Both principals use the same `/mcp` endpoint. Tool-level capability and session
-scope checks run on every call.
+All principals use the same `/mcp` endpoint. Tool-level capability, user access,
+and session scope checks run on every call.
+
+## ACP identity and personal upstream MCP
+
+Codex, Claude Code, OpenCode, Cursor, and Grok all receive the same logical MCP
+configuration through their provider adapters. The configuration contains only a
+short-lived T3 bearer token. It never contains a user's Bifrost, Linear, GitHub,
+or other upstream credential.
+
+When a user starts a turn, T3 binds the ACP generation to that authenticated user.
+If a different authorized user starts the next turn in a shared session, T3
+restarts/resumes the provider generation with the new identity before sending the
+turn. This prevents a long-lived ACP process from retaining the previous user's
+MCP authority.
+
+Managed integrations are configured under **Settings → Experiments → My managed
+MCP integrations**. Each integration can be assigned to every provider instance
+or an explicit list, and may carry a tool allowlist. Calls use:
+
+```text
+ACP → /mcp/upstream/<integration-id> → user's write-only credential → upstream MCP
+```
+
+The proxy accepts the ACP's short-lived T3 token, resolves its `actorUserId`,
+verifies the provider assignment and tool allowlist, loads the credential from
+`ServerSecretStore`, injects the selected authentication header, and streams the
+upstream response. An absent credential fails closed; T3 never falls back to
+another user's key.
+
+Bifrost integrations normally use `x-bf-vk`. Bearer, `x-api-key`, and validated
+custom-header authentication are also supported.
 
 ## Tools
 
@@ -89,7 +122,7 @@ scope checks run on every call.
 | `t3_respond_approval`         | Resolve a pending provider approval using the request's allowed decision.                                             |
 | `t3_respond_user_input`       | Answer a pending structured user-input request.                                                                       |
 | `t3_create_project`           | Register or safely create a workspace project on a fresh T3 server. External operators only.                          |
-| `t3_create_session`           | Create a session, optionally with its first prompt. External operators only.                                          |
+| `t3_create_session`           | Create a user-owned session. Personal Conductors, external users, and legacy external operators.                      |
 | `t3_submit_plan`              | Publish Markdown or HTML and start an attached Plannotator review gate.                                               |
 | `t3_list_plannotator_reviews` | Inspect review state, decision, feedback, proxy path, and diagnostics.                                                |
 | `t3_update_server_settings`   | Apply a validated settings patch. External operators only.                                                            |
@@ -188,7 +221,10 @@ reconciled to its durable review identity and existing opaque path. Use
 - Never place an operator key in source control, chat transcripts, shell history,
   screenshots, or logs.
 - The settings read tool redacts provider environment secrets and never returns
-  the operator key.
+  legacy operator or personal integration credentials.
+- A shared session changes credential identity only at a serialized turn
+  boundary. Direct ACP configuration outside T3's managed proxy is not covered
+  by this isolation guarantee.
 - Plannotator direct loopback ports are never returned to the browser. The browser
   receives only the opaque T3 proxy path.
 - HTML plans execute inside the dedicated iframe surface. Accept HTML only from
@@ -202,6 +238,8 @@ reconciled to its durable review identity and existing opaque path. Use
 
 - MCP authentication and scopes:
   `apps/server/src/mcp/{McpSessionRegistry,McpInvocationContext}.ts`
+- Per-user profile/secret metadata and upstream proxy:
+  `apps/server/src/mcp/{UserMcpProfileStore,McpUpstreamProxy}.ts`
 - Tool contracts and handlers:
   `apps/server/src/mcp/toolkits/control/`
 - Plannotator lifecycle and proxy:

@@ -36,6 +36,8 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
+import { mcpUpstreamProxyRouteLayer } from "./mcp/McpUpstreamProxy.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 // T3-CUSTOM(expbkt3): BEGIN — experimental native-plan review runtime.
 import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
@@ -344,6 +346,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(ServerSecretStore.layer),
+  // T3-CUSTOM(expbkt3): Shared per-user MCP metadata and secret resolver.
+  Layer.provideMerge(UserMcpProfileStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
@@ -381,10 +385,14 @@ const RuntimeServicesLive = PlannotatorManager.layer.pipe(
 
 const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
   plannotatorProxyRouteLayer,
-  McpHttpServer.layer.pipe(
-    Layer.provide(McpSessionRegistry.layer),
-    Layer.provide(ClerkDirectoryLive),
-  ),
+  mcpUpstreamProxyRouteLayer,
+  McpHttpServer.layer,
+).pipe(
+  // One registry instance authenticates both the native and upstream MCP
+  // routes; separate instances would not recognize each other's run tokens.
+  Layer.provide(McpSessionRegistry.layer),
+  Layer.provide(ClerkDirectoryLive),
+  Layer.provide(OrchestrationAccessControlLive),
 );
 // T3-CUSTOM(expbkt3): END
 

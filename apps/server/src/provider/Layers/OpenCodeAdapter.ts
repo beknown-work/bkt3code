@@ -1235,19 +1235,27 @@ export function makeOpenCodeAdapter(
               });
               const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
               if (mcpSession && !server.external) {
-                yield* runOpenCodeSdk("mcp.add", () =>
-                  client.mcp.add({
-                    name: "t3-code",
-                    config: {
-                      type: "remote",
-                      url: mcpSession.endpoint,
-                      headers: {
-                        Authorization: mcpSession.authorizationHeader,
+                for (const configured of [
+                  { name: "t3-code", url: mcpSession.endpoint },
+                  ...mcpSession.upstreamServers.map((upstream) => ({
+                    name: McpProviderSession.upstreamMcpServerName(upstream),
+                    url: upstream.endpoint,
+                  })),
+                ]) {
+                  yield* runOpenCodeSdk("mcp.add", () =>
+                    client.mcp.add({
+                      name: configured.name,
+                      config: {
+                        type: "remote",
+                        url: configured.url,
+                        headers: {
+                          Authorization: mcpSession.authorizationHeader,
+                        },
+                        oauth: false,
                       },
-                      oauth: false,
-                    },
-                  }),
-                );
+                    }),
+                  );
+                }
               }
               // Resume: re-adopt the session named by the durable cursor —
               // OpenCode scopes history by session id. The probe recovers only

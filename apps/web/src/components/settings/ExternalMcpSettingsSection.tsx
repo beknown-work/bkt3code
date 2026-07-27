@@ -1,14 +1,21 @@
 /**
- * T3-CUSTOM(expbkt3): Experimental external MCP configuration UI. It is
- * mounted through one feature-flagged seam in ExperimentsSettingsPanel.
+ * T3-CUSTOM(expbkt3): Per-user external T3 access and managed upstream MCP
+ * integrations. Secret values are write-only and never returned by T3.
  */
-import { CopyIcon, EyeIcon, EyeOffIcon, RefreshCwIcon } from "lucide-react";
+import type {
+  PersonalMcpAuthMode,
+  PersonalMcpIntegration,
+  PersonalMcpIntegrationUpdate,
+} from "@t3tools/contracts";
+import { CopyIcon, KeyRoundIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { usePersonalMcpProfile } from "../../hooks/usePersonalMcpProfile";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -17,176 +24,410 @@ export function formatExternalMcpApiKey(bytes: Uint8Array): string {
   return `t3exp_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function generateExternalMcpApiKey(): string {
-  const bytes = new Uint8Array(24);
-  globalThis.crypto.getRandomValues(bytes);
-  return formatExternalMcpApiKey(bytes);
-}
+const toUpdate = (
+  integration: PersonalMcpIntegration,
+  credential?: string,
+): PersonalMcpIntegrationUpdate => ({
+  id: integration.id,
+  name: integration.name,
+  url: integration.url,
+  enabled: integration.enabled,
+  authMode: integration.authMode,
+  customHeaderName: integration.customHeaderName,
+  ...(credential === undefined ? {} : { credential }),
+  providerInstanceIds: integration.providerInstanceIds,
+  allowedTools: integration.allowedTools,
+});
 
 export function ExternalMcpSettingsSection() {
   const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const updateServerSettings = useUpdatePrimarySettings();
+  const { profile, update, rotateToken, revokeToken } = usePersonalMcpProfile();
   const externalMcp = settings.experimental.externalMcp;
-  const [revealed, setRevealed] = useState(false);
   const [urlDraft, setUrlDraft] = useState<string | null>(null);
-  const { copyToClipboard: copyApiKey, isCopied: apiKeyCopied } = useCopyToClipboard({
-    target: "external MCP API key",
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [credentialDrafts, setCredentialDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const { copyToClipboard: copyToken, isCopied: tokenCopied } = useCopyToClipboard({
+    target: "personal T3 MCP token",
   });
   const { copyToClipboard: copyConfig, isCopied: configCopied } = useCopyToClipboard({
-    target: "external MCP configuration",
+    target: "personal T3 MCP configuration",
   });
 
   const effectiveUrl =
     externalMcp.publicUrl.trim() ||
     (typeof window === "undefined" ? "/mcp" : `${window.location.origin}/mcp`);
+  const displayedToken = newToken ?? (profile?.externalTokenPrefix || "<PERSONAL_TOKEN>");
   const configSnippet = useMemo(
     () =>
       JSON.stringify(
         {
           mcpServers: {
-            "t3-code-control": {
+            "t3-code": {
               type: "http",
               url: effectiveUrl,
-              headers: {
-                Authorization: `Bearer ${externalMcp.apiKey || "<API_KEY>"}`,
-              },
+              headers: { Authorization: `Bearer ${displayedToken}` },
             },
           },
         },
         null,
         2,
       ),
-    [effectiveUrl, externalMcp.apiKey],
+    [displayedToken, effectiveUrl],
   );
 
   const patchExternalMcp = (patch: Partial<typeof externalMcp>) => {
-    updateSettings({
+    updateServerSettings({
       experimental: {
         ...settings.experimental,
-        externalMcp: { ...externalMcp, ...patch },
+        externalMcp: { ...externalMcp, ...patch, apiKey: "" },
       },
     });
   };
 
-  const rotateKey = () => {
-    const apiKey = generateExternalMcpApiKey();
-    patchExternalMcp({ apiKey });
-    setRevealed(true);
+  const persistIntegrations = async (
+    integrations: ReadonlyArray<PersonalMcpIntegration>,
+    secretPatch?: { readonly id: string; readonly value: string },
+  ) => {
+    if (!profile) return;
+    await update({
+      conductor: profile.conductor,
+      externalAccessEnabled: profile.externalAccessEnabled,
+      integrations: integrations.map((integration) =>
+        toUpdate(integration, secretPatch?.id === integration.id ? secretPatch.value : undefined),
+      ),
+    });
+    if (secretPatch) {
+      setCredentialDrafts((current) => ({ ...current, [secretPatch.id]: "" }));
+    }
+  };
+
+  const patchIntegration = (
+    id: string,
+    patch: Partial<PersonalMcpIntegration>,
+  ): ReadonlyArray<PersonalMcpIntegration> =>
+    (profile?.integrations ?? []).map((integration) =>
+      integration.id === id ? { ...integration, ...patch } : integration,
+    );
+
+  const addBifrost = () => {
+    if (!profile) return;
+    const suffix = profile.integrations.filter((entry) => entry.id.startsWith("bifrost")).length;
+    const id = suffix === 0 ? "bifrost" : `bifrost-${suffix + 1}`;
+    void persistIntegrations([
+      ...profile.integrations,
+      {
+        id,
+        name: "Bifrost",
+        url: "http://localhost:8080/mcp",
+        enabled: true,
+        authMode: "x-bf-vk",
+        customHeaderName: "",
+        credentialConfigured: false,
+        providerInstanceIds: [],
+        allowedTools: [],
+      },
+    ]);
   };
 
   return (
-    <SettingsSection title="External T3 MCP control">
-      <SettingsRow
-        title="Enable external MCP server"
-        description="Allow trusted agents outside T3 Code to inspect and control sessions through the authenticated /mcp endpoint. The API key has operator-level access."
-        status={
-          externalMcp.enabled && externalMcp.apiKey.length >= 24
-            ? `Ready at ${effectiveUrl}`
-            : externalMcp.enabled
-              ? "Generate an API key to finish enabling external access."
-              : "Disabled. In-session agents continue to receive their own short-lived scoped MCP credential."
-        }
-        control={
-          <Switch
-            checked={externalMcp.enabled}
-            onCheckedChange={(checked) => {
-              const enabled = Boolean(checked);
-              patchExternalMcp({
-                enabled,
-                ...(enabled && externalMcp.apiKey.length < 24
-                  ? { apiKey: generateExternalMcpApiKey() }
-                  : {}),
-              });
-            }}
-            aria-label="Enable external T3 MCP server"
-          />
-        }
-      />
-
-      <SettingsRow
-        title="Public MCP URL"
-        description="URL agents use for Streamable HTTP MCP. Leave blank to use this browser's origin plus /mcp."
-      >
-        <Input
-          className="mt-3 mb-3.5 font-mono text-xs"
-          value={urlDraft ?? externalMcp.publicUrl}
-          onChange={(event) => setUrlDraft(event.target.value)}
-          onFocus={() => setUrlDraft(externalMcp.publicUrl)}
-          onBlur={() => {
-            const next = (urlDraft ?? externalMcp.publicUrl).trim();
-            setUrlDraft(null);
-            if (next !== externalMcp.publicUrl) patchExternalMcp({ publicUrl: next });
-          }}
-          placeholder={effectiveUrl}
-          spellCheck={false}
-          aria-label="External MCP public URL"
+    <>
+      <SettingsSection title="Personal T3 MCP access">
+        <SettingsRow
+          title="Enable MCP endpoint"
+          description="Server-wide transport switch. Personal tokens remain user-scoped and cannot become server administrators."
+          status={externalMcp.enabled ? `Available at ${effectiveUrl}` : "Disabled"}
+          control={
+            <Switch
+              checked={externalMcp.enabled}
+              onCheckedChange={(checked) => patchExternalMcp({ enabled: Boolean(checked) })}
+              aria-label="Enable external T3 MCP endpoint"
+            />
+          }
         />
-      </SettingsRow>
 
-      <SettingsRow
-        title="Operator API key"
-        description="Treat this like a password. Rotating it immediately invalidates the previous external credential; agent-scoped credentials are unaffected."
-      >
-        <div className="mt-3 mb-3.5 flex items-center gap-2">
+        <SettingsRow
+          title="Public MCP URL"
+          description="Shared endpoint URL. Authentication and accessible sessions are resolved separately for each personal token."
+        >
           <Input
-            className="font-mono text-xs"
-            type={revealed ? "text" : "password"}
-            value={externalMcp.apiKey}
-            readOnly
-            placeholder="Generate an API key"
-            aria-label="External MCP operator API key"
-          />
-          <Button
-            size="icon-sm"
-            variant="outline"
-            onClick={() => setRevealed((current) => !current)}
-            disabled={!externalMcp.apiKey}
-            aria-label={revealed ? "Hide API key" : "Reveal API key"}
-          >
-            {revealed ? <EyeOffIcon /> : <EyeIcon />}
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            onClick={() => copyApiKey(externalMcp.apiKey)}
-            disabled={!externalMcp.apiKey}
-            aria-label="Copy API key"
-          >
-            <CopyIcon />
-          </Button>
-          <Button size="sm" variant="outline" onClick={rotateKey}>
-            <RefreshCwIcon />
-            {externalMcp.apiKey ? "Rotate" : "Generate"}
-          </Button>
-        </div>
-        {apiKeyCopied ? <p className="mb-3 text-xs text-emerald-600">API key copied.</p> : null}
-      </SettingsRow>
-
-      <SettingsRow
-        title="Agent configuration"
-        description="Paste this JSON into an MCP-capable agent. Tool descriptions are self-documenting, and focused tools are preferred over the advanced raw command escape hatch."
-      >
-        <div className="mt-3 mb-3.5 space-y-2">
-          <Textarea
-            className="min-h-52 font-mono text-xs"
-            value={configSnippet}
-            readOnly
+            className="mt-3 mb-3.5 font-mono text-xs"
+            value={urlDraft ?? externalMcp.publicUrl}
+            onChange={(event) => setUrlDraft(event.target.value)}
+            onFocus={() => setUrlDraft(externalMcp.publicUrl)}
+            onBlur={() => {
+              const publicUrl = (urlDraft ?? externalMcp.publicUrl).trim();
+              setUrlDraft(null);
+              if (publicUrl !== externalMcp.publicUrl) patchExternalMcp({ publicUrl });
+            }}
+            placeholder={effectiveUrl}
             spellCheck={false}
-            aria-label="External MCP agent configuration"
           />
-          <div className="flex justify-end">
+        </SettingsRow>
+
+        <SettingsRow
+          title="My external access"
+          description="Allows your personal token to connect from agents outside T3. It can access only projects and sessions available to your account."
+          control={
+            <Switch
+              checked={profile?.externalAccessEnabled ?? false}
+              disabled={!profile}
+              onCheckedChange={(checked) => {
+                if (!profile) return;
+                void update({
+                  conductor: profile.conductor,
+                  externalAccessEnabled: Boolean(checked),
+                  integrations: profile.integrations,
+                });
+              }}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Personal API token"
+          description="The complete token is shown once after rotation. T3 stores only a hash; revoke it immediately if it is exposed."
+          status={
+            profile?.externalTokenConfigured
+              ? `Configured as ${profile.externalTokenPrefix}`
+              : "No token configured"
+          }
+        >
+          <div className="mt-3 mb-2 flex gap-2">
+            <Input
+              className="font-mono text-xs"
+              value={newToken ?? profile?.externalTokenPrefix ?? ""}
+              readOnly
+              placeholder="Rotate to create a personal token"
+            />
             <Button
               size="sm"
               variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void rotateToken()
+                  .then((token) => setNewToken(token))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <RefreshCwIcon />
+              Rotate
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              disabled={!newToken}
+              onClick={() => newToken && copyToken(newToken)}
+              aria-label="Copy newly generated personal token"
+            >
+              <CopyIcon />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!profile?.externalTokenConfigured || busy}
+              onClick={() => {
+                setBusy(true);
+                void revokeToken()
+                  .then(() => setNewToken(null))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Revoke
+            </Button>
+          </div>
+          {newToken ? (
+            <p className="mb-3 text-xs text-amber-600">
+              Copy this token now. It cannot be revealed again.
+              {tokenCopied ? " Copied." : ""}
+            </p>
+          ) : null}
+        </SettingsRow>
+
+        <SettingsRow
+          title="Agent configuration"
+          description="Use this same connection in Codex, Claude Code, OpenCode, or any Streamable HTTP MCP client."
+        >
+          <Textarea className="mt-3 min-h-44 font-mono text-xs" value={configSnippet} readOnly />
+          <div className="mt-2 mb-3 flex justify-end">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!newToken}
               onClick={() => copyConfig(configSnippet)}
-              disabled={!externalMcp.apiKey}
             >
               <CopyIcon />
               {configCopied ? "Copied" : "Copy configuration"}
             </Button>
           </div>
-        </div>
-      </SettingsRow>
-    </SettingsSection>
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection title="My managed MCP integrations">
+        <SettingsRow
+          title="Credential routing"
+          description="Every ACP receives only a short-lived T3 run token. T3 injects the credential below at its proxy boundary according to the authenticated turn initiator."
+          control={
+            <Button size="sm" variant="outline" onClick={addBifrost} disabled={!profile}>
+              <PlusIcon />
+              Add Bifrost
+            </Button>
+          }
+        />
+
+        {(profile?.integrations ?? []).map((integration) => (
+          <SettingsRow
+            key={integration.id}
+            title={integration.name}
+            description={`${integration.id} · ${integration.credentialConfigured ? "Credential configured" : "Credential required"}`}
+            control={
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={integration.enabled}
+                  onCheckedChange={(checked) =>
+                    void persistIntegrations(
+                      patchIntegration(integration.id, { enabled: Boolean(checked) }),
+                    )
+                  }
+                />
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() =>
+                    void persistIntegrations(
+                      (profile?.integrations ?? []).filter(
+                        (candidate) => candidate.id !== integration.id,
+                      ),
+                    )
+                  }
+                  aria-label={`Remove ${integration.name}`}
+                >
+                  <Trash2Icon />
+                </Button>
+              </div>
+            }
+          >
+            <div className="mt-3 mb-4 grid gap-2 md:grid-cols-2">
+              <Input
+                defaultValue={integration.name}
+                onBlur={(event) =>
+                  void persistIntegrations(
+                    patchIntegration(integration.id, { name: event.target.value }),
+                  )
+                }
+                placeholder="Integration name"
+              />
+              <Input
+                className="font-mono text-xs"
+                defaultValue={integration.url}
+                onBlur={(event) =>
+                  void persistIntegrations(
+                    patchIntegration(integration.id, { url: event.target.value }),
+                  )
+                }
+                placeholder="https://bifrost.example/mcp"
+              />
+              <Select
+                value={integration.authMode}
+                onValueChange={(value) =>
+                  void persistIntegrations(
+                    patchIntegration(integration.id, {
+                      authMode: value as PersonalMcpAuthMode,
+                    }),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="x-bf-vk">Bifrost virtual key</SelectItem>
+                  <SelectItem value="bearer">Bearer token</SelectItem>
+                  <SelectItem value="x-api-key">x-api-key</SelectItem>
+                  <SelectItem value="custom-header">Custom header</SelectItem>
+                </SelectPopup>
+              </Select>
+              <div className="flex gap-2">
+                <Input
+                  className="font-mono text-xs"
+                  type="password"
+                  value={credentialDrafts[integration.id] ?? ""}
+                  onChange={(event) =>
+                    setCredentialDrafts((current) => ({
+                      ...current,
+                      [integration.id]: event.target.value,
+                    }))
+                  }
+                  placeholder={
+                    integration.credentialConfigured
+                      ? "Enter a replacement credential"
+                      : "Enter credential"
+                  }
+                />
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  disabled={!(credentialDrafts[integration.id] ?? "")}
+                  onClick={() =>
+                    void persistIntegrations(profile?.integrations ?? [], {
+                      id: integration.id,
+                      value: credentialDrafts[integration.id] ?? "",
+                    })
+                  }
+                  aria-label={`Save ${integration.name} credential`}
+                >
+                  <KeyRoundIcon />
+                </Button>
+              </div>
+              {integration.authMode === "custom-header" ? (
+                <Input
+                  defaultValue={integration.customHeaderName}
+                  onBlur={(event) =>
+                    void persistIntegrations(
+                      patchIntegration(integration.id, {
+                        customHeaderName: event.target.value,
+                      }),
+                    )
+                  }
+                  placeholder="Header name"
+                />
+              ) : null}
+              <Input
+                className="font-mono text-xs"
+                defaultValue={integration.providerInstanceIds.join(", ")}
+                onBlur={(event) =>
+                  void persistIntegrations(
+                    patchIntegration(integration.id, {
+                      providerInstanceIds: event.target.value
+                        .split(",")
+                        .map((value) => value.trim())
+                        .filter(Boolean) as PersonalMcpIntegration["providerInstanceIds"],
+                    }),
+                  )
+                }
+                placeholder="Provider instance IDs; blank means all ACPs"
+              />
+              <Input
+                className="font-mono text-xs"
+                defaultValue={integration.allowedTools.join(", ")}
+                onBlur={(event) =>
+                  void persistIntegrations(
+                    patchIntegration(integration.id, {
+                      allowedTools: event.target.value
+                        .split(",")
+                        .map((value) => value.trim())
+                        .filter(Boolean),
+                    }),
+                  )
+                }
+                placeholder="Allowed tool names; blank means all"
+              />
+            </div>
+          </SettingsRow>
+        ))}
+      </SettingsSection>
+    </>
   );
 }

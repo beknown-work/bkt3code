@@ -18,6 +18,7 @@ const tabId = PreviewTabId.make("tab-mcp-test");
 const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
 const invocation = {
   principal: "provider-session" as const,
+  actorUserId: null,
   environmentId,
   threadId,
   providerSessionId: "provider-session-mcp-test",

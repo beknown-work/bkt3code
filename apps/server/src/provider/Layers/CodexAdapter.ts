@@ -1423,6 +1423,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                  ...mcpSession.upstreamServers.flatMap((server) => {
+                    const name = McpProviderSession.upstreamMcpServerName(server);
+                    return [
+                      "-c",
+                      `mcp_servers.${name}.url=${server.endpoint}`,
+                      "-c",
+                      `mcp_servers.${name}.bearer_token_env_var="T3_MCP_BEARER_TOKEN"`,
+                    ];
+                  }),
                 ],
               }
             : {}),

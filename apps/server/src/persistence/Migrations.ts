@@ -54,6 +54,8 @@ import Migration0038 from "./Migrations/038_CatchupSummaries.ts";
 import Migration0039 from "./Migrations/039_CatchupSummaryStatus.ts";
 import Migration0040 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0041 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
+// T3-CUSTOM(expbkt3): Per-user MCP profiles and personal access tokens.
+import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -107,6 +109,7 @@ export const migrationEntries = [
   [39, "CatchupSummaryStatus", Migration0039],
   [40, "ProjectionThreadsSettled", Migration0040],
   [41, "ProjectionThreadsSnoozed", Migration0041],
+  [42, "UserMcpProfiles", Migration0042],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

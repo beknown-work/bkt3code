@@ -20,7 +20,8 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { usePersonalMcpProfile } from "../../hooks/usePersonalMcpProfile";
+import { usePrimarySettings } from "../../hooks/useSettings";
 import { resolveAppModelSelectionState } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -82,8 +83,8 @@ export function T3ConductorCard({
   readonly onNavigate: (threadRef: ScopedThreadRef) => void;
 }) {
   const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
-  const conductor = settings.experimental.t3Conductor;
+  const { profile, update } = usePersonalMcpProfile();
+  const conductor = profile?.conductor ?? settings.experimental.t3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projects = useProjects();
   const threads = useThreadShells();
@@ -145,15 +146,15 @@ export function T3ConductorCard({
   }, [providers, resolvedSelection.instanceId, settings, thread?.modelSelection.instanceId]);
 
   const patchThreadId = useCallback(
-    (threadId: string) => {
-      updateSettings({
-        experimental: {
-          ...settings.experimental,
-          t3Conductor: { ...conductor, threadId },
-        },
+    async (threadId: string) => {
+      if (!profile) return null;
+      return await update({
+        conductor: { ...conductor, threadId },
+        externalAccessEnabled: profile.externalAccessEnabled,
+        integrations: profile.integrations,
       });
     },
-    [conductor, settings.experimental, updateSettings],
+    [conductor, profile, update],
   );
 
   useEffect(() => {
@@ -278,7 +279,7 @@ export function T3ConductorCard({
           });
           requireSuccess(archiveResult);
           const nextThreadId = deriveT3ConductorThreadId(primaryEnvironmentId, workspacePath);
-          patchThreadId(nextThreadId);
+          await patchThreadId(nextThreadId);
           const restoreResult = await unarchiveThread({
             environmentId: primaryEnvironmentId,
             input: { threadId: nextThreadId },
@@ -364,7 +365,7 @@ export function T3ConductorCard({
       }
       restoreAttemptedRef.current = targetThreadId;
       if (!configuredThreadId) {
-        patchThreadId(targetThreadId);
+        await patchThreadId(targetThreadId);
       }
 
       setOperationLabel("Restoring home");

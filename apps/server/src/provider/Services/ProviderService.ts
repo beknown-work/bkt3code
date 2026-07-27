@@ -22,6 +22,7 @@ import type {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ThreadId,
+  UserId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -47,6 +48,8 @@ export interface ProviderServiceShape {
   readonly startSession: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
+    /** T3-CUSTOM(expbkt3): User whose delegated MCP grants back this ACP generation. */
+    executionContext?: { readonly actorUserId: UserId | null },
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**

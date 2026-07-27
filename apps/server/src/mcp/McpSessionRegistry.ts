@@ -2,7 +2,13 @@
  * T3-CUSTOM(expbkt3): Issues and revokes capability-scoped credentials for the
  * experimental T3 MCP endpoint.
  */
-import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  PersonalMcpIntegrationId,
+  ProviderInstanceId,
+  ThreadId,
+  type PersonalMcpProfile,
+  type UserId,
+} from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -16,10 +22,12 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
+import * as UserMcpProfileStore from "./UserMcpProfileStore.ts";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly actorUserId?: UserId | null;
 }
 
 export interface McpIssuedCredential {
@@ -60,6 +68,10 @@ export interface McpSessionRegistryOptions {
     readonly enabled: boolean;
     readonly apiKey: string;
   }>;
+  readonly loadPersonalProfile?: (userId: UserId) => Effect.Effect<PersonalMcpProfile | undefined>;
+  readonly resolveExternalUserToken?: (
+    rawToken: string,
+  ) => Effect.Effect<UserMcpProfileStore.ResolvedPersonalMcpToken | undefined>;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
@@ -128,16 +140,49 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
       const expiresAt = issuedAt + maximumLifetimeMs;
+      const actorUserId = request.actorUserId ?? null;
+      const personalProfile =
+        actorUserId === null || options.loadPersonalProfile === undefined
+          ? undefined
+          : yield* options.loadPersonalProfile(actorUserId);
+      const isConductor =
+        personalProfile !== undefined &&
+        personalProfile.conductor.threadId.length > 0 &&
+        personalProfile.conductor.threadId === request.threadId;
+      const capabilities = new Set<McpInvocationContext.McpCapability>([
+        "preview",
+        "t3.read",
+        "t3.control",
+        "t3.plan",
+      ]);
+      if (isConductor) capabilities.add("t3.session.create");
       const scope: McpInvocationContext.McpInvocationScope = {
         principal: "provider-session",
+        actorUserId,
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview", "t3.read", "t3.control", "t3.plan"]),
+        capabilities,
         issuedAt,
         expiresAt,
       };
+      const upstreamServers =
+        personalProfile?.integrations
+          .filter(
+            (integration) =>
+              integration.enabled &&
+              integration.credentialConfigured &&
+              (integration.providerInstanceIds.length === 0 ||
+                integration.providerInstanceIds.includes(request.providerInstanceId)),
+          )
+          .map((integration) => ({
+            id: PersonalMcpIntegrationId.make(integration.id),
+            name: integration.name,
+            endpoint: `${endpoint.slice(0, -"/mcp".length)}/mcp/upstream/${encodeURIComponent(integration.id)}`,
+            authMode: integration.authMode,
+            allowedTools: integration.allowedTools,
+          })) ?? [];
       yield* SynchronizedRef.update(state, ({ records }) => {
         const next = new Map(pruneExpired(records, issuedAt));
         next.set(tokenHash, { tokenHash, scope, lastUsedAt: issuedAt });
@@ -149,8 +194,10 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           threadId: scope.threadId,
           providerSessionId,
           providerInstanceId: scope.providerInstanceId,
+          actorUserId,
           endpoint,
           authorizationHeader: `Bearer ${rawToken}`,
+          upstreamServers,
         },
         expiresAt,
       };
@@ -172,6 +219,24 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       });
       if (providerScope) return providerScope;
 
+      const externalUser =
+        options.resolveExternalUserToken === undefined
+          ? undefined
+          : yield* options.resolveExternalUserToken(rawToken);
+      if (externalUser) {
+        return {
+          principal: "external-user",
+          actorUserId: externalUser.userId,
+          environmentId,
+          threadId: ThreadId.make(externalUser.conductorThreadId || "external-user"),
+          providerSessionId: `external-user:${externalUser.userId}`,
+          providerInstanceId: ProviderInstanceId.make("external-user"),
+          capabilities: new Set(["t3.read", "t3.control", "t3.plan", "t3.session.create"]),
+          issuedAt: timestamp,
+          expiresAt: timestamp + idleTimeoutMs,
+        } satisfies McpInvocationContext.McpInvocationScope;
+      }
+
       const externalSettings = yield* (
         options.loadExternalMcpSettings?.() ?? Effect.succeed({ enabled: false, apiKey: "" })
       );
@@ -184,6 +249,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       }
       return {
         principal: "external-operator",
+        actorUserId: null,
         environmentId,
         threadId: ThreadId.make("external-operator"),
         providerSessionId: "external-operator",
@@ -220,12 +286,17 @@ let activeMcpSessionRegistry: McpSessionRegistryShape | undefined;
 const make = Effect.acquireRelease(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const userProfiles = yield* UserMcpProfileStore.UserMcpProfileStore;
     return yield* makeWithOptions({
       loadExternalMcpSettings: () =>
         serverSettings.getSettings.pipe(
           Effect.map((settings) => settings.experimental.externalMcp),
           Effect.orElseSucceed(() => ({ enabled: false, apiKey: "" })),
         ),
+      loadPersonalProfile: (userId) =>
+        userProfiles.get(userId).pipe(Effect.orElseSucceed(() => undefined)),
+      resolveExternalUserToken: (token) =>
+        userProfiles.resolveExternalToken(token).pipe(Effect.orElseSucceed(() => undefined)),
     });
   }).pipe(
     Effect.tap((registry) =>

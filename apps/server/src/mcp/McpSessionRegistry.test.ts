@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  UserId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 
@@ -110,5 +116,63 @@ it.effect("resolves the enabled external operator key without storing it in the 
     expect(resolved?.principal).toBe("external-operator");
     expect(resolved?.capabilities.has("t3.control")).toBe(true);
     expect(yield* registry.resolve("incorrect_123456789012345678901234567890")).toBeUndefined();
+  }),
+);
+
+it.effect("binds Conductor credentials and upstream MCP servers to the actor user", () =>
+  Effect.gen(function* () {
+    const userId = UserId.make("user-tushar");
+    const conductorThreadId = ThreadId.make("thread-tushar-conductor");
+    const registry = yield* McpSessionRegistry.__testing
+      .make({
+        now: () => 1_000,
+        loadPersonalProfile: (requestedUserId) =>
+          Effect.succeed(
+            requestedUserId === userId
+              ? {
+                  userId,
+                  conductor: {
+                    ...DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
+                    enabled: true,
+                    threadId: conductorThreadId,
+                  },
+                  externalAccessEnabled: true,
+                  externalTokenConfigured: true,
+                  externalTokenPrefix: "t3usr_test…",
+                  integrations: [
+                    {
+                      id: "bifrost",
+                      name: "Bifrost",
+                      url: "https://bifrost.example/mcp",
+                      enabled: true,
+                      authMode: "x-bf-vk",
+                      customHeaderName: "",
+                      credentialConfigured: true,
+                      providerInstanceIds: [],
+                      allowedTools: ["linear_get_issue"],
+                    },
+                  ],
+                  updatedAt: "2026-07-27T00:00:00.000Z",
+                }
+              : undefined,
+          ),
+      })
+      .pipe(
+        Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
+        Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+        Effect.provide(NodeServices.layer),
+      );
+
+    const issued = yield* registry.issue({
+      threadId: conductorThreadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      actorUserId: userId,
+    });
+    expect(issued.config.actorUserId).toBe(userId);
+    expect(issued.config.upstreamServers.map((server) => server.id)).toEqual(["bifrost"]);
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const resolved = yield* registry.resolve(token);
+    expect(resolved?.actorUserId).toBe(userId);
+    expect(resolved?.capabilities.has("t3.session.create")).toBe(true);
   }),
 );

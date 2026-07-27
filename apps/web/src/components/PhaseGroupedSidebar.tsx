@@ -35,6 +35,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
+import { usePersonalMcpProfile } from "../hooks/usePersonalMcpProfile";
 import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -823,7 +824,9 @@ export function PhaseGroupedSidebar() {
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const currentUserId = useCurrentUserId();
   // T3-CUSTOM(expbkt3): Reserve one permanent row outside normal lifecycle groups.
-  const t3Conductor = usePrimarySettings((settings) => settings.experimental.t3Conductor);
+  const legacyT3Conductor = usePrimarySettings((settings) => settings.experimental.t3Conductor);
+  const { profile: personalMcpProfile } = usePersonalMcpProfile();
+  const t3Conductor = personalMcpProfile?.conductor ?? legacyT3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const filters = usePhaseSidebarFilterStore(

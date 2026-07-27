@@ -38,7 +38,7 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
-  type UserId,
+  UserId,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchEntriesError,
@@ -96,6 +96,7 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -270,6 +271,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
+  [WS_METHODS.personalMcpGetProfile, AuthOrchestrationReadScope],
+  [WS_METHODS.personalMcpUpdateProfile, AuthOrchestrationOperateScope],
+  [WS_METHODS.personalMcpRotateToken, AuthOrchestrationOperateScope],
+  [WS_METHODS.personalMcpRevokeToken, AuthOrchestrationOperateScope],
   [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
@@ -384,6 +389,10 @@ const makeWsRpcLayer = (
       // The operating Clerk user for this connection, or null for an
       // unrestricted operator (pairing/CLI/single-user) which skips filtering.
       const actorUserId = Option.getOrNull(accessControl.actorFor(currentSession.subject));
+      // T3-CUSTOM(expbkt3): Local/single-user transports share a deterministic
+      // personal profile; team-mode connections use the authenticated Clerk id.
+      const personalMcpUserId = actorUserId ?? UserId.make("local-user");
+      const personalMcpProfiles = yield* UserMcpProfileStore.UserMcpProfileStore;
       // Whether that operator is a Clerk org admin (may manage project access).
       // Stable for the connection's identity, so resolve once.
       const actorIsAdmin =
@@ -1601,6 +1610,30 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.personalMcpGetProfile]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.personalMcpGetProfile,
+            personalMcpProfiles.get(personalMcpUserId),
+            { "rpc.aggregate": "personal-mcp" },
+          ),
+        [WS_METHODS.personalMcpUpdateProfile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.personalMcpUpdateProfile,
+            personalMcpProfiles.update(personalMcpUserId, input),
+            { "rpc.aggregate": "personal-mcp" },
+          ),
+        [WS_METHODS.personalMcpRotateToken]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.personalMcpRotateToken,
+            personalMcpProfiles.rotateExternalToken(personalMcpUserId),
+            { "rpc.aggregate": "personal-mcp" },
+          ),
+        [WS_METHODS.personalMcpRevokeToken]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.personalMcpRevokeToken,
+            personalMcpProfiles.revokeExternalToken(personalMcpUserId),
+            { "rpc.aggregate": "personal-mcp" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(

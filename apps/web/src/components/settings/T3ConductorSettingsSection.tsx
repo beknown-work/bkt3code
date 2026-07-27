@@ -12,7 +12,8 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { useMemo, useState } from "react";
 
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { usePrimarySettings } from "../../hooks/useSettings";
+import { usePersonalMcpProfile } from "../../hooks/usePersonalMcpProfile";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -48,11 +49,11 @@ const INTERACTION_MODE_LABELS: Record<ProviderInteractionMode, string> = {
 
 export function T3ConductorSettingsSection() {
   const settings = usePrimarySettings();
-  const updateSettings = useUpdatePrimarySettings();
+  const { profile, update } = usePersonalMcpProfile();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const conductor = settings.experimental.t3Conductor;
+  const conductor = profile?.conductor ?? settings.experimental.t3Conductor;
   const [pathDraft, setPathDraft] = useState<string | null>(null);
   const [linearIssueDraft, setLinearIssueDraft] = useState<string | null>(null);
   const [linearIssueError, setLinearIssueError] = useState<string | null>(null);
@@ -81,11 +82,11 @@ export function T3ConductorSettingsSection() {
   );
 
   const patchConductor = (patch: Partial<typeof conductor>) => {
-    updateSettings({
-      experimental: {
-        ...settings.experimental,
-        t3Conductor: { ...conductor, ...patch },
-      },
+    if (!profile) return;
+    void update({
+      conductor: { ...conductor, ...patch },
+      externalAccessEnabled: profile.externalAccessEnabled,
+      integrations: profile.integrations,
     });
   };
 
@@ -93,7 +94,7 @@ export function T3ConductorSettingsSection() {
     <SettingsSection title="T3 Conductor">
       <SettingsRow
         title="Permanent orchestration agent"
-        description="Keep one master T3 agent in a fixed sidebar home. It restores itself if archived, resumes when T3 reconnects, and stays separate from ordinary lifecycle rows."
+        description="Keep one personal master T3 agent in a fixed sidebar home. Its sessions and managed MCP calls use the signed-in user's delegated authority and credentials."
         status={
           conductor.enabled
             ? conductor.workspacePath
