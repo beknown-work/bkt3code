@@ -405,7 +405,7 @@ export function ExternalMcpSettingsSection() {
                         .split(",")
                         .map((value) => value.trim())
                         .filter(Boolean)
-                        .map(ProviderInstanceId.make),
+                        .map((value) => ProviderInstanceId.make(value)),
                     }),
                   )
                 }
