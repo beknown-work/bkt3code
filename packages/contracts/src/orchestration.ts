@@ -389,15 +389,18 @@ export type OrchestrationCheckpointStatus = typeof OrchestrationCheckpointStatus
  * that ran longer than the configured cutoff. Rendered as a helper cue when
  * returning to a session after a long run.
  */
-/** "pending" while the summarizer is running; "ready" once text exists. */
-export const OrchestrationTurnCatchupSummaryStatus = Schema.Literals(["pending", "ready"]);
+/**
+ * "pending" while the summarizer is running, "ready" once text exists, and
+ * "error" when the request completed without a usable summary.
+ */
+export const OrchestrationTurnCatchupSummaryStatus = Schema.Literals(["pending", "ready", "error"]);
 export type OrchestrationTurnCatchupSummaryStatus =
   typeof OrchestrationTurnCatchupSummaryStatus.Type;
 
 export const OrchestrationTurnCatchupSummary = Schema.Struct({
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
-  // Null while pending — the card shows a spinner until the text lands.
+  // Null while pending. For "error", this carries the user-facing failure detail.
   summary: Schema.NullOr(TrimmedNonEmptyString),
   status: OrchestrationTurnCatchupSummaryStatus.pipe(
     Schema.withDecodingDefault(Effect.succeed("ready" as const)),
@@ -1087,9 +1090,15 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
  *
  * - `pending`  — summarization started; show a spinner on the card.
  * - `ready`    — text produced.
- * - `cleared`  — no card for this turn (below cutoff, or summarization failed).
+ * - `error`    — generation failed; keep an actionable inline error card.
+ * - `cleared`  — no card for this turn because it was below the cutoff.
  */
-export const ThreadCatchupSummaryProgress = Schema.Literals(["pending", "ready", "cleared"]);
+export const ThreadCatchupSummaryProgress = Schema.Literals([
+  "pending",
+  "ready",
+  "error",
+  "cleared",
+]);
 export type ThreadCatchupSummaryProgress = typeof ThreadCatchupSummaryProgress.Type;
 
 const ThreadCatchupSummaryUpdateCommand = Schema.Struct({

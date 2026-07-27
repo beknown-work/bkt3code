@@ -694,7 +694,7 @@ describe("applyThreadDetailEvent", () => {
 
   describe("thread.catchup-summary-updated", () => {
     const catchupEvent = (input: {
-      readonly progress: "pending" | "ready" | "cleared";
+      readonly progress: "pending" | "ready" | "error" | "cleared";
       readonly rollingSummary?: string | null;
       readonly displaySummary?: string | null;
     }) =>
@@ -771,6 +771,29 @@ describe("applyThreadDetailEvent", () => {
       if (cleared.kind === "updated") {
         expect(cleared.thread.turnSummaries).toEqual([]);
         expect(cleared.thread.rollingSummary).toBe("Rolling summary text.");
+      }
+    });
+
+    it("keeps a generation failure available for inline retry", () => {
+      const result = applyThreadDetailEvent(
+        baseThread,
+        catchupEvent({
+          progress: "error",
+          displaySummary: "The configured summarizer is unavailable.",
+        }),
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.turnSummaries).toEqual([
+          {
+            turnId: TurnId.make("turn-1"),
+            assistantMessageId: MessageId.make("msg-3"),
+            summary: "The configured summarizer is unavailable.",
+            status: "error",
+            createdAt: "2026-04-01T12:05:00.000Z",
+          },
+        ]);
       }
     });
   });

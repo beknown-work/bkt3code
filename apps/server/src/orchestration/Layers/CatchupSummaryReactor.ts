@@ -1,5 +1,6 @@
 import {
   CommandId,
+  TextGenerationError,
   type MessageId,
   type ThreadId,
   type TurnId,
@@ -15,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
@@ -41,6 +43,10 @@ const MAX_TRACKED_TURNS = 256;
 
 /** Tail of the final assistant message fed to the short-summary prompt. */
 const TURN_TAIL_CHARS = 4_000;
+const CATCHUP_ERROR_FALLBACK =
+  "The summarizer did not return a result. Check the selected model and try again.";
+const MAX_CATCHUP_ERROR_CHARS = 500;
+const isTextGenerationError = Schema.is(TextGenerationError);
 
 type ReactorInput =
   | {
@@ -74,6 +80,21 @@ function parseIsoMs(value: string | null | undefined): number | null {
   }
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Keep provider failures useful in the inline card without forwarding defects,
+ * stack traces, or arbitrarily large CLI output to the browser.
+ */
+export function catchupFailureMessage(cause: Cause.Cause<unknown>): string {
+  const failure = Cause.findErrorOption(cause);
+  const detail =
+    Option.isSome(failure) && isTextGenerationError(failure.value)
+      ? failure.value.detail.trim()
+      : "";
+  return detail && detail.length > 0
+    ? detail.slice(0, MAX_CATCHUP_ERROR_CHARS)
+    : CATCHUP_ERROR_FALLBACK;
 }
 
 /**
@@ -171,8 +192,9 @@ const make = Effect.gen(function* () {
   }) {
     const settings = yield* serverSettingsService.getSettings;
     const sessionSummary: SessionSummarySettings = settings.experimental.sessionSummary;
-    // Disabled means no calls at all, including rolling ingestion.
-    if (!sessionSummary.enabled) {
+    // Disabling the experiment stops automatic calls and rolling ingestion;
+    // an explicit operator request remains available from the message action.
+    if (!sessionSummary.enabled && input.force !== true) {
       return;
     }
 
@@ -221,10 +243,13 @@ const make = Effect.gen(function* () {
       completedAtMs,
     });
     const cutoffMs = sessionSummary.minTurnDurationMinutes * 60_000;
-    const qualifies = input.force === true || (durationMs !== null && durationMs >= cutoffMs);
+    // A zero-minute cutoff means every settled turn, including a replay where
+    // the server no longer has the original start timestamp.
+    const qualifies =
+      input.force === true || cutoffMs === 0 || (durationMs !== null && durationMs >= cutoffMs);
 
     const dispatchProgress = (progress: {
-      readonly progress: "pending" | "ready" | "cleared";
+      readonly progress: "pending" | "ready" | "error" | "cleared";
       readonly rollingSummary: string | null;
       readonly displaySummary: string | null;
     }) =>
@@ -248,7 +273,7 @@ const make = Effect.gen(function* () {
       yield* dispatchProgress({ progress: "pending", rollingSummary: null, displaySummary: null });
     }
 
-    // From here on a failure must retract the spinner rather than leave it spinning.
+    // From here on a failure must replace the spinner with an actionable card.
     yield* Effect.gen(function* () {
       const rolling = yield* textGeneration
         .updateRollingSummary({
@@ -261,11 +286,19 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.timeout(SUMMARIZATION_TIMEOUT));
 
-      if (!qualifies || rolling.summary.trim().length === 0) {
+      if (!qualifies) {
         yield* dispatchProgress({
           progress: "cleared",
           rollingSummary: rolling.summary,
           displaySummary: null,
+        });
+        return;
+      }
+      if (rolling.summary.trim().length === 0) {
+        yield* dispatchProgress({
+          progress: "error",
+          rollingSummary: rolling.summary,
+          displaySummary: CATCHUP_ERROR_FALLBACK,
         });
         return;
       }
@@ -284,20 +317,28 @@ const make = Effect.gen(function* () {
         .pipe(Effect.timeout(SUMMARIZATION_TIMEOUT));
 
       const displaySummary = generated.summary.trim();
-      yield* dispatchProgress({
-        progress: displaySummary.length > 0 ? "ready" : "cleared",
-        rollingSummary: rolling.summary,
-        displaySummary: displaySummary.length > 0 ? displaySummary : null,
-      });
+      yield* dispatchProgress(
+        displaySummary.length > 0
+          ? {
+              progress: "ready",
+              rollingSummary: rolling.summary,
+              displaySummary,
+            }
+          : {
+              progress: "error",
+              rollingSummary: rolling.summary,
+              displaySummary: CATCHUP_ERROR_FALLBACK,
+            },
+      );
     }).pipe(
       Effect.tapCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
-          : // Retract the spinner, then let the worker log the failure.
+          : // Replace the spinner, then let the worker log the failure.
             dispatchProgress({
-              progress: "cleared",
+              progress: "error",
               rollingSummary: null,
-              displaySummary: null,
+              displaySummary: catchupFailureMessage(cause),
             }).pipe(Effect.catch(() => Effect.void)),
       ),
     );

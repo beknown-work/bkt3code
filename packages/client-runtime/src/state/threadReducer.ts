@@ -508,7 +508,8 @@ export function applyThreadDetailEvent(
         Arr.filter((entry) => entry.turnId !== event.payload.turnId),
       );
 
-      // "cleared" retracts the card (and any spinner) for this turn.
+      // "cleared" retracts the card for a below-cutoff turn. Failures remain
+      // present as an "error" summary so the user can retry in place.
       if (event.payload.progress === "cleared") {
         return {
           kind: "updated",

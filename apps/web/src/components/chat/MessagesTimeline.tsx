@@ -55,6 +55,7 @@ import {
   HistoryIcon,
   LoaderIcon,
   RefreshCwIcon,
+  TriangleAlertIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -1350,6 +1351,7 @@ const SessionCatchupCard = memo(function SessionCatchupCard({
   const isPending =
     catchupSummary?.status === "pending" && !isStaleCatchupPending(catchupSummary.createdAt);
   const summary = catchupSummary?.status === "ready" ? (catchupSummary.summary?.trim() ?? "") : "";
+  const error = catchupSummary?.status === "error" ? (catchupSummary.summary?.trim() ?? "") : "";
 
   const regenerateButton =
     onRegenerate === undefined ? null : (
@@ -1384,6 +1386,24 @@ const SessionCatchupCard = memo(function SessionCatchupCard({
           <LoaderIcon className="size-3 animate-spin" />
           <span>Writing catch-up…</span>
         </p>
+      </div>
+    );
+  }
+
+  if (error.length > 0) {
+    return (
+      <div
+        className="mt-3 rounded-2xl border border-destructive/45 bg-destructive/8 p-3 shadow-xs/5"
+        role="alert"
+      >
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 font-medium text-[11px] text-destructive uppercase tracking-wide">
+            <TriangleAlertIcon className="size-3" />
+            <span>Catch-up failed</span>
+          </p>
+          {regenerateButton}
+        </div>
+        <p className="text-[13px] text-foreground leading-snug">{error}</p>
       </div>
     );
   }

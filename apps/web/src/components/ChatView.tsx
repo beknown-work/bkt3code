@@ -108,12 +108,18 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
+  type CatchupSummary,
   type SessionPhase,
   type Thread,
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useCatchupSummaries } from "../hooks/useCatchupSummaries";
+import {
+  makeCatchupRequestError,
+  makePendingCatchupSummary,
+  mergeCatchupSummaryMaps,
+} from "../catchupSummaryState";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -2292,21 +2298,55 @@ function ChatViewContent(props: ChatViewProps) {
   ] = useDraftHeroLayoutTransition(isDraftHeroState);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
-  const catchupSummaryByTurnId = useCatchupSummaries(activeThread);
+  const serverCatchupSummaryByTurnId = useCatchupSummaries(activeThread);
+  // T3-CUSTOM(expbkt3): BEGIN — show the normal card before command acknowledgement.
+  const [transientCatchupSummaryByTurnId, setTransientCatchupSummaryByTurnId] = useState<
+    ReadonlyMap<TurnId, CatchupSummary>
+  >(new Map());
+  const catchupSummaryByTurnId = useMemo(
+    () => mergeCatchupSummaryMaps(serverCatchupSummaryByTurnId, transientCatchupSummaryByTurnId),
+    [serverCatchupSummaryByTurnId, transientCatchupSummaryByTurnId],
+  );
   const requestCatchupSummary = useAtomCommand(threadEnvironment.requestCatchupSummary, {
     reportFailure: false,
   });
   const activeThreadIdForCatchup = activeThread?.id ?? null;
+  const activeThreadIdForCatchupRef = useRef(activeThreadIdForCatchup);
+  activeThreadIdForCatchupRef.current = activeThreadIdForCatchup;
+  useEffect(() => {
+    setTransientCatchupSummaryByTurnId(new Map());
+  }, [activeThreadIdForCatchup]);
   const onRegenerateCatchupSummary = useCallback(
     (turnId: TurnId) => {
       if (!activeThreadIdForCatchup) return;
+      const requestedThreadId = activeThreadIdForCatchup;
+      const requestedAt = new Date().toISOString();
+      setTransientCatchupSummaryByTurnId((current) => {
+        const next = new Map(current);
+        next.set(turnId, makePendingCatchupSummary(turnId, requestedAt));
+        return next;
+      });
       void requestCatchupSummary({
         environmentId,
         input: { threadId: activeThreadIdForCatchup, turnId },
+      }).then((result) => {
+        if (
+          result._tag !== "Failure" ||
+          activeThreadIdForCatchupRef.current !== requestedThreadId
+        ) {
+          return;
+        }
+        const error = squashAtomCommandFailure(result);
+        setTransientCatchupSummaryByTurnId((current) => {
+          const next = new Map(current);
+          next.set(turnId, makeCatchupRequestError(turnId, new Date().toISOString(), error));
+          return next;
+        });
       });
     },
     [activeThreadIdForCatchup, environmentId, requestCatchupSummary],
   );
+  // T3-CUSTOM(expbkt3): END
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {

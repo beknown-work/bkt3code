@@ -99,7 +99,7 @@ export const DeleteProjectionTurnsByThreadInput = Schema.Struct({
 });
 export type DeleteProjectionTurnsByThreadInput = typeof DeleteProjectionTurnsByThreadInput.Type;
 
-export const ProjectionTurnCatchupSummaryStatus = Schema.Literals(["pending", "ready"]);
+export const ProjectionTurnCatchupSummaryStatus = Schema.Literals(["pending", "ready", "error"]);
 
 export const ProjectionTurnCatchupSummary = Schema.Struct({
   turnId: TurnId,

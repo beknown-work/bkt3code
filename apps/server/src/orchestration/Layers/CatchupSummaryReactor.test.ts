@@ -292,6 +292,27 @@ layer("CatchupSummaryReactor", (it) => {
     }),
   );
 
+  it.effect("summarizes every settled turn at a zero-minute cutoff without a start event", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ minTurnDurationMinutes: 0 });
+
+      yield* Effect.gen(function* () {
+        const reactor = yield* CatchupSummaryReactor;
+        yield* reactor.start();
+        yield* seedThread();
+        // Deliberately omit the live turn.started event. Replays and reconnects
+        // can have a transcript without a measurable live duration.
+        yield* completeTurn("zero-cutoff", SHORT_TURN_COMPLETED_AT);
+        yield* reactor.drain;
+
+        assert.strictEqual(yield* Ref.get(harness.catchupCalls), 1);
+        const thread = yield* readThread;
+        assert.strictEqual(thread?.turnSummaries[0]?.status, "ready");
+        assert.strictEqual(thread?.turnSummaries[0]?.summary, DISPLAY_SUMMARY);
+      }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
+    }),
+  );
+
   it.effect("regenerates on request even for a turn under the cutoff", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ minTurnDurationMinutes: 5 });
@@ -325,7 +346,33 @@ layer("CatchupSummaryReactor", (it) => {
     }),
   );
 
-  it.effect("clears the pending marker when summarization fails", () =>
+  it.effect("honors an explicit request even when automatic summaries are disabled", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ enabled: false });
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const reactor = yield* CatchupSummaryReactor;
+        yield* reactor.start();
+        yield* seedThread();
+
+        yield* engine.dispatch({
+          type: "thread.catchup-summary.request",
+          commandId: CommandId.make("cmd-disabled-catchup-request"),
+          threadId: THREAD_ID,
+          turnId: TURN_ID,
+          createdAt: SHORT_TURN_COMPLETED_AT,
+        });
+        yield* reactor.drain;
+
+        assert.strictEqual(yield* Ref.get(harness.catchupCalls), 1);
+        const thread = yield* readThread;
+        assert.strictEqual(thread?.turnSummaries[0]?.status, "ready");
+      }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
+    }),
+  );
+
+  it.effect("replaces the pending marker with an inline error when summarization fails", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ minTurnDurationMinutes: 5, failCatchup: true });
 
@@ -337,9 +384,10 @@ layer("CatchupSummaryReactor", (it) => {
         yield* completeTurn("failing", LONG_TURN_COMPLETED_AT);
         yield* reactor.drain;
 
-        // No spinner left behind, and no card.
         const thread = yield* readThread;
-        assert.deepEqual(thread?.turnSummaries ?? [], []);
+        assert.strictEqual(thread?.turnSummaries.length, 1);
+        assert.strictEqual(thread?.turnSummaries[0]?.status, "error");
+        assert.strictEqual(thread?.turnSummaries[0]?.summary, "summarizer unavailable in test");
       }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
     }),
   );

@@ -101,7 +101,7 @@ const ProjectionCatchupSummaryDbRowSchema = Schema.Struct({
   turnId: TurnId,
   assistantMessageId: Schema.NullOr(MessageId),
   summary: Schema.NullOr(Schema.String),
-  status: Schema.Literals(["pending", "ready"]),
+  status: Schema.Literals(["pending", "ready", "error"]),
   createdAt: IsoDateTime,
 });
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({

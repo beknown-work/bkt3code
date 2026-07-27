@@ -1519,6 +1519,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.catchup-summary-updated": {
+          // "error" is persisted like ready/pending so reconnecting clients do
+          // not lose the failure explanation and retry affordance.
           if (event.payload.progress === "cleared") {
             yield* projectionTurnRepository.clearCatchupSummary({
               threadId: event.payload.threadId,

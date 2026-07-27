@@ -859,8 +859,8 @@ export function projectEvent(
 
         const withoutTurn = thread.turnSummaries.filter((entry) => entry.turnId !== payload.turnId);
 
-        // "cleared" removes any card (and any spinner) for the turn: the turn
-        // was under the cutoff, or summarization failed.
+        // "cleared" removes a below-cutoff card. Generation failures use the
+        // durable "error" state so clients can explain and retry them.
         const turnSummaries =
           payload.progress === "cleared"
             ? withoutTurn

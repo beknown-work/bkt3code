@@ -124,6 +124,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import { isThreadDetailEvent } from "./orchestration/threadDetailEvent.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isOrchestrationGetTurnDiffError = Schema.is(OrchestrationGetTurnDiffError);
 const isOrchestrationGetFullThreadDiffError = Schema.is(OrchestrationGetFullThreadDiffError);
@@ -236,34 +237,6 @@ function projectFileFailureContext(
     default:
       return unexpectedCompatibilityError(error);
   }
-}
-
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
-  OrchestrationEvent,
-  {
-    type:
-      | "thread.message-sent"
-      | "thread.proposed-plan-upserted"
-      | "thread.activity-appended"
-      | "thread.turn-diff-completed"
-      | "thread.reverted"
-      | "thread.session-set"
-      | "thread.member-added"
-      | "thread.member-removed"
-      | "thread.owner-transferred";
-  }
-> {
-  return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.session-set" ||
-    event.type === "thread.member-added" ||
-    event.type === "thread.member-removed" ||
-    event.type === "thread.owner-transferred"
-  );
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
