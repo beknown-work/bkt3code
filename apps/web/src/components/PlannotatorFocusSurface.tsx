@@ -45,7 +45,8 @@ export function normalizePlannotatorPreferenceCookie(
   ) {
     return null;
   }
-  const [pair] = rawCookie.split(";", 1);
+  const pair = rawCookie.split(";", 1)[0];
+  if (pair === undefined) return null;
   const separator = pair.indexOf("=");
   if (separator <= 0) return null;
   const name = pair.slice(0, separator).trim();
