@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
 import * as OrchestrationCommandDispatcher from "./dispatchCommand.ts";
 import {
@@ -153,11 +154,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
+          const projectedSnapshot = projectThreadDetailSnapshot(snapshot.value);
           return {
-            ...snapshot.value,
+            ...projectedSnapshot,
             thread: {
-              ...snapshot.value.thread,
-              execution: yield* executionSupervisor.getSnapshot(snapshot.value.thread.id),
+              ...projectedSnapshot.thread,
+              execution: yield* executionSupervisor.getSnapshot(projectedSnapshot.thread.id),
             },
           };
         }),

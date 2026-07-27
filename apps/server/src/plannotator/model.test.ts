@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parsePlannotatorDecision, rewritePlannotatorHtml } from "./model.ts";
+import {
+  mergePlannotatorAnnotationHistory,
+  parsePlannotatorDecision,
+  parsePlannotatorSubmission,
+  rewritePlannotatorHtml,
+} from "./model.ts";
 
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 
@@ -28,6 +33,146 @@ describe("parsePlannotatorDecision", () => {
       kind: "feedback",
       feedback: "> old behavior\n\nExplain the fallback.\n\nAdd a failure test.",
     });
+  });
+
+  it("retains structured annotations for durable review replay", () => {
+    expect(
+      parsePlannotatorSubmission(
+        "/api/feedback",
+        bytes({
+          approved: false,
+          annotations: [
+            {
+              id: "inline-1",
+              type: "COMMENT",
+              text: "Explain the fallback.",
+              originalText: "old behavior",
+              author: "Reviewer A",
+            },
+            {
+              id: "global-1",
+              type: "GLOBAL_COMMENT",
+              text: "Add a failure test.",
+              originalText: "",
+            },
+            {
+              id: "deletion-1",
+              type: "DELETION",
+              text: "Delete this section.",
+              originalText: "Legacy rollout",
+            },
+          ],
+        }),
+      ),
+    ).toEqual({
+      decision: {
+        kind: "feedback",
+        feedback:
+          "> old behavior\n\nExplain the fallback.\n\nAdd a failure test.\n\nRemove:\n\n> Legacy rollout",
+      },
+      annotations: [
+        {
+          id: "inline-1",
+          type: "COMMENT",
+          text: "Explain the fallback.",
+          originalText: "old behavior",
+          author: "Reviewer A",
+        },
+        {
+          id: "global-1",
+          type: "GLOBAL_COMMENT",
+          text: "Add a failure test.",
+          originalText: "",
+          author: "",
+        },
+        {
+          id: "deletion-1",
+          type: "DELETION",
+          text: "Delete this section.",
+          originalText: "Legacy rollout",
+          author: "",
+        },
+      ],
+    });
+  });
+
+  it("does not treat an external annotation update as submitted feedback", () => {
+    expect(
+      parsePlannotatorSubmission(
+        "/api/external-annotations",
+        bytes({
+          annotations: [
+            {
+              source: "agent-review",
+              type: "GLOBAL_COMMENT",
+              text: "Consider a staged rollout.",
+            },
+          ],
+        }),
+      ),
+    ).toEqual({
+      decision: null,
+      annotations: [
+        {
+          id: ["GLOBAL_COMMENT", "", "Consider%20a%20staged%20rollout.", ""].join(":"),
+          type: "GLOBAL_COMMENT",
+          text: "Consider a staged rollout.",
+          originalText: "",
+          author: "",
+        },
+      ],
+    });
+  });
+
+  it("de-duplicates replayed annotations while appending a later review round", () => {
+    expect(
+      mergePlannotatorAnnotationHistory(
+        [
+          {
+            id: "round-1-id",
+            type: "COMMENT",
+            text: "Explain the fallback.",
+            originalText: "Fallback",
+            author: "Reviewer",
+            submittedAt: "2026-07-27T10:00:00.000Z",
+          },
+        ],
+        [
+          {
+            id: "replayed-random-id",
+            type: "COMMENT",
+            text: "Explain the fallback.",
+            originalText: "Fallback",
+            author: "Reviewer",
+          },
+          {
+            id: "round-2-id",
+            type: "GLOBAL_COMMENT",
+            text: "Add a rollback test.",
+            originalText: "",
+            author: "Reviewer",
+          },
+        ],
+        "2026-07-27T11:00:00.000Z",
+      ),
+    ).toEqual([
+      {
+        id: "round-1-id",
+        type: "COMMENT",
+        text: "Explain the fallback.",
+        originalText: "Fallback",
+        author: "Reviewer",
+        submittedAt: "2026-07-27T10:00:00.000Z",
+      },
+      {
+        id: "round-2-id",
+        type: "GLOBAL_COMMENT",
+        text: "Add a rollback test.",
+        originalText: "",
+        author: "Reviewer",
+        submittedAt: "2026-07-27T11:00:00.000Z",
+      },
+    ]);
   });
 
   it("treats an empty deny endpoint as a denial", () => {

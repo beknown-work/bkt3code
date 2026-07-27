@@ -26,6 +26,7 @@ const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices
 
 const scope = {
   principal: "provider-session" as const,
+  actorUserId: null,
   environmentId: EnvironmentId.make("environment-1"),
   threadId: ThreadId.make("thread-1"),
   providerSessionId: "provider-session-1",
@@ -175,7 +176,7 @@ it.effect("does not let an older response replace a newer explicit tab target", 
   ),
 );
 
-it.effect("does not replace the default tab with a globally stopped recording tab", () =>
+it.effect("tracks the tab returned by a targeted recording stop", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const broker = yield* makeBroker;
@@ -204,7 +205,7 @@ it.effect("does not replace the default tab with a globally stopped recording ta
       yield* broker.invoke({ scope, operation: "recordingStop", input: {} });
       yield* broker.invoke({ scope, operation: "snapshot", input: {} });
 
-      expect(routedRequests.at(-1)?.tabId).toBe(browsingTabId);
+      expect(routedRequests.at(-1)?.tabId).toBe(recordingTabId);
     }),
   ),
 );

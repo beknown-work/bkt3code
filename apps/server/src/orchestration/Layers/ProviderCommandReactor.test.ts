@@ -20,6 +20,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -1183,6 +1184,58 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls.length).toBe(1);
     expect(harness.stopSession.mock.calls.length).toBe(0);
   });
+
+  effectIt.effect(
+    "restarts the provider session when a different credential actor takes over",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch(
+          {
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-turn-start-actor-1"),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: asMessageId("user-message-actor-1"),
+              role: "user",
+              text: "first",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          },
+          { actorUserId: UserId.make("user-a") },
+        );
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+        yield* harness.engine.dispatch(
+          {
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-turn-start-actor-2"),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: asMessageId("user-message-actor-2"),
+              role: "user",
+              text: "second",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          },
+          { actorUserId: UserId.make("user-b") },
+        );
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+        expect(harness.stopSession.mock.calls.length).toBe(0);
+      }),
+  );
 
   it("restarts an existing Codex thread on a compatible requested instance", async () => {
     const harness = await createHarness();

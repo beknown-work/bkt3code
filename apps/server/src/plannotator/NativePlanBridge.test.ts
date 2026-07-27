@@ -51,6 +51,7 @@ function makeSession(
     directUrl: null,
     status: "running",
     feedback: "",
+    annotationHistory: [],
     error: null,
     createdAt: CREATED_AT,
     updatedAt: UPDATED_AT,
@@ -63,11 +64,17 @@ function makeDependencies(input: {
   readonly startedSession: PlannotatorSession;
   readonly discarded: string[];
   readonly commands: unknown[];
+  readonly reopened?: unknown[];
 }): NativePlanBridgeDependencies {
   return {
     manager: {
       list: () => Effect.succeed(input.sessions ?? []),
       start: () => Effect.succeed(input.startedSession),
+      reopen: (reopenInput) =>
+        Effect.sync(() => {
+          input.reopened?.push(reopenInput);
+          return input.startedSession;
+        }),
       discard: (id) =>
         Effect.sync(() => {
           input.discarded.push(id);
@@ -145,26 +152,95 @@ describe("native Plannotator plan bridge", () => {
     }),
   );
 
-  it.effect("replaces a live review when the provider revises an unmarked plan", () =>
+  it.effect("reopens the same review when the provider revises an unmarked plan", () =>
     Effect.gen(function* () {
       const proposedPlan = makePlan("plan-revised");
       const oldSession = makeSession(proposedPlan.id, { id: "old-review" });
-      const startedSession = makeSession(proposedPlan.id, { id: "new-review" });
+      const reopenedSession = makeSession(proposedPlan.id, { id: "old-review" });
       const discarded: string[] = [];
       const commands: unknown[] = [];
+      const reopened: unknown[] = [];
 
-      yield* attachNativePlanReview(
+      const result = yield* attachNativePlanReview(
         makeDependencies({
           sessions: [oldSession],
-          startedSession,
+          startedSession: reopenedSession,
           discarded,
           commands,
+          reopened,
         }),
         { threadId, proposedPlan },
       );
 
-      expect(discarded).toEqual(["old-review"]);
+      expect(result).toEqual({ status: "reopened", session: reopenedSession });
+      expect(reopened).toEqual([
+        {
+          tokenOrId: "old-review",
+          planId: proposedPlan.id,
+          content: proposedPlan.planMarkdown,
+        },
+      ]);
+      expect(discarded).toEqual([]);
       expect(commands).toHaveLength(1);
+    }),
+  );
+
+  it.effect("carries a feedback review and its annotations into the next plan turn", () =>
+    Effect.gen(function* () {
+      const previousPlan = makePlan("plan-round-1");
+      const revisedPlan = makePlan("plan-round-2", {
+        planMarkdown: "# Native plan\n\n1. Build the revised version.",
+      });
+      const feedbackSession = makeSession(previousPlan.id, {
+        id: "durable-review",
+        status: "feedback",
+        feedback: "Revise the rollout.",
+        annotationHistory: [
+          {
+            id: "annotation-1",
+            type: "COMMENT",
+            text: "Revise the rollout.",
+            originalText: "Build it.",
+            author: "Reviewer",
+            submittedAt: UPDATED_AT,
+          },
+        ],
+      });
+      const reopenedSession = makeSession(revisedPlan.id, {
+        ...feedbackSession,
+        planId: revisedPlan.id,
+        status: "running",
+      });
+      const reopened: unknown[] = [];
+      const commands: unknown[] = [];
+
+      const result = yield* attachNativePlanReview(
+        makeDependencies({
+          sessions: [feedbackSession],
+          startedSession: reopenedSession,
+          discarded: [],
+          commands,
+          reopened,
+        }),
+        { threadId, proposedPlan: revisedPlan },
+      );
+
+      expect(result).toEqual({ status: "reopened", session: reopenedSession });
+      expect(reopened).toEqual([
+        {
+          tokenOrId: "durable-review",
+          planId: revisedPlan.id,
+          content: revisedPlan.planMarkdown,
+        },
+      ]);
+      expect(commands).toHaveLength(1);
+      expect(
+        (
+          commands[0] as {
+            proposedPlan: OrchestrationProposedPlan;
+          }
+        ).proposedPlan.planMarkdown,
+      ).toContain("/plannotator/native_token/");
     }),
   );
 

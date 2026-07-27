@@ -18,7 +18,7 @@ describe("PlannotatorFocusSurface", () => {
     );
 
     expect(markup).toContain("data-plannotator-focus-surface");
-    expect(markup).toContain('src="/plannotator/review_token/"');
+    expect(markup).toContain('src="/plannotator/review_token/?t3-reopen=1"');
     expect(markup).toContain('title="Plannotator plan review"');
     expect(markup).toContain('aria-label="Close plan review"');
     expect(markup).toContain("absolute inset-x-0 top-0");

@@ -366,8 +366,10 @@ describe("ClaudeAdapterLive", () => {
       threadId: THREAD_ID,
       providerSessionId: "provider-session-claude-test",
       providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      actorUserId: null,
       endpoint: "http://127.0.0.1:18085/mcp",
       authorizationHeader: `Bearer ${bearerToken}`,
+      upstreamServers: [],
     });
 
     return Effect.gen(function* () {

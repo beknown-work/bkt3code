@@ -5,10 +5,11 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTED_BRANCH="t3code/exp-t3-mcp-plannator"
 EXPECTED_SHA="${1:-${EXPECTED_SHA:-}}"
+WORKFLOW_RUN_ID="${2:-${WORKFLOW_RUN_ID:-}}"
+REPOSITORY="beknown-work/t3code"
 SERVICE_NAME="t3-expbkt3.service"
 HEALTH_URL="http://10.31.39.131:18085/"
 DEPLOYED_SHA_FILE="/home/ubuntu/.t3/expbkt3-dev/deployed-sha"
-BUILD_ENV_FILE="/home/ubuntu/.t3/expbkt3-dev/clerk.env"
 
 exec 9>"/tmp/expbkt3-deploy.lock"
 if ! flock -n 9; then
@@ -42,23 +43,61 @@ git -C "$REPO_DIR" merge --ff-only "origin/$EXPECTED_BRANCH"
 
 export PATH="/home/ubuntu/.nvm/versions/node/v24.16.0/bin:/home/ubuntu/.local/bin:/home/ubuntu/.opencode/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-if [[ -f "$BUILD_ENV_FILE" ]]; then
-  echo "==> Loading private experimental build environment"
-  set -a
-  # shellcheck disable=SC1090
-  source "$BUILD_ENV_FILE"
-  set +a
+if [[ -z "$WORKFLOW_RUN_ID" ]]; then
+  WORKFLOW_RUN_ID="$(gh run list \
+    --repo "$REPOSITORY" \
+    --workflow deploy-expbkt3.yml \
+    --branch "$EXPECTED_BRANCH" \
+    --event push \
+    --status success \
+    --json databaseId,headSha \
+    --jq ".[] | select(.headSha == \"$REMOTE_SHA\") | .databaseId" \
+    --limit 20 |
+    sed -n '1p')"
 fi
 
-echo "==> Installing locked dependencies"
-pnpm --dir "$REPO_DIR" install --frozen-lockfile
+if [[ -z "$WORKFLOW_RUN_ID" ]]; then
+  echo "ERROR: no successful GitHub workflow run found for $REMOTE_SHA." >&2
+  exit 1
+fi
 
-echo "==> Building the experimental web client"
-VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true \
-  pnpm --dir "$REPO_DIR" exec vp run --filter @t3tools/web build
+ARTIFACT_NAME="expbkt3-$REMOTE_SHA"
+ARTIFACT_DIR="$(mktemp -d)"
+BACKUP_DIR="$(mktemp -d)"
+cleanup() {
+  rm -rf -- "$ARTIFACT_DIR" "$BACKUP_DIR"
+}
+trap cleanup EXIT
 
-echo "==> Building the T3 server bundle"
-pnpm --dir "$REPO_DIR" exec vp run --filter t3 build:bundle
+echo "==> Downloading GitHub-built artifact $ARTIFACT_NAME"
+gh run download "$WORKFLOW_RUN_ID" \
+  --repo "$REPOSITORY" \
+  --name "$ARTIFACT_NAME" \
+  --dir "$ARTIFACT_DIR"
+
+ARTIFACT_SHA="$(sed -n '1p' "$ARTIFACT_DIR/SHA" 2>/dev/null || true)"
+ARTIFACT_WEB="$ARTIFACT_DIR/apps/web/dist"
+ARTIFACT_SERVER="$ARTIFACT_DIR/apps/server/dist"
+if [[ "$ARTIFACT_SHA" != "$REMOTE_SHA" ]]; then
+  echo "ERROR: artifact SHA '${ARTIFACT_SHA:-missing}' does not match $REMOTE_SHA." >&2
+  exit 1
+fi
+if [[ ! -f "$ARTIFACT_WEB/index.html" || ! -f "$ARTIFACT_SERVER/bin.mjs" ]]; then
+  echo "ERROR: GitHub artifact is missing the web client or server bundle." >&2
+  exit 1
+fi
+
+echo "==> Installing GitHub-built application artifact"
+mkdir -p "$BACKUP_DIR/apps/web" "$BACKUP_DIR/apps/server"
+if [[ -d "$REPO_DIR/apps/web/dist" ]]; then
+  cp -a "$REPO_DIR/apps/web/dist" "$BACKUP_DIR/apps/web/"
+fi
+if [[ -d "$REPO_DIR/apps/server/dist" ]]; then
+  cp -a "$REPO_DIR/apps/server/dist" "$BACKUP_DIR/apps/server/"
+fi
+mkdir -p "$REPO_DIR/apps/web/dist" "$REPO_DIR/apps/server/dist"
+rsync -a --delete "$ARTIFACT_WEB/" "$REPO_DIR/apps/web/dist/"
+rsync -a --delete "$ARTIFACT_SERVER/" "$REPO_DIR/apps/server/dist/"
 
 echo "==> Restarting $SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
@@ -76,6 +115,14 @@ done
 if ! curl --connect-timeout 2 --max-time 5 -fsS "$HEALTH_URL" >/dev/null; then
   echo " FAILED" >&2
   sudo systemctl --no-pager --lines=50 status "$SERVICE_NAME" >&2 || true
+  echo "==> Restoring the previous application artifact"
+  if [[ -d "$BACKUP_DIR/apps/web/dist" ]]; then
+    rsync -a --delete "$BACKUP_DIR/apps/web/dist/" "$REPO_DIR/apps/web/dist/"
+  fi
+  if [[ -d "$BACKUP_DIR/apps/server/dist" ]]; then
+    rsync -a --delete "$BACKUP_DIR/apps/server/dist/" "$REPO_DIR/apps/server/dist/"
+  fi
+  sudo systemctl restart "$SERVICE_NAME"
   exit 1
 fi
 

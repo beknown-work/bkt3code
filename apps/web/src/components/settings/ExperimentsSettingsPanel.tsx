@@ -4,6 +4,7 @@ import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSetti
 import { Switch } from "../ui/switch";
 import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
 import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
+import { T3ConductorSettingsSection } from "./T3ConductorSettingsSection";
 import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 import {
   SettingResetButton,
@@ -74,7 +75,12 @@ export function ExperimentsSettingsPanel() {
         />
       </SettingsSection>
       {/* T3-CUSTOM(expbkt3): BEGIN — experimental operator MCP settings seam. */}
-      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? <ExternalMcpSettingsSection /> : null}
+      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
+        <>
+          <T3ConductorSettingsSection />
+          <ExternalMcpSettingsSection />
+        </>
+      ) : null}
       {/* T3-CUSTOM(expbkt3): END */}
       <SessionSummarySettingsSection />
     </SettingsPageContainer>

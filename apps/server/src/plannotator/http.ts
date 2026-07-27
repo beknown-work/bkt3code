@@ -14,7 +14,7 @@ import {
 } from "effect/unstable/http";
 
 import { PlannotatorManager, type PlannotatorSessionStatus } from "./PlannotatorManager.ts";
-import { parsePlannotatorDecision, rewritePlannotatorHtml } from "./model.ts";
+import { parsePlannotatorSubmission, rewritePlannotatorHtml } from "./model.ts";
 
 const PLANNOTATOR_PROXY_PATH = /^\/plannotator\/([A-Za-z0-9_-]+)(\/.*)?$/;
 export const PLANNOTATOR_STATUS_PATH = "/__t3/status";
@@ -100,11 +100,31 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
     const manager = yield* PlannotatorManager;
-    const session = yield* manager.getByToken(token);
-    if (!session) {
+    const savedSession = yield* manager.getByToken(token);
+    if (!savedSession) {
       return HttpServerResponse.text("Plannotator review not found.", { status: 404 });
     }
     const proxyPath = match?.[2] || "/";
+    // A deliberate iframe navigation reopens the same durable review process.
+    // Status polling never triggers this path, so a completed decision can
+    // still close T3's focused surface without immediately restarting itself.
+    const session =
+      request.method === "GET" &&
+      proxyPath === "/" &&
+      parsedUrl.value.searchParams.get("t3-reopen") === "1"
+        ? yield* manager.reopen({ tokenOrId: token }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to reopen durable Plannotator review", {
+                cause,
+                plannotatorSessionId: savedSession.id,
+                threadId: savedSession.threadId,
+              }).pipe(Effect.as(null)),
+            ),
+          )
+        : savedSession;
+    if (!session) {
+      return HttpServerResponse.text("Plannotator review could not be reopened.", { status: 503 });
+    }
     // T3-CUSTOM(expbkt3): The parent T3 surface cannot inspect the sandboxed
     // iframe. This token-scoped status response lets it close completed reviews
     // and synchronize Build mode after approval.
@@ -131,42 +151,44 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
 
     if (request.method !== "GET") {
       const body = new Uint8Array(yield* request.arrayBuffer);
-      const decision = parsePlannotatorDecision(proxyPath, body);
-      if (decision) {
-        return yield* manager.applyDecision(token, decision).pipe(
-          Effect.as(
-            HttpServerResponse.jsonUnsafe(
-              { ok: true, captured: true, decision: decision.kind },
-              {
-                status: 202,
-                headers: {
-                  ...PLANNOTATOR_IFRAME_CORS_HEADERS,
-                  "cache-control": "no-store",
-                },
-              },
-            ),
-          ),
-          Effect.catch((cause) =>
-            Effect.logWarning("Failed to apply Plannotator decision", {
-              cause,
-              plannotatorSessionId: session.id,
-              threadId: session.threadId,
-            }).pipe(
-              Effect.as(
-                HttpServerResponse.jsonUnsafe(
-                  { error: "plannotator_decision_failed", message: cause.message },
-                  {
-                    status: 502,
-                    headers: {
-                      ...PLANNOTATOR_IFRAME_CORS_HEADERS,
-                      "cache-control": "no-store",
-                    },
+      const submission = parsePlannotatorSubmission(proxyPath, body);
+      if (submission.decision) {
+        return yield* manager
+          .applyDecision(token, submission.decision, submission.annotations)
+          .pipe(
+            Effect.as(
+              HttpServerResponse.jsonUnsafe(
+                { ok: true, captured: true, decision: submission.decision.kind },
+                {
+                  status: 202,
+                  headers: {
+                    ...PLANNOTATOR_IFRAME_CORS_HEADERS,
+                    "cache-control": "no-store",
                   },
+                },
+              ),
+            ),
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to apply Plannotator decision", {
+                cause,
+                plannotatorSessionId: session.id,
+                threadId: session.threadId,
+              }).pipe(
+                Effect.as(
+                  HttpServerResponse.jsonUnsafe(
+                    { error: "plannotator_decision_failed", message: cause.message },
+                    {
+                      status: 502,
+                      headers: {
+                        ...PLANNOTATOR_IFRAME_CORS_HEADERS,
+                        "cache-control": "no-store",
+                      },
+                    },
+                  ),
                 ),
               ),
             ),
-          ),
-        );
+          );
       }
     }
 

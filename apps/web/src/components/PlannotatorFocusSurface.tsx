@@ -16,6 +16,7 @@ interface PlannotatorFocusSurfaceProps {
 }
 
 const PLANNOTATOR_STATUS_POLL_MS = 500;
+const PLANNOTATOR_REOPEN_GRACE_MS = 750;
 
 export function plannotatorStatusUrl(url: `/plannotator/${string}/`): string {
   return `${url}__t3/status`;
@@ -65,7 +66,9 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
     };
 
     handledDecisionRef.current = null;
-    void poll();
+    // Let the iframe's explicit reopen navigation reset a completed durable
+    // review to "starting" before reading its previous terminal decision.
+    timeoutId = window.setTimeout(() => void poll(), PLANNOTATOR_REOPEN_GRACE_MS);
     return () => {
       cancelled = true;
       if (timeoutId !== null) window.clearTimeout(timeoutId);
@@ -79,7 +82,7 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
     >
       <iframe
         key={url}
-        src={url}
+        src={`${url}?t3-reopen=1`}
         title="Plannotator plan review"
         className="h-full min-h-0 w-full border-0 bg-background"
         sandbox="allow-downloads allow-forms allow-modals allow-scripts"

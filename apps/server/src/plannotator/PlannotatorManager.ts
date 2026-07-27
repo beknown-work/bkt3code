@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
@@ -39,7 +40,11 @@ import {
   latestPlansForNativeReview,
   type NativePlanBridgeInput,
 } from "./NativePlanBridge.ts";
-import type { PlannotatorDecision } from "./model.ts";
+import {
+  mergePlannotatorAnnotationHistory,
+  type PlannotatorDecision,
+  type PlannotatorReviewAnnotation,
+} from "./model.ts";
 
 type InteractionModeSetCommand = Extract<
   OrchestrationCommand,
@@ -87,6 +92,16 @@ export const PlannotatorSessionStatus = Schema.Literals([
 ]);
 export type PlannotatorSessionStatus = typeof PlannotatorSessionStatus.Type;
 
+const PersistedPlannotatorReviewAnnotation = Schema.Struct({
+  id: Schema.String,
+  type: Schema.Literals(["COMMENT", "DELETION", "GLOBAL_COMMENT"]),
+  text: Schema.String,
+  originalText: Schema.String,
+  author: Schema.String,
+  submittedAt: Schema.String,
+});
+type PersistedPlannotatorReviewAnnotation = typeof PersistedPlannotatorReviewAnnotation.Type;
+
 const PersistedPlannotatorSession = Schema.Struct({
   version: Schema.Literal(1),
   id: Schema.String,
@@ -102,6 +117,9 @@ const PersistedPlannotatorSession = Schema.Struct({
   directUrl: Schema.NullOr(Schema.String),
   status: PlannotatorSessionStatus,
   feedback: Schema.String,
+  annotationHistory: Schema.Array(PersistedPlannotatorReviewAnnotation).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   error: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -136,6 +154,9 @@ export interface PlannotatorSession {
   readonly directUrl: string | null;
   readonly status: PlannotatorSessionStatus;
   readonly feedback: string;
+  readonly annotationHistory: ReadonlyArray<
+    PlannotatorReviewAnnotation & { readonly submittedAt: string }
+  >;
   readonly error: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -161,6 +182,12 @@ export interface StartPlannotatorInput {
   readonly content: string;
 }
 
+export interface ReopenPlannotatorInput {
+  readonly tokenOrId: string;
+  readonly planId?: OrchestrationProposedPlanId;
+  readonly content?: string;
+}
+
 interface PlannotatorManagerShape {
   readonly start: (
     input: StartPlannotatorInput,
@@ -169,9 +196,13 @@ interface PlannotatorManagerShape {
   readonly getByToken: (token: string) => Effect.Effect<PlannotatorSession | null>;
   readonly getById: (id: string) => Effect.Effect<PlannotatorSession | null>;
   readonly list: (threadId?: ThreadId) => Effect.Effect<ReadonlyArray<PlannotatorSession>>;
+  readonly reopen: (
+    input: ReopenPlannotatorInput,
+  ) => Effect.Effect<PlannotatorSession, PlannotatorManagerError>;
   readonly applyDecision: (
     token: string,
     decision: PlannotatorDecision,
+    annotations?: ReadonlyArray<PlannotatorReviewAnnotation>,
   ) => Effect.Effect<PlannotatorSession, PlannotatorManagerError>;
 }
 
@@ -231,6 +262,7 @@ export const make = Effect.gen(function* () {
   const registryDir = path.join(NodeOS.homedir(), ".plannotator", "sessions");
   const sessions = new Map<string, PersistedPlannotatorSession>();
   const handles = new Map<string, ChildProcessSpawner.ChildProcessHandle>();
+  const reopenLocks = new Map<string, Semaphore.Semaphore>();
 
   const manifestPath = (session: PersistedPlannotatorSession) =>
     path.join(sessionsDir, `${session.id}.json`);
@@ -340,6 +372,149 @@ export const make = Effect.gen(function* () {
     });
   });
 
+  const replayAnnotationHistory = Effect.fn("PlannotatorManager.replayAnnotationHistory")(
+    function* (session: PersistedPlannotatorSession) {
+      if (session.port === null || session.annotationHistory.length === 0) return;
+      const request = HttpClientRequest.post(
+        `http://127.0.0.1:${session.port}/api/external-annotations`,
+      ).pipe(
+        HttpClientRequest.bodyJsonUnsafe({
+          annotations: session.annotationHistory.map((annotation) => ({
+            source: "t3-review-history",
+            type: annotation.type,
+            text: annotation.text,
+            ...(annotation.originalText ? { originalText: annotation.originalText } : {}),
+            ...(annotation.author ? { author: annotation.author } : {}),
+          })),
+        }),
+      );
+      yield* httpClient.execute(request).pipe(
+        Effect.flatMap((response) =>
+          response.status >= 200 && response.status < 300
+            ? response.text.pipe(Effect.asVoid)
+            : response.text.pipe(
+                Effect.flatMap((body) =>
+                  Effect.fail(
+                    new PlannotatorManagerError({
+                      operation: "reopen",
+                      detail: `Plannotator rejected saved annotation history (${response.status}): ${body}`,
+                    }),
+                  ),
+                ),
+              ),
+        ),
+        Effect.scoped,
+        Effect.mapError(managerError("reopen", "Could not restore prior Plannotator annotations")),
+      );
+    },
+  );
+
+  const clearSubmittedDraft = (session: PersistedPlannotatorSession) =>
+    session.port === null
+      ? Effect.void
+      : httpClient
+          .execute(HttpClientRequest.delete(`http://127.0.0.1:${session.port}/api/draft`))
+          .pipe(
+            Effect.flatMap((response) => response.text),
+            Effect.scoped,
+            Effect.ignore,
+          );
+
+  const launch = Effect.fn("PlannotatorManager.launch")(function* (
+    current: PersistedPlannotatorSession,
+    cwd: string,
+    activitySummary: string,
+  ) {
+    yield* stopHandle(current.token);
+    const command = ChildProcess.make(
+      "plannotator",
+      ["--browser", "none", "annotate", current.planPath, "--gate", "--json"],
+      {
+        cwd,
+        env: {
+          BROWSER: "/usr/bin/true",
+          CI: "1",
+          NO_BROWSER: "1",
+          OPEN_BROWSER: "0",
+          LAUNCH_BROWSER: "0",
+        },
+        extendEnv: true,
+        detached: false,
+        stdin: "ignore",
+      },
+    );
+    const handle = yield* spawner
+      .spawn(command)
+      .pipe(
+        Effect.provideService(Scope.Scope, childScope),
+        Effect.mapError(managerError("start", "Could not launch Plannotator")),
+      );
+    handles.set(current.token, handle);
+    yield* Stream.run(
+      handle.all,
+      fileSystem.sink(current.logPath, { flag: "a", mode: 0o600 }),
+    ).pipe(Effect.ignore, Effect.forkIn(childScope));
+
+    const starting = yield* update(current, {
+      pid: handle.pid,
+      port: null,
+      directUrl: null,
+      status: "starting",
+      error: null,
+    });
+    yield* handle.exitCode.pipe(
+      Effect.flatMap((code) =>
+        Effect.gen(function* () {
+          handles.delete(starting.token);
+          const latest = sessions.get(starting.token);
+          if (
+            !latest ||
+            (latest.status !== "starting" &&
+              latest.status !== "running" &&
+              latest.status !== "applying")
+          ) {
+            return;
+          }
+          yield* update(latest, {
+            status: code === 0 ? "exited" : "error",
+            error: code === 0 ? null : `Plannotator exited with code ${code}.`,
+          }).pipe(Effect.ignore);
+        }),
+      ),
+      Effect.ignore,
+      Effect.forkIn(childScope),
+    );
+
+    const discovered = yield* discover(handle).pipe(
+      Effect.tapError((cause) =>
+        update(starting, { status: "error", error: cause.message }).pipe(
+          Effect.andThen(stopHandle(starting.token)),
+          Effect.ignore,
+        ),
+      ),
+    );
+    const running = yield* update(starting, {
+      port: discovered.port,
+      directUrl: discovered.url,
+      status: "running",
+    });
+    yield* replayAnnotationHistory(running).pipe(
+      Effect.tapError((cause) =>
+        update(running, { status: "error", error: cause.message }).pipe(
+          Effect.andThen(stopHandle(running.token)),
+          Effect.ignore,
+        ),
+      ),
+    );
+    yield* appendActivity(running, activitySummary, "approval", {
+      plannotatorSessionId: running.id,
+      proxyPath: running.proxyPath,
+      format: running.format,
+      restoredAnnotations: running.annotationHistory.length,
+    }).pipe(Effect.ignore);
+    return running;
+  });
+
   yield* Effect.all(
     [
       fileSystem.makeDirectory(plansDir, { recursive: true }),
@@ -434,34 +609,6 @@ export const make = Effect.gen(function* () {
       yield* fileSystem
         .writeFileString(planPath, input.content, { mode: 0o600 })
         .pipe(Effect.mapError(managerError("start", "Could not save the submitted plan")));
-      const command = ChildProcess.make(
-        "plannotator",
-        ["--browser", "none", "annotate", planPath, "--gate", "--json"],
-        {
-          cwd,
-          env: {
-            BROWSER: "/usr/bin/true",
-            CI: "1",
-            NO_BROWSER: "1",
-            OPEN_BROWSER: "0",
-            LAUNCH_BROWSER: "0",
-          },
-          extendEnv: true,
-          detached: false,
-          stdin: "ignore",
-        },
-      );
-      const handle = yield* spawner
-        .spawn(command)
-        .pipe(
-          Effect.provideService(Scope.Scope, childScope),
-          Effect.mapError(managerError("start", "Could not launch Plannotator")),
-        );
-      handles.set(token, handle);
-      yield* Stream.run(handle.all, fileSystem.sink(logPath, { flag: "a", mode: 0o600 })).pipe(
-        Effect.ignore,
-        Effect.forkIn(childScope),
-      );
 
       const starting: PersistedPlannotatorSession = {
         version: 1,
@@ -473,66 +620,25 @@ export const make = Effect.gen(function* () {
         planPath,
         logPath,
         proxyPath,
-        pid: handle.pid,
+        pid: 0,
         port: null,
         directUrl: null,
         status: "starting",
         feedback: "",
+        annotationHistory: [],
         error: null,
         createdAt,
         updatedAt: createdAt,
       };
       sessions.set(token, starting);
       yield* persist(starting).pipe(
-        Effect.tapError(() =>
-          stopHandle(token).pipe(
-            Effect.andThen(fileSystem.remove(planPath).pipe(Effect.ignore)),
-            Effect.ignore,
-          ),
-        ),
+        Effect.tapError(() => fileSystem.remove(planPath).pipe(Effect.ignore)),
       );
-
-      yield* handle.exitCode.pipe(
-        Effect.flatMap((code) =>
-          Effect.gen(function* () {
-            handles.delete(token);
-            const current = sessions.get(token);
-            if (
-              !current ||
-              (current.status !== "starting" &&
-                current.status !== "running" &&
-                current.status !== "applying")
-            ) {
-              return;
-            }
-            yield* update(current, {
-              status: code === 0 ? "exited" : "error",
-              error: code === 0 ? null : `Plannotator exited with code ${code}.`,
-            }).pipe(Effect.ignore);
-          }),
-        ),
-        Effect.ignore,
-        Effect.forkIn(childScope),
-      );
-
-      const discovered = yield* discover(handle).pipe(
+      const running = yield* launch(starting, cwd, "Plan opened for review in Plannotator.").pipe(
         Effect.tapError((cause) =>
-          update(starting, { status: "error", error: cause.message }).pipe(
-            Effect.andThen(stopHandle(token)),
-            Effect.ignore,
-          ),
+          update(starting, { status: "error", error: cause.message }).pipe(Effect.ignore),
         ),
       );
-      const running = yield* update(starting, {
-        port: discovered.port,
-        directUrl: discovered.url,
-        status: "running",
-      });
-      yield* appendActivity(running, "Plan opened for review in Plannotator.", "approval", {
-        plannotatorSessionId: running.id,
-        proxyPath: running.proxyPath,
-        format: running.format,
-      }).pipe(Effect.ignore);
       return publicSession(running);
     });
 
@@ -554,7 +660,115 @@ export const make = Effect.gen(function* () {
       ).pipe(Effect.ignore);
     });
 
-  const applyDecision: PlannotatorManagerShape["applyDecision"] = (token, decision) =>
+  const reopen: PlannotatorManagerShape["reopen"] = (input) => {
+    const current =
+      sessions.get(input.tokenOrId) ??
+      [...sessions.values()].find((session) => session.id === input.tokenOrId);
+    if (!current) {
+      return Effect.fail(
+        new PlannotatorManagerError({
+          operation: "reopen",
+          detail: "The Plannotator review session was not found.",
+        }),
+      );
+    }
+    let lock = reopenLocks.get(current.token);
+    if (!lock) {
+      lock = Semaphore.makeUnsafe(1);
+      reopenLocks.set(current.token, lock);
+    }
+    return lock.withPermit(
+      Effect.gen(function* () {
+        const latest = sessions.get(current.token) ?? current;
+        if (input.content !== undefined) {
+          if (!input.content.trim()) {
+            return yield* new PlannotatorManagerError({
+              operation: "reopen",
+              detail: "Plan content cannot be empty.",
+            });
+          }
+          if (Buffer.byteLength(input.content, "utf8") > 2 * 1024 * 1024) {
+            return yield* new PlannotatorManagerError({
+              operation: "reopen",
+              detail: "Plan content exceeds the 2 MiB safety limit.",
+            });
+          }
+        }
+
+        const existingContent =
+          input.content === undefined
+            ? null
+            : yield* fileSystem
+                .readFileString(latest.planPath)
+                .pipe(Effect.mapError(managerError("reopen", "Could not read the reviewed plan")));
+        const contentChanged = input.content !== undefined && input.content !== existingContent;
+        const nextPlanId = input.planId;
+        const planIdChanged = nextPlanId !== undefined && nextPlanId !== latest.planId;
+        const processIsLive =
+          latest.port !== null &&
+          (latest.status === "starting" ||
+            latest.status === "running" ||
+            latest.status === "applying") &&
+          (yield* probePort(latest.port));
+
+        if (processIsLive && !contentChanged) {
+          const unchanged =
+            planIdChanged && nextPlanId !== undefined
+              ? yield* update(latest, { planId: nextPlanId })
+              : latest;
+          return publicSession(unchanged);
+        }
+
+        const threadOption = yield* query
+          .getThreadDetailById(latest.threadId)
+          .pipe(Effect.mapError(managerError("reopen", "Could not load the target T3 session")));
+        if (Option.isNone(threadOption)) {
+          return yield* new PlannotatorManagerError({
+            operation: "reopen",
+            detail: `T3 session ${latest.threadId} was not found.`,
+          });
+        }
+        const thread = threadOption.value;
+        const shell = yield* query
+          .getShellSnapshot()
+          .pipe(Effect.mapError(managerError("reopen", "Could not load the target T3 project")));
+        const project = shell.projects.find((candidate) => candidate.id === thread.projectId);
+        if (!project) {
+          return yield* new PlannotatorManagerError({
+            operation: "reopen",
+            detail: `Project ${thread.projectId} was not found.`,
+          });
+        }
+        if (contentChanged && input.content !== undefined) {
+          yield* fileSystem
+            .writeFileString(latest.planPath, input.content, { mode: 0o600 })
+            .pipe(Effect.mapError(managerError("reopen", "Could not update the reviewed plan")));
+        }
+        const prepared =
+          planIdChanged && nextPlanId !== undefined
+            ? yield* update(latest, { planId: nextPlanId })
+            : latest;
+        const running = yield* launch(
+          prepared,
+          thread.worktreePath ?? project.workspaceRoot,
+          prepared.annotationHistory.length > 0
+            ? "Plan review reopened with prior annotations."
+            : "Plan review reopened in Plannotator.",
+        ).pipe(
+          Effect.tapError((cause) =>
+            update(prepared, { status: "error", error: cause.message }).pipe(Effect.ignore),
+          ),
+        );
+        return publicSession(running);
+      }),
+    );
+  };
+
+  const applyDecision: PlannotatorManagerShape["applyDecision"] = (
+    token,
+    decision,
+    annotations = [],
+  ) =>
     Effect.gen(function* () {
       const current = sessions.get(token);
       if (!current) {
@@ -579,11 +793,22 @@ export const make = Effect.gen(function* () {
           detail: `The Plannotator review is ${current.status}, so it cannot accept a decision.`,
         });
       }
+      const submittedAt = yield* nowIso;
+      const annotationHistory = mergePlannotatorAnnotationHistory(
+        current.annotationHistory,
+        annotations,
+        submittedAt,
+      );
       const applying = yield* update(current, {
         status: "applying",
         feedback: decision.feedback,
+        annotationHistory,
         error: null,
       });
+      // Once a review round is durably captured by T3, clear Plannotator's
+      // crash-recovery draft so the next reopen does not offer a duplicate
+      // restore. Drafts from genuinely interrupted, unsubmitted rounds remain.
+      yield* clearSubmittedDraft(applying);
       const threadOption = yield* query.getThreadDetailById(applying.threadId).pipe(
         Effect.mapError(managerError("decision", "Could not load the plan's target T3 session")),
         Effect.tapError((cause) =>
@@ -716,6 +941,7 @@ export const make = Effect.gen(function* () {
           .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
           .map(publicSession),
       ),
+    reopen,
     applyDecision,
   });
 

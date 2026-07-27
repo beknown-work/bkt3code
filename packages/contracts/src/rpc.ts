@@ -61,6 +61,12 @@ import {
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  PersonalMcpProfile,
+  PersonalMcpProfileUpdate,
+  PersonalMcpSettingsError,
+  PersonalMcpTokenResult,
+} from "./personalMcp.ts";
+import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
   RelayClientStatusSchema,
@@ -215,6 +221,11 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  // T3-CUSTOM(expbkt3): Per-user automation and MCP credential management.
+  personalMcpGetProfile: "personalMcp.getProfile",
+  personalMcpUpdateProfile: "personalMcp.updateProfile",
+  personalMcpRotateToken: "personalMcp.rotateToken",
+  personalMcpRevokeToken: "personalMcp.revokeToken",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -302,6 +313,30 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_METHODS.personalMcpGetProfile, {
+  payload: Schema.Struct({}),
+  success: PersonalMcpProfile,
+  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsPersonalMcpUpdateProfileRpc = Rpc.make(WS_METHODS.personalMcpUpdateProfile, {
+  payload: PersonalMcpProfileUpdate,
+  success: PersonalMcpProfile,
+  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsPersonalMcpRotateTokenRpc = Rpc.make(WS_METHODS.personalMcpRotateToken, {
+  payload: Schema.Struct({}),
+  success: PersonalMcpTokenResult,
+  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsPersonalMcpRevokeTokenRpc = Rpc.make(WS_METHODS.personalMcpRevokeToken, {
+  payload: Schema.Struct({}),
+  success: PersonalMcpProfile,
+  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -724,6 +759,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsPersonalMcpGetProfileRpc,
+  WsPersonalMcpUpdateProfileRpc,
+  WsPersonalMcpRotateTokenRpc,
+  WsPersonalMcpRevokeTokenRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

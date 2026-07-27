@@ -44,6 +44,8 @@ cd /home/ubuntu/repos/t3code-expbkt3
 ```
 
 The deploy script accepts an optional expected commit SHA. It fetches and
-fast-forwards only the experimental branch, installs locked dependencies, builds
-the flagged web client and server bundle, restarts the isolated service, and
-waits for the private health endpoint.
+fast-forwards only the experimental branch, finds the successful GitHub Actions
+run for that exact SHA, verifies and installs its SHA-addressed web/server
+artifact, restarts the isolated service, and waits for the private health
+endpoint. Dependency installation, tests, and application builds run in GitHub
+Actions; they do not run on the production host.

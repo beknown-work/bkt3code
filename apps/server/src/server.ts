@@ -36,6 +36,8 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
+import { mcpUpstreamProxyRouteLayer } from "./mcp/McpUpstreamProxy.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 // T3-CUSTOM(expbkt3): BEGIN — experimental native-plan review runtime.
 import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
@@ -196,6 +198,14 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
+// T3-CUSTOM(expbkt3): Fully compose this custom persistence service once so
+// unrelated route tests and upstream callers never inherit its SqlClient or
+// secret-store implementation requirements.
+const UserMcpProfileStoreLive = UserMcpProfileStore.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(PersistenceLayerLive),
+);
+
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
 );
@@ -343,7 +353,17 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(ServerSecretStore.layer),
+  // T3-CUSTOM(expbkt3): Keep the personal MCP store beside its write-only
+  // secret dependency in one merge seam. Besides making upstream rebases
+  // mechanical, grouping these avoids exceeding Effect's typed pipe arity.
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ServerSecretStore.layer,
+      // Reusing this layer value shares the already-memoized SQLite runtime;
+      // it does not create a second database connection or migration graph.
+      UserMcpProfileStoreLive,
+    ),
+  ),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
@@ -379,12 +399,20 @@ const RuntimeServicesLive = PlannotatorManager.layer.pipe(
   Layer.provideMerge(RuntimeServicesWithoutPlannotatorLive),
 );
 
+// T3-CUSTOM(expbkt3): Build one memoized user profile + credential registry
+// pair and provide both to the native T3 MCP transport and upstream proxy.
+const PersonalMcpRouteServicesLive = McpSessionRegistry.layer;
+
 const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
   plannotatorProxyRouteLayer,
-  McpHttpServer.layer.pipe(
-    Layer.provide(McpSessionRegistry.layer),
-    Layer.provide(ClerkDirectoryLive),
-  ),
+  mcpUpstreamProxyRouteLayer,
+  McpHttpServer.layer,
+).pipe(
+  // One registry instance authenticates both the native and upstream MCP
+  // routes; separate instances would not recognize each other's run tokens.
+  Layer.provideMerge(PersonalMcpRouteServicesLive),
+  Layer.provide(ClerkDirectoryLive),
+  Layer.provide(OrchestrationAccessControlLive),
 );
 // T3-CUSTOM(expbkt3): END
 

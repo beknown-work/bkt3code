@@ -30,6 +30,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   EditorId,
+  emptyPersonalMcpProfile,
 } from "@t3tools/contracts";
 import {
   computeDpopAccessTokenHash,
@@ -117,6 +118,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -391,6 +393,7 @@ const buildAppUnderTest = (options?: {
       ...derivedPaths,
       staticDir: undefined,
       devUrl,
+      devAllowedOrigins: [],
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
@@ -547,6 +550,21 @@ const buildAppUnderTest = (options?: {
     }).pipe(
       Layer.provide(PlannotatorManager.layer),
       Layer.provide(OrchestrationCommandDispatcher.layer),
+      // T3-CUSTOM(expbkt3): Router tests do not exercise personal credential
+      // persistence. Keep the new RPC dependency fail-closed and in memory.
+      Layer.provide(
+        Layer.mock(UserMcpProfileStore.UserMcpProfileStore)({
+          get: (userId) =>
+            Effect.succeed(emptyPersonalMcpProfile(userId, "2026-07-27T00:00:00.000Z")),
+          update: () => Effect.die("Unexpected personal MCP profile update in router test."),
+          rotateExternalToken: () =>
+            Effect.die("Unexpected personal MCP token rotation in router test."),
+          revokeExternalToken: (userId) =>
+            Effect.succeed(emptyPersonalMcpProfile(userId, "2026-07-27T00:00:00.000Z")),
+          resolveExternalToken: () => Effect.succeed(undefined),
+          getIntegrationCredential: () => Effect.succeed(undefined),
+        }),
+      ),
     );
     const servedRoutesLayer = servedRoutesWithDispatcherLayer.pipe(
       Layer.provide(
@@ -687,7 +705,7 @@ const buildAppUnderTest = (options?: {
             reportStatus: () => Effect.void,
             refresh: () => Effect.void,
             close: () => Effect.void,
-            list: () => Effect.succeed({ sessions: [] }),
+            list: () => Effect.succeed({ sessions: [], serverEpoch: "test-server", revision: 0 }),
             events: Stream.empty,
             subscribeEvents: Effect.flatMap(PubSub.unbounded<PreviewEvent>(), (pubsub) =>
               PubSub.subscribe(pubsub),
@@ -1390,6 +1408,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "bearer-access-token",
         "dpop-access-token",
       ]);
+      // Desktop, so port-scoped: instances scan for a free port and share
+      // 127.0.0.1, and cookies are not scoped by port.
       assert.isTrue(body.auth.sessionCookieName.startsWith("t3_session_"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -3303,6 +3323,34 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 204);
       assertBrowserApiCorsPreflightHeaders(response.headers, {
         origin: crossOriginClientOrigin,
+        credentials: true,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("allows configured development origins through ServerConfig", () =>
+    Effect.gen(function* () {
+      const tailnetOrigin = "https://host.example.ts.net";
+      yield* buildAppUnderTest({
+        config: {
+          devUrl: new URL(crossOriginClientOrigin),
+          devAllowedOrigins: [tailnetOrigin],
+        },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const response = yield* fetchEffect(sessionUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: tailnetOrigin,
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "content-type",
+        },
+      });
+
+      assert.equal(response.status, 204);
+      assertBrowserApiCorsPreflightHeaders(response.headers, {
+        origin: tailnetOrigin,
         credentials: true,
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),

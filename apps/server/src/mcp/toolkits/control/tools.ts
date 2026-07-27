@@ -20,6 +20,7 @@ import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSup
 import { ClerkDirectory } from "../../../auth/ClerkDirectory.ts";
 import { ServerConfig } from "../../../config.ts";
 import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
+import { OrchestrationAccessControl } from "../../../orchestration/Services/AccessControl.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   PlannotatorManager,
@@ -42,6 +43,7 @@ const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ProjectionSnapshotQuery,
   OrchestrationCommandDispatcher,
+  OrchestrationAccessControl,
   ThreadExecutionSupervisor,
   Crypto.Crypto,
 ];
@@ -416,7 +418,7 @@ export const T3SubmitPlanTool = mutatingTool(
 export const T3ListPlannotatorReviewsTool = readonlyTool(
   Tool.make("t3_list_plannotator_reviews", {
     description:
-      "List Plannotator review gates with their T3 session, plan, proxy URL, process state, decision, feedback, and diagnostic paths. In-session callers see only their own session; external operators may filter by sessionId or inspect all reviews.",
+      "List durable Plannotator review gates with their T3 session, plan, stable proxy URL, process state, decision, feedback, cumulative annotation history, and diagnostic paths. In-session callers see only their own session; external operators may filter by sessionId or inspect all reviews.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       plannotatorSessionId: Schema.optional(

@@ -7,26 +7,86 @@ export type PlannotatorDecision =
   | { readonly kind: "feedback"; readonly feedback: string }
   | { readonly kind: "denied"; readonly feedback: string };
 
+export interface PlannotatorReviewAnnotation {
+  readonly id: string;
+  readonly type: "COMMENT" | "DELETION" | "GLOBAL_COMMENT";
+  readonly text: string;
+  readonly originalText: string;
+  readonly author: string;
+}
+
+export interface PlannotatorSubmission {
+  readonly decision: PlannotatorDecision | null;
+  readonly annotations: ReadonlyArray<PlannotatorReviewAnnotation>;
+}
+
+export type PersistedPlannotatorReviewAnnotation = PlannotatorReviewAnnotation & {
+  readonly submittedAt: string;
+};
+
+function reviewAnnotationKey(annotation: PlannotatorReviewAnnotation): string {
+  return [annotation.type, annotation.originalText, annotation.text, annotation.author].join(
+    "\u0000",
+  );
+}
+
+export function mergePlannotatorAnnotationHistory(
+  current: ReadonlyArray<PersistedPlannotatorReviewAnnotation>,
+  submitted: ReadonlyArray<PlannotatorReviewAnnotation>,
+  submittedAt: string,
+): ReadonlyArray<PersistedPlannotatorReviewAnnotation> {
+  const merged = new Map(
+    current.map((annotation) => [reviewAnnotationKey(annotation), annotation]),
+  );
+  for (const annotation of submitted) {
+    const key = reviewAnnotationKey(annotation);
+    if (!merged.has(key)) merged.set(key, { ...annotation, submittedAt });
+  }
+  return [...merged.values()];
+}
+
 function trimmed(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function annotationComments(value: unknown): string {
-  if (!Array.isArray(value)) return "";
-  const comments: Array<string> = [];
+function reviewAnnotations(value: unknown): ReadonlyArray<PlannotatorReviewAnnotation> {
+  if (!Array.isArray(value)) return [];
+  const annotations: Array<PlannotatorReviewAnnotation> = [];
   for (const annotation of value) {
     if (!annotation || typeof annotation !== "object") continue;
     const record = annotation as Record<string, unknown>;
-    const comment =
+    const text =
+      trimmed(record.text) ||
       trimmed(record.comment) ||
       trimmed(record.note) ||
-      trimmed(record.body) ||
-      trimmed(record.text);
-    if (!comment) continue;
-    const quote = trimmed(record.quote);
-    comments.push(quote ? `> ${quote}\n\n${comment}` : comment);
+      trimmed(record.body);
+    if (!text) continue;
+    const originalText = trimmed(record.originalText) || trimmed(record.quote);
+    const rawType = trimmed(record.type).toUpperCase();
+    const type =
+      rawType === "DELETION" && originalText
+        ? ("DELETION" as const)
+        : rawType === "COMMENT" && originalText
+          ? ("COMMENT" as const)
+          : ("GLOBAL_COMMENT" as const);
+    const author = trimmed(record.author);
+    const id =
+      trimmed(record.id) || [type, originalText, text, author].map(encodeURIComponent).join(":");
+    annotations.push({ id, type, text, originalText, author });
   }
-  return comments.join("\n\n");
+  return annotations;
+}
+
+function annotationComments(value: unknown): string {
+  return reviewAnnotations(value)
+    .map((annotation) =>
+      annotation.type === "DELETION"
+        ? `Remove:\n\n> ${annotation.originalText}`
+        : annotation.originalText
+          ? `> ${annotation.originalText}\n\n${annotation.text}`
+          : annotation.text,
+    )
+    .join("\n\n");
 }
 
 function parseJson(body: Uint8Array): Record<string, unknown> | null {
@@ -46,36 +106,55 @@ function feedbackFromPayload(payload: Record<string, unknown> | null): string {
   return trimmed(payload.feedback) || annotationComments(payload.annotations);
 }
 
+export function parsePlannotatorSubmission(
+  proxyPath: string,
+  body: Uint8Array,
+): PlannotatorSubmission {
+  const payload = parseJson(body);
+  const explicitDecision = trimmed(payload?.decision).toLowerCase();
+  const feedback = feedbackFromPayload(payload);
+  const annotations = reviewAnnotations(payload?.annotations);
+
+  if (proxyPath.startsWith("/api/approve") || payload?.approved === true) {
+    return { decision: { kind: "approved", feedback }, annotations };
+  }
+  if (explicitDecision === "approved") {
+    return { decision: { kind: "approved", feedback }, annotations };
+  }
+  if (explicitDecision === "annotated" && feedback) {
+    return { decision: { kind: "feedback", feedback }, annotations };
+  }
+  if (explicitDecision === "denied" || explicitDecision === "rejected") {
+    return {
+      decision: feedback ? { kind: "feedback", feedback } : { kind: "denied", feedback: "" },
+      annotations,
+    };
+  }
+  if (proxyPath.startsWith("/api/feedback")) {
+    return {
+      decision: feedback ? { kind: "feedback", feedback } : { kind: "denied", feedback: "" },
+      annotations,
+    };
+  }
+  if (proxyPath.startsWith("/api/external-annotations")) {
+    // External annotations update the open review but do not submit it. The
+    // eventual approve/feedback request captures the complete review round.
+    return { decision: null, annotations };
+  }
+  if (proxyPath.startsWith("/api/deny") || proxyPath.startsWith("/api/reject")) {
+    return {
+      decision: feedback ? { kind: "feedback", feedback } : { kind: "denied", feedback: "" },
+      annotations,
+    };
+  }
+  return { decision: null, annotations };
+}
+
 export function parsePlannotatorDecision(
   proxyPath: string,
   body: Uint8Array,
 ): PlannotatorDecision | null {
-  const payload = parseJson(body);
-  const explicitDecision = trimmed(payload?.decision).toLowerCase();
-  const feedback = feedbackFromPayload(payload);
-
-  if (proxyPath.startsWith("/api/approve") || payload?.approved === true) {
-    return { kind: "approved", feedback };
-  }
-  if (explicitDecision === "approved") {
-    return { kind: "approved", feedback };
-  }
-  if (explicitDecision === "annotated" && feedback) {
-    return { kind: "feedback", feedback };
-  }
-  if (explicitDecision === "denied" || explicitDecision === "rejected") {
-    return feedback ? { kind: "feedback", feedback } : { kind: "denied", feedback: "" };
-  }
-  if (proxyPath.startsWith("/api/feedback")) {
-    return feedback ? { kind: "feedback", feedback } : { kind: "denied", feedback: "" };
-  }
-  if (proxyPath.startsWith("/api/external-annotations")) {
-    return feedback ? { kind: "feedback", feedback } : null;
-  }
-  if (proxyPath.startsWith("/api/deny") || proxyPath.startsWith("/api/reject")) {
-    return feedback ? { kind: "feedback", feedback } : { kind: "denied", feedback: "" };
-  }
-  return null;
+  return parsePlannotatorSubmission(proxyPath, body).decision;
 }
 
 export function rewritePlannotatorHtml(html: string, proxyPrefix: string): string {
