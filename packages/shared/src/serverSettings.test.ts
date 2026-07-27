@@ -161,6 +161,40 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  // T3-CUSTOM(expbkt3): Guard the permanent Conductor against cross-provider
+  // option leakage when its independently configured model changes.
+  it("replaces T3 Conductor provider traits with its provider and model", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      experimental: {
+        ...DEFAULT_SERVER_SETTINGS.experimental,
+        t3Conductor: {
+          ...DEFAULT_SERVER_SETTINGS.experimental.t3Conductor,
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol", [
+            { id: "effort", value: "high" },
+            { id: "fastMode", value: true },
+          ]),
+        },
+      },
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        experimental: {
+          t3Conductor: {
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("opencode"),
+              model: "openai/gpt-5",
+            },
+          },
+        },
+      }).experimental.t3Conductor.modelSelection,
+    ).toEqual({
+      instanceId: "opencode",
+      model: "openai/gpt-5",
+    });
+  });
+
   it("replaces providerInstances maps so omitted instance fields are cleared", () => {
     const codexId = ProviderInstanceId.make("codex");
     const current = {

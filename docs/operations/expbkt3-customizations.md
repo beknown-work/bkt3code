@@ -2,7 +2,7 @@
 
 The `expbkt3` deployment extends upstream T3 Code with an experimental operations
 layer: lifecycle counters, external MCP control, native-plan Plannotator review,
-and Active Projects administration.
+Active Projects administration, and the permanent T3 Conductor.
 
 These changes are structured to keep upstream merges predictable:
 
@@ -22,20 +22,39 @@ rg 'T3-CUSTOM\\(expbkt3\\)'
 
 ## Feature ownership
 
-| Area                      | Dedicated implementation                                             | Upstream-facing seams                                |
-| ------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------- |
-| Active Projects           | `ActiveProjectsSettingsPanel*`, `settings.projects.tsx`              | `SettingsSidebarNav.tsx`, generated route tree       |
-| External MCP settings     | `ExternalMcpSettingsSection*`                                        | `ExperimentsSettingsPanel.tsx`                       |
-| MCP operator/native tools | `apps/server/src/mcp/toolkits/control/`                              | MCP toolkit assembly and server route wiring         |
-| Plannotator runtime       | `apps/server/src/plannotator/`, `packages/shared/src/plannotator.ts` | server service layers and proxy route                |
-| Native-plan detection     | `NativePlanBridge.ts`                                                | orchestration plan lifecycle hooks                   |
-| Focused review UI         | `PlannotatorFocusSurface*`                                           | chat, plan card/sidebar, and right-panel store seams |
-| Lifecycle counters        | experimental sidebar counter components                              | `SidebarChrome.tsx`                                  |
-| Urgent pending input      | `PhaseGroupedSidebar.logic.ts`                                       | `PhaseGroupedSidebar.tsx`                            |
-| Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`            | none                                                 |
+| Area                      | Dedicated implementation                                                   | Upstream-facing seams                                      |
+| ------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Active Projects           | `ActiveProjectsSettingsPanel*`, `settings.projects.tsx`                    | `SettingsSidebarNav.tsx`, generated route tree             |
+| External MCP settings     | `ExternalMcpSettingsSection*`                                              | `ExperimentsSettingsPanel.tsx`                             |
+| MCP operator/native tools | `apps/server/src/mcp/toolkits/control/`                                    | MCP toolkit assembly and server route wiring               |
+| Plannotator runtime       | `apps/server/src/plannotator/`, `packages/shared/src/plannotator.ts`       | server service layers and proxy route                      |
+| Native-plan detection     | `NativePlanBridge.ts`                                                      | orchestration plan lifecycle hooks                         |
+| Focused review UI         | `PlannotatorFocusSurface*`                                                 | chat, plan card/sidebar, and right-panel store seams       |
+| Lifecycle counters        | experimental sidebar counter components                                    | `SidebarChrome.tsx`                                        |
+| Urgent pending input      | `PhaseGroupedSidebar.logic.ts`                                             | `PhaseGroupedSidebar.tsx`                                  |
+| T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorSettingsSection.tsx` | experimental settings schema and `PhaseGroupedSidebar.tsx` |
+| Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                  | none                                                       |
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
 markers; they are regenerated from marked route sources.
+
+## T3 Conductor lifecycle
+
+T3 Conductor is one durable, primary-environment thread whose id is stored in
+`experimental.t3Conductor.threadId`. When enabled, its fixed sidebar controller:
+
+- provisions the configured workspace as a normal T3 project when needed;
+- initializes the agent with its permanent coordination identity and native T3
+  MCP mission;
+- keeps provider/model traits, runtime access, and interaction mode synchronized
+  with Experimental settings;
+- removes the thread from ordinary lifecycle groups and archive affordances;
+- restores an archived thread, resumes a stopped session, and recreates a
+  deleted thread;
+- retires the previous runtime before moving to a different home workspace.
+
+Disabling the feature hides its command-deck card and stops the live provider
+session while preserving the durable conversation for the next enable.
 
 ## Upstream merge workflow
 

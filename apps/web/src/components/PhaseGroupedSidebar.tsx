@@ -35,7 +35,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
@@ -53,7 +53,7 @@ import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { usePhaseSidebarFilterStore } from "../phaseSidebarFilterStore";
 import { useShortcutModifierState } from "../shortcutModifierState";
-import { useEnvironments } from "../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
@@ -101,6 +101,8 @@ import {
   SidebarEnvironmentNotices,
 } from "./sidebar/SidebarChrome";
 import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
+import { T3ConductorCard } from "./sidebar/T3ConductorCard";
+import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -820,6 +822,9 @@ export function PhaseGroupedSidebar() {
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const currentUserId = useCurrentUserId();
+  // T3-CUSTOM(expbkt3): Reserve one permanent row outside normal lifecycle groups.
+  const t3Conductor = usePrimarySettings((settings) => settings.experimental.t3Conductor);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const filters = usePhaseSidebarFilterStore(
     useShallow((state) => ({
@@ -903,44 +908,48 @@ export function PhaseGroupedSidebar() {
   }, []);
   const allRows = useMemo<ReadonlyArray<PhaseSidebarRow>>(
     () =>
-      threads.map((thread) => {
-        const project = projectByKey.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        );
-        const repositoryKey = project
-          ? derivePhaseSidebarRepositoryKey(project)
-          : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-        const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-        const provider = serverConfigs
-          .get(thread.environmentId)
-          ?.providers.find((candidate) => candidate.instanceId === instanceId);
-        const providerKind = String(provider?.driver ?? instanceId);
-        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        const vcsStatus = vcsStatusByThreadKey.get(threadKey);
-        const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
-        const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
-        const lastVisitedAt = Date.parse(lastVisitedAtByThreadKey[threadKey] ?? "");
-        const isUnreadCompletion =
-          Number.isFinite(completedAt) &&
-          (!Number.isFinite(lastVisitedAt) || completedAt > lastVisitedAt);
-        return {
-          thread,
-          phaseId: resolvePhaseSidebarDisplayPhase(
-            currentPhase,
-            allEnvironmentShellsLive
-              ? null
-              : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
-          ),
-          repositoryKey,
-          repositoryLabel:
-            project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
-          providerKind,
-          providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
-          isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
-          attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
-          unreadPriority: isUnreadCompletion ? 0 : 1,
-        };
-      }),
+      threads
+        // T3-CUSTOM(expbkt3): Conductor owns a fixed command-deck card.
+        .filter((thread) => !isT3ConductorThread(t3Conductor, primaryEnvironmentId, thread))
+        .map((thread) => {
+          const project = projectByKey.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          );
+          const repositoryKey = project
+            ? derivePhaseSidebarRepositoryKey(project)
+            : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+          const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+          const provider = serverConfigs
+            .get(thread.environmentId)
+            ?.providers.find((candidate) => candidate.instanceId === instanceId);
+          const providerKind = String(provider?.driver ?? instanceId);
+          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+          const vcsStatus = vcsStatusByThreadKey.get(threadKey);
+          const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
+          const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
+          const lastVisitedAt = Date.parse(lastVisitedAtByThreadKey[threadKey] ?? "");
+          const isUnreadCompletion =
+            Number.isFinite(completedAt) &&
+            (!Number.isFinite(lastVisitedAt) || completedAt > lastVisitedAt);
+          return {
+            thread,
+            phaseId: resolvePhaseSidebarDisplayPhase(
+              currentPhase,
+              allEnvironmentShellsLive
+                ? null
+                : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
+            ),
+            repositoryKey,
+            repositoryLabel:
+              project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
+            providerKind,
+            providerName:
+              provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
+            isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
+            attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
+            unreadPriority: isUnreadCompletion ? 0 : 1,
+          };
+        }),
     [
       projectByKey,
       repositoryLabels,
@@ -949,6 +958,8 @@ export function PhaseGroupedSidebar() {
       allEnvironmentShellsLive,
       currentUserId,
       lastVisitedAtByThreadKey,
+      primaryEnvironmentId,
+      t3Conductor,
       vcsStatusByThreadKey,
     ],
   );
@@ -1273,6 +1284,12 @@ export function PhaseGroupedSidebar() {
           </SidebarMenu>
         </SidebarGroup>
         <SidebarEnvironmentNotices />
+        {/* T3-CUSTOM(expbkt3): Permanent orchestration home above lifecycle rows. */}
+        <T3ConductorCard
+          shellReady={allEnvironmentShellsLive && networkStatus === "online"}
+          activeThreadKey={routeThreadKey}
+          onNavigate={navigateToRow}
+        />
         <SidebarGroup className="px-2 pt-1 pb-2">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
