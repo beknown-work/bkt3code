@@ -345,9 +345,15 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(ServerSecretStore.layer),
-  // T3-CUSTOM(expbkt3): Shared per-user MCP metadata and secret resolver.
-  Layer.provideMerge(UserMcpProfileStore.layer),
+  // T3-CUSTOM(expbkt3): Keep the personal MCP store beside its write-only
+  // secret dependency in one merge seam. Besides making upstream rebases
+  // mechanical, grouping these avoids exceeding Effect's typed pipe arity.
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ServerSecretStore.layer,
+      UserMcpProfileStore.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+    ),
+  ),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
