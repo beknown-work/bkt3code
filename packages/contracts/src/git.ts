@@ -212,6 +212,8 @@ const VcsStatusLocalShape = {
   hasPrimaryRemote: Schema.Boolean,
   isDefaultRef: Schema.Boolean,
   refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  // T3-CUSTOM(expbkt3): Base ref recorded when T3 created a dedicated worktree.
+  baseRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   hasWorkingTreeChanges: Schema.Boolean,
   workingTree: Schema.Struct({
     files: Schema.Array(

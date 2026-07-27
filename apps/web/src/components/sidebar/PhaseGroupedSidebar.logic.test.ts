@@ -23,6 +23,7 @@ import {
   matchesPhaseSidebarFilters,
   phaseSidebarNeedsUserInput,
   reconcilePhaseSidebarFilters,
+  resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarPhase,
@@ -36,6 +37,54 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-07-16T10:00:00.000Z";
+
+describe("resolvePhaseSidebarCheckoutMetadata", () => {
+  it("shows the live branch for a current checkout", () => {
+    expect(
+      resolvePhaseSidebarCheckoutMetadata(
+        { branch: "stale-branch", worktreePath: null },
+        { refName: "dev", baseRef: "main", pr: null },
+      ),
+    ).toEqual({
+      kind: "current",
+      label: "dev",
+      tooltip: "Current checkout on dev",
+    });
+  });
+
+  it("shows a worktree's recorded starting ref instead of its current branch", () => {
+    expect(
+      resolvePhaseSidebarCheckoutMetadata(
+        { branch: "t3code/generated-feature", worktreePath: "/repo/worktrees/feature" },
+        { refName: "t3code/generated-feature", baseRef: "main", pr: null },
+      ),
+    ).toEqual({
+      kind: "worktree",
+      label: "from main",
+      tooltip: "Worktree started from main",
+    });
+  });
+
+  it("prefers a pull request base when one is available", () => {
+    expect(
+      resolvePhaseSidebarCheckoutMetadata(
+        { branch: "feature/pr", worktreePath: "/repo/worktrees/pr" },
+        {
+          refName: "feature/pr",
+          baseRef: "main",
+          pr: {
+            number: 42,
+            title: "Feature",
+            url: "https://example.com/pr/42",
+            baseRef: "release",
+            headRef: "feature/pr",
+            state: "open",
+          },
+        },
+      ).label,
+    ).toBe("from release");
+  });
+});
 
 function makeExecution(overrides: Partial<ThreadExecutionSnapshot> = {}): ThreadExecutionSnapshot {
   return {

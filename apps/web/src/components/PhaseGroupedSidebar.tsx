@@ -15,8 +15,9 @@ import { useParams, useRouter } from "@tanstack/react-router";
 import {
   ArchiveIcon,
   FilterIcon,
+  FolderGit2Icon,
   FolderPlusIcon,
-  GitBranchIcon,
+  LaptopIcon,
   PlusIcon,
   SearchIcon,
   XIcon,
@@ -84,6 +85,7 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   resolvePhaseSidebarAttentionPriority,
+  resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
@@ -467,6 +469,7 @@ function FilterChip({
 interface PhaseThreadRowProps {
   readonly row: PhaseSidebarRow;
   readonly project: Project | null;
+  readonly vcsStatus: VcsStatusResult | null;
   readonly active: boolean;
   readonly orderedThreadKeys: ReadonlyArray<string>;
   readonly jumpLabel: string | null;
@@ -486,6 +489,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const {
     row,
     project,
+    vcsStatus,
     active,
     orderedThreadKeys,
     jumpLabel,
@@ -511,9 +515,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const status = resolveThreadStatusPill({ thread: { ...row.thread, lastVisitedAt } });
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch);
-  const branchLabel = linearIssue
-    ? null
-    : (row.thread.branch ?? (row.thread.worktreePath ? "WT" : null));
+  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
 
@@ -629,10 +631,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               {row.thread.title}
             </span>
           )}
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-none text-muted-foreground/65">
+          {/* T3-CUSTOM(expbkt3): Keep checkout details left-aligned and pin the provider at right. */}
+          <span className="relative mt-0.5 flex min-w-0 items-center justify-start gap-1.5 pr-5 text-[10px] leading-none text-muted-foreground/65">
             <Tooltip>
               <TooltipTrigger
-                render={<span className="inline-flex min-w-0 flex-1 items-center gap-1" />}
+                render={<span className="inline-flex min-w-0 max-w-20 items-center gap-1" />}
               >
                 {project ? (
                   <ProjectFavicon
@@ -644,6 +647,19 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
               <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className="inline-flex min-w-0 max-w-24 items-center gap-1" />}
+              >
+                {checkoutMetadata.kind === "worktree" ? (
+                  <FolderGit2Icon aria-hidden className="size-2.5 shrink-0" />
+                ) : (
+                  <LaptopIcon aria-hidden className="size-2.5 shrink-0" />
+                )}
+                <span className="min-w-0 truncate">{checkoutMetadata.label}</span>
+              </TooltipTrigger>
+              <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
             </Tooltip>
             {linearIssue ? (
               <Tooltip>
@@ -669,22 +685,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 </TooltipTrigger>
                 <TooltipPopup side="top">Open {linearIssue.identifier} in Linear</TooltipPopup>
               </Tooltip>
-            ) : branchLabel ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={<span className="inline-flex min-w-0 items-center gap-0.5" />}
-                >
-                  {row.thread.branch ? <GitBranchIcon className="size-2.5" /> : null}
-                  <span className="max-w-20 truncate">{branchLabel}</span>
-                </TooltipTrigger>
-                <TooltipPopup side="top">{row.thread.branch ?? "Worktree"}</TooltipPopup>
-              </Tooltip>
             ) : null}
             <Tooltip>
               <TooltipTrigger
                 render={
                   <span
-                    className="inline-flex size-3 items-center justify-center"
+                    className="absolute right-0 inline-flex size-3 items-center justify-center"
                     aria-label={row.providerName}
                   />
                 }
@@ -1324,6 +1330,7 @@ export function PhaseGroupedSidebar() {
                       key={key}
                       row={row}
                       project={project}
+                      vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
                       active={routeThreadKey === key}
                       orderedThreadKeys={visibleThreadKeys}
                       jumpLabel={jumpLabelByKey.get(key) ?? null}

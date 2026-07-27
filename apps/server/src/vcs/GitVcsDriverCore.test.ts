@@ -857,6 +857,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(worktreePath);
         assert.equal(status.aheadCount, 0);
         assert.equal(status.aheadOfDefaultCount, 0);
+        assert.equal(status.baseRef, initialBranch);
+        assert.equal((yield* driver.status({ cwd: worktreePath })).baseRef, initialBranch);
       }),
     );
 

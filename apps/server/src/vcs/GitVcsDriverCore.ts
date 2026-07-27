@@ -66,6 +66,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetail
   hasOriginRemote: false,
   isDefaultBranch: false,
   branch: null,
+  baseRef: null,
   upstreamRef: null,
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
@@ -1426,6 +1427,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : yield* computeAheadCountAgainstBase(cwd, refName).pipe(Effect.orElseSucceed(() => 0));
     }
 
+    // T3-CUSTOM(expbkt3): createWorktree records the selected starting ref in
+    // gh-merge-base. Surface it so the experimental sidebar can describe a
+    // worktree by its origin rather than repeating its current feature branch.
+    const configuredBaseRef =
+      refName === null
+        ? null
+        : yield* runGitStdout(
+            "GitVcsDriver.statusDetails.worktreeBaseRef",
+            cwd,
+            ["config", "--get", `branch.${refName}.gh-merge-base`],
+            true,
+          ).pipe(
+            Effect.map((stdout) => stdout.trim() || null),
+            Effect.orElseSucceed(() => null),
+          );
+
     const stagedEntries = parseNumstatEntries(stagedNumstatStdout);
     const unstagedEntries = parseNumstatEntries(unstagedNumstatStdout);
     const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
@@ -1457,6 +1474,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       hasOriginRemote: hasPrimaryRemote,
       isDefaultBranch,
       branch: refName,
+      baseRef: configuredBaseRef,
       upstreamRef,
       hasWorkingTreeChanges,
       workingTree: {
@@ -1511,6 +1529,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         hasPrimaryRemote: details.hasOriginRemote,
         isDefaultRef: details.isDefaultBranch,
         refName: details.branch,
+        baseRef: details.baseRef,
         hasWorkingTreeChanges: details.hasWorkingTreeChanges,
         workingTree: details.workingTree,
         hasUpstream: details.hasUpstream,

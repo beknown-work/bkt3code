@@ -23,6 +23,38 @@ export const PHASE_SIDEBAR_PHASE_IDS = [
 
 export type PhaseSidebarPhaseId = (typeof PHASE_SIDEBAR_PHASE_IDS)[number];
 
+export interface PhaseSidebarCheckoutMetadata {
+  readonly kind: "current" | "worktree";
+  readonly label: string;
+  readonly tooltip: string;
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Keep checkout semantics explicit in the experimental
+ * sidebar. Current checkouts show their live branch; dedicated worktrees show
+ * the ref they were created from, never their generated feature branch.
+ */
+export function resolvePhaseSidebarCheckoutMetadata(
+  thread: Pick<ThreadShell, "branch" | "worktreePath">,
+  vcsStatus: Pick<VcsStatusResult, "refName" | "baseRef" | "pr"> | null | undefined,
+): PhaseSidebarCheckoutMetadata {
+  if (thread.worktreePath) {
+    const baseRef = vcsStatus?.pr?.baseRef ?? vcsStatus?.baseRef ?? null;
+    return {
+      kind: "worktree",
+      label: baseRef ? `from ${baseRef}` : "Worktree",
+      tooltip: baseRef ? `Worktree started from ${baseRef}` : "Dedicated worktree",
+    };
+  }
+
+  const branch = vcsStatus?.refName ?? thread.branch;
+  return {
+    kind: "current",
+    label: branch ?? "Current checkout",
+    tooltip: branch ? `Current checkout on ${branch}` : "Current checkout",
+  };
+}
+
 export interface PhaseSidebarPhaseDefinition {
   readonly id: PhaseSidebarPhaseId;
   readonly label: string;

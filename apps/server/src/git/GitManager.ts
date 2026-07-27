@@ -803,6 +803,7 @@ export const make = Effect.gen(function* () {
     hasOriginRemote: false,
     isDefaultBranch: false,
     branch: null,
+    baseRef: null,
     upstreamRef: null,
     hasWorkingTreeChanges: false,
     workingTree: { files: [], insertions: 0, deletions: 0 },
@@ -827,6 +828,8 @@ export const make = Effect.gen(function* () {
       hasPrimaryRemote: details.hasOriginRemote,
       isDefaultRef: details.isDefaultBranch,
       refName: details.branch,
+      // T3-CUSTOM(expbkt3): Preserve the worktree origin for the experimental sidebar.
+      baseRef: details.baseRef,
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
       workingTree: details.workingTree,
     } satisfies VcsStatusLocalResult;
