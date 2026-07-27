@@ -3,9 +3,48 @@
  * permanent experimental T3 Conductor. Keeping policy here makes the small
  * upstream sidebar seam straightforward to merge and independently test.
  */
-import type { OrchestrationThreadShell, T3ConductorSettings } from "@t3tools/contracts";
+import {
+  ThreadId,
+  type OrchestrationThreadShell,
+  type T3ConductorSettings,
+} from "@t3tools/contracts";
 
 export const T3_CONDUCTOR_TITLE = "T3 Conductor";
+
+/**
+ * Produces one installation/workspace-scoped identity without relying on a
+ * settings round trip. Multiple tabs therefore converge on the same thread
+ * even when they all observe an empty setting during initial provisioning.
+ */
+export function deriveT3ConductorThreadId(environmentId: string, workspacePath: string): ThreadId {
+  const input = `${environmentId}\0${workspacePath.trim().replaceAll("\\", "/").replace(/\/+$/, "")}`;
+  const hashes = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  const multipliers = [0x01000193, 0x85ebca6b, 0xc2b2ae35, 0x27d4eb2f];
+
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    for (let hashIndex = 0; hashIndex < hashes.length; hashIndex += 1) {
+      hashes[hashIndex] = Math.imul(hashes[hashIndex]! ^ code, multipliers[hashIndex]!);
+      hashes[hashIndex] ^= hashes[hashIndex]! >>> 13;
+    }
+  }
+
+  const hex = hashes.map((hash) => (hash >>> 0).toString(16).padStart(8, "0")).join("");
+  return ThreadId.make(
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20)}`,
+  );
+}
+
+export function resolveT3ConductorThreadId(input: {
+  readonly configuredThreadId: string;
+  readonly environmentId: string;
+  readonly workspacePath: string;
+}): ThreadId {
+  const configuredThreadId = input.configuredThreadId.trim();
+  return configuredThreadId
+    ? ThreadId.make(configuredThreadId)
+    : deriveT3ConductorThreadId(input.environmentId, input.workspacePath);
+}
 
 export function isT3ConductorThread(
   conductor: T3ConductorSettings,

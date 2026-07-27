@@ -10,7 +10,7 @@ import {
   inferProjectTitleFromPath,
   normalizeProjectPathForComparison,
 } from "@t3tools/client-runtime/state/projects";
-import { ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import { type ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { CrownIcon, RefreshCwIcon, Settings2Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Equal from "effect/Equal";
@@ -32,13 +32,15 @@ import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { newMessageId, newProjectId, newThreadId } from "../../lib/utils";
+import { newMessageId, newProjectId } from "../../lib/utils";
 import { cn } from "../../lib/utils";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildT3ConductorBootstrapPrompt,
+  deriveT3ConductorThreadId,
+  resolveT3ConductorThreadId,
   resolveT3ConductorStatus,
   T3_CONDUCTOR_TITLE,
 } from "./T3Conductor.logic";
@@ -274,9 +276,18 @@ export function T3ConductorCard({
             input: { threadId: thread.id },
           });
           requireSuccess(archiveResult);
-          const nextThreadId = newThreadId();
+          const nextThreadId = deriveT3ConductorThreadId(primaryEnvironmentId, workspacePath);
           patchThreadId(nextThreadId);
-          await provision(nextThreadId);
+          const restoreResult = await unarchiveThread({
+            environmentId: primaryEnvironmentId,
+            input: { threadId: nextThreadId },
+          });
+          if (restoreResult._tag === "Failure") {
+            if (isAtomCommandInterrupted(restoreResult)) {
+              throw new Error("Connection interrupted while moving T3 Conductor.");
+            }
+            await provision(nextThreadId);
+          }
           return;
         }
 
@@ -342,39 +353,40 @@ export function T3ConductorCard({
         return;
       }
 
-      let targetThreadId: ThreadId | null = configuredThreadId
-        ? ThreadId.make(configuredThreadId)
-        : null;
-      if (targetThreadId) {
-        if (restoreAttemptedRef.current === targetThreadId) {
-          return;
-        }
-        restoreAttemptedRef.current = targetThreadId;
-        setOperationLabel("Restoring home");
-        const restoreResult = await unarchiveThread({
-          environmentId: primaryEnvironmentId,
-          input: { threadId: targetThreadId },
-        });
-        if (restoreResult._tag === "Success") {
-          return;
-        }
-        if (isAtomCommandInterrupted(restoreResult)) {
-          throw new Error("Connection interrupted while restoring T3 Conductor.");
-        }
-        restoreAttemptedRef.current = null;
-        targetThreadId = null;
+      const targetThreadId = resolveT3ConductorThreadId({
+        configuredThreadId,
+        environmentId: primaryEnvironmentId,
+        workspacePath,
+      });
+      if (restoreAttemptedRef.current === targetThreadId) {
+        return;
       }
-
-      if (!targetThreadId) {
-        targetThreadId = newThreadId();
+      restoreAttemptedRef.current = targetThreadId;
+      if (!configuredThreadId) {
         patchThreadId(targetThreadId);
       }
+
+      setOperationLabel("Restoring home");
+      const restoreResult = await unarchiveThread({
+        environmentId: primaryEnvironmentId,
+        input: { threadId: targetThreadId },
+      });
+      if (restoreResult._tag === "Success") {
+        return;
+      }
+      if (isAtomCommandInterrupted(restoreResult)) {
+        throw new Error("Connection interrupted while restoring T3 Conductor.");
+      }
+
+      // Keep the reserved id after a failed restore. Generating a replacement
+      // here caused every delayed projection event to create another thread.
       setOperationLabel("Taking the podium");
       await provision(targetThreadId);
     })()
       .catch((cause: unknown) => {
         syncedSignatureRef.current = null;
         restartedSessionRef.current = null;
+        restoreAttemptedRef.current = null;
         setError(cause instanceof Error ? cause.message : "T3 Conductor could not be started.");
       })
       .finally(() => {

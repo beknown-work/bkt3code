@@ -46,6 +46,8 @@ T3 Conductor is one durable, primary-environment thread whose id is stored in
 - provisions the configured workspace as a normal T3 project when needed;
 - initializes the agent with its permanent coordination identity and native T3
   MCP mission;
+- reserves one deterministic installation/workspace identity before provisioning,
+  so delayed projections and concurrent browser tabs cannot create duplicates;
 - keeps provider/model traits, runtime access, and interaction mode synchronized
   with Experimental settings;
 - removes the thread from ordinary lifecycle groups and archive affordances;

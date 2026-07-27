@@ -6,9 +6,31 @@ import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 
 import {
   buildT3ConductorBootstrapPrompt,
+  deriveT3ConductorThreadId,
   isT3ConductorThread,
+  resolveT3ConductorThreadId,
   resolveT3ConductorStatus,
 } from "./T3Conductor.logic";
+
+describe("T3 Conductor thread identity", () => {
+  it("converges across callers and changes only with its environment or workspace", () => {
+    const first = deriveT3ConductorThreadId("primary", "/workspace/t3/");
+
+    expect(deriveT3ConductorThreadId("primary", "/workspace/t3")).toBe(first);
+    expect(deriveT3ConductorThreadId("secondary", "/workspace/t3")).not.toBe(first);
+    expect(deriveT3ConductorThreadId("primary", "/workspace/other")).not.toBe(first);
+  });
+
+  it("preserves an already provisioned durable identity", () => {
+    expect(
+      resolveT3ConductorThreadId({
+        configuredThreadId: "existing-conductor",
+        environmentId: "primary",
+        workspacePath: "/workspace/t3",
+      }),
+    ).toBe("existing-conductor");
+  });
+});
 
 describe("buildT3ConductorBootstrapPrompt", () => {
   it("binds the durable identity, workspace, native tools, and operator personality", () => {
