@@ -401,10 +401,7 @@ const RuntimeServicesLive = PlannotatorManager.layer.pipe(
 
 // T3-CUSTOM(expbkt3): Build one memoized user profile + credential registry
 // pair and provide both to the native T3 MCP transport and upstream proxy.
-const PersonalMcpRouteServicesLive = Layer.mergeAll(
-  UserMcpProfileStoreLive,
-  McpSessionRegistry.layer.pipe(Layer.provide(UserMcpProfileStoreLive)),
-);
+const PersonalMcpRouteServicesLive = McpSessionRegistry.layer;
 
 const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
   plannotatorProxyRouteLayer,
@@ -436,9 +433,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
     staticAndDevRouteLayer,
-    // T3-CUSTOM(expbkt3): Personal settings RPCs stay self-contained at the
-    // single upstream WebSocket mounting seam.
-    websocketRpcRouteLayer.pipe(Layer.provide(UserMcpProfileStoreLive)),
+    websocketRpcRouteLayer,
   ),
   PlannotatorAndMcpRoutesLive,
 ).pipe(

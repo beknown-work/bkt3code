@@ -30,6 +30,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   EditorId,
+  emptyPersonalMcpProfile,
 } from "@t3tools/contracts";
 import {
   computeDpopAccessTokenHash,
@@ -117,6 +118,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -548,6 +550,21 @@ const buildAppUnderTest = (options?: {
     }).pipe(
       Layer.provide(PlannotatorManager.layer),
       Layer.provide(OrchestrationCommandDispatcher.layer),
+      // T3-CUSTOM(expbkt3): Router tests do not exercise personal credential
+      // persistence. Keep the new RPC dependency fail-closed and in memory.
+      Layer.provide(
+        Layer.mock(UserMcpProfileStore.UserMcpProfileStore)({
+          get: (userId) =>
+            Effect.succeed(emptyPersonalMcpProfile(userId, "2026-07-27T00:00:00.000Z")),
+          update: () => Effect.die("Unexpected personal MCP profile update in router test."),
+          rotateExternalToken: () =>
+            Effect.die("Unexpected personal MCP token rotation in router test."),
+          revokeExternalToken: (userId) =>
+            Effect.succeed(emptyPersonalMcpProfile(userId, "2026-07-27T00:00:00.000Z")),
+          resolveExternalToken: () => Effect.succeed(undefined),
+          getIntegrationCredential: () => Effect.succeed(undefined),
+        }),
+      ),
     );
     const servedRoutesLayer = servedRoutesWithDispatcherLayer.pipe(
       Layer.provide(

@@ -361,3 +361,10 @@ export const getActiveIntegrationCredential = (
   activeUserMcpProfileStore
     ? activeUserMcpProfileStore.getIntegrationCredential(userId, integrationId)
     : Effect.succeed(undefined);
+
+export const resolveActiveExternalToken = (
+  rawToken: string,
+): Effect.Effect<ResolvedPersonalMcpToken | undefined, PersonalMcpSettingsError> =>
+  activeUserMcpProfileStore
+    ? activeUserMcpProfileStore.resolveExternalToken(rawToken)
+    : Effect.succeed(undefined);

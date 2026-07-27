@@ -290,7 +290,6 @@ let activeMcpSessionRegistry: McpSessionRegistryShape | undefined;
 const make = Effect.acquireRelease(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const userProfiles = yield* UserMcpProfileStore.UserMcpProfileStore;
     return yield* makeWithOptions({
       loadExternalMcpSettings: () =>
         serverSettings.getSettings.pipe(
@@ -298,9 +297,13 @@ const make = Effect.acquireRelease(
           Effect.orElseSucceed(() => ({ enabled: false, apiKey: "" })),
         ),
       loadPersonalProfile: (userId) =>
-        userProfiles.get(userId).pipe(Effect.orElseSucceed(() => undefined)),
+        UserMcpProfileStore.getActivePersonalMcpProfile(userId).pipe(
+          Effect.orElseSucceed(() => undefined),
+        ),
       resolveExternalUserToken: (token) =>
-        userProfiles.resolveExternalToken(token).pipe(Effect.orElseSucceed(() => undefined)),
+        UserMcpProfileStore.resolveActiveExternalToken(token).pipe(
+          Effect.orElseSucceed(() => undefined),
+        ),
     });
   }).pipe(
     Effect.tap((registry) =>
