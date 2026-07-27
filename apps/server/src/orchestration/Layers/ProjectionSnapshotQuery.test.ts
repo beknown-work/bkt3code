@@ -705,6 +705,20 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(shellSnapshot.threads[0]?.settledOverride, "settled");
       assert.equal(shellSnapshot.threads[0]?.settledAt, "2026-04-06T00:00:04.000Z");
 
+      // The project-scoped shell query is also used by team-mode authorization
+      // when project access is inherited from a visible thread. Keep its SELECT
+      // aliases aligned with ProjectionThreadDbRowSchema so creating a new
+      // thread cannot fail authorization while decoding an existing one.
+      const projectThreads = yield* snapshotQuery.listThreadShellsByProjectId(
+        asProjectId("project-settled-test"),
+      );
+      assert.deepEqual(
+        projectThreads.map((thread) => thread.id),
+        [ThreadId.make("thread-settled")],
+      );
+      assert.equal(projectThreads[0]?.settledOverride, "settled");
+      assert.equal(projectThreads[0]?.settledAt, "2026-04-06T00:00:04.000Z");
+
       // And the full command read model carries them too.
       const readModel = yield* snapshotQuery.getCommandReadModel();
       const thread = readModel.threads.find(
