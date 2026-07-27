@@ -18,7 +18,10 @@ import type {
   PlannotatorSession,
 } from "./PlannotatorManager.ts";
 
-type NativePlanManager = Pick<PlannotatorManager["Service"], "start" | "discard" | "list">;
+type NativePlanManager = Pick<
+  PlannotatorManager["Service"],
+  "start" | "discard" | "list" | "reopen"
+>;
 type NativePlanDispatcher = Pick<OrchestrationCommandDispatcher["Service"], "dispatch">;
 
 export interface NativePlanBridgeDependencies {
@@ -36,13 +39,8 @@ export interface NativePlanBridgeInput {
 export type NativePlanBridgeResult =
   | { readonly status: "skipped" }
   | { readonly status: "already-attached"; readonly session: PlannotatorSession }
+  | { readonly status: "reopened"; readonly session: PlannotatorSession }
   | { readonly status: "attached"; readonly session: PlannotatorSession };
-
-const ACTIVE_REVIEW_STATUSES = new Set<PlannotatorSession["status"]>([
-  "starting",
-  "running",
-  "applying",
-]);
 
 /**
  * Attach Plannotator to the same proposed-plan record created by T3's native
@@ -63,38 +61,47 @@ export const attachNativePlanReview = EffectRuntime.fn("attachNativePlanReview")
   const sessions = yield* dependencies.manager.list(threadId);
   const attachedSession = markerPath
     ? sessions.find(
-        (session) =>
-          session.proxyPath === markerPath &&
-          session.planId === proposedPlan.id &&
-          ACTIVE_REVIEW_STATUSES.has(session.status),
+        (session) => session.proxyPath === markerPath && session.planId === proposedPlan.id,
       )
     : undefined;
   if (attachedSession) {
     return { status: "already-attached", session: attachedSession } as const;
   }
 
-  // An unmarked upsert for an existing plan id means the provider revised the
-  // plan. Stop the old live review so Plannotator opens the current content.
-  const obsoleteActiveSessions = sessions.filter(
-    (session) => session.planId === proposedPlan.id && ACTIVE_REVIEW_STATUSES.has(session.status),
-  );
-  yield* EffectRuntime.forEach(
-    obsoleteActiveSessions,
-    (session) => dependencies.manager.discard(session.id),
-    { concurrency: 2, discard: true },
-  );
-
   const content = withoutPlannotatorPlanMarker(proposedPlan.planMarkdown);
   if (!content.trim()) {
     return { status: "skipped" } as const;
   }
 
-  const session = yield* dependencies.manager.start({
-    threadId,
-    planId: proposedPlan.id,
-    format: "md",
-    content,
-  });
+  // Native provider revisions normally arrive as a new turn-scoped plan id.
+  // Reuse the latest feedback lineage (or the same plan's live review) so the
+  // token, plan path, and accumulated annotations stay durable across rounds.
+  const reusableSession = sessions
+    .filter(
+      (session) =>
+        session.planId === proposedPlan.id ||
+        (session.feedback.trim().length > 0 &&
+          session.status !== "approved" &&
+          session.status !== "denied"),
+    )
+    .toSorted(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.createdAt.localeCompare(left.createdAt),
+    )
+    .at(0);
+  const session = reusableSession
+    ? yield* dependencies.manager.reopen({
+        tokenOrId: reusableSession.id,
+        planId: proposedPlan.id,
+        content,
+      })
+    : yield* dependencies.manager.start({
+        threadId,
+        planId: proposedPlan.id,
+        format: "md",
+        content,
+      });
   const [uuid, updatedAt] = yield* EffectRuntime.all([dependencies.randomUuid, dependencies.now]);
 
   yield* dependencies.dispatcher
@@ -109,9 +116,16 @@ export const attachNativePlanReview = EffectRuntime.fn("attachNativePlanReview")
       },
       createdAt: updatedAt,
     })
-    .pipe(EffectRuntime.tapError(() => dependencies.manager.discard(session.id)));
+    .pipe(
+      EffectRuntime.tapError(() =>
+        reusableSession ? EffectRuntime.void : dependencies.manager.discard(session.id),
+      ),
+    );
 
-  return { status: "attached", session } as const;
+  return {
+    status: reusableSession ? ("reopened" as const) : ("attached" as const),
+    session,
+  };
 });
 
 /**

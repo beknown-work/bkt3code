@@ -125,9 +125,9 @@ projection, and WebSocket behavior.
 
 The server also reconciles the newest actionable plan in every active session at
 startup. That gives plans created before this integration a review action and
-replaces a review process that did not survive a restart. Archived and deleted
+reopens a review process that did not survive a restart. Archived and deleted
 sessions are skipped. Repeated events are coalesced by session and plan ID, and
-an already-running attached review is reused.
+an already-attached review is reused.
 
 `t3_submit_plan` remains available for agents operating outside T3 or for callers
 that need to submit an HTML plan. It accepts:
@@ -158,17 +158,28 @@ Decisions return through T3's proxy and durable command path:
   sticky Plan composer state and close the completed iframe.
 - **Request changes / annotations:** combines anchored annotations into feedback
   and starts a plan-mode revision turn without changing the persisted mode. The
-  planning agent is explicitly told not to modify files while revising.
+  planning agent is explicitly told not to modify files while revising. The next
+  native plan revision reuses the same review ID, opaque URL, and plan file.
 - **Deny without feedback:** records the declined review and does not start a
   turn or change mode.
+
+Submitted inline comments, deletion requests, and global comments are stored in
+the review manifest. Opening **Review →** later relaunches the same durable
+review and replays that cumulative annotation history before the document is
+shown. A reviewer can add and submit another round; equivalent replayed comments
+are de-duplicated while genuinely new comments are appended. Plannotator's
+unsubmitted crash-recovery draft remains available after an interrupted review,
+but a successfully captured round clears that draft so it is not offered as a
+duplicate restoration.
 
 Review manifests and plan files live under
 `<state-dir>/plannotator/{sessions,plans}`. Process logs live under
 `<logs-dir>/plannotator`. Files are created with owner-only permissions. At
 startup, a manifest whose process is no longer reachable is marked `exited`
 instead of silently appearing live. The newest actionable native plan is then
-reconciled to a fresh review process and receives a new opaque path. Use
-`t3_list_plannotator_reviews` to retrieve diagnostic paths and status.
+reconciled to its durable review identity and existing opaque path. Use
+`t3_list_plannotator_reviews` to retrieve diagnostic paths, cumulative
+`annotationHistory`, and status.
 
 ## Security and operational notes
 

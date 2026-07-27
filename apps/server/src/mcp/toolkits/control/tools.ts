@@ -416,7 +416,7 @@ export const T3SubmitPlanTool = mutatingTool(
 export const T3ListPlannotatorReviewsTool = readonlyTool(
   Tool.make("t3_list_plannotator_reviews", {
     description:
-      "List Plannotator review gates with their T3 session, plan, proxy URL, process state, decision, feedback, and diagnostic paths. In-session callers see only their own session; external operators may filter by sessionId or inspect all reviews.",
+      "List durable Plannotator review gates with their T3 session, plan, stable proxy URL, process state, decision, feedback, cumulative annotation history, and diagnostic paths. In-session callers see only their own session; external operators may filter by sessionId or inspect all reviews.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       plannotatorSessionId: Schema.optional(

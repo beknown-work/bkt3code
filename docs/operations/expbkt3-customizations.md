@@ -64,6 +64,22 @@ accepts either `TEAM-123` or a complete `linear.app` issue URL. While the
 Conductor thread is open, its isolated top-bar control can link, update, open,
 or remove that ticket; ordinary session headers are unchanged.
 
+## Durable Plannotator reviews
+
+A native T3 plan and its later plan-mode revisions share one Plannotator review
+identity. `PlannotatorManager` keeps the token, plan path, manifest, and captured
+annotation history stable, while `NativePlanBridge` associates the next revised
+native plan ID with that lineage. Opening the iframe deliberately relaunches a
+completed or stopped process and replays stored inline, deletion, and global
+annotations through Plannotator's external-annotation API.
+
+Only a submitted review round is added to `annotationHistory`; unsubmitted
+Plannotator drafts retain their normal crash-recovery behavior. Review history
+is de-duplicated by annotation content because Plannotator assigns new internal
+IDs when saved annotations are replayed. Keep lifecycle changes inside
+`apps/server/src/plannotator/` and the existing focused-surface seam so upstream
+plan rendering remains isolated.
+
 ## Upstream merge workflow
 
 1. Fetch and merge `upstream/main` into the experimental branch before feature
