@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -57,3 +58,20 @@ jobs:
 
       - name: Build server bundle
         run: pnpm exec vp run --filter t3 build:bundle
+
+      # T3-CUSTOM(expbkt3): The production host installs this verified artifact
+      # instead of rebuilding application code on the server.
+      - name: Prepare experimental deployment artifact
+        run: |
+          mkdir -p deployment-artifact/apps/web deployment-artifact/apps/server
+          cp -a apps/web/dist deployment-artifact/apps/web/
+          cp -a apps/server/dist deployment-artifact/apps/server/
+          printf '%s\n' "$GITHUB_SHA" > deployment-artifact/SHA
+
+      - name: Publish experimental deployment artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: expbkt3-${{ github.sha }}
+          path: deployment-artifact
+          if-no-files-found: error
+          retention-days: 7

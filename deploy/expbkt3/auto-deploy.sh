@@ -35,8 +35,11 @@ RUNS_JSON="$(curl --connect-timeout 5 --max-time 20 -fsS \
 RUN_CONCLUSION="$(jq -r --arg sha "$REMOTE_SHA" \
   '[.workflow_runs[] | select(.head_sha == $sha)][0].conclusion // empty' \
   <<<"$RUNS_JSON")"
+RUN_ID="$(jq -r --arg sha "$REMOTE_SHA" \
+  '[.workflow_runs[] | select(.head_sha == $sha)][0].id // empty' \
+  <<<"$RUNS_JSON")"
 
-if [[ -z "$RUN_CONCLUSION" ]]; then
+if [[ -z "$RUN_CONCLUSION" || -z "$RUN_ID" ]]; then
   echo "GitHub validation for $REMOTE_SHA is not finished yet; deployment deferred."
   exit 0
 fi
@@ -47,4 +50,4 @@ if [[ "$RUN_CONCLUSION" != "success" ]]; then
 fi
 
 echo "GitHub validation succeeded for $REMOTE_SHA; starting expbkt3 deployment."
-exec "$REPO_DIR/deploy/expbkt3/deploy.sh" "$REMOTE_SHA"
+exec "$REPO_DIR/deploy/expbkt3/deploy.sh" "$REMOTE_SHA" "$RUN_ID"
