@@ -11,10 +11,11 @@ import {
   PersonalMcpSettingsError,
   PersonalMcpIntegration,
   type PersonalMcpIntegrationId,
-  type UserId,
+  UserId,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -32,6 +33,8 @@ const StoredProfile = Schema.Struct({
   integrations: Schema.Array(PersonalMcpIntegration),
 });
 type StoredProfile = typeof StoredProfile.Type;
+const StoredProfileJson = Schema.fromJsonString(StoredProfile);
+const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 interface ProfileRow {
   readonly userId: string;
@@ -64,11 +67,7 @@ const secretName = (userId: UserId, integrationId: PersonalMcpIntegrationId): st
 const parseStoredProfile = Effect.fn("UserMcpProfileStore.parseStoredProfile")(function* (
   profileJson: string,
 ) {
-  const parsed = yield* Effect.try({
-    try: () => JSON.parse(profileJson),
-    catch: (cause) => fail("decode-profile-json", cause),
-  });
-  return yield* Schema.decodeUnknownEffect(StoredProfile)(parsed).pipe(
+  return yield* Schema.decodeUnknownEffect(StoredProfileJson)(profileJson).pipe(
     Effect.mapError((cause) => fail("decode-profile", cause)),
   );
 });
@@ -149,7 +148,7 @@ export const layer = Layer.effect(
       row?: ProfileRow,
     ) {
       const stored = row ? yield* parseStoredProfile(row.profileJson) : defaultStoredProfile();
-      const now = new Date().toISOString();
+      const now = yield* nowIso;
       return PersonalMcpProfile.make({
         userId,
         conductor: stored.conductor,
@@ -170,8 +169,10 @@ export const layer = Layer.effect(
       userId: UserId,
       stored: StoredProfile,
     ) {
-      const updatedAt = new Date().toISOString();
-      const profileJson = JSON.stringify(stored);
+      const updatedAt = yield* nowIso;
+      const profileJson = yield* Schema.encodeEffect(StoredProfileJson)(stored).pipe(
+        Effect.mapError((cause) => fail("encode-profile", cause)),
+      );
       yield* sql`
         INSERT INTO user_mcp_profiles (user_id, profile_json, updated_at)
         VALUES (${userId}, ${profileJson}, ${updatedAt})
@@ -246,12 +247,13 @@ export const layer = Layer.effect(
       const rawToken = `t3usr_${NodeCrypto.randomBytes(32).toString("base64url")}`;
       const tokenHash = hash(rawToken);
       const tokenPrefix = `${rawToken.slice(0, 14)}…`;
-      const now = new Date().toISOString();
+      const now = yield* nowIso;
       yield* persistStored(userId, {
         conductor: current.conductor,
         externalAccessEnabled: current.externalAccessEnabled,
         integrations: current.integrations,
       });
+      const revokedAt = yield* nowIso;
       yield* sql`
         UPDATE user_mcp_profiles
         SET external_token_hash = ${tokenHash},
@@ -279,7 +281,7 @@ export const layer = Layer.effect(
             external_token_prefix = NULL,
             token_created_at = NULL,
             token_last_used_at = NULL,
-            updated_at = ${new Date().toISOString()}
+            updated_at = ${revokedAt}
         WHERE user_id = ${userId}
       `.pipe(Effect.mapError((cause) => fail("revoke-external-token", cause)));
       return yield* get(userId);
@@ -307,9 +309,10 @@ export const layer = Layer.effect(
       if (!row) return undefined;
       const profile = yield* materialize(UserId.make(row.userId), row);
       if (!profile.externalAccessEnabled) return undefined;
+      const lastUsedAt = yield* nowIso;
       yield* sql`
         UPDATE user_mcp_profiles
-        SET token_last_used_at = ${new Date().toISOString()}
+        SET token_last_used_at = ${lastUsedAt}
         WHERE user_id = ${row.userId}
       `.pipe(Effect.mapError((cause) => fail("touch-external-token", cause)));
       return {

@@ -127,11 +127,13 @@ export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
         typeof payload.params.name === "string"
           ? payload.params.name
           : null;
+      const requestId =
+        payload !== null && typeof payload === "object" && "id" in payload ? payload.id : null;
       if (toolName !== null && !integration.allowedTools.includes(toolName)) {
         return HttpServerResponse.jsonUnsafe(
           {
             jsonrpc: "2.0",
-            id: "id" in payload ? payload.id : null,
+            id: requestId,
             error: { code: -32601, message: `Tool '${toolName}' is not allowed for this user.` },
           },
           { status: 200, headers: { "cache-control": "no-store" } },

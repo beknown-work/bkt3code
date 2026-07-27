@@ -394,6 +394,13 @@ const RuntimeServicesLive = PlannotatorManager.layer.pipe(
   Layer.provideMerge(RuntimeServicesWithoutPlannotatorLive),
 );
 
+// T3-CUSTOM(expbkt3): Build one memoized user profile + credential registry
+// pair and provide both to the native T3 MCP transport and upstream proxy.
+const PersonalMcpRouteServicesLive = Layer.mergeAll(
+  UserMcpProfileStore.layer,
+  McpSessionRegistry.layer.pipe(Layer.provide(UserMcpProfileStore.layer)),
+);
+
 const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
   plannotatorProxyRouteLayer,
   mcpUpstreamProxyRouteLayer,
@@ -401,7 +408,7 @@ const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
 ).pipe(
   // One registry instance authenticates both the native and upstream MCP
   // routes; separate instances would not recognize each other's run tokens.
-  Layer.provide(McpSessionRegistry.layer),
+  Layer.provide(PersonalMcpRouteServicesLive),
   Layer.provide(ClerkDirectoryLive),
   Layer.provide(OrchestrationAccessControlLive),
 );

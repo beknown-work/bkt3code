@@ -20,6 +20,7 @@ import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSup
 import { ClerkDirectory } from "../../../auth/ClerkDirectory.ts";
 import { ServerConfig } from "../../../config.ts";
 import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
+import { OrchestrationAccessControl } from "../../../orchestration/Services/AccessControl.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   PlannotatorManager,
@@ -42,6 +43,7 @@ const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ProjectionSnapshotQuery,
   OrchestrationCommandDispatcher,
+  OrchestrationAccessControl,
   ThreadExecutionSupervisor,
   Crypto.Crypto,
 ];

@@ -402,6 +402,7 @@ const handlers = {
       input.includeArchived === true && hasUserWideScope(scope)
         ? yield* query.getArchivedShellSnapshot().pipe(mapControlError(operation))
         : null;
+    const actorUserId = scope.actorUserId;
     const activeCounts = new Map<string, number>();
     for (const thread of snapshot.threads) {
       activeCounts.set(thread.projectId, (activeCounts.get(thread.projectId) ?? 0) + 1);
@@ -411,14 +412,14 @@ const handlers = {
         .filter(
           (project) =>
             McpInvocationContext.isExternalMcpOperator(scope) ||
-            (scope.actorUserId !== null
-              ? project.ownerUserId === scope.actorUserId ||
-                project.memberUserIds.includes(scope.actorUserId) ||
+            (actorUserId !== null
+              ? project.ownerUserId === actorUserId ||
+                project.memberUserIds.includes(actorUserId) ||
                 snapshot.threads.some(
                   (thread) =>
                     thread.projectId === project.id &&
-                    (thread.ownerUserId === scope.actorUserId ||
-                      thread.memberUserIds.includes(scope.actorUserId)),
+                    (thread.ownerUserId === actorUserId ||
+                      thread.memberUserIds.includes(actorUserId)),
                 )
               : snapshot.threads.some(
                   (thread) => thread.id === scope.threadId && thread.projectId === project.id,
