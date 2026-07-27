@@ -334,6 +334,14 @@ export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =
 export const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void;
 
+// T3-CUSTOM(expbkt3): HTTP routes and provider startup must use the exact same
+// registry instance. Missing startup state fails closed instead of creating a
+// second route-local credential universe.
+export const resolveActiveMcpCredential = (
+  rawToken: string,
+): Effect.Effect<McpInvocationContext.McpInvocationScope | undefined> =>
+  activeMcpSessionRegistry ? activeMcpSessionRegistry.resolve(rawToken) : Effect.succeed(undefined);
+
 /** Exposed for tests. */
 export const __testing = {
   make: makeWithOptions,

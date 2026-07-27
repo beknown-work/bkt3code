@@ -408,7 +408,7 @@ const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
 ).pipe(
   // One registry instance authenticates both the native and upstream MCP
   // routes; separate instances would not recognize each other's run tokens.
-  Layer.provide(PersonalMcpRouteServicesLive),
+  Layer.provideMerge(PersonalMcpRouteServicesLive),
   Layer.provide(ClerkDirectoryLive),
   Layer.provide(OrchestrationAccessControlLive),
 );

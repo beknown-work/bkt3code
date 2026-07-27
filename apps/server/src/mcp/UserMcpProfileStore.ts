@@ -253,7 +253,6 @@ export const layer = Layer.effect(
         externalAccessEnabled: current.externalAccessEnabled,
         integrations: current.integrations,
       });
-      const revokedAt = yield* nowIso;
       yield* sql`
         UPDATE user_mcp_profiles
         SET external_token_hash = ${tokenHash},
@@ -275,6 +274,7 @@ export const layer = Layer.effect(
         externalAccessEnabled: current.externalAccessEnabled,
         integrations: current.integrations,
       });
+      const revokedAt = yield* nowIso;
       yield* sql`
         UPDATE user_mcp_profiles
         SET external_token_hash = NULL,

@@ -66,8 +66,7 @@ export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
     const rawToken = request.headers.authorization?.startsWith("Bearer ")
       ? request.headers.authorization.slice("Bearer ".length).trim()
       : "";
-    const registry = yield* McpSessionRegistry.McpSessionRegistry;
-    const invocation = yield* registry.resolve(rawToken);
+    const invocation = yield* McpSessionRegistry.resolveActiveMcpCredential(rawToken);
     if (
       !invocation ||
       invocation.principal !== "provider-session" ||

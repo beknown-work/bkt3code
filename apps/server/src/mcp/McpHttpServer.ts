@@ -70,26 +70,22 @@ export const normalizeMcpHttpResponse = (
     : response;
 };
 
-const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
-  Effect.map(
-    (registry): McpAuthMiddleware =>
-      Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const authorization = request.headers.authorization;
-        const token =
-          authorization?.startsWith("Bearer ") === true
-            ? authorization.slice("Bearer ".length).trim()
-            : "";
-        const invocation = yield* registry.resolve(token);
-        if (!invocation) return unauthorized;
-        return yield* httpEffect.pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.map(normalizeMcpHttpResponse),
-        );
-      }),
-  ),
-  Effect.withSpan("McpHttpServer.makeAuthMiddleware"),
-);
+const makeMcpAuthMiddleware = Effect.succeed(
+  Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const authorization = request.headers.authorization;
+    const token =
+      authorization?.startsWith("Bearer ") === true
+        ? authorization.slice("Bearer ".length).trim()
+        : "";
+    const invocation = yield* McpSessionRegistry.resolveActiveMcpCredential(token);
+    if (!invocation) return unauthorized;
+    return yield* httpEffect.pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+      Effect.map(normalizeMcpHttpResponse),
+    );
+  }) satisfies McpAuthMiddleware,
+).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
 
 const McpAuthMiddlewareLive = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
