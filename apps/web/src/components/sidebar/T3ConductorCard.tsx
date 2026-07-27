@@ -29,6 +29,7 @@ import {
 } from "../../providerInstances";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useProjects, useThreadShells } from "../../state/entities";
+import { useCurrentUserId } from "../../state/identity";
 import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
@@ -84,10 +85,27 @@ export function T3ConductorCard({
 }) {
   const settings = usePrimarySettings();
   const { profile, update } = usePersonalMcpProfile();
-  const conductor = profile?.conductor ?? settings.experimental.t3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const currentUserId = useCurrentUserId();
   const projects = useProjects();
   const threads = useThreadShells();
+  const legacyConductor = settings.experimental.t3Conductor;
+  const legacyThread = threads.find(
+    (candidate) =>
+      candidate.environmentId === primaryEnvironmentId && candidate.id === legacyConductor.threadId,
+  );
+  // T3-CUSTOM(expbkt3): Claim the one pre-per-user Conductor only for its
+  // existing owner (or the single local user). This migrates experimental
+  // deployments without letting another signed-in team member inherit it.
+  const shouldMigrateLegacyConductor =
+    profile !== null &&
+    !profile.conductor.threadId.trim() &&
+    !profile.conductor.workspacePath.trim() &&
+    Boolean(legacyConductor.threadId.trim() || legacyConductor.workspacePath.trim()) &&
+    (currentUserId === null || legacyThread?.ownerUserId === currentUserId);
+  const conductor = shouldMigrateLegacyConductor
+    ? legacyConductor
+    : (profile?.conductor ?? legacyConductor);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const archiveThread = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
@@ -112,6 +130,17 @@ export function T3ConductorCard({
   const stoppedWhileDisabledRef = useRef<string | null>(null);
   const restartedSessionRef = useRef<string | null>(null);
   const restoreAttemptedRef = useRef<string | null>(null);
+  const legacyMigrationStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (!profile || !shouldMigrateLegacyConductor || legacyMigrationStartedRef.current) return;
+    legacyMigrationStartedRef.current = true;
+    void update({
+      conductor: legacyConductor,
+      externalAccessEnabled: profile.externalAccessEnabled,
+      integrations: profile.integrations,
+    });
+  }, [legacyConductor, profile, shouldMigrateLegacyConductor, update]);
 
   const configuredThreadId = conductor.threadId.trim();
   const thread =

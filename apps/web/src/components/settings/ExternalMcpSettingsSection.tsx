@@ -2,10 +2,11 @@
  * T3-CUSTOM(expbkt3): Per-user external T3 access and managed upstream MCP
  * integrations. Secret values are write-only and never returned by T3.
  */
-import type {
-  PersonalMcpAuthMode,
-  PersonalMcpIntegration,
-  PersonalMcpIntegrationUpdate,
+import {
+  ProviderInstanceId,
+  type PersonalMcpAuthMode,
+  type PersonalMcpIntegration,
+  type PersonalMcpIntegrationUpdate,
 } from "@t3tools/contracts";
 import { CopyIcon, KeyRoundIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -403,7 +404,8 @@ export function ExternalMcpSettingsSection() {
                       providerInstanceIds: event.target.value
                         .split(",")
                         .map((value) => value.trim())
-                        .filter(Boolean) as PersonalMcpIntegration["providerInstanceIds"],
+                        .filter(Boolean)
+                        .map(ProviderInstanceId.make),
                     }),
                   )
                 }

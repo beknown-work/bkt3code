@@ -219,6 +219,14 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       });
       if (providerScope) return providerScope;
 
+      // T3-CUSTOM(expbkt3): The server-wide switch controls all long-lived
+      // external credentials. Short-lived ACP credentials above remain
+      // available so native in-session T3 tools keep working when it is off.
+      const externalSettings = yield* (
+        options.loadExternalMcpSettings?.() ?? Effect.succeed({ enabled: false, apiKey: "" })
+      );
+      if (!externalSettings.enabled) return undefined;
+
       const externalUser =
         options.resolveExternalUserToken === undefined
           ? undefined
@@ -237,11 +245,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         } satisfies McpInvocationContext.McpInvocationScope;
       }
 
-      const externalSettings = yield* (
-        options.loadExternalMcpSettings?.() ?? Effect.succeed({ enabled: false, apiKey: "" })
-      );
       if (
-        !externalSettings.enabled ||
         externalSettings.apiKey.length < 24 ||
         !tokenHashesMatch(yield* hashToken(externalSettings.apiKey), tokenHash)
       ) {
