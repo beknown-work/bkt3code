@@ -176,18 +176,33 @@ export function T3ConductorCard({
 
   const patchThreadId = useCallback(
     async (threadId: string) => {
-      if (!profile) return null;
-      return await update({
+      if (!profile) {
+        throw new Error("Your personal T3 profile is still loading.");
+      }
+      const updated = await update({
         conductor: { ...conductor, threadId },
         externalAccessEnabled: profile.externalAccessEnabled,
         integrations: profile.integrations,
       });
+      if (!updated) {
+        throw new Error("T3 could not save the personal Conductor session.");
+      }
+      return updated;
     },
     [conductor, profile, update],
   );
 
   useEffect(() => {
-    if (!primaryEnvironmentId || !shellReady || inFlightRef.current) {
+    // T3-CUSTOM(expbkt3): Never start an ACP until its user-scoped Conductor
+    // row (including the durable thread id) is committed. This is what lets
+    // McpSessionRegistry grant t3.session.create on the very first generation.
+    if (
+      !profile ||
+      shouldMigrateLegacyConductor ||
+      !primaryEnvironmentId ||
+      !shellReady ||
+      inFlightRef.current
+    ) {
       return;
     }
 
@@ -432,6 +447,7 @@ export function T3ConductorCard({
     primaryEnvironmentId,
     projects,
     patchThreadId,
+    profile,
     resolvedSelection,
     restartSession,
     retryGeneration,
@@ -440,6 +456,7 @@ export function T3ConductorCard({
     shellReady,
     startTurn,
     stopSession,
+    shouldMigrateLegacyConductor,
     thread,
     threadProject,
     unarchiveThread,
