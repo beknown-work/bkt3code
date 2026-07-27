@@ -351,7 +351,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       ServerSecretStore.layer,
-      UserMcpProfileStore.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+      UserMcpProfileStore.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        // Reusing this layer value shares the already-memoized SQLite runtime;
+        // it does not create a second database connection or migration graph.
+        Layer.provide(PersistenceLayerLive),
+      ),
     ),
   ),
   Layer.provideMerge(
