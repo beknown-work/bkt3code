@@ -7,13 +7,8 @@
  */
 import * as Schema from "effect/Schema";
 
-import {
-  IsoDateTime,
-  ProviderInstanceId,
-  TrimmedNonEmptyString,
-  TrimmedString,
-  UserId,
-} from "./baseSchemas.ts";
+import { IsoDateTime, TrimmedNonEmptyString, TrimmedString, UserId } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 import { DEFAULT_T3_CONDUCTOR_PERSONALITY, T3ConductorSettings } from "./settings.ts";
 
 export const PersonalMcpAuthMode = Schema.Literals([
