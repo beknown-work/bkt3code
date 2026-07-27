@@ -24,8 +24,8 @@ export function deriveT3ConductorThreadId(environmentId: string, workspacePath: 
   for (let index = 0; index < input.length; index += 1) {
     const code = input.charCodeAt(index);
     for (let hashIndex = 0; hashIndex < hashes.length; hashIndex += 1) {
-      hashes[hashIndex] = Math.imul(hashes[hashIndex]! ^ code, multipliers[hashIndex]!);
-      hashes[hashIndex] ^= hashes[hashIndex]! >>> 13;
+      const multiplied = Math.imul(hashes[hashIndex]! ^ code, multipliers[hashIndex]!);
+      hashes[hashIndex] = multiplied ^ (multiplied >>> 13);
     }
   }
 
