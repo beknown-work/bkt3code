@@ -20,6 +20,9 @@ import { ThreadMembersControl } from "../members/ThreadMembersControl";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
+// T3-CUSTOM(expbkt3): BEGIN — isolated Conductor header action.
+import { T3ConductorLinearIssueControl } from "./T3ConductorLinearIssueControl";
+// T3-CUSTOM(expbkt3): END
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -129,6 +132,12 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        {/* T3-CUSTOM(expbkt3): BEGIN — Conductor-only Linear action. */}
+        <T3ConductorLinearIssueControl
+          activeThreadEnvironmentId={activeThreadEnvironmentId}
+          activeThreadId={activeThreadId}
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
         <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
         {activeProjectScripts && (
           <ProjectScriptsControl

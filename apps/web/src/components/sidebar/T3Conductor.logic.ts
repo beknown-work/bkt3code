@@ -10,6 +10,41 @@ import {
 } from "@t3tools/contracts";
 
 export const T3_CONDUCTOR_TITLE = "T3 Conductor";
+const LINEAR_ISSUE_IDENTIFIER_PATTERN = /^[a-z][a-z0-9]*-\d+$/i;
+const LINEAR_ISSUE_URL_PATTERN =
+  /^https:\/\/linear\.app\/([a-z0-9][a-z0-9-]*)\/issue\/([a-z][a-z0-9]*-\d+)(?:\/[^?#\s]*)?(?:[?#].*)?$/i;
+
+export interface T3ConductorLinearIssue {
+  readonly identifier: string;
+  readonly url: string;
+}
+
+/**
+ * Accepts the compact identifier people normally paste from Linear, or a
+ * complete Linear issue URL. Bare identifiers use BeKnown's workspace while
+ * full URLs preserve their own Linear workspace.
+ */
+export function resolveT3ConductorLinearIssue(value: string): T3ConductorLinearIssue | null {
+  const candidate = value.trim();
+  if (!candidate) return null;
+
+  if (LINEAR_ISSUE_IDENTIFIER_PATTERN.test(candidate)) {
+    const identifier = candidate.toUpperCase();
+    return {
+      identifier,
+      url: `https://linear.app/beknown/issue/${identifier}`,
+    };
+  }
+
+  const match = LINEAR_ISSUE_URL_PATTERN.exec(candidate);
+  if (!match) return null;
+  const workspace = match[1]!;
+  const identifier = match[2]!.toUpperCase();
+  return {
+    identifier,
+    url: `https://linear.app/${workspace}/issue/${identifier}`,
+  };
+}
 
 /**
  * Produces one installation/workspace-scoped identity without relying on a
@@ -62,11 +97,18 @@ export function isT3ConductorThread(
 export function buildT3ConductorBootstrapPrompt(input: {
   readonly workspacePath: string;
   readonly personalityInstructions: string;
+  readonly linearIssueUrl?: string;
 }): string {
   const additionalInstructions = input.personalityInstructions.trim();
+  const linearIssue = resolveT3ConductorLinearIssue(input.linearIssueUrl ?? "");
   return [
     "You are T3 Conductor, the permanent master orchestration agent for this T3 Code installation.",
     `Your home workspace is ${input.workspacePath}.`,
+    ...(linearIssue
+      ? [
+          `Your dedicated Linear coordination ticket is ${linearIssue.identifier}: ${linearIssue.url}.`,
+        ]
+      : []),
     "",
     "Your standing mission:",
     "- Maintain an operator-level view of all T3 Code sessions and projects.",

@@ -474,6 +474,10 @@ export const T3ConductorSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   threadId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   workspacePath: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  // T3-CUSTOM(expbkt3): Optional durable Linear ticket for the Conductor's
+  // cross-session coordination work. The UI accepts an identifier or URL and
+  // persists a canonical Linear URL here.
+  linearIssueUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   modelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -672,6 +676,7 @@ export const ServerSettingsPatch = Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
           threadId: Schema.optionalKey(TrimmedString),
           workspacePath: Schema.optionalKey(TrimmedString),
+          linearIssueUrl: Schema.optionalKey(TrimmedString),
           modelSelection: Schema.optionalKey(ModelSelectionPatch),
           runtimeMode: Schema.optionalKey(RuntimeMode),
           interactionMode: Schema.optionalKey(ProviderInteractionMode),

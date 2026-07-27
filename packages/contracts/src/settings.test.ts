@@ -47,6 +47,7 @@ describe("ClientSettings phase-grouped sidebar", () => {
       enabled: false,
       threadId: "",
       workspacePath: "",
+      linearIssueUrl: "",
       modelSelection: {
         instanceId: "codex",
         model: "gpt-5.6-sol",
@@ -78,6 +79,7 @@ describe("ServerSettings T3 Conductor", () => {
             enabled: true,
             threadId: "conductor-1",
             workspacePath: "/workspace",
+            linearIssueUrl: "https://linear.app/beknown/issue/TEC-123",
             modelSelection: {
               instanceId: "codex",
               model: "gpt-5.6-terra",
@@ -93,6 +95,7 @@ describe("ServerSettings T3 Conductor", () => {
       enabled: true,
       threadId: "conductor-1",
       workspacePath: "/workspace",
+      linearIssueUrl: "https://linear.app/beknown/issue/TEC-123",
       modelSelection: {
         instanceId: "codex",
         model: "gpt-5.6-terra",

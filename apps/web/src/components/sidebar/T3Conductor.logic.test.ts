@@ -8,6 +8,7 @@ import {
   buildT3ConductorBootstrapPrompt,
   deriveT3ConductorThreadId,
   isT3ConductorThread,
+  resolveT3ConductorLinearIssue,
   resolveT3ConductorThreadId,
   resolveT3ConductorStatus,
 } from "./T3Conductor.logic";
@@ -37,6 +38,7 @@ describe("buildT3ConductorBootstrapPrompt", () => {
     const prompt = buildT3ConductorBootstrapPrompt({
       workspacePath: "/workspace/t3",
       personalityInstructions: "Call out stale work.",
+      linearIssueUrl: "https://linear.app/beknown/issue/tec-321",
     });
 
     expect(prompt).toContain("permanent master orchestration agent");
@@ -44,6 +46,32 @@ describe("buildT3ConductorBootstrapPrompt", () => {
     expect(prompt).toContain("native T3 Code MCP tools");
     expect(prompt).toContain("Never archive or delete it");
     expect(prompt).toContain("Call out stale work.");
+    expect(prompt).toContain("TEC-321");
+  });
+});
+
+describe("resolveT3ConductorLinearIssue", () => {
+  it("normalizes a compact identifier into the BeKnown Linear workspace", () => {
+    expect(resolveT3ConductorLinearIssue("tec-123")).toEqual({
+      identifier: "TEC-123",
+      url: "https://linear.app/beknown/issue/TEC-123",
+    });
+  });
+
+  it("preserves the workspace from a full Linear issue URL", () => {
+    expect(
+      resolveT3ConductorLinearIssue(
+        "https://linear.app/another-workspace/issue/ops-42/a-title?source=t3",
+      ),
+    ).toEqual({
+      identifier: "OPS-42",
+      url: "https://linear.app/another-workspace/issue/OPS-42",
+    });
+  });
+
+  it("rejects unrelated or incomplete links", () => {
+    expect(resolveT3ConductorLinearIssue("https://example.com/issue/TEC-123")).toBeNull();
+    expect(resolveT3ConductorLinearIssue("TEC")).toBeNull();
   });
 });
 

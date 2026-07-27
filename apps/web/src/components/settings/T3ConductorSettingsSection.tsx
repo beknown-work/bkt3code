@@ -27,6 +27,7 @@ import { useProjects } from "../../state/entities";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
+import { resolveT3ConductorLinearIssue } from "../sidebar/T3Conductor.logic";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -53,6 +54,8 @@ export function T3ConductorSettingsSection() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const conductor = settings.experimental.t3Conductor;
   const [pathDraft, setPathDraft] = useState<string | null>(null);
+  const [linearIssueDraft, setLinearIssueDraft] = useState<string | null>(null);
+  const [linearIssueError, setLinearIssueError] = useState<string | null>(null);
   const [personalityDraft, setPersonalityDraft] = useState<string | null>(null);
 
   const resolvedSelection = resolveAppModelSelectionState(
@@ -134,6 +137,45 @@ export function T3ConductorSettingsSection() {
           placeholder={suggestedWorkspace || "/absolute/path/to/workspace"}
           spellCheck={false}
           aria-label="T3 Conductor workspace path"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        title="Dedicated Linear ticket"
+        description="Associate one durable Linear issue with T3 Conductor. Paste an issue identifier such as TEC-123 or a complete Linear issue URL; the linked ticket is available from the chat header."
+        status={linearIssueError ?? undefined}
+      >
+        <Input
+          className="mt-3 mb-3.5 font-mono text-xs"
+          value={linearIssueDraft ?? conductor.linearIssueUrl}
+          onChange={(event) => {
+            setLinearIssueDraft(event.target.value);
+            setLinearIssueError(null);
+          }}
+          onFocus={() => setLinearIssueDraft(conductor.linearIssueUrl)}
+          onBlur={() => {
+            const candidate = (linearIssueDraft ?? conductor.linearIssueUrl).trim();
+            setLinearIssueDraft(null);
+            if (!candidate) {
+              setLinearIssueError(null);
+              if (conductor.linearIssueUrl) patchConductor({ linearIssueUrl: "" });
+              return;
+            }
+            const issue = resolveT3ConductorLinearIssue(candidate);
+            if (!issue) {
+              setLinearIssueError(
+                "Enter a Linear identifier such as TEC-123, or paste a Linear issue URL.",
+              );
+              return;
+            }
+            setLinearIssueError(null);
+            if (issue.url !== conductor.linearIssueUrl) {
+              patchConductor({ linearIssueUrl: issue.url });
+            }
+          }}
+          placeholder="TEC-123 or https://linear.app/…"
+          spellCheck={false}
+          aria-label="T3 Conductor Linear issue"
         />
       </SettingsRow>
 

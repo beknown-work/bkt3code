@@ -238,6 +238,7 @@ export function T3ConductorCard({
             text: buildT3ConductorBootstrapPrompt({
               workspacePath,
               personalityInstructions: conductor.personalityInstructions,
+              linearIssueUrl: conductor.linearIssueUrl,
             }),
             attachments: [],
           },
