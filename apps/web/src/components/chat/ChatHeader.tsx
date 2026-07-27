@@ -20,6 +20,7 @@ import { ThreadMembersControl } from "../members/ThreadMembersControl";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
+import { T3_CONDUCTOR_ENABLED } from "../../experimentalFeatures";
 // T3-CUSTOM(expbkt3): BEGIN — isolated Conductor header action.
 import { T3ConductorLinearIssueControl } from "./T3ConductorLinearIssueControl";
 // T3-CUSTOM(expbkt3): END
@@ -133,10 +134,12 @@ export const ChatHeader = memo(function ChatHeader({
         )}
       >
         {/* T3-CUSTOM(expbkt3): BEGIN — Conductor-only Linear action. */}
-        <T3ConductorLinearIssueControl
-          activeThreadEnvironmentId={activeThreadEnvironmentId}
-          activeThreadId={activeThreadId}
-        />
+        {T3_CONDUCTOR_ENABLED ? (
+          <T3ConductorLinearIssueControl
+            activeThreadEnvironmentId={activeThreadEnvironmentId}
+            activeThreadId={activeThreadId}
+          />
+        ) : null}
         {/* T3-CUSTOM(expbkt3): END */}
         <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
         {activeProjectScripts && (

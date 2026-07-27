@@ -44,7 +44,9 @@ echo "==> Installing locked dependencies"
 pnpm --dir "$REPO_DIR" install --frozen-lockfile
 
 echo "==> Building the web client"
-pnpm --dir "$REPO_DIR" exec vp run --filter @t3tools/web build
+VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true \
+  VITE_T3_CONDUCTOR=false \
+  pnpm --dir "$REPO_DIR" exec vp run --filter @t3tools/web build
 
 echo "==> Building the T3 server bundle"
 pnpm --dir "$REPO_DIR" exec vp run --filter t3 build:bundle

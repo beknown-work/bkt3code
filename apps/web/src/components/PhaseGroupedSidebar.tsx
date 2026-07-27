@@ -96,6 +96,7 @@ import {
   type PhaseSidebarRow,
 } from "./sidebar/PhaseGroupedSidebar.logic";
 import { useCurrentUserId } from "../state/identity";
+import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
   SidebarChromeFooter,
   SidebarChromeHeader,
@@ -913,7 +914,11 @@ export function PhaseGroupedSidebar() {
     () =>
       threads
         // T3-CUSTOM(expbkt3): Conductor owns a fixed command-deck card.
-        .filter((thread) => !isT3ConductorThread(t3Conductor, primaryEnvironmentId, thread))
+        .filter(
+          (thread) =>
+            !T3_CONDUCTOR_ENABLED ||
+            !isT3ConductorThread(t3Conductor, primaryEnvironmentId, thread),
+        )
         .map((thread) => {
           const project = projectByKey.get(
             scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
@@ -1288,11 +1293,13 @@ export function PhaseGroupedSidebar() {
         </SidebarGroup>
         <SidebarEnvironmentNotices />
         {/* T3-CUSTOM(expbkt3): Permanent orchestration home above lifecycle rows. */}
-        <T3ConductorCard
-          shellReady={allEnvironmentShellsLive && networkStatus === "online"}
-          activeThreadKey={routeThreadKey}
-          onNavigate={navigateToRow}
-        />
+        {T3_CONDUCTOR_ENABLED ? (
+          <T3ConductorCard
+            shellReady={allEnvironmentShellsLive && networkStatus === "online"}
+            activeThreadKey={routeThreadKey}
+            onNavigate={navigateToRow}
+          />
+        ) : null}
         <SidebarGroup className="px-2 pt-1 pb-2">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">

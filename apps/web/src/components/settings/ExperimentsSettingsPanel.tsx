@@ -5,7 +5,10 @@ import { Switch } from "../ui/switch";
 import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
 import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
 import { T3ConductorSettingsSection } from "./T3ConductorSettingsSection";
-import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
+import {
+  EXPERIMENTAL_CONTROL_CENTER_ENABLED,
+  T3_CONDUCTOR_ENABLED,
+} from "../../experimentalFeatures";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -77,7 +80,7 @@ export function ExperimentsSettingsPanel() {
       {/* T3-CUSTOM(expbkt3): BEGIN — experimental operator MCP settings seam. */}
       {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
         <>
-          <T3ConductorSettingsSection />
+          {T3_CONDUCTOR_ENABLED ? <T3ConductorSettingsSection /> : null}
           <ExternalMcpSettingsSection />
         </>
       ) : null}

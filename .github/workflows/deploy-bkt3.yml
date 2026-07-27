@@ -51,6 +51,9 @@ jobs:
 
       - name: Build web client
         run: pnpm exec vp run --filter @t3tools/web build
+        env:
+          VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true"
+          VITE_T3_CONDUCTOR: "false"
 
       - name: Build server bundle
         run: pnpm exec vp run --filter t3 build:bundle
