@@ -198,6 +198,14 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
+// T3-CUSTOM(expbkt3): Fully compose this custom persistence service once so
+// unrelated route tests and upstream callers never inherit its SqlClient or
+// secret-store implementation requirements.
+const UserMcpProfileStoreLive = UserMcpProfileStore.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(PersistenceLayerLive),
+);
+
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
 );
@@ -351,12 +359,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       ServerSecretStore.layer,
-      UserMcpProfileStore.layer.pipe(
-        Layer.provide(ServerSecretStore.layer),
-        // Reusing this layer value shares the already-memoized SQLite runtime;
-        // it does not create a second database connection or migration graph.
-        Layer.provide(PersistenceLayerLive),
-      ),
+      // Reusing this layer value shares the already-memoized SQLite runtime;
+      // it does not create a second database connection or migration graph.
+      UserMcpProfileStoreLive,
     ),
   ),
   Layer.provideMerge(
@@ -397,8 +402,8 @@ const RuntimeServicesLive = PlannotatorManager.layer.pipe(
 // T3-CUSTOM(expbkt3): Build one memoized user profile + credential registry
 // pair and provide both to the native T3 MCP transport and upstream proxy.
 const PersonalMcpRouteServicesLive = Layer.mergeAll(
-  UserMcpProfileStore.layer,
-  McpSessionRegistry.layer.pipe(Layer.provide(UserMcpProfileStore.layer)),
+  UserMcpProfileStoreLive,
+  McpSessionRegistry.layer.pipe(Layer.provide(UserMcpProfileStoreLive)),
 );
 
 const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
