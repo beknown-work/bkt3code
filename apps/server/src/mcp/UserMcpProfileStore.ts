@@ -120,6 +120,8 @@ export class UserMcpProfileStore extends Context.Service<
   }
 >()("t3/mcp/UserMcpProfileStore") {}
 
+let activeUserMcpProfileStore: UserMcpProfileStore["Service"] | undefined;
+
 export const layer = Layer.effect(
   UserMcpProfileStore,
   Effect.gen(function* () {
@@ -330,7 +332,7 @@ export const layer = Layer.effect(
       },
     );
 
-    return UserMcpProfileStore.of({
+    const service = UserMcpProfileStore.of({
       get,
       update,
       rotateExternalToken,
@@ -338,5 +340,24 @@ export const layer = Layer.effect(
       resolveExternalToken,
       getIntegrationCredential,
     });
+    // T3-CUSTOM(expbkt3): The HTTP proxy is deliberately bound to the same
+    // process-scoped store instance as WS settings and token issuance.
+    yield* Effect.sync(() => {
+      activeUserMcpProfileStore = service;
+    });
+    return service;
   }),
 );
+
+export const getActivePersonalMcpProfile = (
+  userId: UserId,
+): Effect.Effect<PersonalMcpProfile | undefined, PersonalMcpSettingsError> =>
+  activeUserMcpProfileStore ? activeUserMcpProfileStore.get(userId) : Effect.succeed(undefined);
+
+export const getActiveIntegrationCredential = (
+  userId: UserId,
+  integrationId: PersonalMcpIntegrationId,
+): Effect.Effect<string | undefined, PersonalMcpSettingsError> =>
+  activeUserMcpProfileStore
+    ? activeUserMcpProfileStore.getIntegrationCredential(userId, integrationId)
+    : Effect.succeed(undefined);

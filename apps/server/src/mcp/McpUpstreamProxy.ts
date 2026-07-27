@@ -75,10 +75,9 @@ export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
       return unauthorized("A user-bound T3 provider credential is required.");
     }
 
-    const profiles = yield* UserMcpProfileStore.UserMcpProfileStore;
-    const profile = yield* profiles
-      .get(invocation.actorUserId)
-      .pipe(Effect.catch(() => Effect.succeed(undefined)));
+    const profile = yield* UserMcpProfileStore.getActivePersonalMcpProfile(
+      invocation.actorUserId,
+    ).pipe(Effect.catch(() => Effect.succeed(undefined)));
     const integration = profile?.integrations.find(
       (candidate) =>
         candidate.id === integrationId &&
@@ -93,12 +92,10 @@ export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
         { status: 403, headers: { "cache-control": "no-store" } },
       );
     }
-    const credential = yield* profiles
-      .getIntegrationCredential(
-        invocation.actorUserId,
-        PersonalMcpIntegrationId.make(integration.id),
-      )
-      .pipe(Effect.catch(() => Effect.succeed(undefined)));
+    const credential = yield* UserMcpProfileStore.getActiveIntegrationCredential(
+      invocation.actorUserId,
+      PersonalMcpIntegrationId.make(integration.id),
+    ).pipe(Effect.catch(() => Effect.succeed(undefined)));
     if (!credential) {
       return HttpServerResponse.jsonUnsafe(
         { error: "personal_mcp_credential_missing", integrationId },
