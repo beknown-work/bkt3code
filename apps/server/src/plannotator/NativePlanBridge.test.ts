@@ -10,6 +10,7 @@ import type { PlannotatorSession } from "./PlannotatorManager.ts";
 import {
   attachNativePlanReview,
   latestPlansForNativeReview,
+  nativePlannotatorPlanFormat,
   type NativePlanBridgeDependencies,
 } from "./NativePlanBridge.ts";
 
@@ -65,11 +66,16 @@ function makeDependencies(input: {
   readonly discarded: string[];
   readonly commands: unknown[];
   readonly reopened?: unknown[];
+  readonly started?: unknown[];
 }): NativePlanBridgeDependencies {
   return {
     manager: {
       list: () => Effect.succeed(input.sessions ?? []),
-      start: () => Effect.succeed(input.startedSession),
+      start: (startInput) =>
+        Effect.sync(() => {
+          input.started?.push(startInput);
+          return input.startedSession;
+        }),
       reopen: (reopenInput) =>
         Effect.sync(() => {
           input.reopened?.push(reopenInput);
@@ -93,6 +99,19 @@ function makeDependencies(input: {
 }
 
 describe("native Plannotator plan bridge", () => {
+  it("uses HTML only for complete HTML documents", () => {
+    expect(
+      nativePlannotatorPlanFormat(
+        '\uFEFF<!-- generated plan -->\n<!DOCTYPE html>\n<html lang="en"><body>Plan</body></html>',
+      ),
+    ).toBe("html");
+    expect(nativePlannotatorPlanFormat("<html><body>Plan</body></html>")).toBe("html");
+    expect(nativePlannotatorPlanFormat("```html\n<html><body>Snippet</body></html>\n```")).toBe(
+      "md",
+    );
+    expect(nativePlannotatorPlanFormat("# Plan\n\n<section>HTML fragment</section>")).toBe("md");
+  });
+
   it.effect("attaches a review to the same native proposed-plan record", () =>
     Effect.gen(function* () {
       const proposedPlan = makePlan("plan-native");
@@ -127,6 +146,39 @@ describe("native Plannotator plan bridge", () => {
     }),
   );
 
+  it.effect("starts complete native HTML plans in Plannotator's HTML renderer", () =>
+    Effect.gen(function* () {
+      const proposedPlan = makePlan("plan-html", {
+        planMarkdown:
+          "<!doctype html><html><head><title>Plan</title></head><body><h1>Plan</h1></body></html>",
+      });
+      const startedSession = makeSession(proposedPlan.id, {
+        format: "html",
+        planPath: "/private/plan.html",
+      });
+      const started: unknown[] = [];
+
+      yield* attachNativePlanReview(
+        makeDependencies({
+          startedSession,
+          discarded: [],
+          commands: [],
+          started,
+        }),
+        { threadId, proposedPlan },
+      );
+
+      expect(started).toEqual([
+        {
+          threadId,
+          planId: proposedPlan.id,
+          format: "html",
+          content: proposedPlan.planMarkdown,
+        },
+      ]);
+    }),
+  );
+
   it.effect("does not reopen an already-running attached review", () =>
     Effect.gen(function* () {
       const proposedPlan = makePlan("plan-attached", {
@@ -149,6 +201,42 @@ describe("native Plannotator plan bridge", () => {
       expect(result).toEqual({ status: "already-attached", session: startedSession });
       expect(discarded).toEqual([]);
       expect(commands).toEqual([]);
+    }),
+  );
+
+  it.effect("upgrades an already-attached native HTML plan from Markdown rendering", () =>
+    Effect.gen(function* () {
+      const proposedPlan = makePlan("plan-attached-html", {
+        planMarkdown:
+          "<!doctype html><html><body><h1>Plan</h1></body></html>\n\n<!-- t3-plannotator:/plannotator/native_token/ -->",
+      });
+      const markdownSession = makeSession(proposedPlan.id);
+      const htmlSession = makeSession(proposedPlan.id, {
+        format: "html",
+        planPath: "/private/plan.html",
+      });
+      const reopened: unknown[] = [];
+
+      const result = yield* attachNativePlanReview(
+        makeDependencies({
+          sessions: [markdownSession],
+          startedSession: htmlSession,
+          discarded: [],
+          commands: [],
+          reopened,
+        }),
+        { threadId, proposedPlan },
+      );
+
+      expect(result).toEqual({ status: "reopened", session: htmlSession });
+      expect(reopened).toEqual([
+        {
+          tokenOrId: "review-session",
+          planId: proposedPlan.id,
+          format: "html",
+          content: "<!doctype html><html><body><h1>Plan</h1></body></html>",
+        },
+      ]);
     }),
   );
 
@@ -177,6 +265,7 @@ describe("native Plannotator plan bridge", () => {
         {
           tokenOrId: "old-review",
           planId: proposedPlan.id,
+          format: "md",
           content: proposedPlan.planMarkdown,
         },
       ]);
@@ -230,6 +319,7 @@ describe("native Plannotator plan bridge", () => {
         {
           tokenOrId: "durable-review",
           planId: revisedPlan.id,
+          format: "md",
           content: revisedPlan.planMarkdown,
         },
       ]);
@@ -241,6 +331,59 @@ describe("native Plannotator plan bridge", () => {
           }
         ).proposedPlan.planMarkdown,
       ).toContain("/plannotator/native_token/");
+    }),
+  );
+
+  it.effect("migrates a durable Markdown review to HTML for a later native revision", () =>
+    Effect.gen(function* () {
+      const previousPlan = makePlan("plan-markdown");
+      const revisedPlan = makePlan("plan-html-revision", {
+        planMarkdown: "<!doctype html><html><body><h1>Revised plan</h1></body></html>",
+      });
+      const feedbackSession = makeSession(previousPlan.id, {
+        id: "durable-format-review",
+        status: "feedback",
+        feedback: "Make this interactive.",
+        annotationHistory: [
+          {
+            id: "annotation-format-1",
+            type: "GLOBAL_COMMENT",
+            text: "Make this interactive.",
+            originalText: "",
+            author: "Reviewer",
+            submittedAt: UPDATED_AT,
+          },
+        ],
+      });
+      const reopenedSession = makeSession(revisedPlan.id, {
+        ...feedbackSession,
+        planId: revisedPlan.id,
+        format: "html",
+        planPath: "/private/plan.html",
+        status: "running",
+      });
+      const reopened: unknown[] = [];
+
+      const result = yield* attachNativePlanReview(
+        makeDependencies({
+          sessions: [feedbackSession],
+          startedSession: reopenedSession,
+          discarded: [],
+          commands: [],
+          reopened,
+        }),
+        { threadId, proposedPlan: revisedPlan },
+      );
+
+      expect(result).toEqual({ status: "reopened", session: reopenedSession });
+      expect(reopened).toEqual([
+        {
+          tokenOrId: "durable-format-review",
+          planId: revisedPlan.id,
+          format: "html",
+          content: revisedPlan.planMarkdown,
+        },
+      ]);
     }),
   );
 

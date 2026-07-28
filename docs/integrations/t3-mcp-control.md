@@ -151,10 +151,13 @@ are excluded.
 ## Plannotator plan workflow
 
 Whenever a provider completes a normal T3 plan, the server observes T3's durable
-`proposed-plan-upserted` event, starts a Markdown Plannotator review for that same
-plan ID, and updates the existing plan through the standard orchestration command
-path. This preserves T3's native **Plan Ready**, implementation linkage, timeline,
-projection, and WebSocket behavior.
+`proposed-plan-upserted` event, detects whether the plan is Markdown or a complete
+HTML document, starts the matching Plannotator renderer for that same plan ID,
+and updates the existing plan through the standard orchestration command path.
+This preserves T3's native **Plan Ready**, implementation linkage, timeline,
+projection, and WebSocket behavior. Complete HTML must have an `<html>` root
+(preferably with `<!doctype html>`) and must not be wrapped in a Markdown code
+fence. HTML snippets inside Markdown remain Markdown by design.
 
 The server also reconciles the newest actionable plan in every active session at
 startup. That gives plans created before this integration a review action and
@@ -173,6 +176,8 @@ T3 stores the plan in its private state directory, launches
 `plannotator --browser none annotate <plan> --gate --json`, and adds an actionable
 proposed plan to the session. The plan carries only an opaque, same-origin review
 path; its private token is removed from copy, download, and export operations.
+T3 does not pass Plannotator a `--markdown` flag: the persisted `.md` or `.html`
+plan extension selects the renderer.
 
 Every actionable native plan card shows a prominent **Review →** action beside
 the existing **Expand plan** control. The action briefly shows a preparing state
@@ -192,7 +197,9 @@ Decisions return through T3's proxy and durable command path:
 - **Request changes / annotations:** combines anchored annotations into feedback
   and starts a plan-mode revision turn without changing the persisted mode. The
   planning agent is explicitly told not to modify files while revising. The next
-  native plan revision reuses the same review ID, opaque URL, and plan file.
+  native plan revision reuses the same review ID, opaque URL, and annotation
+  history. If the provider changes between complete HTML and Markdown, T3
+  migrates the private plan file extension without creating a new review.
 - **Deny without feedback:** records the declined review and does not start a
   turn or change mode.
 

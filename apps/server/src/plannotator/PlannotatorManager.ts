@@ -185,6 +185,7 @@ export interface StartPlannotatorInput {
 export interface ReopenPlannotatorInput {
   readonly tokenOrId: string;
   readonly planId?: OrchestrationProposedPlanId;
+  readonly format?: PlannotatorPlanFormat;
   readonly content?: string;
 }
 
@@ -426,6 +427,8 @@ export const make = Effect.gen(function* () {
     activitySummary: string,
   ) {
     yield* stopHandle(current.token);
+    // T3-CUSTOM(expbkt3): Do not force Plannotator's Markdown mode. Its
+    // renderer follows the persisted .md/.html plan path selected by T3.
     const command = ChildProcess.make(
       "plannotator",
       ["--browser", "none", "annotate", current.planPath, "--gate", "--json"],
@@ -695,8 +698,10 @@ export const make = Effect.gen(function* () {
           }
         }
 
+        const nextFormat = input.format ?? latest.format;
+        const formatChanged = nextFormat !== latest.format;
         const existingContent =
-          input.content === undefined
+          input.content === undefined && !formatChanged
             ? null
             : yield* fileSystem
                 .readFileString(latest.planPath)
@@ -711,7 +716,7 @@ export const make = Effect.gen(function* () {
             latest.status === "applying") &&
           (yield* probePort(latest.port));
 
-        if (processIsLive && !contentChanged) {
+        if (processIsLive && !contentChanged && !formatChanged) {
           const unchanged =
             planIdChanged && nextPlanId !== undefined
               ? yield* update(latest, { planId: nextPlanId })
@@ -739,15 +744,37 @@ export const make = Effect.gen(function* () {
             detail: `Project ${thread.projectId} was not found.`,
           });
         }
-        if (contentChanged && input.content !== undefined) {
+        // T3-CUSTOM(expbkt3): Keep the durable review identity and annotation
+        // history while allowing a revised native plan to change renderer.
+        const nextPlanPath = formatChanged
+          ? path.join(plansDir, `${latest.id}.${nextFormat === "html" ? "html" : "md"}`)
+          : latest.planPath;
+        if (contentChanged || formatChanged) {
+          const nextContent = input.content ?? existingContent;
+          if (nextContent === null) {
+            return yield* new PlannotatorManagerError({
+              operation: "reopen",
+              detail: "Could not determine the revised plan content.",
+            });
+          }
           yield* fileSystem
-            .writeFileString(latest.planPath, input.content, { mode: 0o600 })
+            .writeFileString(nextPlanPath, nextContent, { mode: 0o600 })
             .pipe(Effect.mapError(managerError("reopen", "Could not update the reviewed plan")));
         }
-        const prepared =
-          planIdChanged && nextPlanId !== undefined
-            ? yield* update(latest, { planId: nextPlanId })
-            : latest;
+        const sessionChanged = planIdChanged || formatChanged;
+        const prepared = sessionChanged
+          ? yield* update(latest, {
+              ...(planIdChanged && nextPlanId !== undefined ? { planId: nextPlanId } : {}),
+              ...(formatChanged ? { format: nextFormat, planPath: nextPlanPath } : {}),
+            }).pipe(
+              Effect.tapError(() =>
+                formatChanged ? fileSystem.remove(nextPlanPath).pipe(Effect.ignore) : Effect.void,
+              ),
+            )
+          : latest;
+        if (formatChanged) {
+          yield* fileSystem.remove(latest.planPath).pipe(Effect.ignore);
+        }
         const running = yield* launch(
           prepared,
           thread.worktreePath ?? project.workspaceRoot,

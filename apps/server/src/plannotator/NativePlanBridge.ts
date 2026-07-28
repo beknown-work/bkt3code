@@ -15,6 +15,7 @@ import type { OrchestrationCommandDispatcher } from "../orchestration/dispatchCo
 import type {
   PlannotatorManager,
   PlannotatorManagerError,
+  PlannotatorPlanFormat,
   PlannotatorSession,
 } from "./PlannotatorManager.ts";
 
@@ -43,6 +44,20 @@ export type NativePlanBridgeResult =
   | { readonly status: "attached"; readonly session: PlannotatorSession };
 
 /**
+ * T3-CUSTOM(expbkt3): Native providers expose one `planMarkdown` field even
+ * when the agent produced HTML. Treat only a complete HTML document as HTML so
+ * Markdown plans containing snippets or fenced HTML keep their normal renderer.
+ */
+export function nativePlannotatorPlanFormat(content: string): PlannotatorPlanFormat {
+  const document = content.trimStart();
+  return /^(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+html(?:\s[^>]*)?>\s*)?<html(?:\s|>)/i.test(
+    document,
+  )
+    ? "html"
+    : "md";
+}
+
+/**
  * Attach Plannotator to the same proposed-plan record created by T3's native
  * plan lifecycle. The marker is deliberately stored on the existing record so
  * every current client receives the review URL through the normal projection
@@ -64,13 +79,25 @@ export const attachNativePlanReview = EffectRuntime.fn("attachNativePlanReview")
         (session) => session.proxyPath === markerPath && session.planId === proposedPlan.id,
       )
     : undefined;
-  if (attachedSession) {
-    return { status: "already-attached", session: attachedSession } as const;
-  }
 
   const content = withoutPlannotatorPlanMarker(proposedPlan.planMarkdown);
   if (!content.trim()) {
     return { status: "skipped" } as const;
+  }
+  const format = nativePlannotatorPlanFormat(content);
+  if (attachedSession) {
+    if (attachedSession.format === format) {
+      return { status: "already-attached", session: attachedSession } as const;
+    }
+    // Upgrade reviews created before native HTML detection without changing
+    // their opaque URL, captured annotations, or proposed-plan identity.
+    const migrated = yield* dependencies.manager.reopen({
+      tokenOrId: attachedSession.id,
+      planId: proposedPlan.id,
+      format,
+      content,
+    });
+    return { status: "reopened", session: migrated } as const;
   }
 
   // Native provider revisions normally arrive as a new turn-scoped plan id.
@@ -94,12 +121,13 @@ export const attachNativePlanReview = EffectRuntime.fn("attachNativePlanReview")
     ? yield* dependencies.manager.reopen({
         tokenOrId: reusableSession.id,
         planId: proposedPlan.id,
+        format,
         content,
       })
     : yield* dependencies.manager.start({
         threadId,
         planId: proposedPlan.id,
-        format: "md",
+        format,
         content,
       });
   const [uuid, updatedAt] = yield* EffectRuntime.all([dependencies.randomUuid, dependencies.now]);
