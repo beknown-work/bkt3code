@@ -229,6 +229,10 @@ reconciled to its durable review identity and existing opaque path. Use
 `t3_list_plannotator_reviews` to retrieve diagnostic paths, cumulative
 `annotationHistory`, and status.
 
+Opening an older Markdown review also rechecks its persisted content. If the
+content is actually a complete HTML document or balanced top-level HTML plan
+fragment, T3 migrates the same durable review to `.html` before relaunching it.
+
 ## Security and operational notes
 
 - Bind the T3 server to a private interface and expose it only through an

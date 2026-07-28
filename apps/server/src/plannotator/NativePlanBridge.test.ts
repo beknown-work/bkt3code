@@ -7,6 +7,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import type { PlannotatorSession } from "./PlannotatorManager.ts";
+import { resolveStoredPlannotatorPlanFormat } from "./planFormat.ts";
 import {
   attachNativePlanReview,
   latestPlansForNativeReview,
@@ -117,6 +118,21 @@ describe("native Plannotator plan bridge", () => {
     );
     expect(nativePlannotatorPlanFormat("# Plan\n\n<section>HTML fragment</section>")).toBe("md");
     expect(nativePlannotatorPlanFormat("<div>Unclosed HTML plan")).toBe("md");
+  });
+
+  it("self-heals stored HTML fragments without downgrading explicit HTML receipts", () => {
+    expect(
+      resolveStoredPlannotatorPlanFormat(
+        "md",
+        '<div class="plan"><h1>Brew Log</h1><section>Plan UI</section></div>',
+      ),
+    ).toBe("html");
+    expect(
+      resolveStoredPlannotatorPlanFormat(
+        "html",
+        "# Project Northstar\n\nThis plan was submitted as HTML.",
+      ),
+    ).toBe("html");
   });
 
   it.effect("attaches a review to the same native proposed-plan record", () =>

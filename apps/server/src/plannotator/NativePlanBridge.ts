@@ -18,6 +18,7 @@ import type {
   PlannotatorPlanFormat,
   PlannotatorSession,
 } from "./PlannotatorManager.ts";
+import { detectPlannotatorPlanFormat } from "./planFormat.ts";
 
 type NativePlanManager = Pick<
   PlannotatorManager["Service"],
@@ -49,25 +50,7 @@ export type NativePlanBridgeResult =
  * Markdown plans containing snippets or fenced HTML keep their normal renderer.
  */
 export function nativePlannotatorPlanFormat(content: string): PlannotatorPlanFormat {
-  const document = content.trim();
-  const withoutLeadingComments = document.replace(/^(?:<!--[\s\S]*?-->\s*)*/i, "");
-  if (/^(?:<!doctype\s+html(?:\s[^>]*)?>\s*)?<html(?:\s|>)/i.test(withoutLeadingComments)) {
-    return "html";
-  }
-
-  // Providers such as Claude may emit the entire visual plan as one balanced
-  // root fragment instead of adding document-level html/head/body elements.
-  // Requiring the matching closing root avoids treating ordinary Markdown
-  // containing an inline HTML example as an HTML plan.
-  const rootedFragment = /^<(body|main|article|section|div)(?:\s|>)/i.exec(withoutLeadingComments);
-  if (rootedFragment) {
-    const root = rootedFragment[1];
-    if (new RegExp(`</${root}>\\s*$`, "i").test(withoutLeadingComments)) {
-      return "html";
-    }
-  }
-
-  return "md";
+  return detectPlannotatorPlanFormat(content);
 }
 
 /**

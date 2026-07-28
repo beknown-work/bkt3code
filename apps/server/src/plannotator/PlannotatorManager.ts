@@ -45,6 +45,7 @@ import {
   type PlannotatorDecision,
   type PlannotatorReviewAnnotation,
 } from "./model.ts";
+import { resolveStoredPlannotatorPlanFormat } from "./planFormat.ts";
 
 type InteractionModeSetCommand = Extract<
   OrchestrationCommand,
@@ -698,14 +699,24 @@ export const make = Effect.gen(function* () {
           }
         }
 
-        const nextFormat = input.format ?? latest.format;
-        const formatChanged = nextFormat !== latest.format;
+        // T3-CUSTOM(expbkt3): Review reopening is a final self-healing seam for
+        // provider HTML that older native-plan detection persisted as .md.
+        // Explicit HTML sessions stay authoritative and are never inferred from
+        // their intentionally Markdown native receipt.
+        const shouldInspectStoredFormat = input.format === undefined && latest.format === "md";
+        const requestedFormatChanged = input.format !== undefined && input.format !== latest.format;
         const existingContent =
-          input.content === undefined && !formatChanged
+          input.content === undefined && !shouldInspectStoredFormat && !requestedFormatChanged
             ? null
             : yield* fileSystem
                 .readFileString(latest.planPath)
                 .pipe(Effect.mapError(managerError("reopen", "Could not read the reviewed plan")));
+        const nextFormat =
+          input.format ??
+          (shouldInspectStoredFormat && existingContent !== null
+            ? resolveStoredPlannotatorPlanFormat(latest.format, existingContent)
+            : latest.format);
+        const formatChanged = nextFormat !== latest.format;
         const contentChanged = input.content !== undefined && input.content !== existingContent;
         const nextPlanId = input.planId;
         const planIdChanged = nextPlanId !== undefined && nextPlanId !== latest.planId;
