@@ -3,6 +3,7 @@ import {
   EventId,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
+  ThreadTurnAdmissionConflictError,
   type ThreadId,
   type UserId,
 } from "@t3tools/contracts";
@@ -21,8 +22,10 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isThreadTurnAdmissionConflictError = Schema.is(ThreadTurnAdmissionConflictError);
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 function unexpectedCompatibilityError(error: never): never {
@@ -61,6 +64,12 @@ function toDispatchCommandError(cause: unknown, fallbackMessage: string) {
       });
 }
 
+function toDispatchError(cause: unknown, fallbackMessage: string) {
+  return isThreadTurnAdmissionConflictError(cause)
+    ? cause
+    : toDispatchCommandError(cause, fallbackMessage);
+}
+
 /**
  * Dispatch an orchestration command through the server command gate.
  *
@@ -74,7 +83,10 @@ export class OrchestrationCommandDispatcher extends Context.Service<
     readonly dispatch: (
       command: OrchestrationCommand,
       options?: { readonly actorUserId?: UserId | null },
-    ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
+    ) => Effect.Effect<
+      { readonly sequence: number },
+      OrchestrationDispatchCommandError | ThreadTurnAdmissionConflictError
+    >;
   }
 >()("t3/orchestration/dispatchCommand/OrchestrationCommandDispatcher") {}
 
@@ -86,6 +98,7 @@ export const make = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const executionSupervisor = yield* ThreadExecutionSupervisor;
 
   const dispatch = Effect.fn("OrchestrationCommandDispatcher.dispatch")(function* (
     command: OrchestrationCommand,
@@ -384,7 +397,7 @@ export const make = Effect.gen(function* () {
       );
     });
 
-    const dispatchEffect =
+    const baseDispatchEffect =
       command.type === "thread.turn.start" && command.bootstrap
         ? dispatchBootstrapTurnStart(command)
         : orchestrationEngine
@@ -395,11 +408,33 @@ export const make = Effect.gen(function* () {
               ),
             );
 
+    const dispatchEffect =
+      command.type === "thread.turn.start" && command.precondition
+        ? executionSupervisor
+            .admitIdleTurn({
+              threadId: command.threadId,
+              executionId: String(command.commandId),
+              expectedExecutionRevision: command.precondition.expectedExecutionRevision,
+              ...(command.modelSelection?.instanceId
+                ? { providerInstanceId: command.modelSelection.instanceId }
+                : {}),
+              startedAt: command.createdAt,
+            })
+            .pipe(
+              Effect.flatMap(() => baseDispatchEffect),
+              Effect.onError(() =>
+                executionSupervisor
+                  .releaseTurnAdmission(command.threadId, String(command.commandId))
+                  .pipe(Effect.ignoreCause({ log: true })),
+              ),
+            )
+        : baseDispatchEffect;
+
     return yield* startup
       .enqueueCommand(dispatchEffect)
       .pipe(
         Effect.mapError((cause) =>
-          toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          toDispatchError(cause, "Failed to dispatch orchestration command"),
         ),
       );
   });

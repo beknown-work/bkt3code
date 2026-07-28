@@ -17,6 +17,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -45,6 +46,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
@@ -129,6 +131,14 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
         ),
       ),
       Layer.provide(OrchestrationCommandDispatcher.passthroughLayer),
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster, {
+          getStatus: () => Effect.die("VCS status is not used by the project CLI tests"),
+          refreshLocalStatus: () => Effect.die("VCS status is not used by the project CLI tests"),
+          refreshStatus: () => Effect.die("VCS status is not used by the project CLI tests"),
+          streamStatus: () => Stream.die("VCS status is not used by the project CLI tests"),
+        }),
+      ),
       Layer.provide(environmentAuthenticatedAuthLayer),
       Layer.provide(makeProviderRegistryLayer()),
     );

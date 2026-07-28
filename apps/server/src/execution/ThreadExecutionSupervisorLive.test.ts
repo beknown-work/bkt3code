@@ -16,6 +16,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -59,6 +60,72 @@ const startEvent = (
 const layer = it.layer(SqlitePersistenceMemory);
 
 layer("ThreadExecutionSupervisor", (it) => {
+  it.effect("atomically admits only one idle turn and makes same-command retries idempotent", () =>
+    Effect.gen(function* () {
+      const providerService = {
+        inspectSession: () => Effect.succeed(null),
+        streamEvents: Stream.empty,
+      } as unknown as ProviderServiceShape;
+      const orchestration = {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
+      } as OrchestrationEngineService["Service"];
+      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+        Layer.provide(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const results = yield* Effect.all(
+          ["automatic-a", "automatic-b"].map((executionId) =>
+            supervisor
+              .admitIdleTurn({
+                threadId,
+                executionId,
+                expectedExecutionRevision: 0,
+                providerInstanceId,
+                startedAt: createdAt,
+              })
+              .pipe(Effect.result),
+          ),
+          { concurrency: "unbounded" },
+        );
+        const admitted = results.find(Result.isSuccess);
+        const rejected = results.find(Result.isFailure);
+        assert.isDefined(admitted);
+        assert.isDefined(rejected);
+        if (Result.isFailure(rejected!)) {
+          assert.strictEqual(rejected.failure._tag, "ThreadTurnAdmissionConflictError");
+          if (rejected.failure._tag === "ThreadTurnAdmissionConflictError") {
+            assert.strictEqual(rejected.failure.actualExecutionRevision, 1);
+          }
+        }
+        if (Result.isSuccess(admitted!)) {
+          const duplicate = yield* supervisor.admitIdleTurn({
+            threadId,
+            executionId: admitted.success.turn!.executionId,
+            expectedExecutionRevision: 0,
+            providerInstanceId,
+            startedAt: createdAt,
+          });
+          assert.strictEqual(duplicate.revision, admitted.success.revision);
+          assert.strictEqual(duplicate.turn?.executionId, admitted.success.turn?.executionId);
+
+          const released = yield* supervisor.releaseTurnAdmission(
+            threadId,
+            admitted.success.turn!.executionId,
+          );
+          assert.strictEqual(released.activity, "idle");
+          assert.strictEqual(released.turn, null);
+        }
+      }).pipe(Effect.provide(supervisorLayer));
+    }),
+  );
+
   it.effect("installs ownership before spawn, fences stale stops, and deduplicates stops", () =>
     Effect.gen(function* () {
       const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>({ replay: 1 });

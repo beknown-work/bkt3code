@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentAuthenticatedPrincipal,
+  EnvironmentHttpConflictError,
   EnvironmentHttpApi,
   type OrchestrationLatestTurn,
   type ThreadId,
@@ -28,6 +29,8 @@ import { checkCommandAccess } from "./commandAccess.ts";
 import { ClerkDirectory } from "../auth/ClerkDirectory.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
+import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
+import { discoverPullRequestLinks } from "../sourceControl/PullRequestLinkDiscovery.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -39,6 +42,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const clerkDirectory = yield* ClerkDirectory;
     const providerRegistry = yield* ProviderRegistry;
     const executionSupervisor = yield* ThreadExecutionSupervisor;
+    const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
 
     const attachExecutions = Effect.fn("orchestration.http.attachExecutions")(function* <
       T extends {
@@ -165,6 +169,31 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "pullRequestLinks",
+        Effect.fn("environment.orchestration.pullRequestLinks")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const actorUserId = yield* currentActorUserId;
+          const snapshot = yield* projectionSnapshotQuery
+            .getShellSnapshot()
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_snapshot_failed", cause),
+              ),
+            );
+          const accessibleSnapshot =
+            actorUserId === null ? snapshot : filterShellSnapshot(snapshot, actorUserId);
+          const executions = yield* executionSupervisor.getSnapshots(
+            accessibleSnapshot.threads.map((thread) => thread.id),
+          );
+          return yield* discoverPullRequestLinks({
+            snapshot: accessibleSnapshot,
+            executions,
+            getStatus: vcsStatusBroadcaster.getStatus,
+          });
+        }),
+      )
+      .handle(
         "dispatch",
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -191,13 +220,21 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               return yield* failEnvironmentInvalidRequest("invalid_command");
             }
           }
-          return yield* commandDispatcher
-            .dispatch(normalizedCommand, { actorUserId })
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+          return yield* commandDispatcher.dispatch(normalizedCommand, { actorUserId }).pipe(
+            Effect.catchTag(
+              "ThreadTurnAdmissionConflictError",
+              (conflict) =>
+                new EnvironmentHttpConflictError({
+                  message:
+                    conflict.reason === "execution_revision_mismatch"
+                      ? "The thread execution changed before the turn could be admitted."
+                      : "The thread is not idle.",
+                }),
+            ),
+            Effect.catchTag("OrchestrationDispatchCommandError", (cause) =>
+              failEnvironmentInternal("orchestration_dispatch_failed", cause),
+            ),
+          );
         }),
       );
   }),

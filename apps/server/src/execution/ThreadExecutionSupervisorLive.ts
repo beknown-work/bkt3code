@@ -1,5 +1,6 @@
 import {
   ThreadId,
+  ThreadTurnAdmissionConflictError,
   TurnId,
   type OrchestrationStopExecutionResult,
   type ProviderRuntimeEvent,
@@ -387,6 +388,108 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           completedAt: null,
           lastError: null,
         },
+      };
+    });
+
+  const admitIdleTurn: ThreadExecutionSupervisorShape["admitIdleTurn"] = (input) =>
+    transitions.withPermit(
+      Effect.gen(function* () {
+        const observedAt = yield* nowIso;
+        const current = state.get(input.threadId) ?? emptySnapshot(input.threadId, observedAt);
+        if (current.turn?.executionId === input.executionId) {
+          return current;
+        }
+        if (current.revision !== input.expectedExecutionRevision) {
+          return yield* new ThreadTurnAdmissionConflictError({
+            threadId: input.threadId,
+            executionId: input.executionId,
+            reason: "execution_revision_mismatch",
+            expectedExecutionRevision: input.expectedExecutionRevision,
+            actualExecutionRevision: current.revision,
+            activity: current.activity,
+          });
+        }
+        if (
+          current.activity !== "idle" ||
+          current.canStop ||
+          (current.turn !== null && !isTerminalTurn(current))
+        ) {
+          return yield* new ThreadTurnAdmissionConflictError({
+            threadId: input.threadId,
+            executionId: input.executionId,
+            reason: "thread_not_idle",
+            expectedExecutionRevision: input.expectedExecutionRevision,
+            actualExecutionRevision: current.revision,
+            activity: current.activity,
+          });
+        }
+        const replaceProvider =
+          current.providerSession.state === "absent" ||
+          current.providerSession.state === "stopped" ||
+          current.providerSession.state === "failed";
+        const admitted: ThreadExecutionSnapshot = {
+          ...current,
+          authorityEpoch,
+          revision: current.revision + 1,
+          observedAt,
+          activity: "active",
+          canStop: true,
+          providerSession: {
+            ...current.providerSession,
+            providerInstanceId:
+              input.providerInstanceId ?? current.providerSession.providerInstanceId,
+            state: replaceProvider ? "starting" : current.providerSession.state,
+            startedAt: replaceProvider ? observedAt : current.providerSession.startedAt,
+            lastObservedAt: observedAt,
+            lastError: null,
+          },
+          turn: {
+            executionId: input.executionId,
+            providerTurnId: null,
+            state: "starting",
+            startedAt: input.startedAt,
+            stopRequestedAt: null,
+            completedAt: null,
+            lastError: null,
+          },
+        };
+        yield* publish(admitted);
+        yield* increment(threadExecutionTransitionsTotal, {
+          activity: admitted.activity,
+          providerInstanceId: admitted.providerSession.providerInstanceId ?? "unknown",
+          providerSessionState: admitted.providerSession.state,
+          turnState: admitted.turn?.state ?? "none",
+        });
+        return admitted;
+      }),
+    );
+
+  const releaseTurnAdmission: ThreadExecutionSupervisorShape["releaseTurnAdmission"] = (
+    threadId,
+    executionId,
+  ) =>
+    transition(threadId, (current, observedAt) => {
+      if (
+        current.turn?.executionId !== executionId ||
+        current.turn.providerTurnId !== null ||
+        current.turn.state !== "starting"
+      ) {
+        return null;
+      }
+      return {
+        ...current,
+        activity: "idle",
+        canStop: false,
+        providerSession: {
+          ...current.providerSession,
+          state:
+            current.providerSession.state === "starting"
+              ? "stopped"
+              : current.providerSession.state,
+          lastObservedAt: observedAt,
+          lastError: null,
+        },
+        turn: null,
       };
     });
 
@@ -1022,6 +1125,8 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     getSnapshot,
     getSnapshots,
     prepareExecution,
+    admitIdleTurn,
+    releaseTurnAdmission,
     canContinueExecution,
     failExecution,
     stopExecution,

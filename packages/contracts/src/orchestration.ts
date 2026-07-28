@@ -874,6 +874,12 @@ const ThreadTurnStartBootstrap = Schema.Struct({
 
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
 
+export const ThreadTurnStartPrecondition = Schema.Struct({
+  requireIdle: Schema.Literal(true),
+  expectedExecutionRevision: NonNegativeInt,
+});
+export type ThreadTurnStartPrecondition = typeof ThreadTurnStartPrecondition.Type;
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
@@ -890,6 +896,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  precondition: Schema.optional(ThreadTurnStartPrecondition),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
@@ -909,6 +916,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  precondition: Schema.optional(ThreadTurnStartPrecondition),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
@@ -1852,6 +1860,24 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export const ThreadTurnAdmissionConflictReason = Schema.Literals([
+  "execution_revision_mismatch",
+  "thread_not_idle",
+]);
+export type ThreadTurnAdmissionConflictReason = typeof ThreadTurnAdmissionConflictReason.Type;
+
+export class ThreadTurnAdmissionConflictError extends Schema.TaggedErrorClass<ThreadTurnAdmissionConflictError>()(
+  "ThreadTurnAdmissionConflictError",
+  {
+    threadId: ThreadId,
+    executionId: TrimmedNonEmptyString,
+    reason: ThreadTurnAdmissionConflictReason,
+    expectedExecutionRevision: NonNegativeInt,
+    actualExecutionRevision: NonNegativeInt,
+    activity: ThreadExecutionActivity,
   },
 ) {}
 

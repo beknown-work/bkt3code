@@ -226,6 +226,31 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
   }),
 );
 
+it.effect("preserves idle admission preconditions in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-precondition",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-precondition",
+        role: "user",
+        text: "automated repair",
+        attachments: [],
+      },
+      precondition: {
+        requireIdle: true,
+        expectedExecutionRevision: 12,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepEqual(parsed.precondition, {
+      requireIdle: true,
+      expectedExecutionRevision: 12,
+    });
+  }),
+);
+
 it.effect("preserves explicit provider and runtime mode in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

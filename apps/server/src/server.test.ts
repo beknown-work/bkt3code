@@ -27,6 +27,7 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  ThreadTurnAdmissionConflictError,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -105,6 +106,10 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriver from "./vcs/VcsDriver.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import {
+  ThreadExecutionSupervisor,
+  type ThreadExecutionSupervisorShape,
+} from "./execution/ThreadExecutionSupervisor.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -366,6 +371,7 @@ const buildAppUnderTest = (options?: {
     >;
     relayClient?: Partial<RelayClient.RelayClient["Service"]>;
     cloudCliTokenManager?: Partial<CloudCliTokenManager.CloudCliTokenManager["Service"]>;
+    threadExecutionSupervisor?: Partial<ThreadExecutionSupervisorShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -550,6 +556,14 @@ const buildAppUnderTest = (options?: {
     }).pipe(
       Layer.provide(PlannotatorManager.layer),
       Layer.provide(OrchestrationCommandDispatcher.layer),
+      Layer.provide(
+        options?.layers?.threadExecutionSupervisor
+          ? Layer.mock(ThreadExecutionSupervisor)({
+              authorityEpoch: "test-authority",
+              ...options.layers.threadExecutionSupervisor,
+            })
+          : Layer.empty,
+      ),
       // T3-CUSTOM(expbkt3): Router tests do not exercise personal credential
       // persistence. Keep the new RPC dependency fail-closed and in memory.
       Layer.provide(
@@ -1548,6 +1562,72 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ipAddress: "127.0.0.1",
         userAgent: "undici",
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("returns 409 before dispatching a stale idle-only turn", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-stale-admission");
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          threadExecutionSupervisor: {
+            admitIdleTurn: (input) =>
+              Effect.fail(
+                new ThreadTurnAdmissionConflictError({
+                  threadId: input.threadId,
+                  executionId: input.executionId,
+                  reason: "execution_revision_mismatch",
+                  expectedExecutionRevision: input.expectedExecutionRevision,
+                  actualExecutionRevision: 4,
+                  activity: "active",
+                }),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-07-28T00:00:00.000Z";
+      const command: OrchestrationCommand = {
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-stale-admission"),
+        threadId,
+        message: {
+          messageId: MessageId.make("msg-stale-admission"),
+          role: "user",
+          text: "repair the failed check",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        precondition: {
+          requireIdle: true,
+          expectedExecutionRevision: 3,
+        },
+        createdAt,
+      };
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/orchestration/dispatch"), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          "content-type": "application/json",
+        },
+        body: jsonRequestBody(command),
+      });
+      const body = yield* responseJsonEffect<{ readonly _tag: string }>(response);
+
+      assert.equal(response.status, 409);
+      assert.equal(body._tag, "EnvironmentHttpConflictError");
+      assert.deepEqual(dispatchedCommands, []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

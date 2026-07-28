@@ -2,6 +2,8 @@ import type {
   OrchestrationEvent,
   OrchestrationStopExecutionInput,
   OrchestrationStopExecutionResult,
+  ProviderInstanceId,
+  ThreadTurnAdmissionConflictError,
   ThreadExecutionSnapshot,
   ThreadId,
 } from "@t3tools/contracts";
@@ -11,6 +13,14 @@ import * as Stream from "effect/Stream";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import type { ProviderServiceError } from "../provider/Errors.ts";
 
+export interface ThreadTurnAdmissionInput {
+  readonly threadId: ThreadId;
+  readonly executionId: string;
+  readonly expectedExecutionRevision: number;
+  readonly providerInstanceId?: ProviderInstanceId;
+  readonly startedAt: string;
+}
+
 export interface ThreadExecutionSupervisorShape {
   readonly authorityEpoch: string;
   readonly getSnapshot: (threadId: ThreadId) => Effect.Effect<ThreadExecutionSnapshot>;
@@ -19,6 +29,13 @@ export interface ThreadExecutionSupervisorShape {
   ) => Effect.Effect<ReadonlyMap<ThreadId, ThreadExecutionSnapshot>>;
   readonly prepareExecution: (
     event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
+  ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
+  readonly admitIdleTurn: (
+    input: ThreadTurnAdmissionInput,
+  ) => Effect.Effect<ThreadExecutionSnapshot, ThreadTurnAdmissionConflictError | SqlError>;
+  readonly releaseTurnAdmission: (
+    threadId: ThreadId,
+    executionId: string,
   ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
   readonly canContinueExecution: (
     threadId: ThreadId,
@@ -85,6 +102,22 @@ export class ThreadExecutionSupervisor extends Context.Reference<ThreadExecution
           },
         });
       },
+      admitIdleTurn: (input) =>
+        Effect.succeed({
+          ...unavailableSnapshot(input.threadId),
+          activity: "active",
+          canStop: true,
+          turn: {
+            executionId: input.executionId,
+            providerTurnId: null,
+            state: "starting",
+            startedAt: input.startedAt,
+            stopRequestedAt: null,
+            completedAt: null,
+            lastError: null,
+          },
+        }),
+      releaseTurnAdmission: (threadId) => Effect.succeed(unavailableSnapshot(threadId)),
       canContinueExecution: () => Effect.succeed(true),
       failExecution: (threadId, executionId, error) => {
         const snapshot = unavailableSnapshot(threadId);

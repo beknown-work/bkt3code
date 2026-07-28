@@ -25,7 +25,15 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
@@ -34,6 +42,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationUsersResult,
+  ThreadExecutionSnapshot,
 } from "./orchestration.ts";
 import { ServerProviders } from "./server.ts";
 import {
@@ -309,8 +318,45 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
 const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
+  EnvironmentHttpConflictError,
   EnvironmentInternalError,
 ] as const;
+
+export const OrchestrationPullRequestLink = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  threadTitle: TrimmedNonEmptyString,
+  threadUpdatedAt: IsoDateTime,
+  branch: TrimmedNonEmptyString,
+  repository: Schema.Struct({
+    canonicalKey: TrimmedNonEmptyString,
+    owner: TrimmedNonEmptyString,
+    name: TrimmedNonEmptyString,
+  }),
+  pullRequest: Schema.Struct({
+    number: PositiveInt,
+    title: TrimmedNonEmptyString,
+    url: Schema.String,
+    baseRef: TrimmedNonEmptyString,
+    headRef: TrimmedNonEmptyString,
+    state: Schema.Literals(["open", "closed", "merged"]),
+  }),
+  execution: ThreadExecutionSnapshot,
+});
+export type OrchestrationPullRequestLink = typeof OrchestrationPullRequestLink.Type;
+
+export const OrchestrationPullRequestLinkFailure = Schema.Struct({
+  threadId: ThreadId,
+  reason: Schema.Literals(["project_not_found", "workspace_unavailable", "repository_unresolved"]),
+});
+export type OrchestrationPullRequestLinkFailure = typeof OrchestrationPullRequestLinkFailure.Type;
+
+export const OrchestrationPullRequestLinksResult = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  links: Schema.Array(OrchestrationPullRequestLink),
+  failures: Schema.Array(OrchestrationPullRequestLinkFailure),
+});
+export type OrchestrationPullRequestLinksResult = typeof OrchestrationPullRequestLinksResult.Type;
 
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
@@ -511,6 +557,17 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       success: OrchestrationThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "pullRequestLinks",
+      "/api/orchestration/source-control/pull-request-links",
+      {
+        headers: OptionalBearerHeaders,
+        success: OrchestrationPullRequestLinksResult,
+        error: EnvironmentOrchestrationSnapshotErrors,
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {
