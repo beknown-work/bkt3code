@@ -75,9 +75,11 @@ history stable, while `NativePlanBridge` associates the next revised native plan
 ID with that lineage. Complete HTML documents and balanced top-level HTML plan
 fragments use a private `.html` plan path; everything else uses `.md`. A revision
 may migrate that path between extensions without replacing the review identity
-or its annotations. Opening the iframe deliberately relaunches a completed or
-stopped process and replays stored inline, deletion, and global annotations
-through Plannotator's external-annotation API.
+or its annotations. HTML launch arguments include Plannotator's
+`--render-html`; without it Plannotator converts `.html` input back to Markdown.
+Opening the iframe deliberately relaunches a completed or stopped process and
+replays stored inline, deletion, and global annotations through Plannotator's
+external-annotation API.
 
 Archived sessions are excluded from automatic startup reconciliation, but an
 explicit review open falls back to the archived thread/project shell. This lets

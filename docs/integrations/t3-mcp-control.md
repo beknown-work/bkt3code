@@ -180,8 +180,9 @@ T3 stores the plan in its private state directory, launches
 `plannotator --browser none annotate <plan> --gate --json`, and adds an actionable
 proposed plan to the session. The plan carries only an opaque, same-origin review
 path; its private token is removed from copy, download, and export operations.
-T3 does not pass Plannotator a `--markdown` flag: the persisted `.md` or `.html`
-plan extension selects the renderer.
+T3 does not pass Plannotator a `--markdown` flag. Markdown uses Plannotator's
+native mode; HTML passes `--render-html` because Plannotator otherwise converts
+an `.html` input file to Markdown.
 
 Every actionable native plan card shows a prominent **Review →** action beside
 the existing **Expand plan** control. The action briefly shows a preparing state

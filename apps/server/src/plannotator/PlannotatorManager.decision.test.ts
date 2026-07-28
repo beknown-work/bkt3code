@@ -6,6 +6,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   approvedPlanInteractionModeCommand,
+  plannotatorAnnotateArguments,
   resolvePlannotatorLaunchLocation,
 } from "./PlannotatorManager.ts";
 
@@ -99,5 +100,34 @@ describe("Plannotator durable review launch location", () => {
         archivedProjects: [],
       }),
     ).toEqual({ kind: "thread-not-found" });
+  });
+});
+
+describe("Plannotator renderer arguments", () => {
+  it("opts HTML reviews into Plannotator raw HTML rendering", () => {
+    expect(
+      plannotatorAnnotateArguments({
+        planPath: "/plans/review.html",
+        format: "html",
+      }),
+    ).toEqual([
+      "--browser",
+      "none",
+      "annotate",
+      "/plans/review.html",
+      "--render-html",
+      "--gate",
+      "--json",
+    ]);
+  });
+
+  it("leaves Markdown reviews in Plannotator's native mode", () => {
+    const args = plannotatorAnnotateArguments({
+      planPath: "/plans/review.md",
+      format: "md",
+    });
+    expect(args).toEqual(["--browser", "none", "annotate", "/plans/review.md", "--gate", "--json"]);
+    expect(args).not.toContain("--markdown");
+    expect(args).not.toContain("--render-html");
   });
 });
