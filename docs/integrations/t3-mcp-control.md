@@ -151,13 +151,15 @@ are excluded.
 ## Plannotator plan workflow
 
 Whenever a provider completes a normal T3 plan, the server observes T3's durable
-`proposed-plan-upserted` event, detects whether the plan is Markdown or a complete
-HTML document, starts the matching Plannotator renderer for that same plan ID,
-and updates the existing plan through the standard orchestration command path.
-This preserves T3's native **Plan Ready**, implementation linkage, timeline,
-projection, and WebSocket behavior. Complete HTML must have an `<html>` root
-(preferably with `<!doctype html>`) and must not be wrapped in a Markdown code
-fence. HTML snippets inside Markdown remain Markdown by design.
+`proposed-plan-upserted` event, detects whether the plan is Markdown, a complete
+HTML document, or a balanced top-level HTML plan fragment, starts the matching
+Plannotator renderer for that same plan ID, and updates the existing plan through
+the standard orchestration command path. This preserves T3's native **Plan
+Ready**, implementation linkage, timeline, projection, and WebSocket behavior.
+HTML may use an `<html>` root (preferably with `<!doctype html>`) or one balanced
+top-level `body`, `main`, `article`, `section`, or `div` container. It must not be
+wrapped in a Markdown code fence. HTML snippets inside Markdown remain Markdown
+by design.
 
 The server also reconciles the newest actionable plan in every active session at
 startup. That gives plans created before this integration a review action and

@@ -72,11 +72,12 @@ or remove that ticket; ordinary session headers are unchanged.
 A native T3 plan and its later plan-mode revisions share one Plannotator review
 identity. `PlannotatorManager` keeps the token, manifest, and captured annotation
 history stable, while `NativePlanBridge` associates the next revised native plan
-ID with that lineage. Complete HTML documents use a private `.html` plan path;
-everything else uses `.md`. A revision may migrate that path between extensions
-without replacing the review identity or its annotations. Opening the iframe
-deliberately relaunches a completed or stopped process and replays stored inline,
-deletion, and global annotations through Plannotator's external-annotation API.
+ID with that lineage. Complete HTML documents and balanced top-level HTML plan
+fragments use a private `.html` plan path; everything else uses `.md`. A revision
+may migrate that path between extensions without replacing the review identity
+or its annotations. Opening the iframe deliberately relaunches a completed or
+stopped process and replays stored inline, deletion, and global annotations
+through Plannotator's external-annotation API.
 
 Only a submitted review round is added to `annotationHistory`; unsubmitted
 Plannotator drafts retain their normal crash-recovery behavior. Review history

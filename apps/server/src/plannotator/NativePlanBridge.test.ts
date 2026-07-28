@@ -99,17 +99,24 @@ function makeDependencies(input: {
 }
 
 describe("native Plannotator plan bridge", () => {
-  it("uses HTML only for complete HTML documents", () => {
+  it("uses HTML for complete documents and balanced root fragments", () => {
     expect(
       nativePlannotatorPlanFormat(
         '\uFEFF<!-- generated plan -->\n<!DOCTYPE html>\n<html lang="en"><body>Plan</body></html>',
       ),
     ).toBe("html");
     expect(nativePlannotatorPlanFormat("<html><body>Plan</body></html>")).toBe("html");
+    expect(
+      nativePlannotatorPlanFormat(
+        '<div class="plan"><h1>Brew Log</h1><section>Plan UI</section></div>',
+      ),
+    ).toBe("html");
+    expect(nativePlannotatorPlanFormat("<main><h1>Visual plan</h1></main>")).toBe("html");
     expect(nativePlannotatorPlanFormat("```html\n<html><body>Snippet</body></html>\n```")).toBe(
       "md",
     );
     expect(nativePlannotatorPlanFormat("# Plan\n\n<section>HTML fragment</section>")).toBe("md");
+    expect(nativePlannotatorPlanFormat("<div>Unclosed HTML plan")).toBe("md");
   });
 
   it.effect("attaches a review to the same native proposed-plan record", () =>
@@ -237,6 +244,36 @@ describe("native Plannotator plan bridge", () => {
           content: "<!doctype html><html><body><h1>Plan</h1></body></html>",
         },
       ]);
+    }),
+  );
+
+  it.effect("does not downgrade an attached HTML review from its native Markdown receipt", () =>
+    Effect.gen(function* () {
+      const proposedPlan = makePlan("plan-submitted-html", {
+        planMarkdown:
+          "# Project Northstar\n\nThis plan was submitted as HTML. Open the Plannotator review to inspect and annotate the full document.\n\n<!-- t3-plannotator:/plannotator/native_token/ -->",
+      });
+      const htmlSession = makeSession(proposedPlan.id, {
+        format: "html",
+        planPath: "/private/plan.html",
+      });
+      const reopened: unknown[] = [];
+      const commands: unknown[] = [];
+
+      const result = yield* attachNativePlanReview(
+        makeDependencies({
+          sessions: [htmlSession],
+          startedSession: htmlSession,
+          discarded: [],
+          commands,
+          reopened,
+        }),
+        { threadId, proposedPlan },
+      );
+
+      expect(result).toEqual({ status: "already-attached", session: htmlSession });
+      expect(reopened).toEqual([]);
+      expect(commands).toEqual([]);
     }),
   );
 

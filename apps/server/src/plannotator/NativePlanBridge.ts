@@ -49,12 +49,25 @@ export type NativePlanBridgeResult =
  * Markdown plans containing snippets or fenced HTML keep their normal renderer.
  */
 export function nativePlannotatorPlanFormat(content: string): PlannotatorPlanFormat {
-  const document = content.trimStart();
-  return /^(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+html(?:\s[^>]*)?>\s*)?<html(?:\s|>)/i.test(
-    document,
-  )
-    ? "html"
-    : "md";
+  const document = content.trim();
+  const withoutLeadingComments = document.replace(/^(?:<!--[\s\S]*?-->\s*)*/i, "");
+  if (/^(?:<!doctype\s+html(?:\s[^>]*)?>\s*)?<html(?:\s|>)/i.test(withoutLeadingComments)) {
+    return "html";
+  }
+
+  // Providers such as Claude may emit the entire visual plan as one balanced
+  // root fragment instead of adding document-level html/head/body elements.
+  // Requiring the matching closing root avoids treating ordinary Markdown
+  // containing an inline HTML example as an HTML plan.
+  const rootedFragment = /^<(body|main|article|section|div)(?:\s|>)/i.exec(withoutLeadingComments);
+  if (rootedFragment) {
+    const root = rootedFragment[1];
+    if (new RegExp(`</${root}>\\s*$`, "i").test(withoutLeadingComments)) {
+      return "html";
+    }
+  }
+
+  return "md";
 }
 
 /**
@@ -86,18 +99,21 @@ export const attachNativePlanReview = EffectRuntime.fn("attachNativePlanReview")
   }
   const format = nativePlannotatorPlanFormat(content);
   if (attachedSession) {
-    if (attachedSession.format === format) {
-      return { status: "already-attached", session: attachedSession } as const;
+    // T3-CUSTOM(expbkt3): Explicit HTML submissions intentionally keep a
+    // Markdown receipt on the native plan while Plannotator owns the complete
+    // HTML. The persisted attached-session format is therefore authoritative.
+    // Only upgrade the legacy case where the native record itself still
+    // contains a complete HTML document that was previously forced into .md.
+    if (attachedSession.format === "md" && format === "html") {
+      const migrated = yield* dependencies.manager.reopen({
+        tokenOrId: attachedSession.id,
+        planId: proposedPlan.id,
+        format,
+        content,
+      });
+      return { status: "reopened", session: migrated } as const;
     }
-    // Upgrade reviews created before native HTML detection without changing
-    // their opaque URL, captured annotations, or proposed-plan identity.
-    const migrated = yield* dependencies.manager.reopen({
-      tokenOrId: attachedSession.id,
-      planId: proposedPlan.id,
-      format,
-      content,
-    });
-    return { status: "reopened", session: migrated } as const;
+    return { status: "already-attached", session: attachedSession } as const;
   }
 
   // Native provider revisions normally arrive as a new turn-scoped plan id.
