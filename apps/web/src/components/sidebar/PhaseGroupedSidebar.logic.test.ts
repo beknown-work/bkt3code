@@ -21,6 +21,7 @@ import {
   derivePhaseSidebarRepositoryKey,
   isThreadAssignedToUser,
   matchesPhaseSidebarFilters,
+  phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarCheckoutMetadata,
@@ -37,6 +38,34 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-07-16T10:00:00.000Z";
+
+describe("phaseSidebarRowClassName", () => {
+  it("gives the routed row a restrained primary surface and focus ring", () => {
+    const className = phaseSidebarRowClassName(true, false, false);
+
+    expect(className).toContain("bg-primary/10");
+    expect(className).toContain("ring-primary/30");
+    expect(className).toContain("font-semibold");
+  });
+
+  it("keeps multi-selection distinct and strengthens the routed selected row", () => {
+    const selected = phaseSidebarRowClassName(false, true, false);
+    const activeSelected = phaseSidebarRowClassName(true, true, false);
+
+    expect(selected).toContain("bg-primary/15");
+    expect(selected).not.toContain("ring-primary/40");
+    expect(activeSelected).toContain("bg-primary/18");
+    expect(activeSelected).toContain("ring-primary/40");
+  });
+
+  it("preserves the urgent input treatment on an active row", () => {
+    const className = phaseSidebarRowClassName(true, false, true);
+
+    expect(className).toContain("bg-red-500/20");
+    expect(className).toContain("ring-red-500/60");
+    expect(className).toContain("motion-reduce:animate-none");
+  });
+});
 
 describe("resolvePhaseSidebarCheckoutMetadata", () => {
   it("shows the live branch for a current checkout", () => {

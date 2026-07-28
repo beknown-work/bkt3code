@@ -92,6 +92,7 @@ import {
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
+  phaseSidebarRowClassName,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
 } from "./sidebar/PhaseGroupedSidebar.logic";
@@ -178,26 +179,6 @@ function ThreadWorkflowProbe({
 
   useEffect(() => onStatus(threadKey, result.data), [onStatus, result.data, threadKey]);
   return null;
-}
-
-function phaseRowClassName(
-  isActive: boolean,
-  isSelected: boolean,
-  needsUserInput: boolean,
-): string {
-  return cn(
-    "group/phase-row relative flex min-h-11 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-    isActive && isSelected
-      ? "bg-primary/22 text-foreground dark:bg-primary/30"
-      : isSelected
-        ? "bg-primary/15 text-foreground dark:bg-primary/22"
-        : isActive
-          ? "bg-accent/85 text-foreground dark:bg-accent/55"
-          : "text-muted-foreground hover:bg-accent hover:text-foreground",
-    // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
-    needsUserInput &&
-      "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
-  );
 }
 
 function PhaseFilterPopover({
@@ -602,13 +583,21 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseRowClassName(active, selected, needsUserInput)}
+        className={phaseSidebarRowClassName(active, selected, needsUserInput)}
+        aria-current={active ? "page" : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
         onDoubleClick={() => onStartRename(row)}
         onContextMenu={(event) => void handleContextMenu(event)}
       >
+        {active ? (
+          <span
+            aria-hidden
+            data-testid={`phase-thread-active-indicator-${row.thread.id}`}
+            className="pointer-events-none absolute inset-y-1 right-0 w-0.5 rounded-full bg-primary shadow-[0_0_6px_var(--color-primary)]"
+          />
+        ) : null}
         {status ? (
           <ThreadStatusLabel status={status} compact />
         ) : (

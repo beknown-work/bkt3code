@@ -5,6 +5,7 @@ import { deriveLogicalProjectKey } from "../../logicalProject";
 import { isLatestTurnSettled } from "../../session-logic";
 import type { Project, ThreadShell } from "../../types";
 import { getThreadSortTimestamp } from "../../lib/threadSort";
+import { cn } from "../../lib/utils";
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
   // T3-CUSTOM(expbkt3): Pending structured questions are an urgent, top-level phase.
@@ -134,6 +135,31 @@ export interface PhaseSidebarRow {
   readonly isAssignedToMe: boolean;
   readonly attentionPriority: number;
   readonly unreadPriority: number;
+}
+
+/**
+ * Keep the routed thread visually distinct from multi-selected rows. The
+ * persistent right-edge accent is rendered by PhaseThreadRow; these surfaces
+ * provide enough contrast for the active row to remain obvious in both themes.
+ */
+export function phaseSidebarRowClassName(
+  isActive: boolean,
+  isSelected: boolean,
+  needsUserInput: boolean,
+): string {
+  return cn(
+    "group/phase-row relative flex min-h-11 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+    isActive && isSelected
+      ? "bg-primary/18 text-foreground font-semibold ring-1 ring-inset ring-primary/40 hover:bg-primary/22 dark:bg-primary/24"
+      : isSelected
+        ? "bg-primary/15 text-foreground dark:bg-primary/22"
+        : isActive
+          ? "bg-primary/10 text-foreground font-semibold ring-1 ring-inset ring-primary/30 hover:bg-primary/15 dark:bg-primary/16"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+    // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
+    needsUserInput &&
+      "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
+  );
 }
 
 export interface PhaseSidebarRepositoryOption {
