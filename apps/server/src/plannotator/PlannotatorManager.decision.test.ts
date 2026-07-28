@@ -4,7 +4,10 @@
 import { CommandId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { approvedPlanInteractionModeCommand } from "./PlannotatorManager.ts";
+import {
+  approvedPlanInteractionModeCommand,
+  resolvePlannotatorLaunchLocation,
+} from "./PlannotatorManager.ts";
 
 const threadId = ThreadId.make("thread-plan-review");
 const commandId = CommandId.make("plannotator:mode:test");
@@ -40,5 +43,61 @@ describe("Plannotator decision interaction mode", () => {
         createdAt,
       }),
     ).toBeNull();
+  });
+});
+
+describe("Plannotator durable review launch location", () => {
+  it("reopens an archived worktree review from its archived shell", () => {
+    expect(
+      resolvePlannotatorLaunchLocation({
+        threadId: "thread-archived",
+        activeThread: null,
+        activeProjects: [],
+        archivedThreads: [
+          {
+            id: "thread-archived",
+            projectId: "project-1",
+            worktreePath: "/worktrees/archived-review",
+          },
+        ],
+        archivedProjects: [{ id: "project-1", workspaceRoot: "/repos/project-1" }],
+      }),
+    ).toEqual({
+      kind: "found",
+      workingDirectory: "/worktrees/archived-review",
+    });
+  });
+
+  it("uses an archived project's workspace for a current-checkout review", () => {
+    expect(
+      resolvePlannotatorLaunchLocation({
+        threadId: "thread-archived",
+        activeThread: null,
+        activeProjects: [],
+        archivedThreads: [
+          {
+            id: "thread-archived",
+            projectId: "project-1",
+            worktreePath: null,
+          },
+        ],
+        archivedProjects: [{ id: "project-1", workspaceRoot: "/repos/project-1" }],
+      }),
+    ).toEqual({
+      kind: "found",
+      workingDirectory: "/repos/project-1",
+    });
+  });
+
+  it("reports a missing archived thread without guessing a workspace", () => {
+    expect(
+      resolvePlannotatorLaunchLocation({
+        threadId: "thread-missing",
+        activeThread: null,
+        activeProjects: [],
+        archivedThreads: [],
+        archivedProjects: [],
+      }),
+    ).toEqual({ kind: "thread-not-found" });
   });
 });

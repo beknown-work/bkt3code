@@ -79,6 +79,10 @@ or its annotations. Opening the iframe deliberately relaunches a completed or
 stopped process and replays stored inline, deletion, and global annotations
 through Plannotator's external-annotation API.
 
+Archived sessions are excluded from automatic startup reconciliation, but an
+explicit review open falls back to the archived thread/project shell. This lets
+the same durable review be revisited without unarchiving the T3 session.
+
 Only a submitted review round is added to `annotationHistory`; unsubmitted
 Plannotator drafts retain their normal crash-recovery behavior. Review history
 is de-duplicated by annotation content because Plannotator assigns new internal

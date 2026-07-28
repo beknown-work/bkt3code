@@ -165,7 +165,9 @@ The server also reconciles the newest actionable plan in every active session at
 startup. That gives plans created before this integration a review action and
 reopens a review process that did not survive a restart. Archived and deleted
 sessions are skipped. Repeated events are coalesced by session and plan ID, and
-an already-attached review is reused.
+an already-attached review is reused. A user may still reopen an already-attached
+review from an archived session: T3 resolves its archived workspace shell and
+keeps the same durable review URL and annotation history.
 
 `t3_submit_plan` remains available for agents operating outside T3 or for callers
 that need to submit an HTML plan. It accepts:
