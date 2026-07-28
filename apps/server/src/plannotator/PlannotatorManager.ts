@@ -124,6 +124,29 @@ export function resolvePlannotatorLaunchLocation({
   };
 }
 
+/**
+ * T3-CUSTOM(expbkt3): Plannotator converts `.html` input to Markdown unless
+ * `--render-html` is explicit. Markdown reviews intentionally receive neither
+ * that flag nor the legacy `--markdown` override.
+ */
+export function plannotatorAnnotateArguments({
+  planPath,
+  format,
+}: {
+  readonly planPath: string;
+  readonly format: "md" | "html";
+}): ReadonlyArray<string> {
+  return [
+    "--browser",
+    "none",
+    "annotate",
+    planPath,
+    ...(format === "html" ? ["--render-html"] : []),
+    "--gate",
+    "--json",
+  ];
+}
+
 export const PlannotatorPlanFormat = Schema.Literals(["md", "html"]);
 export type PlannotatorPlanFormat = typeof PlannotatorPlanFormat.Type;
 
@@ -474,25 +497,21 @@ export const make = Effect.gen(function* () {
     activitySummary: string,
   ) {
     yield* stopHandle(current.token);
-    // T3-CUSTOM(expbkt3): Do not force Plannotator's Markdown mode. Its
-    // renderer follows the persisted .md/.html plan path selected by T3.
-    const command = ChildProcess.make(
-      "plannotator",
-      ["--browser", "none", "annotate", current.planPath, "--gate", "--json"],
-      {
-        cwd,
-        env: {
-          BROWSER: "/usr/bin/true",
-          CI: "1",
-          NO_BROWSER: "1",
-          OPEN_BROWSER: "0",
-          LAUNCH_BROWSER: "0",
-        },
-        extendEnv: true,
-        detached: false,
-        stdin: "ignore",
+    // T3-CUSTOM(expbkt3): Plannotator otherwise converts HTML files to
+    // Markdown. Select raw HTML rendering only for an HTML review.
+    const command = ChildProcess.make("plannotator", plannotatorAnnotateArguments(current), {
+      cwd,
+      env: {
+        BROWSER: "/usr/bin/true",
+        CI: "1",
+        NO_BROWSER: "1",
+        OPEN_BROWSER: "0",
+        LAUNCH_BROWSER: "0",
       },
-    );
+      extendEnv: true,
+      detached: false,
+      stdin: "ignore",
+    });
     const handle = yield* spawner
       .spawn(command)
       .pipe(
