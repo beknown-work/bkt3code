@@ -78,6 +78,52 @@ export function approvedPlanInteractionModeCommand({
   };
 }
 
+type PlannotatorLaunchThread = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly worktreePath: string | null;
+};
+
+type PlannotatorLaunchProject = {
+  readonly id: string;
+  readonly workspaceRoot: string;
+};
+
+export type PlannotatorLaunchLocation =
+  | { readonly kind: "found"; readonly workingDirectory: string }
+  | { readonly kind: "thread-not-found" }
+  | { readonly kind: "project-not-found"; readonly projectId: string };
+
+/**
+ * T3-CUSTOM(expbkt3): Durable reviews may be revisited after their T3 thread
+ * has been archived. Prefer the active detail, then fall back to the archived
+ * shell so reopening keeps the same review URL and annotation history.
+ */
+export function resolvePlannotatorLaunchLocation({
+  threadId,
+  activeThread,
+  activeProjects,
+  archivedThreads,
+  archivedProjects,
+}: {
+  readonly threadId: string;
+  readonly activeThread: PlannotatorLaunchThread | null;
+  readonly activeProjects: ReadonlyArray<PlannotatorLaunchProject>;
+  readonly archivedThreads: ReadonlyArray<PlannotatorLaunchThread>;
+  readonly archivedProjects: ReadonlyArray<PlannotatorLaunchProject>;
+}): PlannotatorLaunchLocation {
+  const thread = activeThread ?? archivedThreads.find((candidate) => candidate.id === threadId);
+  if (!thread) return { kind: "thread-not-found" };
+  const project = [...activeProjects, ...archivedProjects].find(
+    (candidate) => candidate.id === thread.projectId,
+  );
+  if (!project) return { kind: "project-not-found", projectId: thread.projectId };
+  return {
+    kind: "found",
+    workingDirectory: thread.worktreePath ?? project.workspaceRoot,
+  };
+}
+
 export const PlannotatorPlanFormat = Schema.Literals(["md", "html"]);
 export type PlannotatorPlanFormat = typeof PlannotatorPlanFormat.Type;
 
@@ -735,24 +781,38 @@ export const make = Effect.gen(function* () {
           return publicSession(unchanged);
         }
 
-        const threadOption = yield* query
-          .getThreadDetailById(latest.threadId)
-          .pipe(Effect.mapError(managerError("reopen", "Could not load the target T3 session")));
-        if (Option.isNone(threadOption)) {
+        const [threadOption, activeShell] = yield* Effect.all([
+          query
+            .getThreadDetailById(latest.threadId)
+            .pipe(Effect.mapError(managerError("reopen", "Could not load the target T3 session"))),
+          query
+            .getShellSnapshot()
+            .pipe(Effect.mapError(managerError("reopen", "Could not load the target T3 project"))),
+        ]);
+        const archivedShell = Option.isNone(threadOption)
+          ? yield* query
+              .getArchivedShellSnapshot()
+              .pipe(
+                Effect.mapError(managerError("reopen", "Could not load the archived T3 session")),
+              )
+          : null;
+        const launchLocation = resolvePlannotatorLaunchLocation({
+          threadId: latest.threadId,
+          activeThread: Option.getOrNull(threadOption),
+          activeProjects: activeShell.projects,
+          archivedThreads: archivedShell?.threads ?? [],
+          archivedProjects: archivedShell?.projects ?? [],
+        });
+        if (launchLocation.kind === "thread-not-found") {
           return yield* new PlannotatorManagerError({
             operation: "reopen",
             detail: `T3 session ${latest.threadId} was not found.`,
           });
         }
-        const thread = threadOption.value;
-        const shell = yield* query
-          .getShellSnapshot()
-          .pipe(Effect.mapError(managerError("reopen", "Could not load the target T3 project")));
-        const project = shell.projects.find((candidate) => candidate.id === thread.projectId);
-        if (!project) {
+        if (launchLocation.kind === "project-not-found") {
           return yield* new PlannotatorManagerError({
             operation: "reopen",
-            detail: `Project ${thread.projectId} was not found.`,
+            detail: `Project ${launchLocation.projectId} was not found.`,
           });
         }
         // T3-CUSTOM(expbkt3): Keep the durable review identity and annotation
@@ -788,7 +848,7 @@ export const make = Effect.gen(function* () {
         }
         const running = yield* launch(
           prepared,
-          thread.worktreePath ?? project.workspaceRoot,
+          launchLocation.workingDirectory,
           prepared.annotationHistory.length > 0
             ? "Plan review reopened with prior annotations."
             : "Plan review reopened in Plannotator.",
