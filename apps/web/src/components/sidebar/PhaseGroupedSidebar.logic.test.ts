@@ -20,7 +20,9 @@ import {
   buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
   isThreadAssignedToUser,
+  filterVisiblePhaseSidebarRows,
   matchesPhaseSidebarFilters,
+  partitionPhaseSidebarRows,
   phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
   reconcilePhaseSidebarFilters,
@@ -196,6 +198,11 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     isAssignedToMe: false,
     attentionPriority: 5,
     unreadPriority: 1,
+    // Settlement and snooze default ON: most cases exercise the partition,
+    // and the capability-gating cases opt out explicitly.
+    settlementSupported: true,
+    snoozeSupported: true,
+    changeRequestState: null,
     ...overrides,
   };
 }
@@ -694,5 +701,146 @@ describe("phase sidebar metadata and filters", () => {
         direction: "previous",
       }),
     ).toBe("environment:thread-c");
+  });
+});
+
+describe("partitionPhaseSidebarRows", () => {
+  const future = "2026-07-16T14:00:00.000Z";
+  const past = "2026-07-16T09:00:00.000Z";
+  const partitionOptions = { now, preciseNow: now, autoSettleAfterDays: null };
+  const keysOf = (rows: ReadonlyArray<PhaseSidebarRow>) => rows.map((row) => row.thread.id);
+
+  it("moves an explicitly settled thread off the lifecycle groups", () => {
+    const row = makeRow({
+      thread: makeThread({ settledOverride: "settled", settledAt: now }),
+    });
+
+    const { activeRows, settledRows } = partitionPhaseSidebarRows([row], partitionOptions);
+
+    expect(activeRows).toHaveLength(0);
+    expect(settledRows).toHaveLength(1);
+    expect(
+      buildPhaseSidebarGroups(activeRows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at"),
+    ).toHaveLength(0);
+  });
+
+  it("lets snooze outrank settled classification", () => {
+    const row = makeRow({
+      thread: makeThread({
+        snoozedUntil: future,
+        snoozedAt: past,
+        settledOverride: "settled",
+        settledAt: past,
+      }),
+    });
+
+    const { snoozedRows, settledRows } = partitionPhaseSidebarRows([row], partitionOptions);
+
+    expect(snoozedRows).toHaveLength(1);
+    expect(settledRows).toHaveLength(0);
+  });
+
+  it("keeps a snoozed thread active once it raises its hand for user input", () => {
+    const row = makeRow({
+      thread: makeThread({ snoozedUntil: future, snoozedAt: past, hasPendingUserInput: true }),
+    });
+
+    const { activeRows, snoozedRows } = partitionPhaseSidebarRows([row], partitionOptions);
+
+    expect(snoozedRows).toHaveLength(0);
+    expect(activeRows).toHaveLength(1);
+    expect(phaseSidebarNeedsUserInput(activeRows[0]!.thread)).toBe(true);
+  });
+
+  it("never parks rows whose server lacks the matching capability", () => {
+    const settled = makeRow({
+      thread: makeThread({ settledOverride: "settled", settledAt: now }),
+      settlementSupported: false,
+    });
+    const snoozed = makeRow({
+      thread: makeThread({ id: ThreadId.make("thread-2"), snoozedUntil: future }),
+      snoozeSupported: false,
+    });
+
+    const partition = partitionPhaseSidebarRows([settled, snoozed], partitionOptions);
+
+    expect(partition.activeRows).toHaveLength(2);
+    expect(partition.settledRows).toHaveLength(0);
+    expect(partition.snoozedRows).toHaveLength(0);
+  });
+
+  it("returns an elapsed snooze to the lifecycle groups", () => {
+    const row = makeRow({ thread: makeThread({ snoozedUntil: past, snoozedAt: past }) });
+
+    const { activeRows, snoozedRows } = partitionPhaseSidebarRows([row], partitionOptions);
+
+    expect(snoozedRows).toHaveLength(0);
+    expect(activeRows).toHaveLength(1);
+  });
+
+  it("orders snoozed rows by soonest wake and settled rows by most recently ended", () => {
+    const soon = makeRow({
+      thread: makeThread({
+        id: ThreadId.make("wake-soon"),
+        snoozedUntil: "2026-07-16T11:00:00.000Z",
+      }),
+    });
+    const later = makeRow({
+      thread: makeThread({ id: ThreadId.make("wake-later"), snoozedUntil: future }),
+    });
+    const older = makeRow({
+      thread: makeThread({
+        id: ThreadId.make("settled-older"),
+        settledOverride: "settled",
+        settledAt: past,
+      }),
+    });
+    const newer = makeRow({
+      thread: makeThread({
+        id: ThreadId.make("settled-newer"),
+        settledOverride: "settled",
+        settledAt: now,
+      }),
+    });
+
+    const partition = partitionPhaseSidebarRows([later, soon, older, newer], partitionOptions);
+
+    expect(keysOf(partition.snoozedRows)).toEqual(["wake-soon", "wake-later"]);
+    expect(keysOf(partition.settledRows)).toEqual(["settled-newer", "settled-older"]);
+  });
+
+  it("applies sidebar filters to parked rows, not just lifecycle groups", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ settledOverride: "settled", settledAt: now }),
+        repositoryKey: "repo-1",
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-2"), snoozedUntil: future }),
+        repositoryKey: "repo-2",
+      }),
+    ];
+    const filters = { ...EMPTY_PHASE_SIDEBAR_FILTERS, repositoryKeys: ["repo-1"] };
+
+    const partition = partitionPhaseSidebarRows(
+      filterVisiblePhaseSidebarRows(rows, filters),
+      partitionOptions,
+    );
+
+    expect(partition.settledRows).toHaveLength(1);
+    expect(partition.snoozedRows).toHaveLength(0);
+  });
+
+  it("excludes archived rows from every section", () => {
+    const rows = [makeRow({ thread: makeThread({ archivedAt: now }) })];
+
+    const partition = partitionPhaseSidebarRows(
+      filterVisiblePhaseSidebarRows(rows, EMPTY_PHASE_SIDEBAR_FILTERS),
+      partitionOptions,
+    );
+
+    expect(partition.activeRows).toHaveLength(0);
+    expect(partition.settledRows).toHaveLength(0);
+    expect(partition.snoozedRows).toHaveLength(0);
   });
 });

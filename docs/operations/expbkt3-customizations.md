@@ -32,6 +32,7 @@ rg 'T3-CUSTOM\\(expbkt3\\)'
 | Focused review UI         | `PlannotatorFocusSurface*`                                                                                      | chat, plan card/sidebar, and right-panel store seams                                    |
 | Lifecycle counters        | experimental sidebar counter components                                                                         | `SidebarChrome.tsx`                                                                     |
 | Urgent pending input      | `PhaseGroupedSidebar.logic.ts`                                                                                  | `PhaseGroupedSidebar.tsx`                                                               |
+| Lifecycle parking shelves | `PhaseGroupedSidebar.logic.ts` (`partitionPhaseSidebarRows`), `PhaseGroupedSidebar.tsx`                         | `useThreadActions.ts`, `Sidebar.snooze.ts`, `Sidebar.logic.ts` (all read-only)          |
 | T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorLinearIssueControl.tsx`, `T3ConductorSettingsSection.tsx` | experimental settings schema, `PhaseGroupedSidebar.tsx`, and one `ChatHeader.tsx` mount |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                       | none                                                                                    |
 

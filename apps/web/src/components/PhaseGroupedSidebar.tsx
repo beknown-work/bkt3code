@@ -9,16 +9,23 @@ import {
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
+  type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { ProviderDriverKind, type ScopedThreadRef, type VcsStatusResult } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
+  AlarmClockIcon,
   ArchiveIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ClockIcon,
   FilterIcon,
   FolderGit2Icon,
   FolderPlusIcon,
   LaptopIcon,
   PlusIcon,
+  RotateCcwIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -38,6 +45,7 @@ import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
 import { usePersonalMcpProfile } from "../hooks/usePersonalMcpProfile";
 import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useNowMinute } from "../hooks/useNowMinute";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import {
@@ -73,9 +81,16 @@ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import {
   canReconnectThreadSession,
   isTrailingDoubleClick,
+  resolveSettledTimestamp,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
+import {
+  resolveSnoozePresets,
+  snoozeWakeDescription,
+  snoozeWakeLabel,
+  type SnoozePreset,
+} from "./Sidebar.snooze";
 import { ThreadStatusLabel } from "./ThreadStatusIndicators";
 import {
   PHASE_SIDEBAR_PHASES,
@@ -83,8 +98,10 @@ import {
   buildPhaseSidebarGroups,
   buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
+  filterVisiblePhaseSidebarRows,
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
+  partitionPhaseSidebarRows,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
@@ -95,6 +112,7 @@ import {
   phaseSidebarRowClassName,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
+  type PhaseSidebarSection,
 } from "./sidebar/PhaseGroupedSidebar.logic";
 import { useCurrentUserId } from "../state/identity";
 import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
@@ -146,6 +164,23 @@ const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
   checking: "bg-muted-foreground/45",
   ready: "bg-muted-foreground/45",
 };
+
+// T3-CUSTOM(expbkt3): Settled-tail paging — recent history is the common
+// lookup; the deep tail stays behind an explicit Show more.
+const SETTLED_TAIL_INITIAL_COUNT = 10;
+const SETTLED_TAIL_PAGE_COUNT = 25;
+
+// The failed branch of a settle/snooze command — the four of them share one
+// error reporter, so it takes the widened failure shape.
+type ParkingCommandFailure = Extract<
+  AtomCommandResult<unknown, unknown>,
+  { readonly _tag: "Failure" }
+>;
+
+// Row hover affordances live in a shared overlay pill, so they need one
+// shared button shape.
+const ROW_ACTION_CLASS =
+  "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 type RepositoryOption = ReturnType<typeof buildPhaseSidebarRepositoryOptions>[number];
 
@@ -451,8 +486,127 @@ function FilterChip({
   );
 }
 
+/**
+ * T3-CUSTOM(expbkt3): Hover entry point for snooze — a clock button opening
+ * the preset menu. The row owns the open state so it can pin its hover
+ * actions visible while the menu is up (opening the popup moves the pointer
+ * off the row).
+ *
+ * The trigger renders as a role="button" span, not a <button>: the whole
+ * sidebar row is itself a <button> and nesting one inside it is invalid.
+ */
+function PhaseSnoozePopoverButton({
+  open,
+  label,
+  testId,
+  onOpenChange,
+  onSnooze,
+}: {
+  readonly open: boolean;
+  readonly label: string;
+  readonly testId?: string;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onSnooze: (preset: SnoozePreset) => void;
+}) {
+  // Presets resolve at open time so "In 1 hour" is relative to the click,
+  // not to when the row mounted.
+  const presets = useMemo(() => (open ? resolveSnoozePresets(new Date()) : []), [open]);
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      {/* Plain title instead of a Tooltip wrapper: composing a tooltip
+          trigger around a popover trigger would give this one span two
+          owners of the same `render` slot. */}
+      <PopoverTrigger
+        render={
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={label}
+            title="Snooze"
+            data-testid={testId}
+            className={ROW_ACTION_CLASS}
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+          />
+        }
+      >
+        <ClockIcon className="size-3.5" />
+      </PopoverTrigger>
+      <PopoverPopup side="bottom" align="end" className="w-56" viewportClassName="p-1">
+        {presets.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenChange(false);
+              onSnooze(preset);
+            }}
+            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
+          >
+            <span className="flex-1">{preset.label}</span>
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground/60">
+              {preset.whenLabel}
+            </span>
+          </button>
+        ))}
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+/**
+ * T3-CUSTOM(expbkt3): One hover action in the row overlay. Same
+ * nested-button constraint as the snooze trigger above.
+ */
+function PhaseRowAction({
+  label,
+  tooltip,
+  testId,
+  onClick,
+  children,
+}: {
+  readonly label: string;
+  readonly tooltip: string;
+  readonly testId?: string;
+  readonly onClick: () => void;
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={label}
+            data-testid={testId}
+            className={ROW_ACTION_CLASS}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onClick();
+            }}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              onClick();
+            }}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 interface PhaseThreadRowProps {
   readonly row: PhaseSidebarRow;
+  readonly section: PhaseSidebarSection;
   readonly project: Project | null;
   readonly vcsStatus: VcsStatusResult | null;
   readonly active: boolean;
@@ -468,11 +622,16 @@ interface PhaseThreadRowProps {
   readonly onReconnect: (threadRef: ScopedThreadRef) => Promise<void>;
   readonly onArchive: (row: PhaseSidebarRow) => void;
   readonly onDelete: (row: PhaseSidebarRow) => void;
+  readonly onSettle: (row: PhaseSidebarRow) => void;
+  readonly onUnsettle: (row: PhaseSidebarRow) => void;
+  readonly onSnooze: (row: PhaseSidebarRow, preset: SnoozePreset) => void;
+  readonly onUnsnooze: (row: PhaseSidebarRow) => void;
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
   const {
     row,
+    section,
     project,
     vcsStatus,
     active,
@@ -488,6 +647,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onReconnect,
     onArchive,
     onDelete,
+    onSettle,
+    onSnooze,
+    onUnsettle,
+    onUnsnooze,
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -503,6 +666,36 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
+  // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
+  // While the preset popover is open the pointer sits over the popup, not
+  // the row, so the hover cluster has to stay pinned.
+  const [snoozeMenuOpenRaw, setSnoozeMenuOpen] = useState(false);
+  // Snooze is offered only where it can succeed: capability-gated, and never
+  // on a thread that is blocked on the user (hiding a pending request would
+  // defeat it).
+  const canSnoozeRow =
+    row.snoozeSupported && canSnooze(row.thread, { now: new Date().toISOString() });
+  const snoozeMenuOpen = snoozeMenuOpenRaw && canSnoozeRow;
+  useEffect(() => {
+    if (!canSnoozeRow) setSnoozeMenuOpen(false);
+  }, [canSnoozeRow]);
+  const wokeAt = threadWokeAt(row.thread, { now: new Date().toISOString() });
+  // A wake the user has not looked at yet: same "visiting clears it" rule
+  // the unread indicator uses.
+  const showWokePill =
+    section === "active" &&
+    wokeAt !== null &&
+    (lastVisitedAt === undefined || Date.parse(wokeAt) > Date.parse(lastVisitedAt));
+  // Snoozed rows read "when does this come BACK"; settled rows read "when
+  // did this wrap up" — the same timestamp they sort by.
+  const timeLabel =
+    section === "snoozed" && row.thread.snoozedUntil != null
+      ? snoozeWakeLabel(row.thread.snoozedUntil, new Date())
+      : formatRelativeTimeLabel(
+          (section === "settled" ? resolveSettledTimestamp(row.thread) : null) ??
+            row.thread.updatedAt,
+        ).replace(" ago", "");
+  // T3-CUSTOM(expbkt3): END
 
   const openLinearIssue = (event: { preventDefault(): void; stopPropagation(): void }) => {
     event.preventDefault();
@@ -544,10 +737,38 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     event.preventDefault();
     const api = readLocalApi();
     if (!api) return;
+    // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking items, capability-gated
+    // so an old server shows none of them rather than failing on click.
+    const snoozePresets = resolveSnoozePresets(new Date());
+    const settlementItems = row.settlementSupported
+      ? [
+          section === "settled"
+            ? { id: "unsettle", label: "Un-settle thread" }
+            : { id: "settle", label: "Settle thread" },
+        ]
+      : [];
+    const snoozeItems = row.snoozeSupported
+      ? [
+          section === "snoozed"
+            ? { id: "unsnooze", label: "Wake thread" }
+            : {
+                id: "snooze",
+                label: "Snooze",
+                disabled: !canSnoozeRow,
+                children: snoozePresets.map((preset) => ({
+                  id: `snooze:${preset.id}`,
+                  label: `${preset.label} — ${preset.whenLabel}`,
+                })),
+              },
+        ]
+      : [];
+    // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
         { id: "rename", label: "Rename" },
         { id: "mark-unread", label: "Mark unread" },
+        ...settlementItems,
+        ...snoozeItems,
         {
           id: "reconnect-session",
           label: "Reconnect session",
@@ -567,6 +788,15 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     );
     if (action === "rename") onStartRename(row);
     if (action === "mark-unread") markThreadUnread(threadKey, row.thread.latestTurn?.completedAt);
+    // T3-CUSTOM(expbkt3): BEGIN
+    if (action === "settle") onSettle(row);
+    if (action === "unsettle") onUnsettle(row);
+    if (action === "unsnooze") onUnsnooze(row);
+    if (action?.startsWith("snooze:")) {
+      const preset = snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
+      if (preset) onSnooze(row, preset);
+    }
+    // T3-CUSTOM(expbkt3): END
     if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
       await navigator.clipboard.writeText(workspacePath);
@@ -705,34 +935,83 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               INPUT
             </span>
           ) : null}
+          {/* T3-CUSTOM(expbkt3): A woken thread returns to its original sort
+              position, so the wake signal has to carry the weight itself. */}
+          {showWokePill ? (
+            <span
+              aria-label="Woke from snooze"
+              data-testid={`phase-thread-woke-${row.thread.id}`}
+              className="inline-flex items-center gap-0.5 rounded-sm bg-blue-500/15 px-1 py-0.5 text-[8px] font-semibold tracking-wide text-blue-600 dark:text-blue-400"
+            >
+              <AlarmClockIcon aria-hidden className="size-2.5" />
+              WOKE
+            </span>
+          ) : null}
           {jumpLabel ? (
             <Kbd className="h-4 min-w-0 rounded-sm px-1 text-[9px]">{jumpLabel}</Kbd>
           ) : null}
-          <span className="text-[9px] tabular-nums text-muted-foreground/50">
-            {formatRelativeTimeLabel(row.thread.updatedAt).replace(" ago", "")}
-          </span>
+          <span className="text-[9px] tabular-nums text-muted-foreground/50">{timeLabel}</span>
         </span>
-        {/* T3-CUSTOM(expbkt3): BEGIN — hover action overlays the row instead of reflowing metadata. */}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                role="button"
-                tabIndex={0}
-                aria-label={`Archive ${row.thread.title}`}
-                className="absolute top-1/2 right-1 z-10 hidden size-7 -translate-y-1/2 items-center justify-center rounded-md border border-border/70 bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm hover:text-foreground group-hover/phase-row:inline-flex group-focus-within/phase-row:inline-flex"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onArchive(row);
-                }}
-              />
-            }
+        {/* T3-CUSTOM(expbkt3): BEGIN — hover actions overlay the row instead of reflowing metadata. */}
+        <span
+          className={cn(
+            "absolute top-1/2 right-1 z-10 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/70 bg-background/95 p-0.5 shadow-sm backdrop-blur-sm group-hover/phase-row:flex group-focus-within/phase-row:flex",
+            snoozeMenuOpen && "flex",
+          )}
+        >
+          {section === "snoozed" ? (
+            row.snoozeSupported ? (
+              <PhaseRowAction
+                label={`Wake ${row.thread.title}`}
+                tooltip="Wake now"
+                testId={`phase-thread-unsnooze-${row.thread.id}`}
+                onClick={() => onUnsnooze(row)}
+              >
+                <AlarmClockIcon className="size-3.5" />
+              </PhaseRowAction>
+            ) : null
+          ) : section === "settled" ? (
+            row.settlementSupported ? (
+              <PhaseRowAction
+                label={`Un-settle ${row.thread.title}`}
+                tooltip="Un-settle"
+                testId={`phase-thread-unsettle-${row.thread.id}`}
+                onClick={() => onUnsettle(row)}
+              >
+                <RotateCcwIcon className="size-3.5" />
+              </PhaseRowAction>
+            ) : null
+          ) : (
+            <>
+              {canSnoozeRow ? (
+                <PhaseSnoozePopoverButton
+                  open={snoozeMenuOpen}
+                  label={`Snooze ${row.thread.title}`}
+                  testId={`phase-thread-snooze-${row.thread.id}`}
+                  onOpenChange={setSnoozeMenuOpen}
+                  onSnooze={(preset) => onSnooze(row, preset)}
+                />
+              ) : null}
+              {row.settlementSupported ? (
+                <PhaseRowAction
+                  label={`Settle ${row.thread.title}`}
+                  tooltip="Settle"
+                  testId={`phase-thread-settle-${row.thread.id}`}
+                  onClick={() => onSettle(row)}
+                >
+                  <CheckIcon className="size-3.5" />
+                </PhaseRowAction>
+              ) : null}
+            </>
+          )}
+          <PhaseRowAction
+            label={`Archive ${row.thread.title}`}
+            tooltip="Archive"
+            onClick={() => onArchive(row)}
           >
             <ArchiveIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">Archive</TooltipPopup>
-        </Tooltip>
+          </PhaseRowAction>
+        </span>
         {/* T3-CUSTOM(expbkt3): END */}
       </button>
     </li>
@@ -804,7 +1083,14 @@ export function PhaseGroupedSidebar() {
   const { isMobile, setOpenMobile } = useSidebar();
   const handleNewThread = useNewThreadHandler();
   const openAddProject = useOpenAddProjectCommandPalette();
-  const { archiveThread, confirmAndDeleteThread } = useThreadActions();
+  const {
+    archiveThread,
+    confirmAndDeleteThread,
+    settleThread,
+    unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
+  } = useThreadActions();
   const reconnectThreadSession = useReconnectThreadSession();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -812,7 +1098,16 @@ export function PhaseGroupedSidebar() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
+  const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const currentUserId = useCurrentUserId();
+  // T3-CUSTOM(expbkt3): BEGIN — settle/snooze clocks. `now` is quantized to
+  // the minute so the settled partition does not churn on every render
+  // (auto-settle thresholds are day-granular anyway); snooze wake times are
+  // second-precise, so a separate tick fires exactly at the next wake
+  // boundary and the partition reads a fresh clock when it recomputes.
+  const nowMinute = useNowMinute();
+  const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
+  // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): Reserve one permanent row outside normal lifecycle groups.
   const legacyT3Conductor = usePrimarySettings((settings) => settings.experimental.t3Conductor);
   const { profile: personalMcpProfile } = usePersonalMcpProfile();
@@ -915,10 +1210,11 @@ export function PhaseGroupedSidebar() {
           const repositoryKey = project
             ? derivePhaseSidebarRepositoryKey(project)
             : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+          const serverConfig = serverConfigs.get(thread.environmentId);
           const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-          const provider = serverConfigs
-            .get(thread.environmentId)
-            ?.providers.find((candidate) => candidate.instanceId === instanceId);
+          const provider = serverConfig?.providers.find(
+            (candidate) => candidate.instanceId === instanceId,
+          );
           const providerKind = String(provider?.driver ?? instanceId);
           const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
           const vcsStatus = vcsStatusByThreadKey.get(threadKey);
@@ -945,6 +1241,11 @@ export function PhaseGroupedSidebar() {
             isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
             attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
             unreadPriority: isUnreadCompletion ? 0 : 1,
+            // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
+            settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
+            snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
+            changeRequestState: vcsStatus?.pr?.state ?? null,
+            // T3-CUSTOM(expbkt3): END
           };
         }),
     [
@@ -960,11 +1261,95 @@ export function PhaseGroupedSidebar() {
       vcsStatusByThreadKey,
     ],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — split the inbox from the parked shelves.
+  // Filtering happens once, before the partition, so a filter chip means the
+  // same thing in the lifecycle groups and on both shelves.
+  const { activeRows, snoozedRows, settledRows } = useMemo(() => {
+    // Snooze classification uses a REAL clock, not the quantized minute: a
+    // thread whose wake time just passed must leave the shelf immediately.
+    // snoozeWakeTick re-runs this at the exact boundary.
+    void snoozeWakeTick;
+    return partitionPhaseSidebarRows(filterVisiblePhaseSidebarRows(allRows, filters), {
+      now: nowMinute,
+      preciseNow: new Date().toISOString(),
+      autoSettleAfterDays,
+    });
+  }, [allRows, autoSettleAfterDays, filters, nowMinute, snoozeWakeTick]);
+
+  // Wake exactly when the soonest snooze expires (the shelf is sorted, so
+  // that is the first row). Clamped at 0, and capped so a far-future wake
+  // does not overflow the timer into an immediate fire.
+  useEffect(() => {
+    const nextWakeMs = Date.parse(snoozedRows[0]?.thread.snoozedUntil ?? "");
+    if (!Number.isFinite(nextWakeMs)) return;
+    const delayMs = Math.min(Math.max(nextWakeMs - Date.now(), 0), 2_147_483_000);
+    const id = window.setTimeout(() => bumpSnoozeWakeTick((tick) => tick + 1), delayMs);
+    return () => window.clearTimeout(id);
+  }, [snoozedRows]);
+
   const groups = useMemo(
-    () => buildPhaseSidebarGroups(allRows, filters, sortOrder),
-    [allRows, filters, sortOrder],
+    () => buildPhaseSidebarGroups(activeRows, filters, sortOrder),
+    [activeRows, filters, sortOrder],
   );
-  const visibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
+  const activeVisibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
+
+  // The settled tail renders in pages: history must not dominate the list.
+  const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
+  const showMoreSettled = useCallback(
+    () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
+    [],
+  );
+  // The snoozed shelf is collapsed by default (out of the way, never gone);
+  // the settled tail stays open because it is the ordinary "what did I just
+  // finish" lookup.
+  const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useState(false);
+  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
+  const toggleSnoozedShelf = useCallback(() => setSnoozedShelfExpanded((value) => !value), []);
+  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  // A parked row reached by route (deep link, or the row you just settled)
+  // always renders, even inside a collapsed or paged-out shelf: otherwise
+  // the thread you are looking at has no un-settle or wake affordance.
+  const pinRoutedRow = useCallback(
+    (rendered: ReadonlyArray<PhaseSidebarRow>, all: ReadonlyArray<PhaseSidebarRow>) => {
+      if (routeThreadKey === null) return rendered;
+      if (
+        rendered.some(
+          (row) =>
+            scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)) ===
+            routeThreadKey,
+        )
+      ) {
+        return rendered;
+      }
+      const routedRow = all.find(
+        (row) =>
+          scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)) ===
+          routeThreadKey,
+      );
+      return routedRow ? [...rendered, routedRow] : rendered;
+    },
+    [routeThreadKey],
+  );
+  const renderedSnoozedRows = useMemo(
+    () => pinRoutedRow(snoozedShelfExpanded ? snoozedRows : [], snoozedRows),
+    [pinRoutedRow, snoozedRows, snoozedShelfExpanded],
+  );
+  const visibleSettledRows = useMemo(
+    () => pinRoutedRow(settledRows.slice(0, settledVisibleCount), settledRows),
+    [pinRoutedRow, settledRows, settledVisibleCount],
+  );
+  const hiddenSettledCount = settledRows.length - visibleSettledRows.length;
+  const renderedSettledRows = useMemo(
+    () => pinRoutedRow(settledShelfExpanded ? visibleSettledRows : [], visibleSettledRows),
+    [pinRoutedRow, settledShelfExpanded, visibleSettledRows],
+  );
+  // Traversal, jump labels and shift-range selection operate on what is
+  // actually on screen, shelves included.
+  const visibleRows = useMemo(
+    () => [...activeVisibleRows, ...renderedSnoozedRows, ...renderedSettledRows],
+    [activeVisibleRows, renderedSnoozedRows, renderedSettledRows],
+  );
+  // T3-CUSTOM(expbkt3): END
 
   useEffect(() => {
     const next = new Map(lastKnownPhaseByThreadKeyRef.current);
@@ -1207,6 +1592,130 @@ export function PhaseGroupedSidebar() {
     },
     [archiveThread, confirmArchive],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — settle/snooze commands.
+  // Refs keep these callbacks stable: they are handed to a memoized row, so
+  // depending on the route or the row list directly would re-render every
+  // row on each navigation. They also have to read the CURRENT route when a
+  // command resolves, not the one captured when it started.
+  const activeVisibleRowsRef = useRef(activeVisibleRows);
+  activeVisibleRowsRef.current = activeVisibleRows;
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  routeThreadKeyRef.current = routeThreadKey;
+  // One parking command per thread at a time: a double click must not
+  // dispatch a second settle that fails and toasts a false error.
+  const parkingThreadKeysRef = useRef(new Set<string>());
+  // Parking the thread you are looking at moves you forward to the next
+  // lifecycle row — never into a shelf, since that is what you just left.
+  const planForwardNavigation = useCallback(
+    (threadKey: string) => {
+      const rows = activeVisibleRowsRef.current;
+      const index = rows.findIndex(
+        (row) =>
+          scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)) === threadKey,
+      );
+      if (index === -1) return null;
+      const target = rows[index + 1] ?? rows[index - 1] ?? null;
+      if (!target) return null;
+      return () => navigateToRow(scopeThreadRef(target.thread.environmentId, target.thread.id));
+    },
+    [navigateToRow],
+  );
+  const reportParkingFailure = useCallback((title: string, result: ParkingCommandFailure) => {
+    if (isAtomCommandInterrupted(result)) return;
+    const error = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title,
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
+  }, []);
+  const attemptUnsnooze = useCallback(
+    (row: PhaseSidebarRow) => {
+      void (async () => {
+        const result = await unsnoozeThread(
+          scopeThreadRef(row.thread.environmentId, row.thread.id),
+        );
+        if (result._tag === "Failure") reportParkingFailure("Failed to wake thread", result);
+      })();
+    },
+    [reportParkingFailure, unsnoozeThread],
+  );
+  const attemptUnsettle = useCallback(
+    (row: PhaseSidebarRow) => {
+      void (async () => {
+        const result = await unsettleThread(
+          scopeThreadRef(row.thread.environmentId, row.thread.id),
+        );
+        if (result._tag === "Failure") reportParkingFailure("Failed to un-settle thread", result);
+      })();
+    },
+    [reportParkingFailure, unsettleThread],
+  );
+  const attemptSettle = useCallback(
+    (row: PhaseSidebarRow) => {
+      void (async () => {
+        const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
+        const threadKey = scopedThreadKey(threadRef);
+        if (parkingThreadKeysRef.current.has(threadKey)) return;
+        parkingThreadKeysRef.current.add(threadKey);
+        try {
+          const navigateAfterSettle = planForwardNavigation(threadKey);
+          const result = await settleThread(threadRef);
+          if (result._tag === "Failure") {
+            // Never navigate away from a thread that did not settle.
+            reportParkingFailure("Failed to settle thread", result);
+            return;
+          }
+          // Settle is a high-frequency action and stays silent on success.
+          // Only move forward if the user is still on the settled thread — a
+          // navigation made during the await wins over ours.
+          if (routeThreadKeyRef.current === threadKey) navigateAfterSettle?.();
+        } finally {
+          parkingThreadKeysRef.current.delete(threadKey);
+        }
+      })();
+    },
+    [planForwardNavigation, reportParkingFailure, settleThread],
+  );
+  const attemptSnooze = useCallback(
+    (row: PhaseSidebarRow, preset: SnoozePreset) => {
+      void (async () => {
+        const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
+        const threadKey = scopedThreadKey(threadRef);
+        if (parkingThreadKeysRef.current.has(threadKey)) return;
+        parkingThreadKeysRef.current.add(threadKey);
+        try {
+          const navigateAfterSnooze = planForwardNavigation(threadKey);
+          const result = await snoozeThread(threadRef, preset.snoozedUntil);
+          if (result._tag === "Failure") {
+            reportParkingFailure("Failed to snooze thread", result);
+            return;
+          }
+          // Snooze moves the row to a collapsed shelf, so the toast is the
+          // only confirmation — and the Undo is the escape hatch for a
+          // mis-click.
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
+              timeout: 5_000,
+              actionProps: {
+                children: "Undo",
+                onClick: () => attemptUnsnooze(row),
+              },
+            }),
+          );
+          if (routeThreadKeyRef.current === threadKey) navigateAfterSnooze?.();
+        } finally {
+          parkingThreadKeysRef.current.delete(threadKey);
+        }
+      })();
+    },
+    [attemptUnsnooze, planForwardNavigation, reportParkingFailure, snoozeThread],
+  );
+  // T3-CUSTOM(expbkt3): END
   const requestDelete = useCallback(
     (row: PhaseSidebarRow) => {
       void confirmAndDeleteThread(scopeThreadRef(row.thread.environmentId, row.thread.id)).then(
@@ -1226,6 +1735,11 @@ export function PhaseGroupedSidebar() {
     },
     [confirmAndDeleteThread],
   );
+  // Stable identity for the memoized row (an inline arrow defeated it).
+  const handleArchive = useCallback(
+    (row: PhaseSidebarRow) => void requestArchive(row),
+    [requestArchive],
+  );
   const startGlobalNewThread = useCallback(() => {
     if (projects.length === 1 && projects[0]) {
       void handleNewThread(scopeProjectRef(projects[0].environmentId, projects[0].id));
@@ -1240,6 +1754,42 @@ export function PhaseGroupedSidebar() {
     },
     [handleNewThread],
   );
+
+  // T3-CUSTOM(expbkt3): One row shape for the lifecycle groups and both
+  // parked shelves — only `section` differs.
+  const renderThreadRow = (row: PhaseSidebarRow, section: PhaseSidebarSection) => {
+    const key = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
+    const project =
+      projectByKey.get(
+        scopedProjectKey(scopeProjectRef(row.thread.environmentId, row.thread.projectId)),
+      ) ?? null;
+    return (
+      <PhaseThreadRow
+        key={key}
+        row={row}
+        section={section}
+        project={project}
+        vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
+        active={routeThreadKey === key}
+        orderedThreadKeys={visibleThreadKeys}
+        jumpLabel={jumpLabelByKey.get(key) ?? null}
+        renaming={renamingThreadKey === key}
+        renameTitle={renameTitle}
+        onRenameTitleChange={setRenameTitle}
+        onStartRename={startRename}
+        onCommitRename={commitRename}
+        onCancelRename={cancelRename}
+        onNavigate={navigateToRow}
+        onReconnect={reconnectThreadSession}
+        onArchive={handleArchive}
+        onDelete={requestDelete}
+        onSettle={attemptSettle}
+        onUnsettle={attemptUnsettle}
+        onSnooze={attemptSnooze}
+        onUnsnooze={attemptUnsnooze}
+      />
+    );
+  };
 
   return (
     <>
@@ -1332,41 +1882,87 @@ export function PhaseGroupedSidebar() {
                 </span>
               </header>
               <ul ref={attachAutoAnimate} className="space-y-0.5">
-                {group.rows.map((row) => {
-                  const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
-                  const key = scopedThreadKey(threadRef);
-                  const project =
-                    projectByKey.get(
-                      scopedProjectKey(
-                        scopeProjectRef(row.thread.environmentId, row.thread.projectId),
-                      ),
-                    ) ?? null;
-                  return (
-                    <PhaseThreadRow
-                      key={key}
-                      row={row}
-                      project={project}
-                      vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
-                      active={routeThreadKey === key}
-                      orderedThreadKeys={visibleThreadKeys}
-                      jumpLabel={jumpLabelByKey.get(key) ?? null}
-                      renaming={renamingThreadKey === key}
-                      renameTitle={renameTitle}
-                      onRenameTitleChange={setRenameTitle}
-                      onStartRename={startRename}
-                      onCommitRename={commitRename}
-                      onCancelRename={cancelRename}
-                      onNavigate={navigateToRow}
-                      onReconnect={reconnectThreadSession}
-                      onArchive={(target) => void requestArchive(target)}
-                      onDelete={requestDelete}
-                    />
-                  );
-                })}
+                {group.rows.map((row) => renderThreadRow(row, "active"))}
               </ul>
             </section>
           ))}
-          {groups.length === 0 ? (
+          {/* T3-CUSTOM(expbkt3): BEGIN — parked shelves below the lifecycle
+              groups: out of the way, never gone, always undoable. */}
+          {snoozedRows.length > 0 ? (
+            <section className="mb-3" data-testid="phase-sidebar-snoozed-shelf">
+              <button
+                type="button"
+                onClick={toggleSnoozedShelf}
+                aria-expanded={snoozedShelfExpanded}
+                data-testid="phase-sidebar-snoozed-shelf-toggle"
+                className="mb-1 flex w-full cursor-pointer items-center gap-2 px-2 text-left"
+              >
+                <AlarmClockIcon
+                  aria-hidden
+                  className="size-2.5 shrink-0 text-blue-600 dark:text-blue-400"
+                />
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                  Snoozed
+                </span>
+                <span className="h-px flex-1 bg-blue-500/20 dark:bg-blue-400/15" />
+                <span className="text-[9px] tabular-nums text-muted-foreground/55">
+                  {snoozedRows.length}
+                </span>
+                <ChevronDownIcon
+                  aria-hidden
+                  className={cn(
+                    "size-3 text-blue-600 transition-transform dark:text-blue-400",
+                    snoozedShelfExpanded && "rotate-180",
+                  )}
+                />
+              </button>
+              <ul ref={attachAutoAnimate} className="space-y-0.5">
+                {renderedSnoozedRows.map((row) => renderThreadRow(row, "snoozed"))}
+              </ul>
+            </section>
+          ) : null}
+          {settledRows.length > 0 ? (
+            <section className="mb-3" data-testid="phase-sidebar-settled-shelf">
+              <button
+                type="button"
+                onClick={toggleSettledShelf}
+                aria-expanded={settledShelfExpanded}
+                data-testid="phase-sidebar-settled-shelf-toggle"
+                className="mb-1 flex w-full cursor-pointer items-center gap-2 px-2 text-left"
+              >
+                <CheckIcon aria-hidden className="size-2.5 shrink-0 text-muted-foreground/50" />
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+                  Settled
+                </span>
+                <span className="h-px flex-1 bg-sidebar-border/60" />
+                <span className="text-[9px] tabular-nums text-muted-foreground/55">
+                  {settledRows.length}
+                </span>
+                <ChevronDownIcon
+                  aria-hidden
+                  className={cn(
+                    "size-3 text-muted-foreground/50 transition-transform",
+                    settledShelfExpanded && "rotate-180",
+                  )}
+                />
+              </button>
+              <ul ref={attachAutoAnimate} className="space-y-0.5">
+                {renderedSettledRows.map((row) => renderThreadRow(row, "settled"))}
+              </ul>
+              {settledShelfExpanded && hiddenSettledCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={showMoreSettled}
+                  className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:border-solid hover:border-input hover:text-foreground"
+                >
+                  Show {Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT)} more
+                  <span className="text-muted-foreground/50">({hiddenSettledCount} hidden)</span>
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
+          {groups.length + snoozedRows.length + settledRows.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
               <FilterIcon className="size-5 text-muted-foreground/40" />
               <p className="text-xs text-muted-foreground">No threads match these filters</p>
@@ -1381,7 +1977,7 @@ export function PhaseGroupedSidebar() {
       </SidebarContent>
       <SidebarSeparator />
       <SidebarChromeFooter />
-      {visibleRows.slice(0, 10).map((row) => (
+      {activeVisibleRows.slice(0, 10).map((row) => (
         <SidebarThreadDetailPrewarmer
           key={`prewarm:${row.thread.environmentId}:${row.thread.id}`}
           threadRef={scopeThreadRef(row.thread.environmentId, row.thread.id)}

@@ -1,11 +1,17 @@
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { UserId, VcsStatusResult } from "@t3tools/contracts";
+import {
+  effectiveSettled,
+  effectiveSnoozed,
+  type ChangeRequestStateLike,
+} from "@t3tools/client-runtime/state/thread-settled";
 
 import { deriveLogicalProjectKey } from "../../logicalProject";
 import { isLatestTurnSettled } from "../../session-logic";
 import type { Project, ThreadShell } from "../../types";
 import { getThreadSortTimestamp } from "../../lib/threadSort";
 import { cn } from "../../lib/utils";
+import { resolveSettledTimestamp } from "../Sidebar.logic";
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
   // T3-CUSTOM(expbkt3): Pending structured questions are an urgent, top-level phase.
@@ -135,6 +141,112 @@ export interface PhaseSidebarRow {
   readonly isAssignedToMe: boolean;
   readonly attentionPriority: number;
   readonly unreadPriority: number;
+  /** False on environments whose server predates thread.settle/unsettle:
+      the row can never be classified settled (the user could not undo it)
+      and its lifecycle affordances stay hidden. */
+  readonly settlementSupported: boolean;
+  /** Same version-skew contract for thread.snooze/unsnooze. */
+  readonly snoozeSupported: boolean;
+  /** The row's pull-request state, when its VCS probe has reported one: a
+      merged or closed change request auto-settles an idle thread. */
+  readonly changeRequestState: ChangeRequestStateLike | null;
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Where a row renders in the experimental sidebar —
+ * inside its lifecycle group, or parked on one of the two shelves below
+ * them.
+ */
+export type PhaseSidebarSection = "active" | "snoozed" | "settled";
+
+export interface PhaseSidebarPartition {
+  readonly activeRows: ReadonlyArray<PhaseSidebarRow>;
+  readonly snoozedRows: ReadonlyArray<PhaseSidebarRow>;
+  readonly settledRows: ReadonlyArray<PhaseSidebarRow>;
+}
+
+function snoozeWakeMs(row: PhaseSidebarRow): number {
+  const parsed = Date.parse(row.thread.snoozedUntil ?? "");
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+/** Soonest wake first: the shelf reads as a queue of what comes back next. */
+export function sortSnoozedPhaseSidebarRows(
+  rows: ReadonlyArray<PhaseSidebarRow>,
+): ReadonlyArray<PhaseSidebarRow> {
+  return rows.toSorted(
+    (left, right) =>
+      snoozeWakeMs(left) - snoozeWakeMs(right) ||
+      String(left.thread.id).localeCompare(String(right.thread.id)),
+  );
+}
+
+/**
+ * Settled rows are history, so they order by when the work ENDED — the same
+ * timestamp their label reads, so order and label can never disagree.
+ */
+export function sortSettledPhaseSidebarRows(
+  rows: ReadonlyArray<PhaseSidebarRow>,
+): ReadonlyArray<PhaseSidebarRow> {
+  const timestampMs = (row: PhaseSidebarRow) => {
+    const timestamp = resolveSettledTimestamp(row.thread);
+    return timestamp === null ? 0 : Date.parse(timestamp);
+  };
+  return rows.toSorted(
+    (left, right) =>
+      timestampMs(right) - timestampMs(left) ||
+      String(left.thread.id).localeCompare(String(right.thread.id)),
+  );
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Split visible rows into the lifecycle inbox and the
+ * two parked shelves. Snooze deliberately outranks settled classification:
+ * an explicitly snoozed thread belongs on the snoozed shelf even when it
+ * would also auto-settle, because the shelf carries its wake time.
+ *
+ * Both classifications are capability-gated per row — auto-settling a
+ * thread on a server that cannot un-settle it would strand the row.
+ *
+ * `preciseNow` classifies snooze (wake times are second-precise) while
+ * `now` may be quantized for the day-granular auto-settle window.
+ */
+export function partitionPhaseSidebarRows(
+  rows: ReadonlyArray<PhaseSidebarRow>,
+  options: {
+    readonly now: string;
+    readonly preciseNow: string;
+    readonly autoSettleAfterDays: number | null;
+  },
+): PhaseSidebarPartition {
+  const activeRows: PhaseSidebarRow[] = [];
+  const snoozedRows: PhaseSidebarRow[] = [];
+  const settledRows: PhaseSidebarRow[] = [];
+
+  for (const row of rows) {
+    if (row.snoozeSupported && effectiveSnoozed(row.thread, { now: options.preciseNow })) {
+      snoozedRows.push(row);
+      continue;
+    }
+    if (
+      row.settlementSupported &&
+      effectiveSettled(row.thread, {
+        now: options.now,
+        autoSettleAfterDays: options.autoSettleAfterDays,
+        changeRequestState: row.changeRequestState,
+      })
+    ) {
+      settledRows.push(row);
+      continue;
+    }
+    activeRows.push(row);
+  }
+
+  return {
+    activeRows,
+    snoozedRows: sortSnoozedPhaseSidebarRows(snoozedRows),
+    settledRows: sortSettledPhaseSidebarRows(settledRows),
+  };
 }
 
 /**
@@ -370,14 +482,25 @@ export function matchesPhaseSidebarFilters(
   );
 }
 
+/**
+ * The rows this sidebar may render at all. Shared by the lifecycle groups and
+ * the parked shelves so a filter chip means the same thing everywhere.
+ */
+export function filterVisiblePhaseSidebarRows(
+  rows: ReadonlyArray<PhaseSidebarRow>,
+  filters: PhaseSidebarFilters,
+): ReadonlyArray<PhaseSidebarRow> {
+  return rows.filter(
+    (row) => row.thread.archivedAt === null && matchesPhaseSidebarFilters(row, filters),
+  );
+}
+
 export function buildPhaseSidebarGroups(
   rows: ReadonlyArray<PhaseSidebarRow>,
   filters: PhaseSidebarFilters,
   sortOrder: SidebarThreadSortOrder,
 ): ReadonlyArray<PhaseSidebarGroup> {
-  const visibleRows = rows.filter(
-    (row) => row.thread.archivedAt === null && matchesPhaseSidebarFilters(row, filters),
-  );
+  const visibleRows = filterVisiblePhaseSidebarRows(rows, filters);
 
   return PHASE_SIDEBAR_PHASES.flatMap((phase) => {
     const phaseRows = visibleRows
