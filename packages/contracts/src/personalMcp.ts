@@ -22,6 +22,9 @@ export type PersonalMcpAuthMode = typeof PersonalMcpAuthMode.Type;
 export const PersonalMcpIntegrationId = TrimmedNonEmptyString;
 export type PersonalMcpIntegrationId = typeof PersonalMcpIntegrationId.Type;
 
+export const BIFROST_MCP_INTEGRATION_ID = "bifrost" as const;
+export const BIFROST_MCP_URL = "https://bk-toolhub.beknown.live/mcp" as const;
+
 export const PersonalMcpIntegration = Schema.Struct({
   id: PersonalMcpIntegrationId,
   name: TrimmedNonEmptyString,

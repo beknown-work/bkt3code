@@ -358,7 +358,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps the T3 MCP bearer token out of Claude process arguments", () => {
+  it.effect("registers Bifrost while keeping MCP credentials out of process arguments", () => {
     const harness = makeHarness();
     const bearerToken = "short-lived-provider-token";
     McpProviderSession.setMcpProviderSession({
@@ -369,7 +369,15 @@ describe("ClaudeAdapterLive", () => {
       actorUserId: null,
       endpoint: "http://127.0.0.1:18085/mcp",
       authorizationHeader: `Bearer ${bearerToken}`,
-      upstreamServers: [],
+      upstreamServers: [
+        {
+          id: "bifrost",
+          name: "Bifrost",
+          endpoint: "http://127.0.0.1:18085/mcp/upstream/bifrost",
+          authMode: "x-bf-vk",
+          allowedTools: [],
+        },
+      ],
     });
 
     return Effect.gen(function* () {
@@ -388,6 +396,13 @@ describe("ClaudeAdapterLive", () => {
           : undefined,
         "Bearer ${T3_MCP_BEARER_TOKEN}",
       );
+      assert.deepEqual(options?.mcpServers?.bifrost, {
+        type: "http",
+        url: "http://127.0.0.1:18085/mcp/upstream/bifrost",
+        headers: {
+          Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
+        },
+      });
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {

@@ -212,6 +212,47 @@ it.effect("does not grant session creation to an ordinary user-owned ACP", () =>
   }),
 );
 
+it.effect("pre-registers the shared Bifrost proxy for user sessions before setup", () =>
+  Effect.gen(function* () {
+    const userId = UserId.make("user-bifrost");
+    const registry = yield* McpSessionRegistry.__testing
+      .make({
+        now: () => 1_000,
+        loadPersonalProfile: () =>
+          Effect.succeed({
+            userId,
+            conductor: DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
+            externalAccessEnabled: false,
+            externalTokenConfigured: false,
+            externalTokenPrefix: "",
+            integrations: [],
+            updatedAt: "2026-07-27T00:00:00.000Z",
+          }),
+      })
+      .pipe(
+        Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
+        Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+        Effect.provide(NodeServices.layer),
+      );
+
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-bifrost"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      actorUserId: userId,
+    });
+
+    expect(issued.config.upstreamServers).toEqual([
+      {
+        id: "bifrost",
+        name: "Bifrost",
+        endpoint: "http://127.0.0.1:43123/mcp/upstream/bifrost",
+        authMode: "x-bf-vk",
+        allowedTools: [],
+      },
+    ]);
+  }),
+);
+
 it.effect("resolves a personal external token only while the external endpoint is enabled", () =>
   Effect.gen(function* () {
     const userId = UserId.make("user-tushar");

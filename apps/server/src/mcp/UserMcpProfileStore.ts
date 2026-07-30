@@ -5,6 +5,7 @@
  * user/integration-namespaced ServerSecretStore entries and never returned.
  */
 import {
+  BIFROST_MCP_URL,
   DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
   PersonalMcpProfile,
   type PersonalMcpProfileUpdate,
@@ -63,6 +64,21 @@ const hash = (value: string): string =>
 
 const secretName = (userId: UserId, integrationId: PersonalMcpIntegrationId): string =>
   `user-mcp-${hash(`${userId}\0${integrationId}`)}`;
+
+export const canonicalizePersonalMcpIntegration = <
+  T extends PersonalMcpProfileUpdate["integrations"][number] | PersonalMcpIntegration,
+>(
+  integration: T,
+): T =>
+  integration.authMode === "x-bf-vk"
+    ? {
+        ...integration,
+        name: "Bifrost",
+        url: BIFROST_MCP_URL,
+        authMode: "x-bf-vk",
+        customHeaderName: "",
+      }
+    : integration;
 
 const parseStoredProfile = Effect.fn("UserMcpProfileStore.parseStoredProfile")(function* (
   profileJson: string,
@@ -158,7 +174,7 @@ export const layer = Layer.effect(
         externalTokenConfigured:
           row?.externalTokenHash !== null && row?.externalTokenHash !== undefined,
         externalTokenPrefix: row?.externalTokenPrefix ?? "",
-        integrations: stored.integrations,
+        integrations: stored.integrations.map(canonicalizePersonalMcpIntegration),
         updatedAt: row?.updatedAt ?? now,
       });
     });
@@ -189,12 +205,13 @@ export const layer = Layer.effect(
       input: PersonalMcpProfileUpdate,
     ) {
       const current = yield* get(userId);
+      const canonicalIntegrations = input.integrations.map(canonicalizePersonalMcpIntegration);
       yield* Effect.try({
-        try: () => input.integrations.forEach(validateIntegration),
+        try: () => canonicalIntegrations.forEach(validateIntegration),
         catch: (cause) => fail("validate-integration", cause),
       });
       const currentById = new Map(current.integrations.map((entry) => [entry.id, entry]));
-      const nextIds = new Set(input.integrations.map((entry) => entry.id));
+      const nextIds = new Set(canonicalIntegrations.map((entry) => entry.id));
 
       for (const removed of current.integrations) {
         if (!nextIds.has(removed.id)) {
@@ -205,7 +222,7 @@ export const layer = Layer.effect(
       }
 
       const integrations: PersonalMcpIntegration[] = [];
-      for (const integration of input.integrations) {
+      for (const integration of canonicalIntegrations) {
         const existing = currentById.get(integration.id);
         let credentialConfigured = existing?.credentialConfigured ?? false;
         if (integration.credential !== undefined) {
