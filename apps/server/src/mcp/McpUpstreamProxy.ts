@@ -2,7 +2,7 @@
  * T3-CUSTOM(expbkt3): Authenticated MCP reverse proxy that resolves upstream
  * credentials from the user bound to the active ACP generation.
  */
-import { PersonalMcpIntegrationId } from "@t3tools/contracts";
+import { PersonalMcpIntegrationId, type PersonalMcpAuthMode } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import {
@@ -52,6 +52,55 @@ function unauthorized(message: string) {
     { status: 401, headers: { "cache-control": "no-store" } },
   );
 }
+
+interface ForwardedRequestOptions {
+  readonly url: string;
+  readonly authMode: PersonalMcpAuthMode;
+  readonly customHeaderName: string;
+  readonly credential: string;
+}
+
+const makeForwardedRequest = Effect.fn("McpUpstreamProxy.makeForwardedRequest")(function* (
+  incoming: Request,
+  options: ForwardedRequestOptions,
+) {
+  const outgoingBase = HttpClientRequest.fromWeb(incoming).pipe(
+    HttpClientRequest.setUrl(options.url),
+  );
+  let outgoing = HttpClientRequest.makeWith(
+    outgoingBase.method,
+    outgoingBase.url,
+    outgoingBase.urlParams,
+    outgoingBase.hash,
+    Headers.removeMany(outgoingBase.headers, REQUEST_HEADERS_NOT_FORWARDED),
+    outgoingBase.body,
+  );
+  if (incoming.body !== null) {
+    const body = new Uint8Array(yield* Effect.promise(() => incoming.arrayBuffer()));
+    outgoing = outgoing.pipe(
+      HttpClientRequest.bodyUint8Array(body, incoming.headers.get("content-type") ?? undefined),
+    );
+  }
+  switch (options.authMode) {
+    case "bearer":
+      outgoing = outgoing.pipe(
+        HttpClientRequest.setHeader("authorization", `Bearer ${options.credential}`),
+      );
+      break;
+    case "x-bf-vk":
+      outgoing = outgoing.pipe(HttpClientRequest.setHeader("x-bf-vk", options.credential));
+      break;
+    case "x-api-key":
+      outgoing = outgoing.pipe(HttpClientRequest.setHeader("x-api-key", options.credential));
+      break;
+    case "custom-header":
+      outgoing = outgoing.pipe(
+        HttpClientRequest.setHeader(options.customHeaderName, options.credential),
+      );
+      break;
+  }
+  return outgoing;
+});
 
 export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
   "*",
@@ -137,35 +186,12 @@ export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
       }
     }
 
-    const outgoingBase = HttpClientRequest.fromWeb(incoming).pipe(
-      HttpClientRequest.setUrl(integration.url),
-    );
-    let outgoing = HttpClientRequest.makeWith(
-      outgoingBase.method,
-      outgoingBase.url,
-      outgoingBase.urlParams,
-      outgoingBase.hash,
-      Headers.removeMany(outgoingBase.headers, REQUEST_HEADERS_NOT_FORWARDED),
-      outgoingBase.body,
-    );
-    switch (integration.authMode) {
-      case "bearer":
-        outgoing = outgoing.pipe(
-          HttpClientRequest.setHeader("authorization", `Bearer ${credential}`),
-        );
-        break;
-      case "x-bf-vk":
-        outgoing = outgoing.pipe(HttpClientRequest.setHeader("x-bf-vk", credential));
-        break;
-      case "x-api-key":
-        outgoing = outgoing.pipe(HttpClientRequest.setHeader("x-api-key", credential));
-        break;
-      case "custom-header":
-        outgoing = outgoing.pipe(
-          HttpClientRequest.setHeader(integration.customHeaderName, credential),
-        );
-        break;
-    }
+    const outgoing = yield* makeForwardedRequest(incoming, {
+      url: integration.url,
+      authMode: integration.authMode,
+      customHeaderName: integration.customHeaderName,
+      credential,
+    });
 
     const client = yield* HttpClient.HttpClient;
     return yield* client.execute(outgoing).pipe(
@@ -201,3 +227,8 @@ export const mcpUpstreamProxyRouteLayer = HttpRouter.add(
     );
   }),
 );
+
+/** Exposed for tests. */
+export const __testing = {
+  makeForwardedRequest,
+};
