@@ -12,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { Thread } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+  MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   activeRuntimeWarningLabel,
   branchMismatchKey,
@@ -23,6 +24,7 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  reconcileMountedPlannotatorThreadIds,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
@@ -509,6 +511,34 @@ describe("reconcileMountedTerminalThreadIds", () => {
         activeThreadTerminalOpen: false,
       }),
     ).toEqual(ids.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
+  });
+});
+
+describe("reconcileMountedPlannotatorThreadIds", () => {
+  it("keeps an in-progress review mounted while the user visits another thread", () => {
+    expect(
+      reconcileMountedPlannotatorThreadIds({
+        currentThreadIds: ["thread-with-review"],
+        openThreadIds: ["thread-with-review"],
+        activeThreadId: "other-thread",
+        activeThreadPlannotatorOpen: false,
+      }),
+    ).toEqual(["thread-with-review"]);
+  });
+
+  it("bounds hidden review surfaces while keeping the active review mounted", () => {
+    const hiddenIds = Array.from(
+      { length: MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS + 1 },
+      (_, index) => `hidden-thread-${index}`,
+    );
+    expect(
+      reconcileMountedPlannotatorThreadIds({
+        currentThreadIds: hiddenIds,
+        openThreadIds: [...hiddenIds, "active-thread"],
+        activeThreadId: "active-thread",
+        activeThreadPlannotatorOpen: true,
+      }),
+    ).toEqual([...hiddenIds.slice(-MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS), "active-thread"]);
   });
 });
 
