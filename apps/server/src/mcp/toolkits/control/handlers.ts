@@ -108,7 +108,7 @@ const requireSessionCreator = Effect.fn("T3ControlToolkit.requireSessionCreator"
     return yield* new T3ControlToolError({
       operation,
       message:
-        "Creating sessions requires a personal external token or the delegated T3 Conductor capability.",
+        "Creating sessions requires an authenticated user-bound provider session, personal external token, or external operator credential.",
     });
   }
   return scope;
@@ -1012,3 +1012,8 @@ const handlers = {
 } satisfies Parameters<typeof T3ControlToolkit.toLayer>[0];
 
 export const T3ControlToolkitHandlersLive = T3ControlToolkit.toLayer(handlers);
+
+/** Exposed for focused authorization tests. */
+export const __testing = {
+  resolveSessionId,
+};

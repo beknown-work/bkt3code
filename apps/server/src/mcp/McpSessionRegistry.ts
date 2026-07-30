@@ -146,17 +146,16 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         actorUserId === null || options.loadPersonalProfile === undefined
           ? undefined
           : yield* options.loadPersonalProfile(actorUserId);
-      const isConductor =
-        personalProfile !== undefined &&
-        personalProfile.conductor.threadId.length > 0 &&
-        personalProfile.conductor.threadId === request.threadId;
       const capabilities = new Set<McpInvocationContext.McpCapability>([
         "preview",
         "t3.read",
         "t3.control",
         "t3.plan",
       ]);
-      if (isConductor) capabilities.add("t3.session.create");
+      // Every authenticated user-bound provider session may coordinate the
+      // user's other accessible sessions. Tool handlers still authorize every
+      // target thread/project against actorUserId before reading or mutating it.
+      if (actorUserId !== null) capabilities.add("t3.session.create");
       const scope: McpInvocationContext.McpInvocationScope = {
         principal: "provider-session",
         actorUserId,

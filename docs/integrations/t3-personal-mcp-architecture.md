@@ -51,21 +51,23 @@ Codex receives generated `mcp_servers.*` launch configuration. Claude Code gets
 its HTTP `mcpServers` map. OpenCode registers remote MCP servers through its SDK.
 Cursor and Grok receive equivalent ACP MCP server arrays.
 
-## Conductor authority
+## User session authority
 
-A normal provider session has native read/control/plan authority for its own
-thread. The thread ID persisted in the user's personal Conductor profile also
-receives `t3.session.create`.
-
-The Conductor may:
+Every user-bound provider session has native read/control/plan authority and
+receives `t3.session.create`. It may:
 
 - list the actor's owned or directly shared sessions;
 - list projects visible to the actor;
 - control an accessible session;
 - create a new actor-owned session in an accessible project.
 
-It may not create server-wide projects, modify server settings, or dispatch raw
+It may not access another user's private session, create server-wide projects,
+modify server settings, or dispatch raw
 orchestration commands. Those remain legacy administrator operations.
+
+The persisted personal Conductor remains a convenient durable coordination
+thread, but it has no additional cross-session authority over another
+user-bound provider session.
 
 ## Shared sessions
 

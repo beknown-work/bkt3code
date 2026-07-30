@@ -65,7 +65,7 @@ const optionalSessionId = {
   sessionId: Schema.optional(ThreadId).pipe(
     Schema.annotateKey({
       description:
-        "T3 session/thread ID. Agent-scoped callers may omit this for their current session.",
+        "T3 session/thread ID. User-bound agents may target any accessible session or omit this for their current session.",
     }),
   ),
 };
@@ -82,12 +82,12 @@ const mutatingTool = <T extends Tool.Any>(tool: T): T =>
 export const T3ListSessionsTool = readonlyTool(
   Tool.make("t3_list_sessions", {
     description:
-      "List T3 Code sessions with project, model, mode, live execution state, human-attention reasons, rolling catch-up summary, and latest turn summary. External operators see all sessions; an in-session agent sees only its own session.",
+      "List T3 Code sessions with project, model, mode, live execution state, human-attention reasons, rolling catch-up summary, and latest turn summary. User-bound agents see every session accessible to that user; external operators see all sessions.",
     parameters: Schema.Struct({
       includeArchived: Schema.optional(
         described(
           Schema.Boolean,
-          "Include archived sessions. Only external operators may access archived sessions.",
+          "Include archived sessions accessible to the caller. External operators may access every archived session.",
         ),
       ),
       attentionOnly: Schema.optional(
@@ -109,7 +109,7 @@ export const T3ListSessionsTool = readonlyTool(
 export const T3GetSessionTool = readonlyTool(
   Tool.make("t3_get_session", {
     description:
-      "Inspect one T3 Code session deeply: metadata, live execution, recent messages, activities, proposed plans, checkpoints, and catch-up summaries. Omit sessionId from inside that same session.",
+      "Inspect an accessible T3 Code session deeply: metadata, live execution, recent messages, activities, proposed plans, checkpoints, and catch-up summaries. Omit sessionId for the caller's current session.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       messageLimit: Schema.optional(
@@ -136,7 +136,7 @@ export const T3ListProjectsTool = readonlyTool(
       includeArchived: Schema.optional(
         described(
           Schema.Boolean,
-          "Include projects that currently appear only in archived sessions. External operators only.",
+          "Include projects that currently appear only in archived sessions and are accessible to the caller.",
         ),
       ),
     }),
@@ -338,7 +338,7 @@ export const T3CreateProjectTool = mutatingTool(
 export const T3CreateSessionTool = mutatingTool(
   Tool.make("t3_create_session", {
     description:
-      "Create a T3 Code session in a project and optionally start its first prompt. Defaults to the project's configured model, full-access runtime, and default interaction mode.",
+      "Create a user-owned T3 Code session in an accessible project and optionally start its first prompt. Available to user-bound provider sessions, personal external users, and external operators.",
     parameters: Schema.Struct({
       projectId: described(Schema.String, "Target project ID obtained from t3_list_projects."),
       title: Schema.optional(
@@ -397,7 +397,7 @@ export const T3DispatchCommandTool = mutatingTool(
 export const T3SubmitPlanTool = mutatingTool(
   Tool.make("t3_submit_plan", {
     description:
-      "Submit a Markdown or HTML plan to T3 Code and start a dedicated Plannotator review gate. The plan becomes the session's actionable proposed plan, annotations are sent back to its planning agent, and approval starts implementation through T3's normal durable turn path. Omit sessionId from inside that same session.",
+      "Submit a Markdown or HTML plan to an accessible T3 Code session and start a dedicated Plannotator review gate. The plan becomes the session's actionable proposed plan, annotations are sent back to its planning agent, and approval starts implementation through T3's normal durable turn path.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       format: described(
@@ -418,7 +418,7 @@ export const T3SubmitPlanTool = mutatingTool(
 export const T3ListPlannotatorReviewsTool = readonlyTool(
   Tool.make("t3_list_plannotator_reviews", {
     description:
-      "List durable Plannotator review gates with their T3 session, plan, stable proxy URL, process state, decision, feedback, cumulative annotation history, and diagnostic paths. In-session callers see only their own session; external operators may filter by sessionId or inspect all reviews.",
+      "List durable Plannotator review gates with their T3 session, plan, stable proxy URL, process state, decision, feedback, cumulative annotation history, and diagnostic paths. User-bound agents may inspect reviews for accessible sessions; external operators may inspect all reviews.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       plannotatorSessionId: Schema.optional(

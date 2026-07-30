@@ -67,8 +67,9 @@ T3 has three MCP principals:
 
 - **Provider session:** automatically created for an agent running inside a T3
   session. The credential carries the authenticated user who started the current
-  ACP generation. A normal session can control only itself; that user's persisted
-  Conductor also receives `t3.session.create` and user-wide visibility.
+  ACP generation. Every user-bound provider session receives user-wide visibility
+  and `t3.session.create`, but each operation is still limited to projects and
+  sessions accessible to that user.
 - **External user:** created in the user's Experimental settings. It has the same
   user-scoped visibility as that account and may create user-owned sessions.
 - **Legacy external operator:** retained only for controlled migration and local
@@ -122,7 +123,7 @@ custom-header authentication are also supported.
 | `t3_respond_approval`         | Resolve a pending provider approval using the request's allowed decision.                                             |
 | `t3_respond_user_input`       | Answer a pending structured user-input request.                                                                       |
 | `t3_create_project`           | Register or safely create a workspace project on a fresh T3 server. External operators only.                          |
-| `t3_create_session`           | Create a user-owned session. Personal Conductors, external users, and legacy external operators.                      |
+| `t3_create_session`           | Create a user-owned session. User-bound provider sessions, external users, and legacy external operators.             |
 | `t3_submit_plan`              | Publish Markdown or HTML and start an attached Plannotator review gate.                                               |
 | `t3_list_plannotator_reviews` | Inspect review state, decision, feedback, proxy path, and diagnostics.                                                |
 | `t3_update_server_settings`   | Apply a validated settings patch. External operators only.                                                            |

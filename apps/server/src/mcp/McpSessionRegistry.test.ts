@@ -177,7 +177,7 @@ it.effect("binds Conductor credentials and upstream MCP servers to the actor use
   }),
 );
 
-it.effect("does not grant session creation to an ordinary user-owned ACP", () =>
+it.effect("grants user-wide session authority to every user-bound ACP", () =>
   Effect.gen(function* () {
     const userId = UserId.make("user-priya");
     const registry = yield* McpSessionRegistry.__testing
@@ -208,6 +208,21 @@ it.effect("does not grant session creation to an ordinary user-owned ACP", () =>
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     const resolved = yield* registry.resolve(token);
     expect(resolved?.actorUserId).toBe(userId);
+    expect(resolved?.capabilities.has("t3.session.create")).toBe(true);
+  }),
+);
+
+it.effect("does not grant user-wide session authority without a bound user", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-local-operator"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      actorUserId: null,
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const resolved = yield* registry.resolve(token);
+    expect(resolved?.actorUserId).toBeNull();
     expect(resolved?.capabilities.has("t3.session.create")).toBe(false);
   }),
 );
