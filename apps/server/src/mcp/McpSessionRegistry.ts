@@ -3,6 +3,7 @@
  * experimental T3 MCP endpoint.
  */
 import {
+  BIFROST_MCP_INTEGRATION_ID,
   PersonalMcpIntegrationId,
   ProviderInstanceId,
   ThreadId,
@@ -167,7 +168,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         issuedAt,
         expiresAt,
       };
-      const upstreamServers =
+      const configuredUpstreamServers =
         personalProfile?.integrations
           .filter(
             (integration) =>
@@ -183,6 +184,20 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
             authMode: integration.authMode,
             allowedTools: integration.allowedTools,
           })) ?? [];
+      const upstreamServers =
+        actorUserId !== null &&
+        !configuredUpstreamServers.some((server) => server.id === BIFROST_MCP_INTEGRATION_ID)
+          ? [
+              ...configuredUpstreamServers,
+              {
+                id: PersonalMcpIntegrationId.make(BIFROST_MCP_INTEGRATION_ID),
+                name: "Bifrost",
+                endpoint: `${endpoint.slice(0, -"/mcp".length)}/mcp/upstream/${BIFROST_MCP_INTEGRATION_ID}`,
+                authMode: "x-bf-vk" as const,
+                allowedTools: [],
+              },
+            ]
+          : configuredUpstreamServers;
       yield* SynchronizedRef.update(state, ({ records }) => {
         const next = new Map(pruneExpired(records, issuedAt));
         next.set(tokenHash, { tokenHash, scope, lastUsedAt: issuedAt });

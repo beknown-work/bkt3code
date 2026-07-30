@@ -1,10 +1,11 @@
-import type {
-  EnvironmentId,
-  PersonalMcpAuthMode,
-  PersonalMcpIntegrationId,
-  ProviderInstanceId,
-  ThreadId,
-  UserId,
+import {
+  BIFROST_MCP_INTEGRATION_ID,
+  type EnvironmentId,
+  type PersonalMcpAuthMode,
+  type PersonalMcpIntegrationId,
+  type ProviderInstanceId,
+  type ThreadId,
+  type UserId,
 } from "@t3tools/contracts";
 
 export interface McpUpstreamServerConfig {
@@ -16,6 +17,7 @@ export interface McpUpstreamServerConfig {
 }
 
 export function upstreamMcpServerName(server: McpUpstreamServerConfig): string {
+  if (server.id === BIFROST_MCP_INTEGRATION_ID) return BIFROST_MCP_INTEGRATION_ID;
   return `t3_user_${server.id.replace(/[^a-zA-Z0-9_]/g, "_")}`;
 }
 

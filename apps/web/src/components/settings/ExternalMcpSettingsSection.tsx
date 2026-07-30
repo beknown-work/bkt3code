@@ -3,6 +3,8 @@
  * integrations. Secret values are write-only and never returned by T3.
  */
 import {
+  BIFROST_MCP_INTEGRATION_ID,
+  BIFROST_MCP_URL,
   ProviderInstanceId,
   type PersonalMcpAuthMode,
   type PersonalMcpIntegration,
@@ -23,6 +25,20 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function formatExternalMcpApiKey(bytes: Uint8Array): string {
   return `t3exp_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function buildBifrostIntegration(): PersonalMcpIntegration {
+  return {
+    id: BIFROST_MCP_INTEGRATION_ID,
+    name: "Bifrost",
+    url: BIFROST_MCP_URL,
+    enabled: true,
+    authMode: "x-bf-vk",
+    customHeaderName: "",
+    credentialConfigured: false,
+    providerInstanceIds: [],
+    allowedTools: [],
+  };
 }
 
 const toUpdate = (
@@ -114,22 +130,8 @@ export function ExternalMcpSettingsSection() {
 
   const addBifrost = () => {
     if (!profile) return;
-    const suffix = profile.integrations.filter((entry) => entry.id.startsWith("bifrost")).length;
-    const id = suffix === 0 ? "bifrost" : `bifrost-${suffix + 1}`;
-    void persistIntegrations([
-      ...profile.integrations,
-      {
-        id,
-        name: "Bifrost",
-        url: "http://localhost:8080/mcp",
-        enabled: true,
-        authMode: "x-bf-vk",
-        customHeaderName: "",
-        credentialConfigured: false,
-        providerInstanceIds: [],
-        allowedTools: [],
-      },
-    ]);
+    if (profile.integrations.some((entry) => entry.id === BIFROST_MCP_INTEGRATION_ID)) return;
+    void persistIntegrations([...profile.integrations, buildBifrostIntegration()]);
   };
 
   return (
@@ -271,7 +273,15 @@ export function ExternalMcpSettingsSection() {
           title="Credential routing"
           description="Every ACP receives only a short-lived T3 run token. T3 injects the credential below at its proxy boundary according to the authenticated turn initiator."
           control={
-            <Button size="sm" variant="outline" onClick={addBifrost} disabled={!profile}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={addBifrost}
+              disabled={
+                !profile ||
+                profile.integrations.some((entry) => entry.id === BIFROST_MCP_INTEGRATION_ID)
+              }
+            >
               <PlusIcon />
               Add Bifrost
             </Button>
@@ -311,45 +321,58 @@ export function ExternalMcpSettingsSection() {
             }
           >
             <div className="mt-3 mb-4 grid gap-2 md:grid-cols-2">
-              <Input
-                defaultValue={integration.name}
-                onBlur={(event) =>
-                  void persistIntegrations(
-                    patchIntegration(integration.id, { name: event.target.value }),
-                  )
-                }
-                placeholder="Integration name"
-              />
-              <Input
-                className="font-mono text-xs"
-                defaultValue={integration.url}
-                onBlur={(event) =>
-                  void persistIntegrations(
-                    patchIntegration(integration.id, { url: event.target.value }),
-                  )
-                }
-                placeholder="https://bifrost.example/mcp"
-              />
-              <Select
-                value={integration.authMode}
-                onValueChange={(value) =>
-                  void persistIntegrations(
-                    patchIntegration(integration.id, {
-                      authMode: value as PersonalMcpAuthMode,
-                    }),
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectPopup>
-                  <SelectItem value="x-bf-vk">Bifrost virtual key</SelectItem>
-                  <SelectItem value="bearer">Bearer token</SelectItem>
-                  <SelectItem value="x-api-key">x-api-key</SelectItem>
-                  <SelectItem value="custom-header">Custom header</SelectItem>
-                </SelectPopup>
-              </Select>
+              {integration.id === BIFROST_MCP_INTEGRATION_ID ? (
+                <Input
+                  className="font-mono text-xs md:col-span-2"
+                  value={BIFROST_MCP_URL}
+                  readOnly
+                  aria-label="Bifrost MCP URL"
+                />
+              ) : (
+                <>
+                  <Input
+                    defaultValue={integration.name}
+                    onBlur={(event) =>
+                      void persistIntegrations(
+                        patchIntegration(integration.id, { name: event.target.value }),
+                      )
+                    }
+                    placeholder="Integration name"
+                  />
+                  <Input
+                    className="font-mono text-xs"
+                    defaultValue={integration.url}
+                    onBlur={(event) =>
+                      void persistIntegrations(
+                        patchIntegration(integration.id, { url: event.target.value }),
+                      )
+                    }
+                    placeholder="https://example.com/mcp"
+                  />
+                </>
+              )}
+              {integration.id === BIFROST_MCP_INTEGRATION_ID ? null : (
+                <Select
+                  value={integration.authMode}
+                  onValueChange={(value) =>
+                    void persistIntegrations(
+                      patchIntegration(integration.id, {
+                        authMode: value as PersonalMcpAuthMode,
+                      }),
+                    )
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="x-bf-vk">Bifrost virtual key</SelectItem>
+                    <SelectItem value="bearer">Bearer token</SelectItem>
+                    <SelectItem value="x-api-key">x-api-key</SelectItem>
+                    <SelectItem value="custom-header">Custom header</SelectItem>
+                  </SelectPopup>
+                </Select>
+              )}
               <div className="flex gap-2">
                 <Input
                   className="font-mono text-xs"
@@ -362,9 +385,13 @@ export function ExternalMcpSettingsSection() {
                     }))
                   }
                   placeholder={
-                    integration.credentialConfigured
-                      ? "Enter a replacement credential"
-                      : "Enter credential"
+                    integration.id === BIFROST_MCP_INTEGRATION_ID
+                      ? integration.credentialConfigured
+                        ? "Enter a replacement virtual key"
+                        : "Enter your Bifrost virtual key"
+                      : integration.credentialConfigured
+                        ? "Enter a replacement credential"
+                        : "Enter credential"
                   }
                 />
                 <Button
@@ -382,7 +409,8 @@ export function ExternalMcpSettingsSection() {
                   <KeyRoundIcon />
                 </Button>
               </div>
-              {integration.authMode === "custom-header" ? (
+              {integration.id !== BIFROST_MCP_INTEGRATION_ID &&
+              integration.authMode === "custom-header" ? (
                 <Input
                   defaultValue={integration.customHeaderName}
                   onBlur={(event) =>
@@ -395,37 +423,41 @@ export function ExternalMcpSettingsSection() {
                   placeholder="Header name"
                 />
               ) : null}
-              <Input
-                className="font-mono text-xs"
-                defaultValue={integration.providerInstanceIds.join(", ")}
-                onBlur={(event) =>
-                  void persistIntegrations(
-                    patchIntegration(integration.id, {
-                      providerInstanceIds: event.target.value
-                        .split(",")
-                        .map((value) => value.trim())
-                        .filter(Boolean)
-                        .map((value) => ProviderInstanceId.make(value)),
-                    }),
-                  )
-                }
-                placeholder="Provider instance IDs; blank means all ACPs"
-              />
-              <Input
-                className="font-mono text-xs"
-                defaultValue={integration.allowedTools.join(", ")}
-                onBlur={(event) =>
-                  void persistIntegrations(
-                    patchIntegration(integration.id, {
-                      allowedTools: event.target.value
-                        .split(",")
-                        .map((value) => value.trim())
-                        .filter(Boolean),
-                    }),
-                  )
-                }
-                placeholder="Allowed tool names; blank means all"
-              />
+              {integration.id === BIFROST_MCP_INTEGRATION_ID ? null : (
+                <Input
+                  className="font-mono text-xs"
+                  defaultValue={integration.providerInstanceIds.join(", ")}
+                  onBlur={(event) =>
+                    void persistIntegrations(
+                      patchIntegration(integration.id, {
+                        providerInstanceIds: event.target.value
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean)
+                          .map((value) => ProviderInstanceId.make(value)),
+                      }),
+                    )
+                  }
+                  placeholder="Provider instance IDs; blank means all ACPs"
+                />
+              )}
+              {integration.id === BIFROST_MCP_INTEGRATION_ID ? null : (
+                <Input
+                  className="font-mono text-xs"
+                  defaultValue={integration.allowedTools.join(", ")}
+                  onBlur={(event) =>
+                    void persistIntegrations(
+                      patchIntegration(integration.id, {
+                        allowedTools: event.target.value
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean),
+                      }),
+                    )
+                  }
+                  placeholder="Allowed tool names; blank means all"
+                />
+              )}
             </div>
           </SettingsRow>
         ))}
