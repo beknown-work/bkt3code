@@ -81,17 +81,55 @@ it.effect("builds MCP endpoints from the bound server host", () =>
   }),
 );
 
-it.effect("expires credentials after inactivity", () =>
+it.effect("keeps provider credentials valid across MCP inactivity", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
     const registry = yield* makeRegistry(() => timestamp);
+    const threadId = ThreadId.make("thread-2");
     const issued = yield* registry.issue({
-      threadId: ThreadId.make("thread-2"),
+      threadId,
       providerInstanceId: ProviderInstanceId.make("claude"),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     timestamp += 101;
+    expect((yield* registry.resolve(token))?.threadId).toBe(threadId);
+
+    yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("expires a never-used provider credential at its maximum lifetime", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-3"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_001;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("renews the maximum lifetime whenever a provider credential is used", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const threadId = ThreadId.make("thread-4");
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("claude"),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    for (let index = 0; index < 20; index++) {
+      timestamp += 90;
+      expect((yield* registry.resolve(token))?.threadId).toBe(threadId);
+    }
+
+    expect(timestamp).toBeGreaterThan(issued.expiresAt);
   }),
 );
 

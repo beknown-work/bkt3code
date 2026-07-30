@@ -54,7 +54,6 @@ export class McpSessionRegistry extends Context.Service<
 interface CredentialRecord {
   readonly tokenHash: string;
   readonly scope: McpInvocationContext.McpInvocationScope;
-  readonly lastUsedAt: number;
 }
 
 interface RegistryState {
@@ -75,8 +74,15 @@ export interface McpSessionRegistryOptions {
   ) => Effect.Effect<UserMcpProfileStore.ResolvedPersonalMcpToken | undefined>;
 }
 
+// External-user credentials are resolved from persistent settings on every
+// request, so their invocation scope can remain short-lived.
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
-const DEFAULT_MAXIMUM_LIFETIME_MS = 8 * 60 * 60 * 1_000;
+// Provider MCP credentials are static headers injected when the provider
+// process starts. They cannot be rotated underneath a running process, so an
+// inactivity timeout would permanently disconnect otherwise-healthy sessions.
+// Keep a long absolute backstop, renew it on authenticated use, and rely on
+// provider lifecycle hooks to revoke the credential when the session stops.
+const DEFAULT_MAXIMUM_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
 
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -126,10 +132,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
 
   const pruneExpired = (records: ReadonlyMap<string, CredentialRecord>, timestamp: number) => {
     const next = new Map(
-      Array.from(records).filter(
-        ([, record]) =>
-          timestamp <= record.scope.expiresAt && timestamp - record.lastUsedAt <= idleTimeoutMs,
-      ),
+      Array.from(records).filter(([, record]) => timestamp <= record.scope.expiresAt),
     );
     return next.size === records.size ? records : next;
   };
@@ -199,7 +202,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           : configuredUpstreamServers;
       yield* SynchronizedRef.update(state, ({ records }) => {
         const next = new Map(pruneExpired(records, issuedAt));
-        next.set(tokenHash, { tokenHash, scope, lastUsedAt: issuedAt });
+        next.set(tokenHash, { tokenHash, scope });
         return { records: next };
       });
       return {
@@ -227,9 +230,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         const current = pruneExpired(records, timestamp);
         const record = current.get(tokenHash);
         if (!record) return [undefined, { records: current }] as const;
+        const renewedScope: McpInvocationContext.McpInvocationScope = {
+          ...record.scope,
+          expiresAt: Math.max(record.scope.expiresAt, timestamp + maximumLifetimeMs),
+        };
         const next = new Map(current);
-        next.set(tokenHash, { ...record, lastUsedAt: timestamp });
-        return [record.scope, { records: next }] as const;
+        next.set(tokenHash, { ...record, scope: renewedScope });
+        return [renewedScope, { records: next }] as const;
       });
       if (providerScope) return providerScope;
 
