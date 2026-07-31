@@ -1,0 +1,85 @@
+# Source of truth for the ONLY file that `t3main` adds to upstream `main`.
+#
+# `t3main` is committed to as: upstream main + .github/workflows/deploy-t3.yml.
+# Edit this copy on `bkmain`, then copy it onto `t3main`:
+#
+#   git -C /home/ubuntu/repos/t3code checkout t3main
+#   cp /home/ubuntu/repos/t3code-bkmain/deploy/t3/deploy-t3.yml \
+#      /home/ubuntu/repos/t3code/.github/workflows/deploy-t3.yml
+#
+# The build uses no fork feature flags, so t3.dev stays an upstream-style
+# deployment.
+name: Validate and deploy t3
+
+on:
+  push:
+    branches: [t3main]
+  pull_request:
+    branches: [t3main]
+  workflow_dispatch:
+
+concurrency:
+  group: t3-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.10.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting and lint
+        run: pnpm exec vp check
+
+      - name: Typecheck
+        run: pnpm exec vp run typecheck
+
+      - name: Ensure Electron runtime is installed
+        run: pnpm exec vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Test
+        run: pnpm exec vp run test
+
+      - name: Build web client
+        run: pnpm exec vp run --filter @t3tools/web build
+
+      - name: Build server bundle
+        run: pnpm exec vp run --filter t3 build:bundle
+
+      # The t3.dev host installs this verified artifact instead of rebuilding
+      # application code on the shared dev server.
+      - name: Prepare deployment artifact
+        run: |
+          mkdir -p deployment-artifact/apps/web deployment-artifact/apps/server
+          cp -a apps/web/dist deployment-artifact/apps/web/
+          cp -a apps/server/dist deployment-artifact/apps/server/
+          printf '%s\n' "$GITHUB_SHA" > deployment-artifact/SHA
+
+      - name: Publish deployment artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: t3-${{ github.sha }}
+          path: deployment-artifact
+          if-no-files-found: error
+          retention-days: 7
