@@ -1,5 +1,46 @@
 # AGENTS.md
 
+## Beknown Fork and Deployments
+
+This repository is the Beknown fork of T3 Code (`origin` =
+`beknown-work/bkt3code`, `upstream` = `pingdotgg/t3code`). Three environments run
+on the shared dev server from one git repository and three linked worktrees:
+
+| Environment            | Branch      | Worktree                            | Domain                     | Port  | Service              |
+| ---------------------- | ----------- | ----------------------------------- | -------------------------- | ----- | -------------------- |
+| t3 (upstream-style)    | `t3main`    | `/home/ubuntu/repos/t3code`         | `t3.dev.beknown.live`      | 18082 | `t3-beknown.service` |
+| bkt3 (fork production) | `bkmain`    | `/home/ubuntu/repos/t3code-bkmain`  | `bkt3.dev.beknown.live`    | 18083 | `t3-bkmain.service`  |
+| expbkt3 (fork staging) | `expbkmain` | `/home/ubuntu/repos/t3code-expbkt3` | `expbkt3.dev.beknown.live` | 18085 | `t3-expbkt3.service` |
+
+Branch semantics:
+
+- `main` — byte-pure mirror of upstream. Never deployed, never carries fork
+  commits. Pushing to it deploys nothing.
+- `t3main` — `main` plus two fork-owned files: `.github/workflows/deploy-t3.yml`
+  and the `.gitmodules` entry that declares the vendored alchemy gitlink so
+  `actions/checkout` can clean credentials. Deploys t3.dev. Updated by merging
+  `main` in; never force-pushed.
+- `bkmain` — the fork's production line. Deploys bkt3. All fork work merges here
+  through pull requests.
+- `expbkmain` — long-lived staging branch for drastic changes, above all upstream
+  merges. Deploys expbkt3, and is reset from `bkmain` between experiments.
+
+Coding sessions always run on the bkt3 instance, in worktrees under
+`/home/ubuntu/.t3/bkt3-dev/worktrees/`. Do not start work in a deployment
+worktree; those are checkouts the deploy scripts fast-forward.
+
+How to update an environment: merge to its branch. The branch's GitHub Actions
+workflow validates and uploads a SHA-addressed build artifact, and a systemd
+timer on the box installs that exact artifact within a minute of the run turning
+green. Application code is never built on the server. Full detail, manual deploy
+commands, and the upstream-merge workflow are in
+[docs/operations/deployments.md](./docs/operations/deployments.md).
+
+Deploying restarts the target service, which **kills the agent sessions hosted on
+it** — a bkt3 deploy ends the session that triggered it and interrupts every
+other in-flight turn on bkt3. Trigger manual deploys from the other instance or
+from a human shell, and warn the user before merging to `bkmain`.
+
 ## Task Completion Requirements
 
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.
@@ -7,6 +48,9 @@
   - Backend changes must include and run focused tests for the changed behavior.
   - Run targeted formatting, lint, and type checks for the affected scope when available.
 - Do not run repo-wide `vp check`, `vp run typecheck`, `vp run test`, or equivalent full-suite commands locally unless the user explicitly requests them. CI is responsible for the full verification suite.
+  - This is a hard rule on the Beknown dev server: it is shared by both T3 Code deployments, every agent session, branch databases, and self-hosted runners, and full-suite runs have OOM-crashed it. Never run a repo-wide build either — deployments install GitHub-built artifacts instead.
+  - The verification loop is: push the branch, open the PR, watch CI remotely with `gh pr checks <n> --watch` and `gh run view <id> --log-failed`, then push fixes from here. The fork's deploy workflows run on GitHub-hosted `ubuntu-latest`, so they are real offload.
+  - Local verification stays scoped: one test file or package, one targeted build, or a `curl` against a running dev service. Check headroom with `free -g` and `uptime` first; if available memory is under ~6G or load is above ~12, move the work to CI.
 - After frontend feature development or any user-visible frontend behavior change, the primary agent must run one integrated verification pass for each affected client surface after integrating the work:
   - Web: use the `test-t3-app` skill. Launch one isolated environment, authenticate through the printed pairing URL, and verify the affected flow in the controlled browser.
   - Mobile: use the `test-t3-mobile` skill. Connect one representative iOS Simulator or Android Emulator available on the host to one isolated environment and verify the affected flow. On compatible macOS hosts, prefer iOS for cross-platform changes and stream it through serve-sim in the T3 Code in-app browser or another available agent browser; use Android when it is the affected or viable platform.

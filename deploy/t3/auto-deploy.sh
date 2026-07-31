@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
+# Polls for a successful t3main workflow run before deploying t3.dev.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EXPECTED_BRANCH="bkmain"
-DEPLOYED_SHA_FILE="/home/ubuntu/.t3/bkt3-dev/deployed-sha"
-WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/bkt3code/actions/workflows/deploy-bkt3.yml/runs?branch=bkmain&event=push&per_page=20"
+REPO_DIR="${T3_REPO_DIR:-/home/ubuntu/repos/t3code}"
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXPECTED_BRANCH="t3main"
+DEPLOYED_SHA_FILE="/home/ubuntu/.t3/beknown-dev/deployed-sha"
+WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/bkt3code/actions/workflows/deploy-t3.yml/runs?branch=t3main&event=push&per_page=20"
 
 CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [[ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]]; then
-  echo "ERROR: automatic bkt3 deployment requires branch '$EXPECTED_BRANCH' (found '${CURRENT_BRANCH:-detached HEAD}')." >&2
+  echo "ERROR: automatic t3 deployment requires branch '$EXPECTED_BRANCH' (found '${CURRENT_BRANCH:-detached HEAD}')." >&2
   exit 1
 fi
 
@@ -23,7 +25,7 @@ fi
 
 if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]] && \
   git -C "$REPO_DIR" merge-base --is-ancestor "$REMOTE_SHA" "$LOCAL_SHA"; then
-  echo "Local bkmain is ahead of origin/bkmain; automatic deployment deferred until it is pushed."
+  echo "Local t3main is ahead of origin; deployment deferred until it is pushed."
   exit 0
 fi
 
@@ -53,5 +55,5 @@ if [[ "$RUN_CONCLUSION" != "success" ]]; then
   exit 0
 fi
 
-echo "GitHub validation succeeded for $REMOTE_SHA; starting bkt3 deployment."
-exec "$REPO_DIR/deploy/bkt3/deploy.sh" "$REMOTE_SHA" "$RUN_ID"
+echo "GitHub validation succeeded for $REMOTE_SHA; starting t3 deployment."
+exec "$DEPLOY_DIR/deploy.sh" "$REMOTE_SHA" "$RUN_ID"

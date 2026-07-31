@@ -94,14 +94,17 @@ plan rendering remains isolated.
 
 ## Upstream merge workflow
 
-1. Fetch and merge `upstream/main` into the experimental branch before feature
-   work.
+1. Fetch and merge `upstream/main` into `expbkmain` — the long-lived staging
+   branch — before feature work. Never test an upstream merge directly on
+   `bkmain`; see [Beknown deployments](./deployments.md).
 2. Resolve upstream-owned files by preserving the smallest marked seam. Prefer
    adapting dedicated custom files over expanding edits inside upstream files.
 3. Regenerate the route tree when routes change by running the focused web build.
 4. Run focused tests and type checks for changed packages.
 5. Run the isolated `test-t3-app` browser pass for visible web changes.
-6. Deploy only the verified commit through the experimental workflow.
+6. Deploy only the verified commit through the experimental workflow, then
+   promote it to `bkmain` through a pull request and reset `expbkmain` from
+   `bkmain`.
 
 When upstream adds an equivalent feature, compare behavior at the marked seam
 and retire the custom implementation rather than maintaining two paths.

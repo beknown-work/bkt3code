@@ -24,14 +24,33 @@ cd /home/ubuntu/repos/t3code-bkmain
 ./deploy/bkt3/deploy.sh
 ```
 
-The deployment script fetches and fast-forwards `bkmain`, installs the locked
-dependencies, rebuilds the web and server bundles, restarts the service, and waits
-for the local endpoint to become healthy.
+The deployment script fetches and fast-forwards `bkmain`, finds the successful
+GitHub Actions run for that exact SHA, verifies and installs its SHA-addressed
+web/server artifact, restarts the service, and waits for the local endpoint to
+become healthy. If the health check fails it restores the previous artifact and
+restarts again. Dependency installation, tests, and application builds run in
+GitHub Actions; they do not run on the shared dev server.
+
+> Deploying bkt3 from a session hosted **on** bkt3 kills that session. Agent
+> worktrees under `/home/ubuntu/.t3/bkt3-dev/worktrees/` run as children of
+> `t3-bkmain.service`, which this script restarts — interrupting every in-flight
+> turn on the instance. Trigger a manual bkt3 deploy from the `t3.dev` instance
+> or from a human shell.
+
+## Reverse proxy
+
+```bash
+./deploy/bkt3/proxy.sh
+```
+
+Idempotent registration of the `bkt3-proxy` swarm service that routes
+`bkt3.dev.beknown.live` to `10.31.39.131:18083`.
 
 ## Automatic CI/CD
 
-`.github/workflows/deploy-bkt3.yml` validates, typechecks, and builds pull requests
-and pushes targeting `bkmain`.
+`.github/workflows/deploy-bkt3.yml` validates, typechecks, tests, and builds pull
+requests and pushes targeting `bkmain`, then uploads the `bkt3-<sha>` deployment
+artifact that the host installs.
 
 On the server, `t3-bkmain-deploy.timer` checks the current `origin/bkmain` head once
 per minute. It deploys only when the GitHub Actions run for that exact commit has
