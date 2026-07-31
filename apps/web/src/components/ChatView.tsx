@@ -151,8 +151,6 @@ import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
-// T3-CUSTOM(expbkt3): Focused plan review surface; activation seams are marked below.
-import { PlannotatorFocusSurface } from "./PlannotatorFocusSurface";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
@@ -258,7 +256,6 @@ import {
 } from "./chat/draftHeroTransition";
 import {
   activeRuntimeWarningLabel,
-  MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
@@ -279,7 +276,6 @@ import {
   cloneComposerImageForRetry,
   deriveLockedProvider,
   readFileAsDataUrl,
-  reconcileMountedPlannotatorThreadIds,
   reconcileMountedTerminalThreadIds,
   resolveSendWorkspaceContext,
   resolveThreadMetadataUpdateForNextTurn,
@@ -607,40 +603,6 @@ function serverTerminalIdsStrictSubsetOfClient(
   }
   return true;
 }
-
-interface PersistentPlannotatorFocusSurfaceProps {
-  threadRef: ScopedThreadRef;
-  surface: Extract<RightPanelSurface, { kind: "plannotator" }>;
-  visible: boolean;
-}
-
-const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFocusSurface({
-  threadRef,
-  surface,
-  visible,
-}: PersistentPlannotatorFocusSurfaceProps) {
-  const close = useCallback(() => {
-    useRightPanelStore.getState().closeSurface(threadRef, surface.id);
-  }, [surface.id, threadRef]);
-  const handleDecision = useCallback(
-    (decision: "approved" | "feedback" | "denied") => {
-      if (decision === "approved") {
-        useComposerDraftStore.getState().setInteractionMode(threadRef, "default");
-      }
-      close();
-    },
-    [close, threadRef],
-  );
-
-  return (
-    <PlannotatorFocusSurface
-      url={surface.url}
-      visible={visible}
-      onClose={close}
-      onDecision={handleDecision}
-    />
-  );
-});
 
 interface PersistentThreadTerminalDrawerProps {
   threadRef: { environmentId: EnvironmentId; threadId: ThreadId };
@@ -1388,13 +1350,6 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     ),
   );
-  const openPlannotatorThreadKeys = useRightPanelStore(
-    useShallow((state) =>
-      Object.entries(state.byThreadKey).flatMap(([threadKey, panelState]) =>
-        panelState.surfaces.some((surface) => surface.kind === "plannotator") ? [threadKey] : [],
-      ),
-    ),
-  );
   const storeSetTerminalOpen = useTerminalUiStateStore((s) => s.setTerminalOpen);
   const storeEnsureTerminal = useTerminalUiStateStore((state) => state.ensureTerminal);
   const storeSplitTerminal = useTerminalUiStateStore((s) => s.splitTerminal);
@@ -1413,7 +1368,6 @@ function ChatViewContent(props: ChatViewProps) {
     [draftThreadsByThreadKey],
   );
   const [mountedTerminalThreadKeys, setMountedTerminalThreadKeys] = useState<string[]>([]);
-  const [mountedPlannotatorThreadKeys, setMountedPlannotatorThreadKeys] = useState<string[]>([]);
   const mountedTerminalThreadRefs = useMemo(
     () =>
       mountedTerminalThreadKeys.flatMap((mountedThreadKey) => {
@@ -1548,34 +1502,6 @@ function ChatViewContent(props: ChatViewProps) {
   const activeRightPanelSurface = useRightPanelStore((state) =>
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
-  const renderedPlannotatorThreadKeys = useMemo(
-    () =>
-      reconcileMountedPlannotatorThreadIds({
-        currentThreadIds: mountedPlannotatorThreadKeys,
-        openThreadIds: openPlannotatorThreadKeys,
-        activeThreadId: activeThreadKey,
-        activeThreadPlannotatorOpen: activeRightPanelSurface?.kind === "plannotator",
-        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
-      }),
-    [
-      activeRightPanelSurface?.kind,
-      activeThreadKey,
-      mountedPlannotatorThreadKeys,
-      openPlannotatorThreadKeys,
-    ],
-  );
-  const mountedPlannotatorSurfaces = useRightPanelStore(
-    useShallow((state) =>
-      renderedPlannotatorThreadKeys.flatMap((mountedThreadKey) => {
-        const threadRef = parseScopedThreadKey(mountedThreadKey);
-        const surface = state.byThreadKey[mountedThreadKey]?.surfaces.find(
-          (candidate): candidate is Extract<RightPanelSurface, { kind: "plannotator" }> =>
-            candidate.kind === "plannotator",
-        );
-        return threadRef && surface ? [{ key: mountedThreadKey, threadRef, surface }] : [];
-      }),
-    ),
-  );
   const activeFileSurface =
     activeRightPanelSurface?.kind === "file" ? activeRightPanelSurface : null;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
@@ -1668,21 +1594,6 @@ function ChatViewContent(props: ChatViewProps) {
         : nextThreadIds;
     });
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
-  useEffect(() => {
-    setMountedPlannotatorThreadKeys((currentThreadIds) => {
-      const nextThreadIds = reconcileMountedPlannotatorThreadIds({
-        currentThreadIds,
-        openThreadIds: openPlannotatorThreadKeys,
-        activeThreadId: activeThreadKey,
-        activeThreadPlannotatorOpen: activeRightPanelSurface?.kind === "plannotator",
-        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
-      });
-      return currentThreadIds.length === nextThreadIds.length &&
-        currentThreadIds.every((nextThreadId, index) => nextThreadId === nextThreadIds[index])
-        ? currentThreadIds
-        : nextThreadIds;
-    });
-  }, [activeRightPanelSurface, activeThreadKey, openPlannotatorThreadKeys]);
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.execution ?? null);
   const activeProjectRef = activeThread
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
@@ -5789,40 +5700,10 @@ function ChatViewContent(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
-  const persistentPlannotatorSurfaces = mountedPlannotatorSurfaces.map(
-    ({ key: mountedThreadKey, threadRef, surface }) => (
-      <PersistentPlannotatorFocusSurface
-        key={mountedThreadKey}
-        threadRef={threadRef}
-        surface={surface}
-        visible={
-          mountedThreadKey === activeThreadKey &&
-          activeRightPanelSurface?.kind === "plannotator" &&
-          surface.id === activeRightPanelSurface.id
-        }
-      />
-    ),
-  );
-
   // Empty state: no active thread
   if (!activeThread) {
-    return (
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-        {persistentPlannotatorSurfaces}
-        <NoActiveThreadState />
-      </div>
-    );
+    return <NoActiveThreadState />;
   }
-
-  // T3-CUSTOM(expbkt3): BEGIN — review mode replaces the upstream workspace, preserving its sidebar.
-  if (activeRightPanelSurface?.kind === "plannotator") {
-    return (
-      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-        {persistentPlannotatorSurfaces}
-      </div>
-    );
-  }
-  // T3-CUSTOM(expbkt3): END
 
   const panelToggleControls = (
     <PanelLayoutControls
@@ -5925,7 +5806,6 @@ function ChatViewContent(props: ChatViewProps) {
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-      {persistentPlannotatorSurfaces}
       {rightPanelOpen && !shouldUsePlanSidebarSheet ? panelLayoutControls : null}
       <div
         className={cn(
