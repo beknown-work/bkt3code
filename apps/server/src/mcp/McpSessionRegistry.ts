@@ -7,6 +7,8 @@ import {
   PersonalMcpIntegrationId,
   ProviderInstanceId,
   ThreadId,
+  userIdFromSubject,
+  type AuthSessionId,
   type PersonalMcpProfile,
   type UserId,
 } from "@t3tools/contracts";
@@ -14,11 +16,14 @@ import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/unstable/http";
 
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -36,6 +41,12 @@ export interface McpIssuedCredential {
   readonly expiresAt: number;
 }
 
+/** An authenticated login that keeps a provider MCP credential authorized. */
+export interface McpLoginBinding {
+  readonly sessionId: AuthSessionId;
+  readonly expiresAtMillis: number;
+}
+
 export interface McpSessionRegistryShape {
   readonly issue: (request: McpCredentialRequest) => Effect.Effect<McpIssuedCredential>;
   readonly resolve: (
@@ -43,6 +54,7 @@ export interface McpSessionRegistryShape {
   ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly revokeLogin: (authSessionId: AuthSessionId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
 }
 
@@ -54,6 +66,12 @@ export class McpSessionRegistry extends Context.Service<
 interface CredentialRecord {
   readonly tokenHash: string;
   readonly scope: McpInvocationContext.McpInvocationScope;
+  /**
+   * The authenticated logins this credential was issued from. `undefined` means
+   * the credential is not login-derived (single-user/unrestricted local mode)
+   * and is governed only by the absolute backstop lifetime.
+   */
+  readonly loginSessionIds: ReadonlySet<AuthSessionId> | undefined;
 }
 
 interface RegistryState {
@@ -72,6 +90,12 @@ export interface McpSessionRegistryOptions {
   readonly resolveExternalUserToken?: (
     rawToken: string,
   ) => Effect.Effect<UserMcpProfileStore.ResolvedPersonalMcpToken | undefined>;
+  /**
+   * Active authenticated logins for an actor. When configured, every
+   * user-bound provider credential is tied to the logins returned here and
+   * dies with them.
+   */
+  readonly listActiveLogins?: (userId: UserId) => Effect.Effect<ReadonlyArray<McpLoginBinding>>;
 }
 
 // External-user credentials are resolved from persistent settings on every
@@ -80,8 +104,9 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
 // Provider MCP credentials are static headers injected when the provider
 // process starts. They cannot be rotated underneath a running process, so an
 // inactivity timeout would permanently disconnect otherwise-healthy sessions.
-// Keep a long absolute backstop, renew it on authenticated use, and rely on
-// provider lifecycle hooks to revoke the credential when the session stops.
+// A user-bound credential instead lives exactly as long as the authenticated
+// login that produced it; this backstop only bounds credentials that no login
+// governs (single-user/unrestricted local mode).
 const DEFAULT_MAXIMUM_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
 
 const bytesToHex = (bytes: Uint8Array): string =>
@@ -143,8 +168,26 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
-      const expiresAt = issuedAt + maximumLifetimeMs;
       const actorUserId = request.actorUserId ?? null;
+      // T3-CUSTOM(expbkt3): A user-bound credential is an extension of the
+      // login that produced it. It never expires from inactivity, and it dies
+      // when every login it was issued from is gone.
+      const activeLogins =
+        actorUserId === null || options.listActiveLogins === undefined
+          ? undefined
+          : yield* options.listActiveLogins(actorUserId);
+      const loginSessionIds = activeLogins
+        ? new Set(activeLogins.map((login) => login.sessionId))
+        : undefined;
+      const expiresAt = activeLogins
+        ? activeLogins.reduce((latest, login) => Math.max(latest, login.expiresAtMillis), issuedAt)
+        : issuedAt + maximumLifetimeMs;
+      if (activeLogins && activeLogins.length === 0) {
+        yield* Effect.logWarning(
+          "issuing an unusable provider MCP credential because the actor has no active login",
+          { actorUserId, threadId: request.threadId },
+        );
+      }
       const personalProfile =
         actorUserId === null || options.loadPersonalProfile === undefined
           ? undefined
@@ -202,7 +245,12 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           : configuredUpstreamServers;
       yield* SynchronizedRef.update(state, ({ records }) => {
         const next = new Map(pruneExpired(records, issuedAt));
-        next.set(tokenHash, { tokenHash, scope });
+        // A thread has exactly one live provider MCP credential. Issuing a new
+        // one — the user-handoff path — must strand the previous holder.
+        for (const [existingHash, existingRecord] of next) {
+          if (existingRecord.scope.threadId === scope.threadId) next.delete(existingHash);
+        }
+        next.set(tokenHash, { tokenHash, scope, loginSessionIds });
         return { records: next };
       });
       return {
@@ -230,13 +278,11 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         const current = pruneExpired(records, timestamp);
         const record = current.get(tokenHash);
         if (!record) return [undefined, { records: current }] as const;
-        const renewedScope: McpInvocationContext.McpInvocationScope = {
-          ...record.scope,
-          expiresAt: Math.max(record.scope.expiresAt, timestamp + maximumLifetimeMs),
-        };
-        const next = new Map(current);
-        next.set(tokenHash, { ...record, scope: renewedScope });
-        return [renewedScope, { records: next }] as const;
+        // A login-derived credential is only as authorized as its logins.
+        if (record.loginSessionIds !== undefined && record.loginSessionIds.size === 0) {
+          return [undefined, { records: current }] as const;
+        }
+        return [record.scope, { records: current }] as const;
       });
       if (providerScope) return providerScope;
 
@@ -302,6 +348,25 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     revokeThread: Effect.fn("McpSessionRegistry.revokeThread")(function* (threadId) {
       yield* revokeWhere((record) => record.scope.threadId === threadId);
     }),
+    // T3-CUSTOM(expbkt3): Logging out (or revoking a client) must immediately
+    // unauthorize the provider MCP credentials that login produced. A
+    // credential issued from several concurrent logins survives until the last
+    // of them is gone.
+    revokeLogin: Effect.fn("McpSessionRegistry.revokeLogin")(function* (authSessionId) {
+      yield* SynchronizedRef.update(state, ({ records }) => {
+        const next = new Map<string, CredentialRecord>();
+        for (const [tokenHash, record] of records) {
+          if (record.loginSessionIds === undefined || !record.loginSessionIds.has(authSessionId)) {
+            next.set(tokenHash, record);
+            continue;
+          }
+          const remaining = new Set(record.loginSessionIds);
+          remaining.delete(authSessionId);
+          if (remaining.size > 0) next.set(tokenHash, { ...record, loginSessionIds: remaining });
+        }
+        return { records: next };
+      });
+    }),
     revokeAll: SynchronizedRef.set(state, { records: new Map() }),
   });
 });
@@ -311,7 +376,8 @@ let activeMcpSessionRegistry: McpSessionRegistryShape | undefined;
 const make = Effect.acquireRelease(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    return yield* makeWithOptions({
+    const sessions = yield* SessionStore.SessionStore;
+    const registry = yield* makeWithOptions({
       loadExternalMcpSettings: () =>
         serverSettings.getSettings.pipe(
           Effect.map((settings) => settings.experimental.externalMcp),
@@ -325,7 +391,34 @@ const make = Effect.acquireRelease(
         UserMcpProfileStore.resolveActiveExternalToken(token).pipe(
           Effect.orElseSucceed(() => undefined),
         ),
+      listActiveLogins: (userId) =>
+        sessions.listActive().pipe(
+          Effect.map((clientSessions) =>
+            clientSessions
+              .filter((clientSession) => userIdFromSubject(clientSession.subject) === userId)
+              .map((clientSession) => ({
+                sessionId: clientSession.sessionId,
+                expiresAtMillis: DateTime.toEpochMillis(clientSession.expiresAt),
+              })),
+          ),
+          // An authorization decision that cannot be verified must not grant
+          // access: an unreadable session table yields no logins, so the
+          // credential is issued unauthorized. The next provider session start
+          // re-issues and recovers once the store is readable again.
+          Effect.tapCause(Effect.logError),
+          Effect.orElseSucceed((): ReadonlyArray<McpLoginBinding> => []),
+        ),
     });
+    // T3-CUSTOM(expbkt3): Logout and client revocation both remove the auth
+    // session; provider MCP credentials issued from it must die with it.
+    yield* sessions.streamChanges.pipe(
+      Stream.runForEach((change) =>
+        change.type === "clientRemoved" ? registry.revokeLogin(change.sessionId) : Effect.void,
+      ),
+      Effect.tapCause(Effect.logError),
+      Effect.forkScoped,
+    );
+    return registry;
   }).pipe(
     Effect.tap((registry) =>
       Effect.sync(() => {
@@ -343,13 +436,13 @@ const make = Effect.acquireRelease(
 
 export const layer = Layer.effect(McpSessionRegistry, make);
 
+// Issuing already strands the thread's previous credential, so a handoff to a
+// different user cannot leave the old holder authorized.
 export const issueActiveMcpCredential = (
   request: McpCredentialRequest,
 ): Effect.Effect<McpIssuedCredential | undefined> =>
   activeMcpSessionRegistry
-    ? activeMcpSessionRegistry
-        .revokeThread(request.threadId)
-        .pipe(Effect.andThen(activeMcpSessionRegistry.issue(request)))
+    ? activeMcpSessionRegistry.issue(request)
     : Effect.sync((): McpIssuedCredential | undefined => undefined);
 
 export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>

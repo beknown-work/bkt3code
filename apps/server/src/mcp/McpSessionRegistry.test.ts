@@ -1,16 +1,23 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  AuthSessionId,
   DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
   UserId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import { HttpServer } from "effect/unstable/http";
 
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -113,23 +120,203 @@ it.effect("expires a never-used provider credential at its maximum lifetime", ()
   }),
 );
 
-it.effect("renews the maximum lifetime whenever a provider credential is used", () =>
+const bearerToken = (issued: { readonly config: { readonly authorizationHeader: string } }) =>
+  issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+const makeLoginBoundRegistry = (
+  now: () => number,
+  logins: ReadonlyMap<
+    UserId,
+    ReadonlyArray<{ readonly sessionId: AuthSessionId; readonly expiresAtMillis: number }>
+  >,
+) =>
+  McpSessionRegistry.__testing
+    .make({
+      now,
+      idleTimeoutMs: 100,
+      maximumLifetimeMs: 1_000,
+      listActiveLogins: (userId) => Effect.sync(() => logins.get(userId) ?? []),
+    })
+    .pipe(
+      Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
+      Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+      Effect.provide(NodeServices.layer),
+    );
+
+const loginUserId = UserId.make("user-login");
+const loginSessionId = AuthSessionId.make("auth-session-desktop");
+
+it.effect("keeps a login-bound provider credential valid for the whole login", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
-    const registry = yield* makeRegistry(() => timestamp);
-    const threadId = ThreadId.make("thread-4");
+    const registry = yield* makeLoginBoundRegistry(
+      () => timestamp,
+      new Map([[loginUserId, [{ sessionId: loginSessionId, expiresAtMillis: 10_000_000 }]]]),
+    );
+    const threadId = ThreadId.make("thread-login-bound");
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
     });
-    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const token = bearerToken(issued);
+    expect(issued.expiresAt).toBe(10_000_000);
 
-    for (let index = 0; index < 20; index++) {
-      timestamp += 90;
-      expect((yield* registry.resolve(token))?.threadId).toBe(threadId);
-    }
+    // Far beyond both the old idle window and the unbound backstop lifetime,
+    // with no intervening MCP traffic at all.
+    timestamp += 5_000_000;
+    expect((yield* registry.resolve(token))?.threadId).toBe(threadId);
+  }),
+);
 
-    expect(timestamp).toBeGreaterThan(issued.expiresAt);
+it.effect("denies provider MCP access once the originating login has expired", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeLoginBoundRegistry(
+      () => timestamp,
+      new Map([[loginUserId, [{ sessionId: loginSessionId, expiresAtMillis: 50_000 }]]]),
+    );
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-login-expiry"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
+    });
+    const token = bearerToken(issued);
+
+    timestamp = 50_001;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("revokes provider credentials when the originating login is revoked", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeLoginBoundRegistry(
+      () => 1_000,
+      new Map([[loginUserId, [{ sessionId: loginSessionId, expiresAtMillis: 10_000_000 }]]]),
+    );
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-logout"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
+    });
+    const token = bearerToken(issued);
+    expect(yield* registry.resolve(token)).toBeDefined();
+
+    yield* registry.revokeLogin(loginSessionId);
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("keeps a provider credential alive while any originating login survives", () =>
+  Effect.gen(function* () {
+    const otherLoginSessionId = AuthSessionId.make("auth-session-phone");
+    const unrelatedLoginSessionId = AuthSessionId.make("auth-session-unrelated");
+    const registry = yield* makeLoginBoundRegistry(
+      () => 1_000,
+      new Map([
+        [
+          loginUserId,
+          [
+            { sessionId: loginSessionId, expiresAtMillis: 10_000_000 },
+            { sessionId: otherLoginSessionId, expiresAtMillis: 20_000_000 },
+          ],
+        ],
+      ]),
+    );
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-multi-login"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
+    });
+    const token = bearerToken(issued);
+
+    yield* registry.revokeLogin(unrelatedLoginSessionId);
+    expect(yield* registry.resolve(token)).toBeDefined();
+
+    yield* registry.revokeLogin(loginSessionId);
+    expect(yield* registry.resolve(token)).toBeDefined();
+
+    yield* registry.revokeLogin(otherLoginSessionId);
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("denies provider MCP access to an actor without any active login", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeLoginBoundRegistry(() => 1_000, new Map());
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-logged-out"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: UserId.make("user-without-login"),
+    });
+    expect(yield* registry.resolve(bearerToken(issued))).toBeUndefined();
+  }),
+);
+
+it.effect("invalidates the previous credential when another user takes over the thread", () =>
+  Effect.gen(function* () {
+    const handoffUserId = UserId.make("user-handoff");
+    const handoffLoginSessionId = AuthSessionId.make("auth-session-handoff");
+    const threadId = ThreadId.make("thread-handoff");
+    const registry = yield* makeLoginBoundRegistry(
+      () => 1_000,
+      new Map([
+        [loginUserId, [{ sessionId: loginSessionId, expiresAtMillis: 10_000_000 }]],
+        [handoffUserId, [{ sessionId: handoffLoginSessionId, expiresAtMillis: 10_000_000 }]],
+      ]),
+    );
+    const first = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
+    });
+    const second = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: handoffUserId,
+    });
+
+    expect(yield* registry.resolve(bearerToken(first))).toBeUndefined();
+    expect((yield* registry.resolve(bearerToken(second)))?.actorUserId).toBe(handoffUserId);
+  }),
+);
+
+it.effect("revokes every provider credential on shutdown", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeLoginBoundRegistry(
+      () => 1_000,
+      new Map([[loginUserId, [{ sessionId: loginSessionId, expiresAtMillis: 10_000_000 }]]]),
+    );
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-shutdown"),
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
+    });
+    const token = bearerToken(issued);
+    expect(yield* registry.resolve(token)).toBeDefined();
+
+    yield* registry.revokeAll;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("revokes provider credentials when the provider session stops", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread-provider-stop");
+    const registry = yield* makeLoginBoundRegistry(
+      () => 1_000,
+      new Map([[loginUserId, [{ sessionId: loginSessionId, expiresAtMillis: 10_000_000 }]]]),
+    );
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      actorUserId: loginUserId,
+    });
+    const token = bearerToken(issued);
+    const providerSessionId = issued.config.providerSessionId;
+
+    yield* registry.revokeProviderSession(providerSessionId);
+    expect(yield* registry.resolve(token)).toBeUndefined();
   }),
 );
 
@@ -334,5 +521,102 @@ it.effect("resolves a personal external token only while the external endpoint i
 
     endpointEnabled = false;
     expect(yield* registry.resolve("t3usr_personal-token")).toBeUndefined();
+  }),
+);
+
+// T3-CUSTOM(expbkt3): The wiring between the real auth session store and the
+// registry is what makes logout actually cut off provider MCP access, so it is
+// exercised through the production layer rather than the injected options.
+const makeStubSessionStore = (input: {
+  readonly clientSessions: ReadonlyArray<{
+    readonly sessionId: AuthSessionId;
+    readonly subject: string;
+    readonly expiresAt: string;
+  }>;
+  readonly changes: PubSub.PubSub<SessionStore.SessionCredentialChange>;
+}) =>
+  SessionStore.SessionStore.of({
+    cookieName: "t3-session",
+    issue: () => Effect.die("unused"),
+    verify: () => Effect.die("unused"),
+    issueWebSocketToken: () => Effect.die("unused"),
+    verifyWebSocketToken: () => Effect.die("unused"),
+    listActive: () =>
+      Effect.succeed(
+        input.clientSessions.map((clientSession) => ({
+          sessionId: clientSession.sessionId,
+          subject: clientSession.subject,
+          scopes: [],
+          method: "browser-session-cookie" as const,
+          client: { deviceType: "unknown" as const },
+          issuedAt: DateTime.makeUnsafe("2026-07-31T00:00:00.000Z"),
+          expiresAt: DateTime.makeUnsafe(clientSession.expiresAt),
+          lastConnectedAt: null,
+          connected: true,
+          current: false,
+        })),
+      ),
+    streamChanges: Stream.fromPubSub(input.changes),
+    revoke: () => Effect.die("unused"),
+    revokeAllExcept: () => Effect.die("unused"),
+    markConnected: () => Effect.void,
+    markDisconnected: () => Effect.void,
+  });
+
+const eventuallyUnauthorized = (
+  registry: McpSessionRegistry.McpSessionRegistryShape,
+  token: string,
+) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((yield* registry.resolve(token)) === undefined) return true;
+      yield* Effect.yieldNow;
+    }
+    return false;
+  });
+
+it.effect("cuts off provider MCP access when the auth session store revokes the login", () =>
+  Effect.gen(function* () {
+    const userId = UserId.make("user_wired");
+    const revokedSessionId = AuthSessionId.make("auth-session-wired");
+    const changes = yield* PubSub.unbounded<SessionStore.SessionCredentialChange>();
+    const sessionStore = makeStubSessionStore({
+      clientSessions: [
+        {
+          sessionId: revokedSessionId,
+          subject: `clerk:${userId}`,
+          expiresAt: "2026-12-31T00:00:00.000Z",
+        },
+      ],
+      changes,
+    });
+
+    // The whole body runs inside the layer's scope so the revocation
+    // subscriber it forks stays alive, exactly as it does in the server.
+    yield* Effect.gen(function* () {
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const issued = yield* registry.issue({
+        threadId: ThreadId.make("thread-wired"),
+        providerInstanceId: ProviderInstanceId.make("claude"),
+        actorUserId: userId,
+      });
+      const token = bearerToken(issued);
+      expect(yield* registry.resolve(token)).toBeDefined();
+
+      // Let the layer's revocation subscriber attach before publishing.
+      for (let attempt = 0; attempt < 20; attempt++) yield* Effect.yieldNow;
+      yield* PubSub.publish(changes, { type: "clientRemoved", sessionId: revokedSessionId });
+      expect(yield* eventuallyUnauthorized(registry, token)).toBe(true);
+    }).pipe(
+      Effect.provide(
+        McpSessionRegistry.layer.pipe(
+          Layer.provide(Layer.succeed(SessionStore.SessionStore, sessionStore)),
+          Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+          Layer.provide(Layer.succeed(HttpServer.HttpServer, fakeHttpServer)),
+          Layer.provide(Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment)),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
   }),
 );
