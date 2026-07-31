@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTED_BRANCH="bkmain"
 DEPLOYED_SHA_FILE="/home/ubuntu/.t3/bkt3-dev/deployed-sha"
-WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/t3code/actions/workflows/deploy-bkt3.yml/runs?branch=bkmain&event=push&per_page=20"
+WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/bkt3code/actions/workflows/deploy-bkt3.yml/runs?branch=bkmain&event=push&per_page=20"
 
 CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [[ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]]; then
@@ -27,10 +27,15 @@ if [[ "$LOCAL_SHA" != "$REMOTE_SHA" ]] && \
   exit 0
 fi
 
-RUNS_JSON="$(curl --connect-timeout 5 --max-time 20 -fsS \
+# A rate-limited or unreachable GitHub API is a reason to wait, not a unit
+# failure; the next timer tick retries.
+if ! RUNS_JSON="$(curl --connect-timeout 5 --max-time 20 -fsS \
   -H 'Accept: application/vnd.github+json' \
   -H 'X-GitHub-Api-Version: 2022-11-28' \
-  "$WORKFLOW_RUNS_URL")"
+  "$WORKFLOW_RUNS_URL")"; then
+  echo "Could not read GitHub validation runs for $REMOTE_SHA; deployment deferred."
+  exit 0
+fi
 RUN_CONCLUSION="$(jq -r --arg sha "$REMOTE_SHA" \
   '[.workflow_runs[] | select(.head_sha == $sha)][0].conclusion // empty' \
   <<<"$RUNS_JSON")"
