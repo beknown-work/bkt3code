@@ -16,12 +16,13 @@ TimeoutStopSec=30
 KillMode=mixed
 UMask=0077
 LimitNOFILE=65536
-# Contain runaway builds/tests spawned inside agent worktrees: throttle
-# reclaim at 4G of anonymous memory and OOM-kill within the service at 6G
-# instead of taking down the host. Mirrors the drop-ins applied on the box.
+# Contain runaway builds/tests spawned inside agent worktrees: OOM-kill within
+# the service instead of taking down the host. Mirrors the drop-ins applied on
+# the box. Raised from 4G/6G once the steady-state working set (agent sessions
+# plus their provider processes) outgrew the original cap.
 MemoryAccounting=yes
-MemoryHigh=4G
-MemoryMax=6G
+MemoryHigh=16G
+MemoryMax=16G
 TasksMax=4096
 
 [Install]
