@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EXPECTED_BRANCH="t3code/exp-t3-mcp-plannator"
+EXPECTED_BRANCH="expbkmain"
 SERVER_BUNDLE="$REPO_DIR/apps/server/dist/bin.mjs"
 
 CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"

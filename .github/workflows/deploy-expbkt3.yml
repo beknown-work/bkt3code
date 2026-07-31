@@ -3,9 +3,9 @@ name: Validate and deploy experimental T3
 
 on:
   push:
-    branches: ["t3code/exp-t3-mcp-plannator"]
+    branches: [expbkmain]
   pull_request:
-    branches: ["t3code/exp-t3-mcp-plannator"]
+    branches: [expbkmain]
   workflow_dispatch:
 
 concurrency:

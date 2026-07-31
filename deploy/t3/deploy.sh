@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# T3-CUSTOM(expbkt3): Verified manual deployment entry point for the experimental branch.
+# Installs the GitHub-built t3.dev artifact.
+#
+# This script lives in the bkmain worktree but deploys the t3code worktree
+# (branch `t3main`). Application code is never built on the shared dev server;
+# see docs/operations/deployments.md.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EXPECTED_BRANCH="expbkmain"
+REPO_DIR="${T3_REPO_DIR:-/home/ubuntu/repos/t3code}"
+EXPECTED_BRANCH="t3main"
 EXPECTED_SHA="${1:-${EXPECTED_SHA:-}}"
 WORKFLOW_RUN_ID="${2:-${WORKFLOW_RUN_ID:-}}"
 REPOSITORY="beknown-work/bkt3code"
-SERVICE_NAME="t3-expbkt3.service"
-HEALTH_URL="http://10.31.39.131:18085/"
-DEPLOYED_SHA_FILE="/home/ubuntu/.t3/expbkt3-dev/deployed-sha"
+SERVICE_NAME="t3-beknown.service"
+HEALTH_URL="http://10.31.39.131:18082/"
+DEPLOYED_SHA_FILE="/home/ubuntu/.t3/beknown-dev/deployed-sha"
 
-exec 9>"/tmp/expbkt3-deploy.lock"
+exec 9>"/tmp/t3-deploy.lock"
 if ! flock -n 9; then
-  echo "ERROR: another expbkt3 deployment is already running." >&2
+  echo "ERROR: another t3 deployment is already running." >&2
   exit 1
 fi
 
@@ -46,7 +50,7 @@ export PATH="/home/ubuntu/.nvm/versions/node/v24.16.0/bin:/home/ubuntu/.local/bi
 if [[ -z "$WORKFLOW_RUN_ID" ]]; then
   WORKFLOW_RUN_ID="$(gh run list \
     --repo "$REPOSITORY" \
-    --workflow deploy-expbkt3.yml \
+    --workflow deploy-t3.yml \
     --branch "$EXPECTED_BRANCH" \
     --event push \
     --status success \
@@ -61,7 +65,7 @@ if [[ -z "$WORKFLOW_RUN_ID" ]]; then
   exit 1
 fi
 
-ARTIFACT_NAME="expbkt3-$REMOTE_SHA"
+ARTIFACT_NAME="t3-$REMOTE_SHA"
 ARTIFACT_DIR="$(mktemp -d)"
 BACKUP_DIR="$(mktemp -d)"
 cleanup() {
@@ -102,7 +106,7 @@ rsync -a --delete "$ARTIFACT_SERVER/" "$REPO_DIR/apps/server/dist/"
 echo "==> Restarting $SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
 
-echo -n "==> Waiting for expbkt3"
+echo -n "==> Waiting for t3"
 for _ in $(seq 1 60); do
   if curl --connect-timeout 1 --max-time 3 -fsS "$HEALTH_URL" >/dev/null 2>&1; then
     echo " OK"
@@ -135,4 +139,4 @@ fi
 install -d -m 0700 "$(dirname "$DEPLOYED_SHA_FILE")"
 umask 077
 printf '%s\n' "$DEPLOYED_SHA" >"$DEPLOYED_SHA_FILE"
-echo "==> expbkt3 deployed at $DEPLOYED_SHA"
+echo "==> t3 deployed at $DEPLOYED_SHA"

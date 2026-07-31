@@ -3,9 +3,9 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EXPECTED_BRANCH="t3code/exp-t3-mcp-plannator"
+EXPECTED_BRANCH="expbkmain"
 DEPLOYED_SHA_FILE="/home/ubuntu/.t3/expbkt3-dev/deployed-sha"
-WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/bkt3code/actions/workflows/deploy-expbkt3.yml/runs?branch=t3code%2Fexp-t3-mcp-plannator&event=push&per_page=20"
+WORKFLOW_RUNS_URL="https://api.github.com/repos/beknown-work/bkt3code/actions/workflows/deploy-expbkt3.yml/runs?branch=expbkmain&event=push&per_page=20"
 
 CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [[ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]]; then
