@@ -204,6 +204,19 @@ describe("rewritePlannotatorHtml", () => {
     expect(rewritten).not.toContain("secret");
     expect(rewritten).toContain("t3:plannotator-preference-cookie");
     expect(rewritten).toContain("location.hash.match(/^#t3-preferences=");
+    expect(rewritten).toContain('get("t3-reopen")!=="1"');
+    expect(rewritten).toContain("querySelectorAll('[role=\"dialog\"]')");
+    expect(rewritten).toContain('heading.textContent.trim()!=="Draft Recovered"');
+    expect(rewritten).toContain('button.textContent.trim()!=="Restore"');
+    expect(rewritten).toContain("button.click()");
+    expect(rewritten).toContain("timeout=setTimeout(stop,10000)");
+  });
+
+  it("injects draft recovery even when Plannotator omits a head element", () => {
+    const rewritten = rewritePlannotatorHtml("<main>Plan</main>", "/plannotator/opaque");
+
+    expect(rewritten).toContain('get("t3-reopen")!=="1"');
+    expect(rewritten).toContain("<main>Plan</main>");
   });
 
   it("filters the browser cookie header to Plannotator preferences", () => {
