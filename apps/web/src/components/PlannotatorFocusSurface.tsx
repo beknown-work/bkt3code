@@ -11,6 +11,7 @@ type PlannotatorDecision = "approved" | "feedback" | "denied";
 
 interface PlannotatorFocusSurfaceProps {
   url: `/plannotator/${string}/`;
+  visible?: boolean;
   onClose: () => void;
   onDecision: (decision: PlannotatorDecision) => void;
 }
@@ -84,6 +85,7 @@ export function readPlannotatorDecision(value: unknown): PlannotatorDecision | n
 
 export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
   url,
+  visible = true,
   onClose,
   onDecision,
 }: PlannotatorFocusSurfaceProps) {
@@ -160,8 +162,11 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
 
   return (
     <div
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
+      className={
+        visible ? "relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background" : "hidden"
+      }
       data-plannotator-focus-surface
+      aria-hidden={visible ? undefined : true}
     >
       <iframe
         ref={iframeRef}

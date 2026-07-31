@@ -151,8 +151,6 @@ import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
-// T3-CUSTOM(expbkt3): Focused plan review surface; activation seams are marked below.
-import { PlannotatorFocusSurface } from "./PlannotatorFocusSurface";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
@@ -3366,24 +3364,6 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThreadRef, cleanupRightPanelSurfaces, syncActivePreviewSurface],
   );
-  // T3-CUSTOM(expbkt3): Approval is the only Plannotator decision that
-  // overrides the sticky composer mode. Feedback and denial remain in Plan.
-  const handlePlannotatorDecision = useCallback(
-    (decision: "approved" | "feedback" | "denied") => {
-      if (decision === "approved") {
-        setComposerDraftInteractionMode(composerDraftTarget, "default");
-      }
-      if (activeRightPanelSurface?.kind === "plannotator") {
-        closeRightPanelSurface(activeRightPanelSurface);
-      }
-    },
-    [
-      activeRightPanelSurface,
-      closeRightPanelSurface,
-      composerDraftTarget,
-      setComposerDraftInteractionMode,
-    ],
-  );
   const closeOtherRightPanelSurfaces = useCallback(
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
@@ -5724,18 +5704,6 @@ function ChatViewContent(props: ChatViewProps) {
   if (!activeThread) {
     return <NoActiveThreadState />;
   }
-
-  // T3-CUSTOM(expbkt3): BEGIN — review mode replaces the upstream workspace, preserving its sidebar.
-  if (activeRightPanelSurface?.kind === "plannotator") {
-    return (
-      <PlannotatorFocusSurface
-        url={activeRightPanelSurface.url}
-        onClose={() => closeRightPanelSurface(activeRightPanelSurface)}
-        onDecision={handlePlannotatorDecision}
-      />
-    );
-  }
-  // T3-CUSTOM(expbkt3): END
 
   const panelToggleControls = (
     <PanelLayoutControls

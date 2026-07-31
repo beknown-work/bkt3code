@@ -23,6 +23,7 @@ import {
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
+export const MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS = 3;
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
@@ -148,6 +149,22 @@ export function reconcileMountedTerminalThreadIds(input: {
     activeThreadId: input.activeThreadId,
     activeThreadOpen: input.activeThreadTerminalOpen,
     maxHiddenThreadCount: input.maxHiddenThreadCount ?? MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  });
+}
+
+export function reconcileMountedPlannotatorThreadIds(input: {
+  currentThreadIds: ReadonlyArray<string>;
+  openThreadIds: ReadonlyArray<string>;
+  activeThreadId: string | null;
+  activeThreadPlannotatorOpen: boolean;
+  maxHiddenThreadCount?: number;
+}): string[] {
+  return reconcileRetainedMountedThreadIds({
+    currentThreadIds: input.currentThreadIds,
+    openThreadIds: input.openThreadIds,
+    activeThreadId: input.activeThreadId,
+    activeThreadOpen: input.activeThreadPlannotatorOpen,
+    maxHiddenThreadCount: input.maxHiddenThreadCount ?? MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
   });
 }
 

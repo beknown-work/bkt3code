@@ -10,6 +10,7 @@ import { usePrimaryEnvironmentId } from "../state/environments";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
+import { PersistentPlannotatorReviewHost } from "../components/PersistentPlannotatorReviewHost";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isPreviewFocused } from "../lib/previewFocus";
@@ -17,7 +18,11 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
-import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
+import {
+  selectActiveRightPanel,
+  selectActiveRightPanelSurface,
+  useRightPanelStore,
+} from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
@@ -175,10 +180,23 @@ function ChatRouteGlobalShortcuts() {
 }
 
 function ChatRouteLayout() {
+  const { routeThreadRef } = useHandleNewThread();
+  const activeRightPanelSurface = useRightPanelStore((state) =>
+    selectActiveRightPanelSurface(state.byThreadKey, routeThreadRef),
+  );
+  const activePlannotatorSurface =
+    activeRightPanelSurface?.kind === "plannotator" ? activeRightPanelSurface : null;
+
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      <Outlet />
+      <PersistentPlannotatorReviewHost
+        activeThreadRef={routeThreadRef}
+        activeSurface={activePlannotatorSurface}
+      />
+      <div className={activePlannotatorSurface ? "hidden" : "contents"}>
+        <Outlet />
+      </div>
     </>
   );
 }

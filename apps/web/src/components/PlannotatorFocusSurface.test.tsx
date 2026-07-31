@@ -30,6 +30,21 @@ describe("PlannotatorFocusSurface", () => {
     expect(markup).not.toContain("allow-same-origin");
   });
 
+  it("keeps the review iframe mounted while its thread is hidden", () => {
+    const markup = renderToStaticMarkup(
+      <PlannotatorFocusSurface
+        url="/plannotator/review_token/"
+        visible={false}
+        onClose={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('class="hidden"');
+    expect(markup).toContain('aria-hidden="true"');
+    expect(markup).toContain('src="/plannotator/review_token/?t3-reopen=1"');
+  });
+
   it("parses only terminal review decisions from the token-scoped status response", () => {
     expect(plannotatorStatusUrl("/plannotator/review_token/")).toBe(
       "/plannotator/review_token/__t3/status",
