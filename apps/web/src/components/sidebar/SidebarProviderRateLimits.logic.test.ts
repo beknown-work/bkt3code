@@ -92,8 +92,10 @@ describe("buildProviderRateLimitRows", () => {
       ],
       now,
     });
-    expect(staleRows[0]?.remainingPercent).toBeNull();
+    expect(staleRows[0]?.remainingPercent).toBe(75);
     expect(staleRows[0]?.freshness).toBe("stale");
+    expect(staleRows[0]?.tone).toBe("unknown");
+    expect(staleRows[0]?.windows[0]?.remainingPercent).toBe(75);
 
     const resetRows = buildProviderRateLimitRows({
       providers: [provider("codex")],
@@ -112,8 +114,69 @@ describe("buildProviderRateLimitRows", () => {
       ],
       now,
     });
-    expect(resetRows[0]?.remainingPercent).toBeNull();
+    expect(resetRows[0]?.remainingPercent).toBe(75);
+    expect(resetRows[0]?.freshness).toBe("stale");
+    expect(resetRows[0]?.tone).toBe("unknown");
     expect(resetRows[0]?.windows[0]?.status).toBe("awaiting-refresh");
+  });
+
+  it("falls back to cached results when live data is unavailable and marks them stale", () => {
+    const rows = buildProviderRateLimitRows({
+      providers: [provider("codex")],
+      entries: [],
+      cachedEntries: [snapshot("codex", [26])],
+      now,
+    });
+
+    expect(rows[0]).toMatchObject({
+      remainingPercent: 74,
+      freshness: "stale",
+      tone: "unknown",
+      source: "cache",
+    });
+    expect(summarizeProviderRateLimitRows(rows)).toBe(
+      "Provider usage limits: Codex 74% remaining, cached",
+    );
+
+    const failedRows = buildProviderRateLimitRows({
+      providers: [provider("codex")],
+      entries: [
+        snapshot("codex", [], {
+          availability: "error",
+          windows: [],
+          observedAt: null,
+          lastRefreshFailed: true,
+        }),
+      ],
+      cachedEntries: [snapshot("codex", [26])],
+      now,
+    });
+    expect(failedRows[0]).toMatchObject({
+      remainingPercent: 74,
+      freshness: "stale",
+      tone: "unknown",
+      source: "cache",
+    });
+  });
+
+  it("lets a live not-applicable result override an older cached subscription result", () => {
+    const rows = buildProviderRateLimitRows({
+      providers: [provider("codex")],
+      entries: [
+        snapshot("codex", [], {
+          availability: "not-applicable",
+          windows: [],
+        }),
+      ],
+      cachedEntries: [snapshot("codex", [26])],
+      now,
+    });
+
+    expect(rows[0]).toMatchObject({
+      remainingPercent: null,
+      freshness: "not-applicable",
+      source: "live",
+    });
   });
 
   it("retains enabled rows with an em dash when no reading is available", () => {
