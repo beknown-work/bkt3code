@@ -147,6 +147,8 @@ export interface PhaseSidebarRow {
   readonly settlementSupported: boolean;
   /** Same version-skew contract for thread.snooze/unsnooze. */
   readonly snoozeSupported: boolean;
+  /** Same version-skew contract for priority on thread.meta.update. */
+  readonly prioritySupported: boolean;
   /** The row's pull-request state, when its VCS probe has reported one: a
       merged or closed change request auto-settles an idle thread. */
   readonly changeRequestState: ChangeRequestStateLike | null;
@@ -258,6 +260,7 @@ export function phaseSidebarRowClassName(
   isActive: boolean,
   isSelected: boolean,
   needsUserInput: boolean,
+  isP0 = false,
 ): string {
   return cn(
     "group/phase-row relative flex min-h-11 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
@@ -268,6 +271,12 @@ export function phaseSidebarRowClassName(
         : isActive
           ? "bg-primary/10 text-foreground font-semibold ring-1 ring-inset ring-primary/30 hover:bg-primary/15 dark:bg-primary/16"
           : "text-muted-foreground hover:bg-accent hover:text-foreground",
+    // T3-CUSTOM(expbkt3): P0 rows carry a steady amber emphasis so the most
+    // urgent work is findable at a glance. Deliberately calmer than the red
+    // needs-input flash below, which still wins when both apply.
+    isP0 &&
+      !needsUserInput &&
+      "bg-amber-500/10 text-foreground ring-1 ring-inset ring-amber-500/50 shadow-[inset_3px_0_0_0_var(--color-amber-500)] hover:bg-amber-500/20",
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
@@ -495,6 +504,30 @@ export function filterVisiblePhaseSidebarRows(
   );
 }
 
+/**
+ * T3-CUSTOM(expbkt3): sort rank for a thread's priority. Unprioritised rows
+ * rank after P4 so an explicit P4 still outranks "no opinion".
+ */
+export function phaseSidebarPriorityRank(thread: ThreadShell): number {
+  return thread.priority ?? PHASE_SIDEBAR_UNPRIORITISED_RANK;
+}
+
+export const PHASE_SIDEBAR_UNPRIORITISED_RANK = 5;
+
+/** T3-CUSTOM(expbkt3): render label for a priority value ("P0".."P4"). */
+export function formatThreadPriority(priority: number): string {
+  return `P${priority}`;
+}
+
+/** T3-CUSTOM(expbkt3): the priority values offered in the row context menu. */
+export const PHASE_SIDEBAR_PRIORITY_CHOICES = [
+  { value: 0, label: "P0 — Urgent" },
+  { value: 1, label: "P1 — High" },
+  { value: 2, label: "P2 — Medium" },
+  { value: 3, label: "P3 — Low" },
+  { value: 4, label: "P4 — Lowest" },
+] as const satisfies ReadonlyArray<{ readonly value: 0 | 1 | 2 | 3 | 4; readonly label: string }>;
+
 export function buildPhaseSidebarGroups(
   rows: ReadonlyArray<PhaseSidebarRow>,
   filters: PhaseSidebarFilters,
@@ -507,6 +540,11 @@ export function buildPhaseSidebarGroups(
       .filter((row) => row.phaseId === phase.id)
       .toSorted(
         (left, right) =>
+          // T3-CUSTOM(expbkt3): priority leads the ordering inside every
+          // lifecycle group. Rows that need input are already hoisted into
+          // their own group upstream of this comparator, so attention states
+          // still surface — they just no longer outrank an explicit P0.
+          phaseSidebarPriorityRank(left.thread) - phaseSidebarPriorityRank(right.thread) ||
           left.attentionPriority - right.attentionPriority ||
           left.unreadPriority - right.unreadPriority ||
           getThreadSortTimestamp(right.thread, sortOrder) -

@@ -390,6 +390,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdByUserId: actor,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
+          // T3-CUSTOM(expbkt3): session priority.
+          priority: command.priority ?? null,
         },
       };
     }
@@ -688,6 +690,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          // T3-CUSTOM(expbkt3): undefined leaves priority unchanged; null clears it.
+          ...(command.priority !== undefined ? { priority: command.priority } : {}),
           updatedAt: occurredAt,
         },
       };

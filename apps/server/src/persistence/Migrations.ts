@@ -59,6 +59,9 @@ import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
 // T3-CUSTOM(expbkt3): upstream ships this as migration 35. See the allocation
 // rule above the registry — legacy fork indices 33-42 make 35 unavailable.
 import Migration0043 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
+// T3-CUSTOM(expbkt3): fork migrations, numbered 1000+.
+import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
+import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -133,6 +136,9 @@ const migrationEntries = [
   [41, "ProjectionThreadsSnoozed", Migration0041],
   [42, "UserMcpProfiles", Migration0042],
   [43, "ProjectionThreadTitleRegeneration", Migration0043],
+  // T3-CUSTOM(expbkt3): fork migrations live at 1000+ (see the rule above).
+  [1000, "ProjectionThreadsPriority", Migration1000],
+  [1001, "SessionRecoveryState", Migration1001],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

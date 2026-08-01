@@ -176,6 +176,8 @@ export function applyThreadDetailEvent(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
+          // T3-CUSTOM(expbkt3): session priority.
+          ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
           updatedAt: event.payload.updatedAt,
         },
       };

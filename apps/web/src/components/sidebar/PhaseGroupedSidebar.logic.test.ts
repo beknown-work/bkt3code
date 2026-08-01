@@ -25,6 +25,8 @@ import {
   partitionPhaseSidebarRows,
   phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
+  phaseSidebarPriorityRank,
+  formatThreadPriority,
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
@@ -202,6 +204,7 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     // and the capability-gating cases opt out explicitly.
     settlementSupported: true,
     snoozeSupported: true,
+    prioritySupported: true,
     changeRequestState: null,
     ...overrides,
   };
@@ -842,5 +845,74 @@ describe("partitionPhaseSidebarRows", () => {
     expect(partition.activeRows).toHaveLength(0);
     expect(partition.settledRows).toHaveLength(0);
     expect(partition.snoozedRows).toHaveLength(0);
+  });
+});
+
+// T3-CUSTOM(expbkt3): session priority.
+describe("phase sidebar priority", () => {
+  it("ranks unprioritised threads after an explicit P4", () => {
+    expect(phaseSidebarPriorityRank(makeThread({ priority: 0 }))).toBe(0);
+    expect(phaseSidebarPriorityRank(makeThread({ priority: 4 }))).toBe(4);
+    expect(phaseSidebarPriorityRank(makeThread())).toBeGreaterThan(4);
+  });
+
+  it("formats priorities for display", () => {
+    expect(formatThreadPriority(0)).toBe("P0");
+    expect(formatThreadPriority(4)).toBe("P4");
+  });
+
+  it("sorts by priority ahead of attention and recency inside a group", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-unset"), updatedAt: now }),
+        phaseId: "ready",
+        attentionPriority: 1,
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-p4"), priority: 4, updatedAt: now }),
+        phaseId: "ready",
+        attentionPriority: 1,
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-p0"), priority: 0, updatedAt: now }),
+        phaseId: "ready",
+        // Deliberately the *worst* attention rank: priority must still win.
+        attentionPriority: 5,
+      }),
+    ];
+
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
+      ThreadId.make("thread-p0"),
+      ThreadId.make("thread-p4"),
+      ThreadId.make("thread-unset"),
+    ]);
+  });
+
+  it("falls back to attention order when priorities tie", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-late"), priority: 1 }),
+        phaseId: "ready",
+        attentionPriority: 4,
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-early"), priority: 1 }),
+        phaseId: "ready",
+        attentionPriority: 2,
+      }),
+    ];
+
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
+      ThreadId.make("thread-early"),
+      ThreadId.make("thread-late"),
+    ]);
+  });
+
+  it("highlights P0 rows unless they are already flashing for input", () => {
+    expect(phaseSidebarRowClassName(false, false, false, true)).toContain("amber");
+    expect(phaseSidebarRowClassName(false, false, true, true)).not.toContain("amber");
+    expect(phaseSidebarRowClassName(false, false, false, false)).not.toContain("amber");
   });
 });

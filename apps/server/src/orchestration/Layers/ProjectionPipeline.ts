@@ -679,6 +679,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             settledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            // T3-CUSTOM(expbkt3): session priority.
+            priority: event.payload.priority ?? null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -855,6 +857,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
               : {}),
+            // T3-CUSTOM(expbkt3): session priority.
+            ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;

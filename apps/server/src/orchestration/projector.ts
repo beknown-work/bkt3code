@@ -313,6 +313,8 @@ export function projectEvent(
             settledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            // T3-CUSTOM(expbkt3): session priority.
+            priority: payload.priority ?? null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -428,6 +430,8 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            // T3-CUSTOM(expbkt3): session priority.
+            ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
             updatedAt: payload.updatedAt,
           }),
         })),

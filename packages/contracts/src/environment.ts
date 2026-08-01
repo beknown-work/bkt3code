@@ -50,6 +50,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): server understands priority on thread.create and
+      thread.meta.update. Same version-skew contract as threadSnooze. */
+  threadPriority: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): server understands externalSession on thread.create
+      (attach a new thread to an existing provider session). */
+  threadExternalSessionAttach: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

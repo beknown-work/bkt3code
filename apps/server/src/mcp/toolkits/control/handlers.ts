@@ -235,6 +235,8 @@ function sessionSummary(
     archivedAt: thread.archivedAt,
     settledAt: thread.settledAt,
     snoozedUntil: thread.snoozedUntil ?? null,
+    // T3-CUSTOM(expbkt3): session priority (0 = P0 highest, null = unset).
+    priority: thread.priority ?? null,
     session: thread.session,
     execution,
     needsHumanAttention: reasons.length > 0,
@@ -510,7 +512,9 @@ const handlers = {
     if (
       input.title !== undefined ||
       input.modelSelection !== undefined ||
-      input.branch !== undefined
+      input.branch !== undefined ||
+      // T3-CUSTOM(expbkt3): session priority.
+      input.priority !== undefined
     ) {
       const commandId = yield* makeCommandId(crypto, operation);
       const result = yield* dispatcher
@@ -521,6 +525,8 @@ const handlers = {
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
           ...(input.branch === undefined ? {} : { branch: input.branch }),
+          // T3-CUSTOM(expbkt3): undefined leaves priority unchanged; null clears it.
+          ...(input.priority === undefined ? {} : { priority: input.priority }),
         })
         .pipe(mapControlError(operation));
       results.push({ type: "thread.meta.update", sequence: result.sequence });
@@ -840,6 +846,8 @@ const handlers = {
                 branch: input.branch ?? null,
                 worktreePath: input.worktreePath ?? null,
                 createdAt,
+                // T3-CUSTOM(expbkt3): session priority.
+                priority: input.priority ?? null,
               },
             },
           },
@@ -869,6 +877,8 @@ const handlers = {
           branch: input.branch ?? null,
           worktreePath: input.worktreePath ?? null,
           createdAt,
+          // T3-CUSTOM(expbkt3): session priority.
+          priority: input.priority ?? null,
         },
         { actorUserId: ownerUserId },
       )

@@ -143,6 +143,9 @@ export const make = Effect.gen(function* () {
       threadSettlement: true,
       threadSnooze: true,
       threadTitleRegeneration: true,
+      // T3-CUSTOM(expbkt3)
+      threadPriority: true,
+      threadExternalSessionAttach: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || serverSelfUpdate === "respawn"
         ? { serverSelfUpdateProgress: true }

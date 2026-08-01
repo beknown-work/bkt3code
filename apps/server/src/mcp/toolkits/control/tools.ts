@@ -10,6 +10,7 @@ import {
   RuntimeMode,
   ServerSettingsPatch,
   ThreadId,
+  ThreadPriority,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Path from "effect/Path";
@@ -214,6 +215,13 @@ export const T3UpdateSessionTool = mutatingTool(
           "New source-control branch metadata, or null to clear it.",
         ),
       ),
+      // T3-CUSTOM(expbkt3): session priority.
+      priority: Schema.optional(
+        described(
+          Schema.NullOr(ThreadPriority),
+          "New session priority: 0 (P0, highest) through 4 (P4, lowest), or null to clear it.",
+        ),
+      ),
     }),
     success: Schema.Unknown,
     failure: T3ControlToolError,
@@ -369,6 +377,13 @@ export const T3CreateSessionTool = mutatingTool(
         described(
           Schema.NullOr(Schema.String),
           "Optional existing worktree path. Omit to use normal T3 project behavior.",
+        ),
+      ),
+      // T3-CUSTOM(expbkt3): session priority.
+      priority: Schema.optional(
+        described(
+          ThreadPriority,
+          "Optional session priority: 0 (P0, highest) through 4 (P4, lowest). Omit to leave the session unprioritised.",
         ),
       ),
     }),

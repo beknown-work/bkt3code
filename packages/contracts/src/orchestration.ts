@@ -497,6 +497,24 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+// T3-CUSTOM(expbkt3): session priority. Linear-style P0..P4 stored as an
+// integer so ordering is arithmetic; 0 is the highest priority and an absent
+// value means "unprioritised" (sorts after P4). The "P0" spelling is purely
+// presentational and lives in the renderer, never in the event log.
+export const ThreadPriority = Schema.Literals([0, 1, 2, 3, 4]);
+export type ThreadPriority = typeof ThreadPriority.Type;
+
+// T3-CUSTOM(expbkt3): attach-to-external-session. Binds a brand-new thread to
+// a provider session that was started outside T3 (e.g. `claude`/`codex` in a
+// terminal). Carries the provider *instance* rather than the driver kind
+// because the persisted-cursor fallback in ProviderService.startSession is
+// instance-gated.
+export const ThreadExternalSessionAttachment = Schema.Struct({
+  providerInstanceId: ProviderInstanceId,
+  sessionId: TrimmedNonEmptyString,
+});
+export type ThreadExternalSessionAttachment = typeof ThreadExternalSessionAttachment.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -526,6 +544,8 @@ export const OrchestrationThread = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // T3-CUSTOM(expbkt3): optional so payloads from pre-priority servers decode.
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
@@ -593,6 +613,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // T3-CUSTOM(expbkt3): session priority (see ThreadPriority).
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   session: Schema.NullOr(OrchestrationSession),
   execution: Schema.optionalKey(Schema.NullOr(ThreadExecutionSnapshot)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -734,6 +756,12 @@ const ThreadCreateCommand = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
+  // T3-CUSTOM(expbkt3): session priority. Absent means "unprioritised".
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+  // T3-CUSTOM(expbkt3): attach-to-external-session. Handled as a dispatcher
+  // side-effect (seeds the provider session binding); deliberately not carried
+  // into the thread.created event, so the event log stays upstream-shaped.
+  externalSession: Schema.optional(ThreadExternalSessionAttachment),
 });
 
 const ThreadDeleteCommand = Schema.Struct({
@@ -801,6 +829,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // T3-CUSTOM(expbkt3): session priority. undefined = unchanged, null = clear.
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -876,6 +906,9 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
+  // T3-CUSTOM(expbkt3): lets single-shot creators (MCP, the Linear bridge)
+  // set a priority at creation time.
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
 });
 
 const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
@@ -1269,6 +1302,8 @@ export const ThreadCreatedPayload = Schema.Struct({
   createdByUserId: Schema.optional(Schema.NullOr(UserId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  // T3-CUSTOM(expbkt3): session priority at creation time.
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
 });
 
 export const ThreadDeletedPayload = Schema.Struct({
@@ -1329,6 +1364,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // T3-CUSTOM(expbkt3): session priority. undefined = unchanged, null = clear.
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   updatedAt: IsoDateTime,
 });
 

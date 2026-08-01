@@ -110,6 +110,8 @@ import {
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
   phaseSidebarRowClassName,
+  formatThreadPriority,
+  PHASE_SIDEBAR_PRIORITY_CHOICES,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
   type PhaseSidebarSection,
@@ -626,6 +628,8 @@ interface PhaseThreadRowProps {
   readonly onUnsettle: (row: PhaseSidebarRow) => void;
   readonly onSnooze: (row: PhaseSidebarRow, preset: SnoozePreset) => void;
   readonly onUnsnooze: (row: PhaseSidebarRow) => void;
+  // T3-CUSTOM(expbkt3): null clears the priority.
+  readonly onSetPriority: (row: PhaseSidebarRow, priority: 0 | 1 | 2 | 3 | 4 | null) => void;
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
@@ -651,6 +655,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onSnooze,
     onUnsettle,
     onUnsnooze,
+    onSetPriority,
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -762,11 +767,31 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               },
         ]
       : [];
+    const priorityItems = row.prioritySupported
+      ? [
+          {
+            id: "priority",
+            label: "Priority",
+            children: [
+              ...PHASE_SIDEBAR_PRIORITY_CHOICES.map((choice) => ({
+                id: `priority:${choice.value}`,
+                label: row.thread.priority === choice.value ? `${choice.label} ✓` : choice.label,
+              })),
+              {
+                id: "priority:clear",
+                label: "Clear priority",
+                disabled: row.thread.priority == null,
+              },
+            ],
+          },
+        ]
+      : [];
     // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
         { id: "rename", label: "Rename" },
         { id: "mark-unread", label: "Mark unread" },
+        ...priorityItems,
         ...settlementItems,
         ...snoozeItems,
         {
@@ -796,6 +821,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       const preset = snoozePresets.find((candidate) => `snooze:${candidate.id}` === action);
       if (preset) onSnooze(row, preset);
     }
+    if (action === "priority:clear") onSetPriority(row, null);
+    else if (action?.startsWith("priority:")) {
+      const choice = PHASE_SIDEBAR_PRIORITY_CHOICES.find(
+        (candidate) => `priority:${candidate.value}` === action,
+      );
+      if (choice) onSetPriority(row, choice.value);
+    }
     // T3-CUSTOM(expbkt3): END
     if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
@@ -813,7 +845,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseSidebarRowClassName(active, selected, needsUserInput)}
+        className={phaseSidebarRowClassName(
+          active,
+          selected,
+          needsUserInput,
+          row.thread.priority === 0,
+        )}
         aria-current={active ? "page" : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
@@ -930,6 +967,23 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </span>
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
+          {/* T3-CUSTOM(expbkt3): P0 is loud because it is the one level that
+              claims attention across every lifecycle group; P1-P4 stay quiet
+              markers so they read as metadata, not alarms. */}
+          {row.thread.priority != null ? (
+            <span
+              aria-label={`Priority ${formatThreadPriority(row.thread.priority)}`}
+              data-testid={`phase-thread-priority-${row.thread.id}`}
+              className={cn(
+                "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide",
+                row.thread.priority === 0
+                  ? "bg-amber-500 text-white shadow-sm"
+                  : "bg-muted-foreground/15 text-muted-foreground",
+              )}
+            >
+              {formatThreadPriority(row.thread.priority)}
+            </span>
+          ) : null}
           {needsUserInput ? (
             <span className="rounded-sm bg-red-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm">
               INPUT
@@ -1244,6 +1298,7 @@ export function PhaseGroupedSidebar() {
             // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
             settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
             snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
+            prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
             changeRequestState: vcsStatus?.pr?.state ?? null,
             // T3-CUSTOM(expbkt3): END
           };
@@ -1570,6 +1625,29 @@ export function PhaseGroupedSidebar() {
     },
     [renameTitle, updateThreadMetadata],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — session priority.
+  const setThreadPriority = useCallback(
+    (row: PhaseSidebarRow, priority: 0 | 1 | 2 | 3 | 4 | null) => {
+      if (row.thread.priority === priority) return;
+      void updateThreadMetadata({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id, priority },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to set priority",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [updateThreadMetadata],
+  );
+  // T3-CUSTOM(expbkt3): END
   const requestArchive = useCallback(
     async (row: PhaseSidebarRow) => {
       if (confirmArchive) {
@@ -1787,6 +1865,7 @@ export function PhaseGroupedSidebar() {
         onUnsettle={attemptUnsettle}
         onSnooze={attemptSnooze}
         onUnsnooze={attemptUnsnooze}
+        onSetPriority={setThreadPriority}
       />
     );
   };

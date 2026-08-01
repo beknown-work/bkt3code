@@ -15,6 +15,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
+  ThreadPriority,
   TurnId,
   UserId,
 } from "@t3tools/contracts";
@@ -43,6 +44,8 @@ export const ProjectionThread = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozedUntil: Schema.NullOr(IsoDateTime),
   snoozedAt: Schema.NullOr(IsoDateTime),
+  // T3-CUSTOM(expbkt3): session priority (P0..P4 as 0..4, null = unset).
+  priority: Schema.NullOr(ThreadPriority),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),

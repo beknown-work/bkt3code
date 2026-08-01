@@ -331,6 +331,8 @@ export const make = Effect.gen(function* () {
               branch: bootstrap.createThread.branch,
               worktreePath: bootstrap.createThread.worktreePath,
               createdAt: bootstrap.createThread.createdAt,
+              // T3-CUSTOM(expbkt3): session priority.
+              priority: bootstrap.createThread.priority ?? null,
             },
             dispatchOptions,
           );
