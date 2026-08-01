@@ -96,6 +96,16 @@ export const providerRuntimeEventsTotal = Metric.counter("t3_provider_runtime_ev
   description: "Total canonical provider runtime events processed.",
 });
 
+export const providerRateLimitUpdatesTotal = Metric.counter(
+  "t3_provider_rate_limit_updates_total",
+  { description: "Normalized provider rate-limit updates processed." },
+);
+
+export const providerRateLimitRefreshFailuresTotal = Metric.counter(
+  "t3_provider_rate_limit_refresh_failures_total",
+  { description: "Provider rate-limit refresh failures." },
+);
+
 export const gitCommandsTotal = Metric.counter("t3_git_commands_total", {
   description: "Total git commands executed by the server runtime.",
 });

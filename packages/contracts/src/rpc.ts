@@ -61,6 +61,7 @@ import {
   OrchestrationStopExecutionError,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
 import {
   PersonalMcpProfile,
   PersonalMcpProfileUpdate,
@@ -251,6 +252,7 @@ export const WS_METHODS = {
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeServerResources: "subscribeServerResources",
+  subscribeProviderRateLimits: "subscribeProviderRateLimits",
   subscribeAuthAccess: "subscribeAuthAccess",
 } as const;
 
@@ -747,6 +749,13 @@ export const WsSubscribeServerResourcesRpc = Rpc.make(WS_METHODS.subscribeServer
   stream: true,
 });
 
+export const WsSubscribeProviderRateLimitsRpc = Rpc.make(WS_METHODS.subscribeProviderRateLimits, {
+  payload: Schema.Struct({}),
+  success: ProviderRateLimitsStreamSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -822,6 +831,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerResourcesRpc,
+  WsSubscribeProviderRateLimitsRpc,
   WsSubscribeAuthAccessRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationStopExecutionRpc,

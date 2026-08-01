@@ -306,6 +306,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscribeServerResources,
       idleTtlMs: 5_000,
     }),
+    providerRateLimits: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:provider-rate-limits",
+      tag: WS_METHODS.subscribeProviderRateLimits,
+      idleTtlMs: 5_000,
+    }),
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
       tag: WS_METHODS.subscribeServerLifecycle,
