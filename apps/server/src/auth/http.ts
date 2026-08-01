@@ -36,6 +36,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { resolveClerkBrowserIdentity } from "./ClerkBrowserIdentity.ts";
 import { ClerkDirectory } from "./ClerkDirectory.ts";
 import * as ClerkIdentityVerifier from "./ClerkIdentityVerifier.ts";
 import * as EnvironmentUserService from "./EnvironmentUserService.ts";
@@ -264,6 +265,27 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         );
     });
 
+    // T3-CUSTOM(expbkt3): Browser tokens are ordinary Clerk session tokens. They must be
+    // verified with the Clerk secret + org membership, not the relay JWT audience verifier.
+    const resolveDirectClerkIdentity = (token: string) =>
+      resolveClerkBrowserIdentity(token).pipe(
+        Effect.provideService(ClerkDirectory, clerkDirectory),
+        Effect.catchTag("ClerkDirectoryError", (error) =>
+          failEnvironmentInternal("identity_management_failed", error),
+        ),
+        Effect.tap(({ identity }) =>
+          users.assertAllowed(identity.userId).pipe(
+            Effect.catchTag("EnvironmentUserManagementError", (error) =>
+              Effect.gen(function* () {
+                return error.reason === "identity-blocked"
+                  ? yield* failEnvironmentAuthInvalid("blocked_identity")
+                  : yield* failEnvironmentInternal("identity_management_failed", error);
+              }),
+            ),
+          ),
+        ),
+      );
+
     return handlers
       .handle(
         "session",
@@ -332,9 +354,10 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             const request = yield* HttpServerRequest.HttpServerRequest;
             // Verify the Clerk token and hard-gate on org membership before
             // minting a browser-session cookie bound to "clerk:<userId>".
-            const verified = yield* clerkDirectory.verifySessionToken(args.payload.token);
+            const verified = yield* resolveDirectClerkIdentity(args.payload.token);
+            yield* persistIdentity(verified.identity, verified.administrativeGrant);
             const result = yield* serverAuth.createClerkBrowserSession(
-              { subject: verified.subject },
+              { subject: verified.subject, userId: verified.identity.userId },
               deriveAuthClientMetadata({ request }),
             );
             const sessionCookies = yield* Effect.fromResult(
@@ -374,11 +397,13 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const session = yield* EnvironmentAuthenticatedPrincipal;
-            const identity = yield* resolveIdentity(args.payload.identityToken);
-            if (identity === null) {
-              return yield* failEnvironmentAuthInvalid("missing_identity");
-            }
-            yield* persistIdentity(identity, session.scopes.has(AuthAccessWriteScope));
+            // T3-CUSTOM(expbkt3): This endpoint receives the direct browser session token.
+            const verified = yield* resolveDirectClerkIdentity(args.payload.identityToken);
+            const identity = verified.identity;
+            yield* persistIdentity(
+              identity,
+              verified.administrativeGrant || session.scopes.has(AuthAccessWriteScope),
+            );
             yield* sessions
               .bindUserId(session.sessionId, identity.userId)
               .pipe(
@@ -389,6 +414,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             yield* appendCredentialResponseHeaders;
             return { userId: identity.userId };
           },
+          Effect.catchTag("ClerkAuthError", () => failEnvironmentAuthInvalid("invalid_identity")),
           Effect.catchTag("EnvironmentAuthInvalidError", appendDpopChallengeOnUnauthorized),
         ),
       )
