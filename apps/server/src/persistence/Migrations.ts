@@ -56,6 +56,9 @@ import Migration0040 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0041 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 // T3-CUSTOM(expbkt3): Per-user MCP profiles and personal access tokens.
 import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
+// T3-CUSTOM(expbkt3): upstream ships this as migration 35. See the allocation
+// rule above the registry — legacy fork indices 33-42 make 35 unavailable.
+import Migration0043 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -67,7 +70,26 @@ import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-export const migrationEntries = [
+export // T3-CUSTOM(expbkt3): migration index allocation rule. Do not re-decide this
+// on every upstream merge — apply it mechanically.
+//
+//   * 1-32      shared history, identical to upstream.
+//   * 33-42     LEGACY fork block. Frozen. These indices are already applied in
+//               production databases (effect_sql_migrations keys on
+//               `${id}_${name}`), so renumbering one makes it run a second time
+//               on live data. Never touch them.
+//   * 43-999    upstream migrations. Keep upstream's own index whenever it is
+//               free; when it collides with the legacy block, take the next
+//               free index here and leave the file named after upstream's
+//               number. Once upstream's counter passes 42 these align by
+//               themselves and no remapping is needed again.
+//   * 1000+     ALL new fork migrations. Never allocate a fork migration below
+//               1000 again; that is what keeps upstream's numbering free.
+//
+// Adding a fork migration: name the file `1000_Thing.ts` and register
+// `[1000, "Thing", Migration1000]`. Adding an upstream one during a merge: keep
+// its filename, register at its own index if free, else the next free < 1000.
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -110,6 +132,7 @@ export const migrationEntries = [
   [40, "ProjectionThreadsSettled", Migration0040],
   [41, "ProjectionThreadsSnoozed", Migration0041],
   [42, "UserMcpProfiles", Migration0042],
+  [43, "ProjectionThreadTitleRegeneration", Migration0043],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

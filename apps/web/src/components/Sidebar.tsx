@@ -6,6 +6,8 @@ import {
   ContainerIcon,
   FolderPlusIcon,
   Globe2Icon,
+  LoaderIcon,
+  SearchIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -69,6 +71,7 @@ import {
   type SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { isElectron } from "../env";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -120,6 +123,7 @@ import {
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { Kbd } from "./ui/kbd";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -129,6 +133,7 @@ import {
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
+import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import {
@@ -160,16 +165,13 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-  SidebarSeparator,
   useSidebar,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import { openCommandPalette } from "../commandPaletteBus";
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
-  canReconnectThreadSession,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -184,8 +186,10 @@ import {
   ThreadStatusPill,
 } from "./Sidebar.logic";
 import { sortThreads } from "../lib/threadSort";
+import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { CommandDialogTrigger } from "./ui/command";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import {
@@ -201,12 +205,6 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import {
-  SidebarChromeFooter,
-  SidebarChromeHeader,
-  SidebarEnvironmentNotices,
-} from "./sidebar/SidebarChrome";
-import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -443,7 +441,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
     [discoveredPorts, navigateToThread, openPreview, threadRef],
   );
-  const isThreadRunning = thread.execution?.canStop === true;
+  const isThreadRunning =
+    thread.session?.status === "running" && thread.session.activeTurnId != null;
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
@@ -453,7 +452,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
-    hasDedicatedWorktree: thread.worktreePath !== null,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
@@ -699,7 +697,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </TooltipPopup>
             </Tooltip>
           )}
-          {threadStatus && <ThreadStatusLabel status={threadStatus} compact />}
+          {threadStatus && <ThreadStatusLabel status={threadStatus} />}
           {renamingThreadKey === threadKey ? (
             <input
               ref={handleRenameInputRef}
@@ -1111,7 +1109,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
-  const reconnectThreadSession = useReconnectThreadSession();
   const updateSettings = useUpdateClientSettings();
   const sidebarThreadPreviewCount = useClientSettings<SidebarThreadPreviewCount>(
     (settings) => settings.sidebarThreadPreviewCount,
@@ -2121,17 +2118,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             : []),
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
-          {
-            id: "reconnect-session",
-            label: "Reconnect session",
-            disabled: !canReconnectThreadSession(thread),
-          },
           { id: "copy-path", label: "Copy Path" },
-          {
-            id: "copy-session-id",
-            label: "Copy Session ID",
-            disabled: !thread.session?.providerThreadId,
-          },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],
@@ -2171,10 +2158,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         markThreadUnread(threadKey, thread.latestTurn?.completedAt);
         return;
       }
-      if (clicked === "reconnect-session") {
-        await reconnectThreadSession(threadRef);
-        return;
-      }
       if (clicked === "copy-path") {
         if (!threadWorkspacePath) {
           toastManager.add(
@@ -2187,10 +2170,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
         copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
-        return;
-      }
-      if (clicked === "copy-session-id" && thread.session?.providerThreadId) {
-        await navigator.clipboard.writeText(thread.session.providerThreadId);
         return;
       }
       if (clicked === "copy-thread-id") {
@@ -2230,7 +2209,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.workspaceRoot,
-      reconnectThreadSession,
       startThreadRename,
     ],
   );
@@ -2240,9 +2218,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       <div className="group/project-header relative">
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
-          size="sm"
-          className={`h-8 gap-2 rounded-md px-2 py-1.5 pr-8 text-left hover:bg-sidebar-row-hover group-hover/project-header:bg-sidebar-row-hover group-hover/project-header:text-sidebar-foreground max-sm:pr-14 ${
-            isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+          className={`pr-8 group-hover/project-header:bg-sidebar-row-hover group-hover/project-header:text-sidebar-foreground max-sm:pr-14 ${
+            isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : ""
           }`}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
@@ -2509,6 +2486,81 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
+function LocalSecondaryStatus() {
+  const { environments } = useEnvironments();
+  // The desktop reports which local secondary backends (e.g. the WSL backend)
+  // exist; the hook polls because the bridge has no change event. A backend that
+  // is still cold-booting has no httpBaseUrl yet and isn't in the catalog, so we
+  // surface "Connecting" straight from the bootstrap list and clear it once the
+  // matching environment reports a connected phase.
+  const secondaries = useDesktopLocalBootstraps();
+
+  // Connected desktop-local environments keyed by their backend URL so we can
+  // match a bootstrap (which only knows the URL) to its connection phase.
+  const localEnvByUrl = useMemo(() => {
+    const map = new Map<string, { phase: string; error: string | null }>();
+    for (const environment of environments) {
+      if (
+        isDesktopLocalConnectionTarget(environment.entry.target) &&
+        environment.displayUrl !== null
+      ) {
+        map.set(environment.displayUrl, {
+          phase: environment.connection.phase,
+          error: environment.connection.error,
+        });
+      }
+    }
+    return map;
+  }, [environments]);
+
+  const connecting: string[] = [];
+  const failed: Array<{ label: string; error: string | null }> = [];
+  for (const bootstrap of secondaries) {
+    const env =
+      bootstrap.httpBaseUrl !== null ? localEnvByUrl.get(bootstrap.httpBaseUrl) : undefined;
+    if (env?.phase === "connected") {
+      continue;
+    }
+    if (env?.phase === "error") {
+      failed.push({ label: bootstrap.label, error: env.error });
+      continue;
+    }
+    connecting.push(bootstrap.label);
+  }
+
+  if (connecting.length === 0 && failed.length === 0) {
+    return null;
+  }
+
+  return (
+    <SidebarGroup className="px-2 pt-2 pb-0">
+      {connecting.length > 0 ? (
+        <Alert
+          variant="default"
+          className="rounded-2xl border-border/40 bg-accent/40 text-muted-foreground"
+        >
+          <LoaderIcon className="animate-spin" />
+          <AlertTitle className="text-xs font-medium text-foreground">
+            Connecting {connecting.join(", ")}
+          </AlertTitle>
+        </Alert>
+      ) : null}
+      {failed.length > 0 ? (
+        <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
+          <TriangleAlertIcon />
+          <AlertTitle>Couldn't connect {failed.map((entry) => entry.label).join(", ")}</AlertTitle>
+          <AlertDescription>
+            {failed
+              .map((entry) => entry.error)
+              .filter(Boolean)
+              .join("; ") || "The backend didn't respond."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+    </SidebarGroup>
+  );
+}
+
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
   "attributes" | "listeners" | "setActivatorNodeRef"
@@ -2769,14 +2821,33 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   );
 
   return (
-    <SidebarContent className="gap-0">
-      <SidebarGroup className="px-2 pt-2 pb-1">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarSearchAction shortcutLabel={commandPaletteShortcutLabel} />
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroup>
+    <SidebarContent
+      className="gap-0"
+      fixedHeader={
+        <SidebarGroup className="px-2 pt-2 pb-1">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <CommandDialogTrigger
+                render={
+                  <SidebarMenuButton
+                    className="focus-visible:ring-0"
+                    data-testid="command-palette-trigger"
+                  />
+                }
+              >
+                <SearchIcon />
+                <span className="flex-1 truncate">Search</span>
+                {commandPaletteShortcutLabel ? (
+                  <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">
+                    {commandPaletteShortcutLabel}
+                  </Kbd>
+                ) : null}
+              </CommandDialogTrigger>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+      }
+    >
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
         <SidebarGroup className="px-2 pt-2 pb-0">
           <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
@@ -2800,7 +2871,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </Alert>
         </SidebarGroup>
       ) : null}
-      <SidebarEnvironmentNotices />
+      <LocalSecondaryStatus />
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
@@ -3438,11 +3509,7 @@ export default function Sidebar() {
         .downloadUpdate()
         .then((result) => {
           if (result.completed) {
-            toastManager.add({
-              type: "success",
-              title: "Update downloaded",
-              description: "Restart the app from the update button to install it.",
-            });
+            showDesktopUpdateDownloadedToast(bridge, result.state);
           }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
@@ -3563,8 +3630,6 @@ export default function Sidebar() {
             attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
             projectsLength={projects.length}
           />
-
-          <SidebarSeparator />
           <SidebarChromeFooter />
         </>
       )}

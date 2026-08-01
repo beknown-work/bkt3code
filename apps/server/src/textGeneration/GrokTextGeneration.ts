@@ -170,6 +170,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         stagedSummary: input.stagedSummary,
         stagedPatch: input.stagedPatch,
         includeBranch: input.includeBranch === true,
+        policy: input.policy,
       });
 
       const generated = yield* runGrokJson({
@@ -197,6 +198,8 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         commitSummary: input.commitSummary,
         diffSummary: input.diffSummary,
         diffPatch: input.diffPatch,
+        policy: input.policy,
+        changeRequestTemplate: input.changeRequestTemplate,
       });
 
       const generated = yield* runGrokJson({
@@ -237,6 +240,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
     Effect.fn("GrokTextGeneration.generateThreadTitle")(function* (input) {
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
+        previousTitle: input.previousTitle,
         attachments: input.attachments,
       });
 

@@ -1,19 +1,22 @@
-import { useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { LoaderIcon, SettingsIcon, TriangleAlertIcon } from "lucide-react";
 import { memo, useCallback, useMemo } from "react";
 
-import { APP_STAGE_LABEL } from "../../branding";
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../../connection/useDesktopLocalBootstraps";
 import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 import { cn } from "../../lib/utils";
 import { useThreadShells } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
-import { primaryServerConfigAtom } from "../../state/server";
-import { resolveSidebarStageBadgeLabel } from "../Sidebar.logic";
-import { SidebarStageBackdrop, resolveSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import {
+  resolveEnvironmentIdentificationPillLabel,
+  resolveSidebarStageBackdropVariant,
+  SidebarStageBackdrop,
+  useEnvironmentStageLabel,
+} from "../SidebarStageBackdrop";
+import { Badge } from "../ui/badge";
 import {
   SidebarFooter,
   SidebarGroup,
@@ -34,8 +37,16 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }: {
   isElectron: boolean;
 }) {
-  const stageLabel = useSidebarStageLabel();
-  const backdropVariant = resolveSidebarStageBackdropVariant(stageLabel);
+  const stageLabel = useEnvironmentStageLabel();
+  const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const backdropVariant = resolveSidebarStageBackdropVariant(
+    stageLabel,
+    environmentIdentificationMode === "artwork",
+  );
+  const pillLabel =
+    environmentIdentificationMode === "pill"
+      ? resolveEnvironmentIdentificationPillLabel(stageLabel)
+      : null;
 
   return (
     <SidebarHeader
@@ -53,6 +64,16 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         )}
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
+      {pillLabel ? (
+        <Badge
+          className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+          data-environment-identification="pill"
+          size="sm"
+          variant="secondary"
+        >
+          {pillLabel}
+        </Badge>
+      ) : null}
     </SidebarHeader>
   );
 });
@@ -151,16 +172,6 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function useSidebarStageLabel() {
-  const primaryServerVersion =
-    useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
-
-  return resolveSidebarStageBadgeLabel({
-    primaryServerVersion,
-    fallbackStageLabel: APP_STAGE_LABEL,
-  });
-}
-
 function T3Wordmark() {
   return (
     <svg
@@ -188,18 +199,14 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [isMobile, navigate, setOpenMobile]);
 
   return (
-    <SidebarFooter className="p-2">
+    <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarResourceMonitorPill />
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-            onClick={handleSettingsClick}
-          >
-            <SettingsIcon className="size-4.5 shrink-0" />
+          <SidebarMenuButton onClick={handleSettingsClick}>
+            <SettingsIcon />
             <span>Settings</span>
           </SidebarMenuButton>
         </SidebarMenuItem>

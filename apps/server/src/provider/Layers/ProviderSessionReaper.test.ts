@@ -224,6 +224,7 @@ describe("ProviderSessionReaper", () => {
           listThreadShellsByProjectId: () => Effect.succeed([]),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
+          searchThreads: () => Effect.succeed({ matches: [] }),
         }),
       ),
       // The reaper's orphaned-turn pass reads the projections directly and

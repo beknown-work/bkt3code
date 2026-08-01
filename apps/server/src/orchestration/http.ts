@@ -78,16 +78,23 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           const actorUserId = yield* currentActorUserId;
+          // Serve the lightweight command read model (thread bodies empty)
+          // instead of the fully hydrated snapshot. Hydrating every message
+          // and activity payload in the database has OOM-killed servers, and
+          // the route's only consumer (the project CLI) reads projects alone —
+          // UI clients load the shell and per-thread snapshots instead.
           const snapshot = yield* projectionSnapshotQuery
-            .getSnapshot()
+            .getCommandReadModel()
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_snapshot_failed", cause),
               ),
             );
-          return yield* attachExecutions(
-            actorUserId === null ? snapshot : filterReadModel(snapshot, actorUserId),
-          );
+          // T3-CUSTOM(expbkt3): keep per-actor filtering on this route so the
+          // multi-user deployment cannot leak other operators' projects and
+          // threads. Executions are intentionally not attached here, matching
+          // upstream: this read model carries no thread bodies.
+          return actorUserId === null ? snapshot : filterReadModel(snapshot, actorUserId);
         }),
       )
       .handle(
