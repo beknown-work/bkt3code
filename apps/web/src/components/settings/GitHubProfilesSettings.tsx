@@ -1,6 +1,7 @@
 import { CheckCircle2Icon, GithubIcon, PlusIcon, UnplugIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type { GitHubSourceControlProfile, SourceControlProfileId } from "@t3tools/contracts";
 
 import { usePrimaryEnvironment } from "../../state/environments";
@@ -11,6 +12,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { githubProfileActionErrorMessage } from "./GitHubProfilesSettings.logic";
 import { SettingsSection } from "./settingsLayout";
 
 interface ProfileDraft {
@@ -72,13 +74,14 @@ export function GitHubProfilesSettingsSection(props: { readonly disabled?: boole
     [draft],
   );
 
-  const run = async (key: string, action: () => Promise<{ readonly _tag: string }>) => {
+  const run = async <A, E>(key: string, action: () => Promise<AtomCommandResult<A, E>>) => {
     setPendingAction(key);
     setActionError(null);
     const result = await action();
     setPendingAction(null);
-    if (result._tag !== "Success") {
-      setActionError("The GitHub profile action failed. Check the token and try again.");
+    const errorMessage = githubProfileActionErrorMessage(result);
+    if (errorMessage !== null) {
+      setActionError(errorMessage);
       return false;
     }
     profilesQuery.refresh();
@@ -259,6 +262,10 @@ export function GitHubProfilesSettingsSection(props: { readonly disabled?: boole
               value={draft.gitEmail}
               onChange={(event) => setDraft({ ...draft, gitEmail: event.currentTarget.value })}
             />
+            <p className="text-xs text-muted-foreground">
+              Private emails require “Email addresses: read” on the PAT. A GitHub noreply email
+              works without that permission.
+            </p>
           </div>
           <div className="space-y-1">
             <Label htmlFor="github-profile-token">Fine-grained PAT</Label>

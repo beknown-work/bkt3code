@@ -282,6 +282,8 @@ export const make = Effect.gen(function* () {
       return;
     }
 
+    const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+
     const environment = yield* isolatedEnvironment(profileId, credential, process.env);
     const response = yield* github
       .execute({ cwd: config.cwd, args: ["api", "user/emails"], env: environment })
@@ -290,7 +292,7 @@ export const make = Effect.gen(function* () {
           profileError({
             operation: "validate-email",
             reason: "invalid-email",
-            detail: "Use a verified GitHub email or the account's GitHub-provided noreply address.",
+            detail: `GitHub could not verify this email. Grant the token "Email addresses: read", or use ${noreplyEmail}.`,
             profileId,
           }),
         ),
@@ -300,7 +302,7 @@ export const make = Effect.gen(function* () {
         profileError({
           operation: "validate-email",
           reason: "invalid-email",
-          detail: "GitHub could not confirm this commit email.",
+          detail: `GitHub could not confirm this commit email. Grant the token "Email addresses: read", or use ${noreplyEmail}.`,
           profileId,
         }),
       ),
@@ -313,7 +315,7 @@ export const make = Effect.gen(function* () {
       return yield* profileError({
         operation: "validate-email",
         reason: "invalid-email",
-        detail: "Use a verified GitHub email or the account's GitHub-provided noreply address.",
+        detail: `This email is not verified on GitHub. Use a verified email or ${noreplyEmail}.`,
         profileId,
       });
     }

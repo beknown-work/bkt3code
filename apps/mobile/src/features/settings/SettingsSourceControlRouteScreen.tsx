@@ -420,6 +420,10 @@ function EnvironmentProfiles(props: {
             autoCorrect={false}
             keyboardType="email-address"
           />
+          <Text className="text-xs text-foreground-muted">
+            Private emails require “Email addresses: read” on the PAT. A GitHub noreply email works
+            without that permission.
+          </Text>
           <TextInput
             value={token}
             onChangeText={setToken}

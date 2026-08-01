@@ -64,6 +64,15 @@ const makeHarness = Effect.gen(function* () {
         );
       }
       if (input.args[0] === "api" && input.args[1] === "user/emails") {
+        if (credential === "email-private-token") {
+          return Effect.fail(
+            new GitHubCli.GitHubCliCommandError({
+              command: "gh",
+              cwd: input.cwd,
+              cause: new Error("HTTP 403: Resource not accessible by personal access token"),
+            }),
+          );
+        }
         return Effect.succeed(output("[]"));
       }
       const bob = credential === "bob-token";
@@ -156,6 +165,27 @@ it.layer(NodeServices.layer)("SourceControlProfileService", (it) => {
         new TextDecoder().decode(harness.secrets.get(sourceControlProfileSecretName(profile.id))),
         "alice-token",
       );
+    }),
+  );
+
+  it.effect("explains how to recover when a token cannot read private GitHub emails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const error = yield* Effect.flip(
+        harness.service.upsert({
+          label: "Alice",
+          gitName: "Alice Example",
+          gitEmail: "alice@example.com",
+          credential: "email-private-token",
+        }),
+      );
+
+      assert.strictEqual(error.reason, "invalid-email");
+      assert.strictEqual(
+        error.detail,
+        'GitHub could not verify this email. Grant the token "Email addresses: read", or use 42+alice@users.noreply.github.com.',
+      );
+      assert.notInclude(error.detail, "email-private-token");
     }),
   );
 
