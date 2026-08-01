@@ -50,11 +50,18 @@ jobs:
       - name: Test
         run: pnpm exec vp run test
 
+      # The Clerk publishable key is baked into the SPA here. Without it the
+      # bundle mounts no ClerkProvider, so team mode is silently off in the
+      # browser: no sign-in gate, no member tagging, no "Assigned to me". It
+      # used to come from the host's clerk.env when the web client was built on
+      # the box; a CI build has to supply it explicitly. Publishable keys are
+      # public by design — they ship in the served bundle — hence a variable.
       - name: Build web client
         run: pnpm exec vp run --filter @t3tools/web build
         env:
           VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true"
           VITE_T3_CONDUCTOR: "false"
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
 
       - name: Build server bundle
         run: pnpm exec vp run --filter t3 build:bundle
