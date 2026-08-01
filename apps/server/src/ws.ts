@@ -142,6 +142,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import * as ThreadSourceControlActionLock from "./sourceControl/ThreadSourceControlActionLock.ts";
+import { applyAssignedSourceControlProfile } from "./sourceControl/ThreadSourceControlProfileSelection.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
@@ -1272,9 +1273,23 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
-              const identityMode = (yield* serverSettings.getSettings).sourceControlIdentityMode;
+              let normalizedCommand = yield* normalizeDispatchCommand(command);
+              const sourceControlSettings = yield* serverSettings.getSettings;
+              const identityMode = sourceControlSettings.sourceControlIdentityMode;
               if (identityMode === "thread-profile") {
+                // T3-CUSTOM(expbkt3): New-thread attribution defaults to the
+                // authenticated environment user's linked GitHub profile. This
+                // also closes the profile-query loading race in every client.
+                const assignedProfileId =
+                  currentSession.userId === null
+                    ? null
+                    : (Object.values(sourceControlSettings.sourceControlProfiles).find(
+                        (profile) => profile.ownerUserId === currentSession.userId,
+                      )?.id ?? null);
+                normalizedCommand = applyAssignedSourceControlProfile(
+                  normalizedCommand,
+                  assignedProfileId,
+                );
                 const requestedProfileId =
                   normalizedCommand.type === "thread.create"
                     ? normalizedCommand.sourceControlProfileId
