@@ -113,6 +113,9 @@ import {
   ThreadExecutionSupervisor,
   type ThreadExecutionSupervisorShape,
 } from "./execution/ThreadExecutionSupervisor.ts";
+// T3-CUSTOM(expbkt3): dispatcher dependencies for external-session attach.
+import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
+import { ProviderService } from "./provider/Services/ProviderService.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -584,6 +587,11 @@ const buildAppUnderTest = (options?: {
             })
           : Layer.empty,
       ),
+      // T3-CUSTOM(expbkt3): the dispatcher can seed a provider binding when a
+      // thread attaches to an external session. Router tests never do, so keep
+      // these fail-closed rather than wiring real provider layers in.
+      Layer.provide(Layer.mock(ProviderService)({})),
+      Layer.provide(Layer.mock(ProviderSessionDirectory)({})),
       // T3-CUSTOM(expbkt3): Router tests do not exercise personal credential
       // persistence. Keep the new RPC dependency fail-closed and in memory.
       Layer.provide(

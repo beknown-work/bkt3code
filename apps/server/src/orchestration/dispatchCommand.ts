@@ -7,12 +7,15 @@ import {
   type ThreadId,
   type UserId,
 } from "@t3tools/contracts";
+import * as NodeOS from "node:os";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -23,6 +26,13 @@ import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
+// T3-CUSTOM(expbkt3): attach-to-external-session.
+import {
+  buildExternalResumeCursor,
+  probeExternalSessionArtifact,
+} from "../provider/externalSessionAttachment.ts";
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isThreadTurnAdmissionConflictError = Schema.is(ThreadTurnAdmissionConflictError);
@@ -99,6 +109,14 @@ export const make = Effect.gen(function* () {
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
+  // T3-CUSTOM(expbkt3): attach-to-external-session seeds the provider binding
+  // before the first turn, which is all the existing resume path needs.
+  const providerService = yield* ProviderService;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
+  const homeDirectory = NodeOS.homedir();
+  // Captured here so the filesystem probe does not leak its requirements into
+  // `dispatch`, whose signature is context-free (same trick as the reaper).
+  const platformContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
   const dispatch = Effect.fn("OrchestrationCommandDispatcher.dispatch")(function* (
     command: OrchestrationCommand,
@@ -399,16 +417,163 @@ export const make = Effect.gen(function* () {
       );
     });
 
+    // T3-CUSTOM(expbkt3): BEGIN — attach a new thread to an existing external
+    // provider session.
+    const dispatchAttachedThreadCreate = Effect.fn("dispatchAttachedThreadCreate")(function* (
+      createCommand: Extract<OrchestrationCommand, { type: "thread.create" }>,
+      externalSession: NonNullable<
+        Extract<OrchestrationCommand, { type: "thread.create" }>["externalSession"]
+      >,
+    ) {
+      const fail = (message: string) =>
+        Effect.fail(new OrchestrationDispatchCommandError({ message }));
+
+      // Resume is bound to the directory the session ran in, so a worktree
+      // checkout would silently look somewhere else.
+      if (createCommand.branch !== null || createCommand.worktreePath !== null) {
+        return yield* fail(
+          "An attached session must use the project checkout: it resumes in the directory the external session ran in.",
+        );
+      }
+      // ProviderService only falls back to a persisted cursor when the binding
+      // instance matches the one the turn routes to.
+      if (createCommand.modelSelection.instanceId !== externalSession.providerInstanceId) {
+        return yield* fail(
+          "The attached session's provider instance must match the thread's selected model instance.",
+        );
+      }
+
+      const instance = yield* providerService
+        .getInstanceInfo(externalSession.providerInstanceId)
+        .pipe(
+          Effect.mapError(
+            () =>
+              new OrchestrationDispatchCommandError({
+                message: `Provider instance '${externalSession.providerInstanceId}' was not found.`,
+              }),
+          ),
+        );
+
+      const built = yield* Effect.try({
+        try: () => buildExternalResumeCursor(instance.driverKind, externalSession.sessionId),
+        catch: (cause) =>
+          new OrchestrationDispatchCommandError({
+            message: cause instanceof Error ? cause.message : "Invalid external session id.",
+          }),
+      });
+
+      const shell = yield* snapshotQuery
+        .getShellSnapshot()
+        .pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to read the project for an attached session."),
+          ),
+        );
+      const project = shell.projects.find((entry) => entry.id === createCommand.projectId);
+      if (!project) {
+        return yield* fail(`T3 project ${createCommand.projectId} was not found.`);
+      }
+
+      const probe = yield* probeExternalSessionArtifact({
+        driverKind: instance.driverKind,
+        sessionId: built.normalizedSessionId,
+        cwd: project.workspaceRoot,
+        homePath: homeDirectory,
+      }).pipe(
+        Effect.provide(platformContext),
+        Effect.orElseSucceed(() => "unknown" as const),
+      );
+
+      if (probe === "missing") {
+        // Codex silently starts a fresh thread on an unknown id, so a missing
+        // artifact must fail loudly here rather than look like a success.
+        return yield* fail(
+          `No ${instance.driverKind === "claudeAgent" ? "Claude" : "Codex"} session '${built.normalizedSessionId}' was found for ${project.workspaceRoot}. Check the session id and that you picked the project it ran in.`,
+        );
+      }
+      if (probe === "unknown") {
+        yield* Effect.logWarning("provider.external-session.probe-inconclusive", {
+          threadId: createCommand.threadId,
+          driverKind: instance.driverKind,
+          cwd: project.workspaceRoot,
+        });
+      }
+
+      const result = yield* orchestrationEngine
+        .dispatch(createCommand, dispatchOptions)
+        .pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          ),
+        );
+
+      yield* providerSessionDirectory
+        .upsert({
+          threadId: createCommand.threadId,
+          provider: instance.driverKind,
+          providerInstanceId: externalSession.providerInstanceId,
+          runtimeMode: createCommand.runtimeMode,
+          // Not running yet: the binding only carries the resume state that
+          // the first turn will pick up.
+          status: "stopped",
+          resumeCursor: built.cursor,
+          runtimePayload: { cwd: project.workspaceRoot },
+        })
+        .pipe(
+          Effect.mapError(
+            () =>
+              new OrchestrationDispatchCommandError({
+                // The thread exists and is usable; only the binding failed.
+                message:
+                  "The thread was created but could not be attached to the external session. Delete it and try again.",
+              }),
+          ),
+        );
+
+      yield* orchestrationEngine
+        .dispatch(
+          {
+            type: "thread.activity.append",
+            commandId: yield* serverCommandId("attach-external-session"),
+            threadId: createCommand.threadId,
+            activity: {
+              id: yield* serverEventId,
+              tone: "info",
+              kind: "session.attached-external",
+              summary: `Attached to an existing ${instance.driverKind === "claudeAgent" ? "Claude" : "Codex"} session (${built.normalizedSessionId.slice(0, 8)})`,
+              payload: {
+                providerInstanceId: externalSession.providerInstanceId,
+                sessionId: built.normalizedSessionId,
+                probe,
+              },
+              turnId: null,
+              createdAt: createCommand.createdAt,
+            },
+            createdAt: createCommand.createdAt,
+          },
+          dispatchOptions,
+        )
+        .pipe(Effect.ignoreCause({ log: true }));
+
+      return result;
+    });
+    // T3-CUSTOM(expbkt3): END
+
     const baseDispatchEffect =
       command.type === "thread.turn.start" && command.bootstrap
         ? dispatchBootstrapTurnStart(command)
-        : orchestrationEngine
-            .dispatch(command, dispatchOptions)
-            .pipe(
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-              ),
-            );
+        : // T3-CUSTOM(expbkt3): attach-to-external-session. Validate first, so
+          // a bad session id fails before a thread exists, then seed the
+          // provider binding so the first turn resumes instead of starting new.
+          command.type === "thread.create" && command.externalSession
+          ? dispatchAttachedThreadCreate(command, command.externalSession)
+          : orchestrationEngine
+              .dispatch(command, dispatchOptions)
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                ),
+              );
 
     const dispatchEffect =
       command.type === "thread.turn.start" && command.precondition

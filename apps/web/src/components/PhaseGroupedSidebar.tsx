@@ -23,6 +23,7 @@ import {
   FilterIcon,
   FolderGit2Icon,
   FolderPlusIcon,
+  Link2Icon,
   LaptopIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -124,6 +125,8 @@ import {
   SidebarEnvironmentNotices,
 } from "./sidebar/SidebarChrome";
 import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
+// T3-CUSTOM(expbkt3): attach-to-external-session.
+import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
 import { T3ConductorCard } from "./sidebar/T3ConductorCard";
 import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
 import { Badge } from "./ui/badge";
@@ -1079,6 +1082,7 @@ function NewThreadProjectPicker({
   onOpenChange,
   onSelect,
   onAddProject,
+  onAttachExternalSession,
 }: {
   readonly open: boolean;
   readonly projects: ReadonlyArray<Project>;
@@ -1086,6 +1090,8 @@ function NewThreadProjectPicker({
   readonly onOpenChange: (open: boolean) => void;
   readonly onSelect: (project: Project) => void;
   readonly onAddProject: () => void;
+  // T3-CUSTOM(expbkt3): attach-to-external-session.
+  readonly onAttachExternalSession: () => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1119,6 +1125,16 @@ function NewThreadProjectPicker({
           >
             <FolderPlusIcon className="size-4" />
             Add project
+          </button>
+          {/* T3-CUSTOM(expbkt3): continue a Claude/Codex session started in a
+              terminal, instead of only ever starting fresh ones. */}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={onAttachExternalSession}
+          >
+            <Link2Icon className="size-4" />
+            Attach existing session
           </button>
         </DialogPanel>
       </DialogPopup>
@@ -1179,6 +1195,8 @@ export function PhaseGroupedSidebar() {
   const clearFilters = usePhaseSidebarFilterStore((state) => state.clearAll);
   const reconcileFilters = usePhaseSidebarFilterStore((state) => state.reconcile);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  // T3-CUSTOM(expbkt3): attach-to-external-session.
+  const [attachSessionOpen, setAttachSessionOpen] = useState(false);
   const [vcsStatusByThreadKey, setVcsStatusByThreadKey] = useState<
     ReadonlyMap<string, VcsStatusResult | null>
   >(() => new Map());
@@ -2072,7 +2090,13 @@ export function PhaseGroupedSidebar() {
           setProjectPickerOpen(false);
           openAddProject();
         }}
+        onAttachExternalSession={() => {
+          setProjectPickerOpen(false);
+          setAttachSessionOpen(true);
+        }}
       />
+      {/* T3-CUSTOM(expbkt3): attach-to-external-session. */}
+      <AttachExternalSessionDialog open={attachSessionOpen} onOpenChange={setAttachSessionOpen} />
     </>
   );
 }

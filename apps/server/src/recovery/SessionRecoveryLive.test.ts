@@ -120,19 +120,19 @@ describe("SessionRecovery", () => {
         }),
       streamDomainEvents: Stream.empty,
       latestSequence: Effect.succeed(0),
-    } as unknown as OrchestrationEngineService["Service"];
+    } as unknown as typeof OrchestrationEngineService.Service;
 
     const supervisor = {
       getSnapshot: (threadId: ThreadId) =>
         Effect.succeed(input.snapshots.get(String(threadId)) ?? makeSnapshot(threadId)),
-    } as unknown as ThreadExecutionSupervisor["Service"];
+    } as unknown as typeof ThreadExecutionSupervisor.Service;
 
     const snapshotQuery = {
       getThreadShellById: (threadId: ThreadId) => {
         const shell = input.shells?.get(String(threadId)) ?? makeThreadShell(threadId);
         return Effect.succeed(Option.some(shell) as Option.Option<never>);
       },
-    } as unknown as ProjectionSnapshotQuery["Service"];
+    } as unknown as typeof ProjectionSnapshotQuery.Service;
 
     const layer = makeSessionRecoveryLive({
       // Long interval: these tests drive the sweep through start() once and
@@ -165,18 +165,17 @@ describe("SessionRecovery", () => {
   }
 
   /** The sweep does async SQL, so assertions poll rather than yield-count. */
-  async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000) {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
+  async function waitFor(predicate: () => boolean | Promise<boolean>, attempts = 500) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (await predicate()) return;
-      if (Date.now() >= deadline) throw new Error("Timed out waiting for the recovery sweep.");
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await runtime!.runPromise(Effect.sleep("10 millis"));
     }
+    throw new Error("Timed out waiting for the recovery sweep.");
   }
 
   /** Give the sweep room to run, for assertions that nothing should happen. */
   async function settle() {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await runtime!.runPromise(Effect.sleep("300 millis"));
   }
 
   const readRow = (threadId: ThreadId) =>
