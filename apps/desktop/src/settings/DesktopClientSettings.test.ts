@@ -22,6 +22,7 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   phaseGroupedSidebarEnabled: true,
   providerModelPreferences: {},
+  providerRateLimitsEnabled: true,
   resourceMonitorEnabled: false,
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",

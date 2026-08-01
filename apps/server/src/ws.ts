@@ -90,6 +90,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderRateLimits from "./provider/ProviderRateLimits.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -329,6 +330,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerResources, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeProviderRateLimits, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
 ]);
 
@@ -450,6 +452,7 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerRateLimits = yield* ProviderRateLimits.ProviderRateLimits;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -2163,6 +2166,10 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.subscribeServerResources]: (_input) =>
           observeRpcStream(WS_METHODS.subscribeServerResources, systemResourceMonitor.stream, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.subscribeProviderRateLimits]: (_input) =>
+          observeRpcStream(WS_METHODS.subscribeProviderRateLimits, providerRateLimits.stream, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>

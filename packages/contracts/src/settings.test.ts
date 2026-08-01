@@ -123,6 +123,21 @@ describe("ClientSettings resource monitor", () => {
   });
 });
 
+describe("ClientSettings provider usage limits", () => {
+  it("defaults the header indicator on for legacy settings", () => {
+    expect(decodeClientSettings({}).providerRateLimitsEnabled).toBe(true);
+  });
+
+  it("accepts persisted values and client patches", () => {
+    expect(
+      decodeClientSettings({ providerRateLimitsEnabled: false }).providerRateLimitsEnabled,
+    ).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ providerRateLimitsEnabled: false }).providerRateLimitsEnabled,
+    ).toBe(false);
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);

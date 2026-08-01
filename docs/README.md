@@ -11,6 +11,9 @@
   - [Remote access](./user/remote-access.md)
   - [Keeping T3 Code in sync](./user/server-updates.md)
   - [Keybindings](./user/keybindings.md)
+  - [Provider usage limits](./user/provider-limits.md)
+- Internals
+  - [Provider rate limits](./internals/provider-rate-limits.md)
 - [T3 Connect](./cloud/t3-connect-clerk.md)
 - [Integrations](./integrations/source-control-providers.md)
   - [T3 Code MCP control center](./integrations/t3-mcp-control.md)

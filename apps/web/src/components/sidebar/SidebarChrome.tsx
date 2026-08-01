@@ -7,6 +7,7 @@ import { APP_STAGE_LABEL } from "../../branding";
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../../connection/useDesktopLocalBootstraps";
 import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
+import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { useThreadShells } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
@@ -25,6 +26,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
+import { SidebarProviderRateLimits } from "./SidebarProviderRateLimits";
 import { SidebarResourceMonitorPill } from "./SidebarResourceMonitorPill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 import { summarizeSidebarSessions } from "./sidebarSessionCounters";
@@ -40,7 +42,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative h-auto min-h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-0 px-3 py-0 md:px-0",
         isElectron && "drag-region",
       )}
     >
@@ -63,6 +65,10 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const threads = useThreadShells();
   const stageLabel = useSidebarStageLabel();
   const counts = useMemo(() => summarizeSidebarSessions(threads), [threads]);
+  const providerRateLimitsEnabled = useClientSettings(
+    (settings) => settings.providerRateLimitsEnabled,
+  );
+  const showProviderRateLimits = EXPERIMENTAL_CONTROL_CENTER_ENABLED && providerRateLimitsEnabled;
   // T3-CUSTOM(expbkt3): END
   const syncing = environments.some(
     (environment) =>
@@ -71,7 +77,10 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 
   return (
-    <div className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex min-w-0 items-center gap-1.5">
+    <div
+      className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex min-w-0 max-w-full flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden"
+      data-testid="sidebar-brand-layout"
+    >
       <Link
         aria-label="Go to threads"
         className={cn(
@@ -132,20 +141,28 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
         </div>
       ) : null}
       {/* T3-CUSTOM(expbkt3): END */}
-      {syncing ? (
-        <span
-          aria-label="Connection interrupted; syncing"
-          className="inline-flex"
-          role="status"
-          title="Connection interrupted. Syncing…"
+      {showProviderRateLimits || syncing ? (
+        <div
+          className="flex h-7 max-w-full shrink-0 items-center gap-1.5 overflow-hidden"
+          data-testid="sidebar-provider-rate-limits-slot"
         >
-          <LoaderIcon
-            className={cn(
-              "size-3 animate-spin",
-              onBackdrop ? "text-white/70" : "text-muted-foreground/70",
-            )}
-          />
-        </span>
+          {showProviderRateLimits ? <SidebarProviderRateLimits onBackdrop={onBackdrop} /> : null}
+          {syncing ? (
+            <span
+              aria-label="Connection interrupted; syncing"
+              className="inline-flex shrink-0"
+              role="status"
+              title="Connection interrupted. Syncing…"
+            >
+              <LoaderIcon
+                className={cn(
+                  "size-3 animate-spin",
+                  onBackdrop ? "text-white/70" : "text-muted-foreground/70",
+                )}
+              />
+            </span>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
