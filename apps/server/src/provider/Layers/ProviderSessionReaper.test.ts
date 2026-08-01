@@ -100,6 +100,7 @@ function makeReadModel(
       runtimeMode: "full-access" as const,
       branch: null,
       worktreePath: null,
+      sourceControlProfileId: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

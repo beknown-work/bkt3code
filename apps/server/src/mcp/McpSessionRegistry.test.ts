@@ -542,6 +542,7 @@ const makeStubSessionStore = (input: {
       Effect.succeed(
         input.clientSessions.map((clientSession) => ({
           sessionId: clientSession.sessionId,
+          userId: null,
           subject: clientSession.subject,
           scopes: [],
           method: "browser-session-cookie" as const,
@@ -556,6 +557,8 @@ const makeStubSessionStore = (input: {
     streamChanges: Stream.fromPubSub(input.changes),
     revoke: () => Effect.die("unused"),
     revokeAllExcept: () => Effect.die("unused"),
+    revokeByUserId: () => Effect.die("unused"),
+    bindUserId: () => Effect.die("unused"),
     markConnected: () => Effect.void,
     markDisconnected: () => Effect.void,
   });

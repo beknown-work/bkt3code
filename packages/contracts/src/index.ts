@@ -1,6 +1,7 @@
 export * from "./baseSchemas.ts";
 export * from "./background.ts";
 export * from "./auth.ts";
+export * from "./users.ts";
 export * from "./environment.ts";
 export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
@@ -11,6 +12,7 @@ export * from "./terminal.ts";
 export * from "./provider.ts";
 export * from "./providerInstance.ts";
 export * from "./providerRuntime.ts";
+export * from "./providerRateLimits.ts";
 export * from "./model.ts";
 export * from "./keybindings.ts";
 export * from "./server.ts";

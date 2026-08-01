@@ -62,7 +62,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
     selectedThread !== null && selectedThreadCwd !== null
       ? vcsEnvironment.status({
           environmentId: selectedThread.environmentId,
-          input: { cwd: selectedThreadCwd },
+          input: { cwd: selectedThreadCwd, threadId: selectedThread.id },
         })
       : null,
   );
@@ -225,6 +225,9 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullRefresh()} />
       }
     >
+      {gitActions.actingProfileLogin ? (
+        <MetaCard label="GitHub identity" value={`@${gitActions.actingProfileLogin}`} />
+      ) : null}
       <View
         className={
           isInspector

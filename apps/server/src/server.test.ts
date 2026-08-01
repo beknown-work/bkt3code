@@ -26,6 +26,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  SourceControlProfileId,
   ThreadId,
   ThreadTurnAdmissionConflictError,
   WS_METHODS,
@@ -89,6 +90,9 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
+import * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
+import * as ThreadSourceControlActionLock from "./sourceControl/ThreadSourceControlActionLock.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -115,7 +119,6 @@ import {
 } from "./execution/ThreadExecutionSupervisor.ts";
 // T3-CUSTOM(expbkt3): dispatcher dependencies for external-session attach.
 import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
-import { ProviderService } from "./provider/Services/ProviderService.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -123,6 +126,8 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ClerkIdentityVerifier from "./auth/ClerkIdentityVerifier.ts";
+import * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -184,6 +189,7 @@ const makeDefaultOrchestrationReadModel = () => {
         runtimeMode: "full-access" as const,
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
@@ -218,6 +224,7 @@ const makeDefaultOrchestrationThreadShell = (
     interactionMode: "default",
     branch: null,
     worktreePath: null,
+    sourceControlProfileId: null,
     latestTurn: null,
     createdAt: now,
     updatedAt: now,
@@ -360,6 +367,10 @@ const buildAppUnderTest = (options?: {
     sourceControlRepositoryService?: Partial<
       SourceControlRepositoryService.SourceControlRepositoryService["Service"]
     >;
+    sourceControlProfileService?: Partial<
+      SourceControlProfileService.SourceControlProfileService["Service"]
+    >;
+    providerService?: Partial<ProviderService.ProviderService["Service"]>;
     reviewService?: Partial<ReviewService.ReviewService["Service"]>;
     vcsStatusBroadcaster?: Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>;
     projectSetupScriptRunner?: Partial<
@@ -590,7 +601,7 @@ const buildAppUnderTest = (options?: {
       // T3-CUSTOM(expbkt3): the dispatcher can seed a provider binding when a
       // thread attaches to an external session. Router tests never do, so keep
       // these fail-closed rather than wiring real provider layers in.
-      Layer.provide(Layer.mock(ProviderService)({})),
+      Layer.provide(Layer.mock(ProviderService.ProviderService)({})),
       Layer.provide(Layer.mock(ProviderSessionDirectory)({})),
       // T3-CUSTOM(expbkt3): Router tests do not exercise personal credential
       // persistence. Keep the new RPC dependency fail-closed and in memory.
@@ -634,14 +645,30 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ServerSettings.ServerSettingsService)({
-          start: Effect.void,
-          ready: Effect.void,
-          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          streamChanges: Stream.empty,
-          ...options?.layers?.serverSettings,
-        }),
+        Layer.mergeAll(
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            start: Effect.void,
+            ready: Effect.void,
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            streamChanges: Stream.empty,
+            ...options?.layers?.serverSettings,
+          }),
+          Layer.mock(ClerkIdentityVerifier.ClerkIdentityVerifier)({
+            verify: () => Effect.die("Clerk identity verifier not stubbed"),
+          }),
+          Layer.mock(EnvironmentUserService.EnvironmentUserService)({
+            assertAllowed: () => Effect.void,
+            assertAdministrator: () => Effect.void,
+            admit: () => Effect.die("environment user admission not stubbed"),
+            list: () => Effect.die("environment user directory not stubbed"),
+            update: () => Effect.die("environment user update not stubbed"),
+            revokeSessions: () => Effect.die("environment user revocation not stubbed"),
+            setSourceControlProfile: () =>
+              Effect.die("environment user source-control assignment not stubbed"),
+            revokeUnidentifiedSessions: Effect.succeed(0),
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ExternalLauncher.ExternalLauncher)({
@@ -722,9 +749,37 @@ const buildAppUnderTest = (options?: {
       Layer.provide(reviewLayer),
       Layer.provide(vcsProvisioningLayer),
       Layer.provide(
-        Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
-          ...options?.layers?.sourceControlRepositoryService,
-        }),
+        Layer.mergeAll(
+          Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
+            ...options?.layers?.sourceControlRepositoryService,
+          }),
+          Layer.mock(SourceControlProfileService.SourceControlProfileService)({
+            list: Effect.succeed({ identityMode: "machine", profiles: [] }),
+            upsert: () => Effect.die("source-control profile not stubbed"),
+            test: () => Effect.die("source-control profile not stubbed"),
+            replaceCredential: () => Effect.die("source-control profile not stubbed"),
+            disconnect: () => Effect.die("source-control profile not stubbed"),
+            archive: () => Effect.die("source-control profile not stubbed"),
+            resolveExecutionContext: () => Effect.die("source-control profile not stubbed"),
+            resolveThreadExecutionContext: () => Effect.succeed(null),
+            ...options?.layers?.sourceControlProfileService,
+          }),
+          Layer.mock(ProviderService.ProviderService)({
+            startSession: () => Effect.die("provider service not stubbed"),
+            sendTurn: () => Effect.die("provider service not stubbed"),
+            interruptTurn: () => Effect.die("provider service not stubbed"),
+            respondToRequest: () => Effect.die("provider service not stubbed"),
+            respondToUserInput: () => Effect.die("provider service not stubbed"),
+            stopSession: () => Effect.die("provider service not stubbed"),
+            listSessions: () => Effect.succeed([]),
+            getCapabilities: () => Effect.die("provider service not stubbed"),
+            getInstanceInfo: () => Effect.die("provider service not stubbed"),
+            rollbackConversation: () => Effect.die("provider service not stubbed"),
+            streamEvents: Stream.empty,
+            ...options?.layers?.providerService,
+          }),
+          ThreadSourceControlActionLock.layer,
+        ),
       ),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
       Layer.provide(
@@ -5285,6 +5340,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 },
                 branch: "feature/demo",
                 worktreePath: null,
+                sourceControlProfileId: null,
               }),
           },
           gitVcsDriver: {
@@ -5302,6 +5358,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                     current: true,
                     isDefault: true,
                     worktreePath: null,
+                    sourceControlProfileId: null,
                   },
                 ],
                 isRepo: true,
@@ -5844,6 +5901,99 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("stops the provider and terminals before changing a thread's GitHub owner", () =>
+    Effect.gen(function* () {
+      const aliceId = SourceControlProfileId.make("github_42");
+      const bobId = SourceControlProfileId.make("github_84");
+      const effects: string[] = [];
+      const dispatchedCommands: OrchestrationCommand[] = [];
+      const now = "2026-01-01T00:00:00.000Z";
+      const thread = {
+        ...makeDefaultOrchestrationReadModel().threads[0]!,
+        sourceControlProfileId: aliceId,
+        session: {
+          threadId: defaultThreadId,
+          status: "ready" as const,
+          providerName: "codex",
+          runtimeMode: "full-access" as const,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+      };
+      const bob = {
+        id: bobId,
+        provider: "github" as const,
+        label: "Bob",
+        login: "bob",
+        accountId: 84,
+        avatarUrl: null,
+        gitName: "Bob Example",
+        gitEmail: "84+bob@users.noreply.github.com",
+        ownerUserId: null,
+        credentialStatus: "connected" as const,
+        archived: false,
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          sourceControlProfileService: {
+            test: () => Effect.succeed(bob),
+            list: Effect.succeed({ identityMode: "thread-profile", profiles: [bob] }),
+          },
+          providerService: {
+            stopSession: () =>
+              Effect.sync(() => {
+                effects.push("provider.stop");
+              }),
+          },
+          terminalManager: {
+            hasRunningCommand: () => Effect.succeed(false),
+            close: () =>
+              Effect.sync(() => {
+                effects.push("terminal.close");
+              }),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailById: () => Effect.succeed(Option.some(thread)),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                effects.push(`dispatch:${command.type}`);
+                return { sequence: dispatchedCommands.length };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.sourceControlThreadOwnerSet]({
+            threadId: defaultThreadId,
+            sourceControlProfileId: bobId,
+          }),
+        ),
+      );
+
+      assert.equal(result.login, "bob");
+      assert.deepEqual(effects, [
+        "provider.stop",
+        "terminal.close",
+        "dispatch:thread.source-control-profile.set",
+        "dispatch:thread.activity.append",
+        "terminal.close",
+      ]);
+      const ownerCommand = dispatchedCommands[0];
+      assert.equal(ownerCommand?.type, "thread.source-control-profile.set");
+      if (ownerCommand?.type === "thread.source-control-profile.set") {
+        assert.equal(ownerCommand.sourceControlProfileId, bobId);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc orchestration methods", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
@@ -5874,6 +6024,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             runtimeMode: "full-access" as const,
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: now,
             updatedAt: now,
             archivedAt: null,
@@ -7334,6 +7485,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               interactionMode: "default",
               branch: "main",
               worktreePath: null,
+              sourceControlProfileId: null,
               createdAt,
             },
             prepareWorktree: {
@@ -7488,6 +7640,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 interactionMode: "default",
                 branch: "main",
                 worktreePath: null,
+                sourceControlProfileId: null,
                 createdAt,
               },
               prepareWorktree: {
@@ -7609,6 +7762,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 interactionMode: "default",
                 branch: "main",
                 worktreePath: null,
+                sourceControlProfileId: null,
                 createdAt,
               },
               prepareWorktree: {
@@ -7693,6 +7847,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 interactionMode: "default",
                 branch: "main",
                 worktreePath: null,
+                sourceControlProfileId: null,
                 createdAt,
               },
               prepareWorktree: {
@@ -7724,6 +7879,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         terminalId: "default",
         cwd: "/tmp/project",
         worktreePath: null,
+        sourceControlProfileId: null,
         status: "running" as const,
         pid: 1234,
         history: "",

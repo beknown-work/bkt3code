@@ -1,5 +1,6 @@
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -17,6 +18,7 @@ import {
   type DiscoveredLocalServerList,
   type OrchestrationCommand,
   type GitActionProgressEvent,
+  type GitHubSourceControlProfile,
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
@@ -51,6 +53,8 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  EventId,
+  SourceControlProfileError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -90,6 +94,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderRateLimits from "./provider/ProviderRateLimits.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -111,6 +116,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -119,6 +125,12 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
+import {
+  CurrentSourceControlExecutionEnvironment,
+  withSourceControlExecutionEnvironment,
+} from "./sourceControl/SourceControlExecutionEnvironment.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
@@ -128,6 +140,8 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
+import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
+import * as ThreadSourceControlActionLock from "./sourceControl/ThreadSourceControlActionLock.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
@@ -385,16 +399,19 @@ const makeWsRpcLayer = (
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
+      const gitVcsDriver = yield* GitVcsDriver.GitVcsDriver;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerRateLimits = yield* ProviderRateLimits.ProviderRateLimits;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const crypto = yield* Crypto.Crypto;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const repositoryIdentityResolver =
@@ -417,6 +434,7 @@ const makeWsRpcLayer = (
         ),
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const environmentUsers = yield* EnvironmentUserService.EnvironmentUserService;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
@@ -430,6 +448,10 @@ const makeWsRpcLayer = (
       );
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const sourceControlProfiles = yield* SourceControlProfileService.SourceControlProfileService;
+      const sourceControlActionLock =
+        yield* ThreadSourceControlActionLock.ThreadSourceControlActionLock;
+      const providerService = yield* ProviderService.ProviderService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -1026,12 +1048,270 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const resolveSelectedSourceControlEnvironment = Effect.fn(
+        "ws.resolveSelectedSourceControlEnvironment",
+      )(function* (
+        profileId:
+          | SourceControlProfileService.SourceControlExecutionContext["profileId"]
+          | undefined,
+      ) {
+        if (profileId !== undefined) {
+          const context = yield* sourceControlProfiles.resolveExecutionContext(profileId, {});
+          return {
+            profileId: context.profileId,
+            environment: context.environment,
+          };
+        }
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(
+            () =>
+              new SourceControlProfileError({
+                operation: "resolve-profile",
+                reason: "profile-persist-failed",
+                detail: "Could not read source-control identity settings.",
+              }),
+          ),
+        );
+        if (settings.sourceControlIdentityMode === "thread-profile") {
+          return yield* new SourceControlProfileError({
+            operation: "resolve-profile",
+            reason: "missing-profile",
+            detail: "Select a GitHub profile before continuing.",
+          });
+        }
+        return null;
+      });
+
+      const resolveThreadSourceControlEnvironment = Effect.fn(
+        "ws.resolveThreadSourceControlEnvironment",
+      )(function* (threadId: ThreadId | undefined) {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(
+            () =>
+              new SourceControlProfileError({
+                operation: "resolve-thread-profile",
+                reason: "profile-persist-failed",
+                detail: "Could not read source-control identity settings.",
+                ...(threadId !== undefined ? { threadId } : {}),
+              }),
+          ),
+        );
+        if (settings.sourceControlIdentityMode === "machine") {
+          return null;
+        }
+        if (threadId === undefined) {
+          return yield* new SourceControlProfileError({
+            operation: "resolve-thread-profile",
+            reason: "missing-profile",
+            detail: "This Git operation must identify its owning thread.",
+          });
+        }
+
+        const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+          Effect.mapError(
+            () =>
+              new SourceControlProfileError({
+                operation: "resolve-thread-profile",
+                reason: "thread-not-found",
+                detail: "Could not read the thread's GitHub owner.",
+                threadId,
+              }),
+          ),
+        );
+        if (Option.isNone(thread)) {
+          return yield* new SourceControlProfileError({
+            operation: "resolve-thread-profile",
+            reason: "thread-not-found",
+            detail: "The selected thread no longer exists.",
+            threadId,
+          });
+        }
+        const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
+          threadId,
+          thread.value.sourceControlProfileId,
+          {},
+        );
+        return context === null
+          ? null
+          : { profileId: context.profileId, environment: context.environment };
+      });
+
+      const withThreadSourceControl = <A, E, R>(
+        threadId: ThreadId | undefined,
+        effect: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E | SourceControlProfileError, R> =>
+        Effect.flatMap(resolveThreadSourceControlEnvironment(threadId), (executionEnvironment) =>
+          withSourceControlExecutionEnvironment(effect, executionEnvironment),
+        );
+
+      const withThreadActionLock = <A, E, R>(
+        threadId: ThreadId | undefined,
+        effect: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E, R> =>
+        threadId === undefined ? effect : sourceControlActionLock.runExclusive(threadId, effect);
+
+      const withThreadSourceControlStream = <A, E, R>(
+        threadId: ThreadId | undefined,
+        stream: Stream.Stream<A, E, R>,
+      ): Stream.Stream<A, E | SourceControlProfileError, R> =>
+        Stream.unwrap(
+          resolveThreadSourceControlEnvironment(threadId).pipe(
+            Effect.map((executionEnvironment) =>
+              stream.pipe(
+                Stream.provideService(
+                  CurrentSourceControlExecutionEnvironment,
+                  executionEnvironment,
+                ),
+              ),
+            ),
+          ),
+        );
+
+      const ensureGitHubRemotesUseHttps = Effect.fn("ws.ensureGitHubRemotesUseHttps")(
+        function* (input: { readonly cwd: string; readonly threadId?: ThreadId | undefined }) {
+          const executionEnvironment = yield* resolveThreadSourceControlEnvironment(input.threadId);
+          if (executionEnvironment === null) return;
+          const remote = yield* withSourceControlExecutionEnvironment(
+            gitVcsDriver.execute({
+              operation: "SourceControlRemote.validateHttps",
+              cwd: input.cwd,
+              args: ["remote", "get-url", "origin"],
+              allowNonZeroExit: true,
+            }),
+            executionEnvironment,
+          ).pipe(
+            Effect.mapError(
+              () =>
+                new SourceControlProfileError({
+                  operation: "validate-remote",
+                  reason: "validation-failed",
+                  detail: "GitHub remotes could not be validated before the authenticated action.",
+                  profileId: executionEnvironment.profileId,
+                  ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+                }),
+            ),
+          );
+          if (remote.exitCode === 0 && githubSshRemoteToHttps(remote.stdout.trim()) !== null) {
+            return yield* new SourceControlProfileError({
+              operation: "validate-remote",
+              reason: "ssh-remote",
+              detail:
+                "Convert the GitHub remote to HTTPS before fetching, pushing, or preparing a pull request.",
+              profileId: executionEnvironment.profileId,
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            });
+          }
+        },
+      );
+
+      const withThreadSourceControlEnvironment = <
+        A extends {
+          readonly threadId: string;
+          readonly env?: Readonly<Record<string, string>> | undefined;
+        },
+      >(
+        input: A,
+      ): Effect.Effect<A, SourceControlProfileError> =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make(input.threadId);
+          const settings = yield* serverSettings.getSettings.pipe(
+            Effect.mapError(
+              () =>
+                new SourceControlProfileError({
+                  operation: "resolve-terminal-profile",
+                  reason: "profile-persist-failed",
+                  detail: "Could not read source-control identity settings.",
+                  threadId,
+                }),
+            ),
+          );
+          if (settings.sourceControlIdentityMode === "machine") {
+            return input;
+          }
+          const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+            Effect.mapError(
+              () =>
+                new SourceControlProfileError({
+                  operation: "resolve-terminal-profile",
+                  reason: "thread-not-found",
+                  detail: "Could not read the terminal's thread owner.",
+                  threadId,
+                }),
+            ),
+          );
+          if (Option.isNone(thread)) {
+            return yield* new SourceControlProfileError({
+              operation: "resolve-terminal-profile",
+              reason: "thread-not-found",
+              detail: "The terminal's thread no longer exists.",
+              threadId,
+            });
+          }
+          const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
+            threadId,
+            thread.value.sourceControlProfileId,
+            {},
+          );
+          if (context === null) {
+            return input;
+          }
+          const merged = SourceControlProfileService.mergeSourceControlEnvironment(
+            input.env ?? {},
+            context.environment,
+          );
+          const env = Object.fromEntries(
+            Object.entries(merged).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          );
+          return { ...input, env } as A;
+        });
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
+              const identityMode = (yield* serverSettings.getSettings).sourceControlIdentityMode;
+              if (identityMode === "thread-profile") {
+                const requestedProfileId =
+                  normalizedCommand.type === "thread.create"
+                    ? normalizedCommand.sourceControlProfileId
+                    : normalizedCommand.type === "thread.turn.start" &&
+                        normalizedCommand.bootstrap?.createThread
+                      ? normalizedCommand.bootstrap.createThread.sourceControlProfileId
+                      : normalizedCommand.type === "thread.turn.start"
+                        ? (Option.getOrNull(
+                            yield* projectionSnapshotQuery.getThreadShellById(
+                              normalizedCommand.threadId,
+                            ),
+                          )?.sourceControlProfileId ?? null)
+                        : undefined;
+                if (requestedProfileId === null) {
+                  return yield* new OrchestrationDispatchCommandError({
+                    message: "Select a GitHub owner for this thread before continuing.",
+                  });
+                }
+                if (requestedProfileId !== undefined) {
+                  const validation =
+                    normalizedCommand.type === "thread.turn.start" &&
+                    !normalizedCommand.bootstrap?.createThread
+                      ? sourceControlProfiles.resolveThreadExecutionContext(
+                          normalizedCommand.threadId,
+                          requestedProfileId,
+                        )
+                      : sourceControlProfiles.resolveExecutionContext(requestedProfileId);
+                  yield* validation.pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new OrchestrationDispatchCommandError({
+                          message: error.detail,
+                        }),
+                    ),
+                  );
+                }
+              }
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"
                   ? yield* projectionSnapshotQuery
@@ -1047,7 +1327,10 @@ const makeWsRpcLayer = (
                         Effect.orElseSucceed(() => false),
                       )
                   : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              const dispatchEffect = dispatchNormalizedCommand(normalizedCommand);
+              const result = yield* normalizedCommand.type === "thread.turn.start"
+                ? sourceControlActionLock.runExclusive(normalizedCommand.threadId, dispatchEffect)
+                : dispatchEffect;
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -1608,16 +1891,33 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
-          observeRpcEffect(
+        [WS_METHODS.serverUpdateSettings]: ({ patch }) => {
+          // Profile metadata is writable only through the credential-aware
+          // source-control profile RPCs. A generic settings client must not be
+          // able to replace a validated login/account binding.
+          const { sourceControlProfiles: _ignoredProfileMetadata, ...clientWritablePatch } = patch;
+          const requiresUserAdministrator =
+            patch.environmentUserIdentityMode !== undefined ||
+            patch.sourceControlIdentityMode !== undefined;
+          return observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            serverSettings
-              .updateSettings(patch)
-              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            Effect.gen(function* () {
+              if (requiresUserAdministrator) {
+                yield* environmentUsers.assertAdministrator(currentSessionId);
+              }
+              const updated = yield* serverSettings
+                .updateSettings(clientWritablePatch)
+                .pipe(Effect.map(ServerSettings.redactServerSettingsForClient));
+              if (patch.environmentUserIdentityMode === "required") {
+                yield* environmentUsers.revokeUnidentifiedSessions;
+              }
+              return updated;
+            }),
             {
               "rpc.aggregate": "server",
             },
-          ),
+          );
+        },
         [WS_METHODS.personalMcpGetProfile]: (_input) =>
           observeRpcEffect(
             WS_METHODS.personalMcpGetProfile,
@@ -1753,7 +2053,15 @@ const makeWsRpcLayer = (
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
-            sourceControlRepositories.lookupRepository(input),
+            Effect.gen(function* () {
+              const executionEnvironment = yield* resolveSelectedSourceControlEnvironment(
+                input.sourceControlProfileId,
+              );
+              return yield* withSourceControlExecutionEnvironment(
+                sourceControlRepositories.lookupRepository(input),
+                executionEnvironment,
+              );
+            }),
             {
               "rpc.aggregate": "source-control",
             },
@@ -1761,7 +2069,29 @@ const makeWsRpcLayer = (
         [WS_METHODS.sourceControlCloneRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlCloneRepository,
-            sourceControlRepositories.cloneRepository(input),
+            Effect.gen(function* () {
+              const executionEnvironment = yield* resolveSelectedSourceControlEnvironment(
+                input.sourceControlProfileId,
+              );
+              if (
+                executionEnvironment !== null &&
+                input.remoteUrl !== undefined &&
+                githubSshRemoteToHttps(input.remoteUrl) !== null
+              ) {
+                return yield* new SourceControlProfileError({
+                  operation: "clone-repository",
+                  reason: "ssh-remote",
+                  detail: "Use the repository's HTTPS clone URL with a GitHub profile.",
+                  profileId: executionEnvironment.profileId,
+                });
+              }
+              const cloneInput =
+                executionEnvironment === null ? input : { ...input, protocol: "https" as const };
+              return yield* withSourceControlExecutionEnvironment(
+                sourceControlRepositories.cloneRepository(cloneInput),
+                executionEnvironment,
+              );
+            }),
             {
               "rpc.aggregate": "source-control",
             },
@@ -1769,12 +2099,348 @@ const makeWsRpcLayer = (
         [WS_METHODS.sourceControlPublishRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlPublishRepository,
-            sourceControlRepositories
-              .publishRepository(input)
-              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            Effect.gen(function* () {
+              const executionEnvironment = yield* resolveSelectedSourceControlEnvironment(
+                input.sourceControlProfileId,
+              );
+              const publishInput =
+                executionEnvironment === null ? input : { ...input, protocol: "https" as const };
+              return yield* withSourceControlExecutionEnvironment(
+                sourceControlRepositories
+                  .publishRepository(publishInput)
+                  .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                executionEnvironment,
+              );
+            }),
             {
               "rpc.aggregate": "source-control",
             },
+          ),
+        [WS_METHODS.sourceControlProfilesList]: (_input) =>
+          observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {
+            "rpc.aggregate": "source-control-profile",
+          }),
+        [WS_METHODS.sourceControlProfilesUpsert]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlProfilesUpsert,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(sourceControlProfiles.upsert(input))),
+            { "rpc.aggregate": "source-control-profile" },
+          ),
+        [WS_METHODS.sourceControlProfilesTest]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlProfilesTest,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(sourceControlProfiles.test(input))),
+            { "rpc.aggregate": "source-control-profile" },
+          ),
+        [WS_METHODS.sourceControlProfilesReplaceCredential]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlProfilesReplaceCredential,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(sourceControlProfiles.replaceCredential(input))),
+            { "rpc.aggregate": "source-control-profile" },
+          ),
+        [WS_METHODS.sourceControlProfilesDisconnect]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlProfilesDisconnect,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(sourceControlProfiles.disconnect(input))),
+            { "rpc.aggregate": "source-control-profile" },
+          ),
+        [WS_METHODS.sourceControlProfilesArchive]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlProfilesArchive,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(sourceControlProfiles.archive(input))),
+            { "rpc.aggregate": "source-control-profile" },
+          ),
+        [WS_METHODS.usersList]: (_input) =>
+          observeRpcEffect(WS_METHODS.usersList, environmentUsers.list(currentSessionId), {
+            "rpc.aggregate": "users",
+          }),
+        [WS_METHODS.usersUpdate]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.usersUpdate,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(environmentUsers.update(input))),
+            { "rpc.aggregate": "users" },
+          ),
+        [WS_METHODS.usersRevokeSessions]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.usersRevokeSessions,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(environmentUsers.revokeSessions(input))),
+            { "rpc.aggregate": "users" },
+          ),
+        [WS_METHODS.usersSourceControlProfileSet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.usersSourceControlProfileSet,
+            environmentUsers
+              .assertAdministrator(currentSessionId)
+              .pipe(Effect.andThen(environmentUsers.setSourceControlProfile(input))),
+            { "rpc.aggregate": "users" },
+          ),
+        [WS_METHODS.sourceControlThreadOwnerSet]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlThreadOwnerSet,
+            Effect.gen(function* () {
+              const switchProgram: Effect.Effect<
+                GitHubSourceControlProfile,
+                SourceControlProfileError
+              > = Effect.gen(function* () {
+                const target = yield* sourceControlProfiles.test({
+                  profileId: input.sourceControlProfileId,
+                });
+                const profileList = yield* sourceControlProfiles.list;
+                if (
+                  profileList.profiles.find(
+                    (profile) => profile.id === input.sourceControlProfileId,
+                  )?.archived === true
+                ) {
+                  return yield* new SourceControlProfileError({
+                    operation: "switch-thread-owner",
+                    reason: "archived-profile",
+                    detail: "Archived GitHub profiles cannot own new thread activity.",
+                    profileId: input.sourceControlProfileId,
+                    threadId: input.threadId,
+                  });
+                }
+
+                if (yield* terminalManager.hasRunningCommand(input.threadId)) {
+                  return yield* new SourceControlProfileError({
+                    operation: "switch-thread-owner",
+                    reason: "thread-busy",
+                    detail: "Wait for the active terminal command to finish before changing owner.",
+                    profileId: input.sourceControlProfileId,
+                    threadId: input.threadId,
+                  });
+                }
+                const threadOption = yield* projectionSnapshotQuery
+                  .getThreadDetailById(input.threadId)
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "switch-thread-owner",
+                          reason: "thread-not-found",
+                          detail: "Could not read the selected thread.",
+                          profileId: input.sourceControlProfileId,
+                          threadId: input.threadId,
+                        }),
+                    ),
+                  );
+                if (Option.isNone(threadOption)) {
+                  return yield* new SourceControlProfileError({
+                    operation: "switch-thread-owner",
+                    reason: "thread-not-found",
+                    detail: "The selected thread no longer exists.",
+                    profileId: input.sourceControlProfileId,
+                    threadId: input.threadId,
+                  });
+                }
+                const thread = threadOption.value;
+                if (thread.sourceControlProfileId === input.sourceControlProfileId) {
+                  return target;
+                }
+                if (
+                  thread.latestTurn?.state === "running" ||
+                  thread.session?.status === "starting" ||
+                  thread.session?.status === "running"
+                ) {
+                  return yield* new SourceControlProfileError({
+                    operation: "switch-thread-owner",
+                    reason: "thread-busy",
+                    detail: "Wait for the active provider turn to finish before changing owner.",
+                    profileId: input.sourceControlProfileId,
+                    threadId: input.threadId,
+                  });
+                }
+
+                if (thread.session !== null && thread.session.status !== "stopped") {
+                  yield* providerService.stopSession({ threadId: input.threadId }).pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "switch-thread-owner",
+                          reason: "thread-busy",
+                          detail: "The provider session could not be stopped safely.",
+                          profileId: input.sourceControlProfileId,
+                          threadId: input.threadId,
+                        }),
+                    ),
+                  );
+                }
+                yield* terminalManager.close({ threadId: input.threadId }).pipe(
+                  Effect.mapError(
+                    () =>
+                      new SourceControlProfileError({
+                        operation: "switch-thread-owner",
+                        reason: "thread-busy",
+                        detail: "The thread's terminals could not be closed safely.",
+                        profileId: input.sourceControlProfileId,
+                        threadId: input.threadId,
+                      }),
+                  ),
+                );
+
+                const changedAt = yield* nowIso;
+                const ownerCommandId = CommandId.make(
+                  yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+                );
+                yield* orchestrationEngine
+                  .dispatch({
+                    type: "thread.source-control-profile.set",
+                    commandId: ownerCommandId,
+                    threadId: input.threadId,
+                    sourceControlProfileId: input.sourceControlProfileId,
+                    createdAt: changedAt,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "switch-thread-owner",
+                          reason: "thread-busy",
+                          detail: "Thread state changed while its owner was being switched.",
+                          profileId: input.sourceControlProfileId,
+                          threadId: input.threadId,
+                        }),
+                    ),
+                  );
+                yield* orchestrationEngine
+                  .dispatch({
+                    type: "thread.activity.append",
+                    commandId: CommandId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
+                    threadId: input.threadId,
+                    activity: {
+                      id: EventId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
+                      tone: "info",
+                      kind: "source-control.owner-changed",
+                      summary: `GitHub owner changed from ${thread.sourceControlProfileId ?? "unassigned"} to @${target.login}`,
+                      payload: {
+                        previousSourceControlProfileId: thread.sourceControlProfileId,
+                        sourceControlProfileId: input.sourceControlProfileId,
+                        login: target.login,
+                        initiatingSessionId: currentSessionId,
+                      },
+                      turnId: null,
+                      createdAt: changedAt,
+                    },
+                    createdAt: changedAt,
+                  })
+                  .pipe(Effect.ignore({ log: true }));
+                // Close again after projection to catch a terminal that raced the
+                // pre-switch cleanup. New opens resolve the new owner.
+                yield* terminalManager.close({ threadId: input.threadId }).pipe(Effect.ignore);
+                return target;
+              });
+              const switchResult = yield* sourceControlActionLock.tryRunExclusive(
+                input.threadId,
+                switchProgram,
+              );
+              if (Option.isNone(switchResult)) {
+                return yield* new SourceControlProfileError({
+                  operation: "switch-thread-owner",
+                  reason: "thread-busy",
+                  detail: "Wait for the active turn or Git action to finish before changing owner.",
+                  profileId: input.sourceControlProfileId,
+                  threadId: input.threadId,
+                });
+              }
+              return switchResult.value;
+            }),
+            { "rpc.aggregate": "source-control-profile" },
+          ),
+        [WS_METHODS.sourceControlConvertRemote]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlConvertRemote,
+            sourceControlActionLock.runExclusive(
+              input.threadId,
+              Effect.gen(function* () {
+                const threadOption = yield* projectionSnapshotQuery
+                  .getThreadShellById(input.threadId)
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "convert-remote",
+                          reason: "thread-not-found",
+                          detail: "Could not read the selected thread.",
+                          threadId: input.threadId,
+                        }),
+                    ),
+                  );
+                if (Option.isNone(threadOption)) {
+                  return yield* new SourceControlProfileError({
+                    operation: "convert-remote",
+                    reason: "thread-not-found",
+                    detail: "The selected thread no longer exists.",
+                    threadId: input.threadId,
+                  });
+                }
+                const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
+                  input.threadId,
+                  threadOption.value.sourceControlProfileId,
+                );
+                const environment = context?.environment ?? process.env;
+                const current = yield* gitVcsDriver
+                  .execute({
+                    operation: "SourceControlRemote.getUrl",
+                    cwd: input.cwd,
+                    args: ["remote", "get-url", input.remoteName],
+                    env: environment,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "convert-remote",
+                          reason: "remote-not-found",
+                          detail: `Git remote '${input.remoteName}' could not be read.`,
+                          threadId: input.threadId,
+                        }),
+                    ),
+                  );
+                const previousUrl = current.stdout.trim();
+                const remoteUrl = githubSshRemoteToHttps(previousUrl);
+                if (remoteUrl === null) {
+                  return yield* new SourceControlProfileError({
+                    operation: "convert-remote",
+                    reason: "ssh-remote",
+                    detail: "The selected remote is not a GitHub SSH URL that can be converted.",
+                    threadId: input.threadId,
+                  });
+                }
+                yield* gitVcsDriver
+                  .execute({
+                    operation: "SourceControlRemote.setUrl",
+                    cwd: input.cwd,
+                    args: ["remote", "set-url", input.remoteName, remoteUrl],
+                    env: environment,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "convert-remote",
+                          reason: "validation-failed",
+                          detail: "The GitHub remote could not be converted to HTTPS.",
+                          threadId: input.threadId,
+                        }),
+                    ),
+                  );
+                return { remoteName: input.remoteName, previousUrl, remoteUrl };
+              }),
+            ),
+            { "rpc.aggregate": "source-control-profile" },
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(
@@ -1924,9 +2590,12 @@ const makeWsRpcLayer = (
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeVcsStatus,
-            vcsStatusBroadcaster.streamStatus(input, {
-              automaticRemoteRefreshInterval: automaticGitFetchInterval,
-            }),
+            withThreadSourceControlStream(
+              input.threadId,
+              vcsStatusBroadcaster.streamStatus(input, {
+                automaticRemoteRefreshInterval: automaticGitFetchInterval,
+              }),
+            ),
             {
               "rpc.aggregate": "vcs",
             },
@@ -1934,7 +2603,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsRefreshStatus]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsRefreshStatus,
-            vcsStatusBroadcaster.refreshStatus(input.cwd),
+            withThreadSourceControl(input.threadId, vcsStatusBroadcaster.refreshStatus(input.cwd)),
             {
               "rpc.aggregate": "vcs",
             },
@@ -1942,11 +2611,23 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsPull]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsPull,
-            gitWorkflow.pullCurrentBranch(input.cwd).pipe(
-              Effect.matchCauseEffect({
-                onFailure: (cause) => Effect.failCause(cause),
-                onSuccess: (result) =>
-                  refreshGitStatus(input.cwd).pipe(Effect.ignore({ log: true }), Effect.as(result)),
+            withThreadActionLock(
+              input.threadId,
+              Effect.gen(function* () {
+                yield* ensureGitHubRemotesUseHttps(input);
+                return yield* withThreadSourceControl(
+                  input.threadId,
+                  gitWorkflow.pullCurrentBranch(input.cwd).pipe(
+                    Effect.matchCauseEffect({
+                      onFailure: (cause) => Effect.failCause(cause),
+                      onSuccess: (result) =>
+                        refreshGitStatus(input.cwd).pipe(
+                          Effect.ignore({ log: true }),
+                          Effect.as(result),
+                        ),
+                    }),
+                  ),
+                );
               }),
             ),
             { "rpc.aggregate": "git" },
@@ -1954,30 +2635,44 @@ const makeWsRpcLayer = (
         [WS_METHODS.gitRunStackedAction]: (input) =>
           observeRpcStream(
             WS_METHODS.gitRunStackedAction,
-            Stream.callback<GitActionProgressEvent, GitManagerServiceError>((queue) =>
-              gitWorkflow
-                .runStackedAction(input, {
-                  actionId: input.actionId,
-                  progressReporter: {
-                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
-                  },
-                })
-                .pipe(
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) => Queue.failCause(queue, cause),
-                    onSuccess: () =>
-                      refreshGitStatus(input.cwd).pipe(
-                        Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
-                      ),
+            withThreadSourceControlStream(
+              input.threadId,
+              Stream.callback<
+                GitActionProgressEvent,
+                GitManagerServiceError | SourceControlProfileError
+              >((queue) =>
+                withThreadActionLock(
+                  input.threadId,
+                  Effect.gen(function* () {
+                    if (input.action !== "commit") {
+                      yield* ensureGitHubRemotesUseHttps(input);
+                    }
+                    yield* gitWorkflow
+                      .runStackedAction(input, {
+                        actionId: input.actionId,
+                        progressReporter: {
+                          publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                        },
+                      })
+                      .pipe(
+                        Effect.matchCauseEffect({
+                          onFailure: (cause) => Queue.failCause(queue, cause),
+                          onSuccess: () =>
+                            refreshGitStatus(input.cwd).pipe(
+                              Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
+                            ),
+                        }),
+                      );
                   }),
-                ),
+                ).pipe(Effect.catchCause((cause) => Queue.failCause(queue, cause))),
+              ),
             ),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.gitResolvePullRequest]: (input) =>
           observeRpcEffect(
             WS_METHODS.gitResolvePullRequest,
-            gitWorkflow.resolvePullRequest(input),
+            withThreadSourceControl(input.threadId, gitWorkflow.resolvePullRequest(input)),
             {
               "rpc.aggregate": "git",
             },
@@ -1985,9 +2680,18 @@ const makeWsRpcLayer = (
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           observeRpcEffect(
             WS_METHODS.gitPreparePullRequestThread,
-            gitWorkflow
-              .preparePullRequestThread(input)
-              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            withThreadActionLock(
+              input.threadId,
+              Effect.gen(function* () {
+                yield* ensureGitHubRemotesUseHttps(input);
+                return yield* withThreadSourceControl(
+                  input.threadId,
+                  gitWorkflow
+                    .preparePullRequestThread(input)
+                    .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                );
+              }),
+            ),
             { "rpc.aggregate": "git" },
           ),
         [WS_METHODS.vcsListRefs]: (input) =>
@@ -2031,24 +2735,42 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "review",
           }),
         [WS_METHODS.terminalOpen]: (input) =>
-          observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
-            "rpc.aggregate": "terminal",
-          }),
+          observeRpcEffect(
+            WS_METHODS.terminalOpen,
+            withThreadActionLock(
+              ThreadId.make(input.threadId),
+              withThreadSourceControlEnvironment(input).pipe(Effect.flatMap(terminalManager.open)),
+            ),
+            { "rpc.aggregate": "terminal" },
+          ),
         [WS_METHODS.terminalAttach]: (input) =>
           observeRpcStream(
             WS_METHODS.terminalAttach,
-            Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
-              Effect.acquireRelease(
-                terminalManager.attachStream(input, (event) => Queue.offer(queue, event)),
-                (unsubscribe) => Effect.sync(unsubscribe),
+            Stream.unwrap(
+              withThreadActionLock(
+                ThreadId.make(input.threadId),
+                withThreadSourceControlEnvironment(input).pipe(
+                  Effect.map((resolvedInput) =>
+                    Stream.callback<TerminalAttachStreamEvent, TerminalError>((queue) =>
+                      Effect.acquireRelease(
+                        terminalManager.attachStream(resolvedInput, (event) =>
+                          Queue.offer(queue, event),
+                        ),
+                        (unsubscribe) => Effect.sync(unsubscribe),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
             { "rpc.aggregate": "terminal" },
           ),
         [WS_METHODS.terminalWrite]: (input) =>
-          observeRpcEffect(WS_METHODS.terminalWrite, terminalManager.write(input), {
-            "rpc.aggregate": "terminal",
-          }),
+          observeRpcEffect(
+            WS_METHODS.terminalWrite,
+            withThreadActionLock(ThreadId.make(input.threadId), terminalManager.write(input)),
+            { "rpc.aggregate": "terminal" },
+          ),
         [WS_METHODS.terminalResize]: (input) =>
           observeRpcEffect(WS_METHODS.terminalResize, terminalManager.resize(input), {
             "rpc.aggregate": "terminal",
@@ -2058,9 +2780,16 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "terminal",
           }),
         [WS_METHODS.terminalRestart]: (input) =>
-          observeRpcEffect(WS_METHODS.terminalRestart, terminalManager.restart(input), {
-            "rpc.aggregate": "terminal",
-          }),
+          observeRpcEffect(
+            WS_METHODS.terminalRestart,
+            withThreadActionLock(
+              ThreadId.make(input.threadId),
+              withThreadSourceControlEnvironment(input).pipe(
+                Effect.flatMap(terminalManager.restart),
+              ),
+            ),
+            { "rpc.aggregate": "terminal" },
+          ),
         [WS_METHODS.terminalClose]: (input) =>
           observeRpcEffect(WS_METHODS.terminalClose, terminalManager.close(input), {
             "rpc.aggregate": "terminal",
@@ -2227,6 +2956,10 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.subscribeServerResources]: (_input) =>
           observeRpcStream(WS_METHODS.subscribeServerResources, systemResourceMonitor.stream, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.subscribeProviderRateLimits]: (_input) =>
+          observeRpcStream(WS_METHODS.subscribeProviderRateLimits, providerRateLimits.stream, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>

@@ -6,6 +6,8 @@ import {
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
   GitStackedAction,
+  ThreadId,
+  type ThreadId as ThreadIdType,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -57,11 +59,13 @@ export interface VcsActionState {
 export interface VcsActionTarget {
   readonly environmentId: EnvironmentIdType | null;
   readonly cwd: string | null;
+  readonly threadId?: ThreadIdType | null;
 }
 
 export interface ResolvedVcsActionTarget {
   readonly environmentId: EnvironmentIdType;
   readonly cwd: string;
+  readonly threadId: ThreadIdType | null;
 }
 
 export interface BeginVcsActionInput {
@@ -160,7 +164,7 @@ export const EMPTY_VCS_ACTION_STATE = Object.freeze<VcsActionState>({
 const nowMs = (): number => DateTime.toEpochMillis(DateTime.nowUnsafe());
 let nextLocalActionId = 0;
 const decodeVcsActionTargetKey = Schema.decodeUnknownSync(
-  Schema.Tuple([EnvironmentId, Schema.String]),
+  Schema.Tuple([EnvironmentId, Schema.String, Schema.NullOr(ThreadId)]),
 );
 
 export const vcsActionStateAtom = Atom.family((key: string) => {
@@ -179,13 +183,13 @@ export function getVcsActionTargetKey(target: VcsActionTarget): string | null {
   if (target.environmentId === null || target.cwd === null) {
     return null;
   }
-  return JSON.stringify([target.environmentId, target.cwd]);
+  return JSON.stringify([target.environmentId, target.cwd, target.threadId ?? null]);
 }
 
 export function parseVcsActionTargetKey(key: string): ResolvedVcsActionTarget {
   try {
-    const [environmentId, cwd] = decodeVcsActionTargetKey(JSON.parse(key));
-    return { environmentId, cwd };
+    const [environmentId, cwd, threadId] = decodeVcsActionTargetKey(JSON.parse(key));
+    return { environmentId, cwd, threadId };
   } catch (cause) {
     throw new VcsActionTargetKeyParseError({ keyLength: key.length, cause });
   }
@@ -460,6 +464,7 @@ export function createVcsActionManager<R, E>(
           actionId: transportActionId,
           cwd: target.cwd,
           action: input.action,
+          ...(target.threadId !== null ? { threadId: target.threadId } : {}),
           ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
           ...(input.featureBranch ? { featureBranch: true } : {}),
           ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),

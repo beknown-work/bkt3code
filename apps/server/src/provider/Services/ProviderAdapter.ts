@@ -19,6 +19,7 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -30,6 +31,12 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+}
+
+export interface ProviderSessionExecutionOptions {
+  readonly environment?: NodeJS.ProcessEnv;
+  /** T3-CUSTOM(expbkt3): User whose delegated MCP grants back this ACP generation. */
+  readonly actorUserId?: UserId | null;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -73,6 +80,7 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly startSession: (
     input: ProviderSessionStartInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**

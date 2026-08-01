@@ -348,6 +348,7 @@ export const make = Effect.gen(function* () {
               interactionMode: bootstrap.createThread.interactionMode,
               branch: bootstrap.createThread.branch,
               worktreePath: bootstrap.createThread.worktreePath,
+              sourceControlProfileId: bootstrap.createThread.sourceControlProfileId,
               createdAt: bootstrap.createThread.createdAt,
               // T3-CUSTOM(expbkt3): session priority.
               priority: bootstrap.createThread.priority ?? null,

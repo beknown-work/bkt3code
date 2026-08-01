@@ -1,7 +1,9 @@
 import {
   EnvironmentAuthInvalidError,
+  EnvironmentUserId,
   type AuthBrowserSessionResult,
   type AuthCreatePairingCredentialInput,
+  type AuthIdentityBindingResult,
   type AuthSessionState,
   type DesktopBridge,
 } from "@t3tools/contracts";
@@ -11,6 +13,7 @@ import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/u
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { installEnvironmentHttpTest } from "../test/environmentHttpTest";
+import { setManagedClerkIdentityTokenProvider } from "./cloud/managedIdentity";
 import { __setPrimaryHttpRunnerForTests, type PrimaryHttpEffectRunner } from "./lib/runtime";
 
 type TestWindow = {
@@ -98,6 +101,7 @@ async function installAuthApi(input: {
   readonly browserSession?: (
     credential: string,
   ) => Effect.Effect<AuthBrowserSessionResult, EnvironmentAuthInvalidError>;
+  readonly bindIdentity?: (identityToken: string) => Effect.Effect<AuthIdentityBindingResult>;
   readonly pairingCredential?: (payload: AuthCreatePairingCredentialInput) => Effect.Effect<{
     readonly id: string;
     readonly credential: string;
@@ -109,6 +113,9 @@ async function installAuthApi(input: {
     ...(input.session ? { session: () => Effect.succeed(input.session!()) } : {}),
     ...(input.browserSession
       ? { browserSession: (payload) => input.browserSession!(payload.credential) }
+      : {}),
+    ...(input.bindIdentity
+      ? { bindIdentity: (payload) => input.bindIdentity!(payload.identityToken) }
       : {}),
     ...(input.pairingCredential
       ? { pairingCredential: (payload) => input.pairingCredential!(payload) }
@@ -131,6 +138,7 @@ describe("resolveInitialServerAuthGateState", () => {
     const { __resetServerAuthBootstrapForTests } = await import("./environments/primary");
     __resetServerAuthBootstrapForTests();
     __setPrimaryHttpRunnerForTests();
+    setManagedClerkIdentityTokenProvider(null);
     vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -447,6 +455,32 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     expect(testApi.calls.session).toBe(1);
+  });
+
+  it("binds an existing browser session to the signed-in Clerk user", async () => {
+    setManagedClerkIdentityTokenProvider(async () => "signed-clerk-identity");
+    const testApi = await installAuthApi({
+      session: () => authenticatedSession(LOOPBACK_AUTH),
+      bindIdentity: () => Effect.succeed({ userId: EnvironmentUserId.make("user_clerk_alice") }),
+    });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "authenticated",
+    });
+    expect(testApi.calls.bindIdentity).toEqual([{ identityToken: "signed-clerk-identity" }]);
+  });
+
+  it("binds a Clerk identity that becomes available after administrative pairing", async () => {
+    const testApi = await installAuthApi({
+      bindIdentity: () => Effect.succeed({ userId: EnvironmentUserId.make("user_clerk_alice") }),
+    });
+    const { bindPrimaryEnvironmentClerkIdentity } = await import("./environments/primary");
+
+    await expect(
+      bindPrimaryEnvironmentClerkIdentity("signed-clerk-identity"),
+    ).resolves.toBeUndefined();
+    expect(testApi.calls.bindIdentity).toEqual([{ identityToken: "signed-clerk-identity" }]);
   });
 
   it("creates a pairing credential from the authenticated auth endpoint", async () => {

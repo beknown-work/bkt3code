@@ -203,6 +203,7 @@ describe("environment commands", () => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
       }).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.forkChild({ startImmediately: true }),

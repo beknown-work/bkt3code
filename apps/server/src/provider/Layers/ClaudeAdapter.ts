@@ -15,6 +15,8 @@ import {
   type PermissionUpdate,
   type SDKMessage,
   type SDKControlGetContextUsageResponse,
+  type SDKControlGetUsageResponse,
+  type SDKRateLimitInfo,
   type SDKResultMessage,
   type SettingSource,
   type SDKUserMessage,
@@ -33,6 +35,8 @@ import {
   type ModelSelection,
   ProviderItemId,
   type ProviderRuntimeEvent,
+  type ProviderRateLimitUpdate,
+  type ProviderRateLimitWindow,
   type ProviderRuntimeTurnStatus,
   type ProviderSendTurnInput,
   type ProviderSession,
@@ -54,6 +58,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -70,6 +75,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
@@ -95,6 +101,141 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJ
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
+
+const CLAUDE_RATE_LIMIT_WINDOWS = {
+  five_hour: {
+    windowId: "claude:five-hour",
+    label: "Five-hour",
+    windowDurationMinutes: 300,
+    category: "rolling",
+  },
+  seven_day: {
+    windowId: "claude:seven-day",
+    label: "Seven-day",
+    windowDurationMinutes: 10_080,
+    category: "weekly",
+  },
+  seven_day_oauth_apps: {
+    windowId: "claude:oauth-apps",
+    label: "OAuth apps",
+    windowDurationMinutes: 10_080,
+    category: "weekly",
+  },
+  seven_day_opus: {
+    windowId: "claude:opus",
+    label: "Opus",
+    windowDurationMinutes: 10_080,
+    category: "model",
+  },
+  seven_day_sonnet: {
+    windowId: "claude:sonnet",
+    label: "Sonnet",
+    windowDurationMinutes: 10_080,
+    category: "model",
+  },
+  overage: {
+    windowId: "claude:overage",
+    label: "Extra usage",
+    category: "overage",
+  },
+} as const;
+
+function validUsedPercent(value: number | null | undefined): value is number {
+  return (
+    value !== null && value !== undefined && Number.isFinite(value) && value >= 0 && value <= 100
+  );
+}
+
+function resetAtFromIso(value: string | null | undefined): DateTime.Utc | null {
+  if (!value || !Number.isFinite(Date.parse(value))) return null;
+  return DateTime.makeUnsafe(value);
+}
+
+function resetAtFromEpochSeconds(value: number | undefined): DateTime.Utc | null {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? DateTime.makeUnsafe(value * 1_000)
+    : null;
+}
+
+export function normalizeClaudeUsageResponse(
+  response: SDKControlGetUsageResponse,
+  observedAt: DateTime.Utc,
+): ProviderRateLimitUpdate {
+  if (!response.rate_limits_available || response.rate_limits === null) {
+    return {
+      mode: "replace",
+      availability: "not-applicable",
+      windows: [],
+      observedAt,
+    };
+  }
+
+  const limits = response.rate_limits;
+  const windowKeys = [
+    "five_hour",
+    "seven_day",
+    "seven_day_oauth_apps",
+    "seven_day_opus",
+    "seven_day_sonnet",
+  ] as const;
+  const windows: Array<ProviderRateLimitWindow> = windowKeys.flatMap((key) => {
+    const source = limits[key];
+    if (!source || !validUsedPercent(source.utilization)) return [];
+    const definition = CLAUDE_RATE_LIMIT_WINDOWS[key];
+    return [
+      {
+        ...definition,
+        usedPercent: source.utilization,
+        resetsAt: resetAtFromIso(source.resets_at),
+      },
+    ];
+  });
+
+  const overage = limits.extra_usage;
+  if (overage?.is_enabled && validUsedPercent(overage.utilization)) {
+    windows.push({
+      ...CLAUDE_RATE_LIMIT_WINDOWS.overage,
+      usedPercent: overage.utilization,
+      resetsAt: null,
+    });
+  }
+
+  return {
+    mode: "replace",
+    availability: "available",
+    windows,
+    observedAt,
+  };
+}
+
+export function normalizeClaudeRateLimitEvent(
+  info: SDKRateLimitInfo,
+  observedAt: DateTime.Utc,
+): ProviderRateLimitUpdate {
+  const type = info.rateLimitType;
+  if (type === undefined || !validUsedPercent(info.utilization)) {
+    return { mode: "merge", availability: "available", windows: [], observedAt };
+  }
+  const definition = CLAUDE_RATE_LIMIT_WINDOWS[type];
+  return {
+    mode: "merge",
+    availability: "available",
+    windows: [
+      {
+        ...definition,
+        usedPercent: info.utilization,
+        resetsAt: resetAtFromEpochSeconds(
+          type === "overage" ? (info.overageResetsAt ?? info.resetsAt) : info.resetsAt,
+        ),
+      },
+    ],
+    observedAt,
+  };
+}
+
+function claudeRateLimitRefreshError(observedAt: DateTime.Utc): ProviderRateLimitUpdate {
+  return { mode: "merge", availability: "error", windows: [], observedAt };
+}
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
@@ -211,6 +352,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<SDKControlGetUsageResponse>;
   readonly close: () => void;
 }
 
@@ -1371,6 +1513,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+  const usageRefreshQueue = yield* Queue.unbounded<ClaudeSessionContext>();
+  const lastUsageRefreshAt = yield* Ref.make<number | null>(null);
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -1389,6 +1533,44 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+
+  const performUsageRefresh = Effect.fn("ClaudeAdapter.performUsageRefresh")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const readUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (readUsage === undefined || context.stopped) return;
+    const now = yield* Clock.currentTimeMillis;
+    const allowed = yield* Ref.modify(lastUsageRefreshAt, (previous) =>
+      previous !== null && now - previous < 60_000
+        ? ([false, previous] as const)
+        : ([true, now] as const),
+    );
+    if (!allowed) return;
+
+    const observedAt = yield* DateTime.now;
+    const update = yield* Effect.tryPromise(() => readUsage.call(context.query)).pipe(
+      Effect.map((response) => normalizeClaudeUsageResponse(response, observedAt)),
+      Effect.orElseSucceed(() => claudeRateLimitRefreshError(observedAt)),
+    );
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      payload: { rateLimits: update },
+      providerRefs: nativeProviderRefs(context),
+    });
+  });
+
+  const requestUsageRefresh = (context: ClaudeSessionContext) =>
+    Queue.offer(usageRefreshQueue, context).pipe(Effect.asVoid);
+
+  yield* Stream.fromQueue(usageRefreshQueue).pipe(
+    Stream.runForEach(performUsageRefresh),
+    Effect.forkScoped,
+  );
 
   const logNativeSdkMessage = Effect.fnUntraced(function* (
     context: ClaudeSessionContext,
@@ -2562,6 +2744,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     yield* completeTurn(context, status, errorMessage, message);
+    yield* requestUsageRefresh(context);
   });
 
   const handleSystemMessage = Effect.fn("handleSystemMessage")(function* (
@@ -2608,6 +2791,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             config: message as Record<string, unknown>,
           },
         });
+        yield* requestUsageRefresh(context);
         return;
       case "status":
         yield* offerRuntimeEvent({
@@ -2911,7 +3095,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...base,
         type: "account.rate-limits.updated",
         payload: {
-          rateLimits: message,
+          rateLimits: normalizeClaudeRateLimitEvent(
+            message.rate_limit_info,
+            DateTime.makeUnsafe(stamp.createdAt),
+          ),
         },
       });
       return;
@@ -3139,7 +3326,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   };
 
   const startSession: ClaudeAdapterShape["startSession"] = Effect.fn("startSession")(
-    function* (input) {
+    function* (input, executionOptions) {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -3173,6 +3360,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
+      const sessionEnvironment = executionOptions?.environment
+        ? mergeSourceControlEnvironment(claudeEnvironment, executionOptions.environment)
+        : claudeEnvironment;
       const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
       const sessionId = existingResumeSessionId ?? newSessionId;
 
@@ -3546,7 +3736,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         includePartialMessages: true,
         canUseTool,
         env: {
-          ...claudeEnvironment,
+          ...sessionEnvironment,
           ...(mcpSession
             ? {
                 T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
@@ -3949,6 +4139,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ),
       Effect.tap(() => Queue.shutdown(runtimeEventQueue)),
       Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
+      Effect.tap(() => Queue.shutdown(usageRefreshQueue)),
     ),
   );
 

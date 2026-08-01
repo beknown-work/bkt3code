@@ -51,6 +51,7 @@ function makeThread(
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     ...input,
+    sourceControlProfileId: input.sourceControlProfileId ?? null,
   };
 }
 

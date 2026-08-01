@@ -172,6 +172,7 @@ function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
     interactionMode: "default",
     branch: null,
     worktreePath: null,
+    sourceControlProfileId: null,
     latestTurn: null,
     createdAt: now,
     updatedAt: now,

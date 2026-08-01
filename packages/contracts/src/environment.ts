@@ -50,6 +50,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes the read-only provider subscription-usage stream. */
+  providerRateLimits: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): server understands priority on thread.create and
       thread.meta.update. Same version-skew contract as threadSnooze. */
   threadPriority: Schema.optionalKey(Schema.Boolean),

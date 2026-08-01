@@ -73,6 +73,7 @@ const THREAD = {
   interactionMode: "default" as const,
   branch: null,
   worktreePath: null,
+  sourceControlProfileId: null,
   latestTurn: null,
   ownerUserId: null,
   memberUserIds: [],

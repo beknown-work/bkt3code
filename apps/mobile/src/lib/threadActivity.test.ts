@@ -54,6 +54,7 @@ function makeThread(
     ownerUserId: null,
     memberUserIds: [],
     ...input,
+    sourceControlProfileId: input.sourceControlProfileId ?? null,
     settledOverride: input.settledOverride ?? null,
     settledAt: input.settledAt ?? null,
   };

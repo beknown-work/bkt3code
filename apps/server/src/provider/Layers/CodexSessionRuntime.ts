@@ -1218,6 +1218,27 @@ export const makeCodexSessionRuntime = (
       yield* client.request("initialize", buildCodexInitializeParams());
       yield* client.notify("initialized", undefined);
 
+      // Subscription quota collection is observability-only. Run it after
+      // initialization, but never make thread startup wait on the account RPC.
+      yield* client.request("account/rateLimits/read", undefined).pipe(
+        Effect.flatMap((payload) =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method: "account/rateLimits/read",
+            payload,
+          }),
+        ),
+        Effect.catch(() =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method: "account/rateLimits/readFailed",
+          }),
+        ),
+        Effect.forkIn(runtimeScope),
+      );
+
       const requestedModel = normalizeCodexModelSlug(options.model);
 
       const opened = yield* openCodexThread({

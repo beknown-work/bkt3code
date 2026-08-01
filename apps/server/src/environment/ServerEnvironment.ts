@@ -143,6 +143,7 @@ export const make = Effect.gen(function* () {
       threadSettlement: true,
       threadSnooze: true,
       threadTitleRegeneration: true,
+      providerRateLimits: true,
       // T3-CUSTOM(expbkt3)
       threadPriority: true,
       threadExternalSessionAttach: true,

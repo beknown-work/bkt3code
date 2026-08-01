@@ -10,6 +10,8 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Environment users](#environment-users)
+- [Source-control identity](#source-control-identity)
 - [Checkpointing](#checkpointing)
 
 ## Concepts
@@ -116,6 +118,35 @@ Controls how assistant text reaches the thread timeline. In [the contracts][1], 
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
 
+### Environment users
+
+#### Environment user
+
+A durable human identity local to one environment and keyed by a verified Clerk subject. It carries
+the local role, blocked state, public profile data, and optional source-control profile assignment.
+Device sessions remain separate records and reference the user when Clerk identity was supplied.
+
+#### Presence
+
+The derived online or offline state of an environment user. A user is online while at least one of
+their non-revoked environment sessions has a live WebSocket connection. Presence is not persisted as
+an independent source of truth.
+
+### Source-control identity
+
+#### Source-control profile
+
+A server-managed GitHub attribution identity containing public account and Git commit metadata plus
+a separately stored write-only credential. In thread-profile mode, a thread references one profile
+and all server-owned GitHub activity from that thread resolves through it. See
+[source-control-identity.md][25].
+
+#### Thread owner
+
+The source-control profile assigned to a thread. Ownership controls attribution, not authorization:
+trusted collaborators may work in or transfer one another's threads. An owner change affects only
+operations started after the durable owner-change event. See [source-control-identity.md][25].
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].
@@ -179,3 +210,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./source-control-identity.md

@@ -4,6 +4,7 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationThread,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
@@ -32,6 +33,7 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import type { ProviderSessionExecutionOptions } from "../../provider/Services/ProviderAdapter.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -46,6 +48,7 @@ import {
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadExecutionSupervisor } from "../../execution/ThreadExecutionSupervisor.ts";
+import { SourceControlProfileService } from "../../sourceControl/SourceControlProfileService.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -258,6 +261,7 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
+  const sourceControlProfiles = yield* Effect.serviceOption(SourceControlProfileService);
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -386,6 +390,29 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const resolveSourceControlExecutionOptions = Effect.fnUntraced(function* (
+    thread: OrchestrationThread,
+    method: string,
+  ): Effect.fn.Return<ProviderSessionExecutionOptions | undefined, ProviderAdapterRequestError> {
+    const context = yield* Option.match(sourceControlProfiles, {
+      onNone: () => Effect.succeed(null),
+      onSome: (profiles) =>
+        profiles.resolveThreadExecutionContext(thread.id, thread.sourceControlProfileId, {}).pipe(
+          Effect.mapError(
+            (error) =>
+              new ProviderAdapterRequestError({
+                provider: providerErrorLabelFromInstanceHint({
+                  instanceId: String(thread.modelSelection.instanceId),
+                }),
+                method,
+                detail: error.detail,
+              }),
+          ),
+        ),
+    });
+    return context ? { environment: context.environment } : undefined;
   });
 
   const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {
@@ -560,6 +587,10 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
+    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+      thread,
+      "thread.turn.start",
+    );
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -576,7 +607,10 @@ const make = Effect.gen(function* () {
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         },
-        { actorUserId: desiredCredentialActor },
+        {
+          ...sourceControlExecutionOptions,
+          actorUserId: desiredCredentialActor,
+        },
       );
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -1142,6 +1176,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+      thread,
+      "thread.turn.start",
+    );
+
     if (!(yield* executionSupervisor.canContinueExecution(event.payload.threadId, executionId))) {
       // A stop may arrive while the provider process is starting. Ensure a
       // process spawned during that window cannot survive or receive a turn.
@@ -1154,7 +1193,9 @@ const make = Effect.gen(function* () {
     yield* executionSupervisor.canContinueExecution(event.payload.threadId, executionId).pipe(
       Effect.flatMap((canContinue) =>
         canContinue
-          ? providerService.sendTurn(sendTurnRequest.value).pipe(Effect.asVoid)
+          ? providerService
+              .sendTurn(sendTurnRequest.value, sourceControlExecutionOptions)
+              .pipe(Effect.asVoid)
           : Effect.void,
       ),
       Effect.catchCause(recoverTurnStartFailure),
@@ -1182,7 +1223,14 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+      thread,
+      "thread.turn.interrupt",
+    );
+    yield* providerService.interruptTurn(
+      { threadId: event.payload.threadId },
+      sourceControlExecutionOptions,
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1205,12 +1253,19 @@ const make = Effect.gen(function* () {
       });
     }
 
+    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+      thread,
+      "thread.approval.respond",
+    );
     yield* providerService
-      .respondToRequest({
-        threadId: event.payload.threadId,
-        requestId: event.payload.requestId,
-        decision: event.payload.decision,
-      })
+      .respondToRequest(
+        {
+          threadId: event.payload.threadId,
+          requestId: event.payload.requestId,
+          decision: event.payload.decision,
+        },
+        sourceControlExecutionOptions,
+      )
       .pipe(
         Effect.catchCause((cause) =>
           appendProviderFailureActivity({
@@ -1249,12 +1304,19 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+        thread,
+        "thread.user-input.respond",
+      );
       yield* providerService
-        .respondToUserInput({
-          threadId: event.payload.threadId,
-          requestId: event.payload.requestId,
-          answers: event.payload.answers,
-        })
+        .respondToUserInput(
+          {
+            threadId: event.payload.threadId,
+            requestId: event.payload.requestId,
+            answers: event.payload.answers,
+          },
+          sourceControlExecutionOptions,
+        )
         .pipe(
           Effect.catchCause((cause) =>
             appendProviderFailureActivity({

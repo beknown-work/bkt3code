@@ -15,6 +15,8 @@ import {
   AuthClerkSessionRequest,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
+  AuthIdentityBindingRequest,
+  AuthIdentityBindingResult,
   AuthPairingCredentialResult,
   AuthPairingLink,
   AuthRevokeClientSessionInput,
@@ -27,6 +29,7 @@ import {
 } from "./auth.ts";
 import {
   AuthSessionId,
+  EnvironmentUserId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -74,6 +77,9 @@ export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidRe
 export const EnvironmentAuthInvalidReason = Schema.Literals([
   "missing_credential",
   "invalid_credential",
+  "missing_identity",
+  "invalid_identity",
+  "blocked_identity",
 ]);
 export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.Type;
 
@@ -93,6 +99,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "pairing_link_revoke_failed",
   "client_sessions_load_failed",
   "client_session_revoke_failed",
+  "identity_management_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
@@ -360,6 +367,7 @@ export type OrchestrationPullRequestLinksResult = typeof OrchestrationPullReques
 
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
+  readonly userId: EnvironmentUserId | null;
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlySet<AuthEnvironmentScope>;
@@ -455,6 +463,14 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       success: AuthBrowserSessionResult,
       error: EnvironmentClerkSessionErrors,
     }),
+  )
+  .add(
+    HttpApiEndpoint.post("bindIdentity", "/api/auth/identity", {
+      headers: OptionalBearerHeaders,
+      payload: AuthIdentityBindingRequest,
+      success: AuthIdentityBindingResult,
+      error: EnvironmentAuthenticationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("token", "/oauth/token", {

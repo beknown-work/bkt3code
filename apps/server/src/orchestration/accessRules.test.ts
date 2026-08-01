@@ -46,6 +46,7 @@ const thread = (
   interactionMode: "default",
   branch: null,
   worktreePath: null,
+  sourceControlProfileId: null,
   latestTurn: null,
   ownerUserId,
   memberUserIds,

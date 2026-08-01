@@ -284,6 +284,7 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1174,6 +1175,7 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1209,6 +1211,7 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1362,6 +1365,7 @@ describe("ProviderRuntimeIngestion", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         }),
         harness.engine.dispatch({
@@ -1600,6 +1604,7 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1635,6 +1640,7 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );

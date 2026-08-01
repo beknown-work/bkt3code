@@ -35,6 +35,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   ProviderAdapterProcessError,
@@ -533,7 +534,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         });
       }).pipe(Effect.onError(() => Effect.sync(() => (ctx.stopped = false))));
 
-    const startSession: GrokAdapterShape["startSession"] = (input) =>
+    const startSession: GrokAdapterShape["startSession"] = (input, executionOptions) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -576,9 +577,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           });
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const sessionEnvironment = executionOptions?.environment
+            ? mergeSourceControlEnvironment(
+                options?.environment ?? process.env,
+                executionOptions.environment,
+              )
+            : options?.environment;
           const acp = yield* makeGrokAcpRuntime({
             grokSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),

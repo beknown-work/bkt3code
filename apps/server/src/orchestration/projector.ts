@@ -21,6 +21,7 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadSourceControlProfileSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -301,6 +302,7 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            sourceControlProfileId: payload.sourceControlProfileId,
             latestTurn: null,
             // Owner is the creator (team mode). Preserve a prior owner on
             // idempotent re-creation (bootstrap retry after compensation).
@@ -605,6 +607,22 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             interactionMode: payload.interactionMode,
             updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.source-control-profile-set":
+      return decodeForEvent(
+        ThreadSourceControlProfileSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            sourceControlProfileId: payload.sourceControlProfileId,
+            updatedAt: payload.changedAt,
           }),
         })),
       );

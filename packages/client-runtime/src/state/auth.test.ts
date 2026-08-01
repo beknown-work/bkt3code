@@ -17,6 +17,7 @@ describe("applyAuthAccessStreamEvent", () => {
     } as const;
     const clientSession = {
       sessionId: AuthSessionId.make("session-client"),
+      userId: null,
       subject: "subject",
       scopes: ["orchestration:read"],
       method: "browser-session-cookie",

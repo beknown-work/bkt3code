@@ -31,6 +31,7 @@ const readModel: OrchestrationReadModel = {
       interactionMode: "default",
       branch: null,
       worktreePath: null,
+      sourceControlProfileId: null,
       latestTurn: null,
       createdAt: UPDATED_AT,
       updatedAt: UPDATED_AT,

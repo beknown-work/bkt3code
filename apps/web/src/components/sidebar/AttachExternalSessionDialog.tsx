@@ -123,6 +123,7 @@ export function AttachExternalSessionDialog({
         // thread must use the project checkout rather than a worktree.
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt: new Date().toISOString(),
         externalSession: {
           providerInstanceId: entry.instanceId,

@@ -8,6 +8,8 @@ import {
   type AuthBrowserSessionResult,
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
+  type AuthIdentityBindingRequest,
+  type AuthIdentityBindingResult,
   type AuthPairingCredentialResult,
   type AuthSessionState,
   type ExecutionEnvironmentDescriptor,
@@ -32,6 +34,9 @@ interface EnvironmentHttpTestScenario {
   readonly descriptor?: () => Effect.Effect<ExecutionEnvironmentDescriptor>;
   readonly session?: () => Effect.Effect<AuthSessionState>;
   readonly browserSession?: BrowserSessionHandler;
+  readonly bindIdentity?: (
+    payload: AuthIdentityBindingRequest,
+  ) => Effect.Effect<AuthIdentityBindingResult>;
   readonly pairingCredential?: (
     payload: AuthCreatePairingCredentialInput,
   ) => Effect.Effect<AuthPairingCredentialResult>;
@@ -41,6 +46,7 @@ export interface EnvironmentHttpTestCalls {
   descriptor: number;
   session: number;
   browserSession: Array<AuthBrowserSessionRequest>;
+  bindIdentity: Array<AuthIdentityBindingRequest>;
   pairingCredential: Array<AuthCreatePairingCredentialInput>;
 }
 
@@ -53,6 +59,7 @@ const authenticatedAuth: Context.Service.Shape<typeof EnvironmentAuthenticatedAu
   httpEffect.pipe(
     Effect.provideService(EnvironmentAuthenticatedPrincipal, {
       sessionId: AuthSessionId.make("test-session"),
+      userId: null,
       subject: "test-client",
       method: "browser-session-cookie",
       scopes: new Set<AuthEnvironmentScope>(),
@@ -65,6 +72,7 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
     descriptor: 0,
     session: 0,
     browserSession: [],
+    bindIdentity: [],
     pairingCredential: [],
   };
 
@@ -100,6 +108,15 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
               }),
             )
             .handle("clerkSession", () => unexpectedEndpoint("auth.clerkSession"))
+            .handle(
+              "bindIdentity",
+              Effect.fn("test.environment.auth.bindIdentity")(function* ({ payload }) {
+                calls.bindIdentity.push(payload);
+                return yield* (
+                  scenario.bindIdentity?.(payload) ?? unexpectedEndpoint("auth.bindIdentity")
+                );
+              }),
+            )
             .handle("token", () => unexpectedEndpoint("auth.token"))
             .handle("webSocketTicket", () => unexpectedEndpoint("auth.webSocketTicket"))
             .handle(

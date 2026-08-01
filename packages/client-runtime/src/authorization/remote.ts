@@ -40,6 +40,7 @@ export const exchangeRemoteDpopAccessToken = Effect.fn(
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly clientMetadata?: AuthClientPresentationMetadata;
   readonly dpopProof: string;
+  readonly identityToken?: string;
   readonly timeoutMs?: number;
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
@@ -53,6 +54,7 @@ export const exchangeRemoteDpopAccessToken = Effect.fn(
         subject_token: input.credential,
         subject_token_type: AuthEnvironmentBootstrapTokenType,
         requested_token_type: AuthAccessTokenType,
+        ...(input.identityToken ? { identity_token: input.identityToken } : {}),
         ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
         ...clientMetadataTokenExchangeFields(input.clientMetadata),
       },

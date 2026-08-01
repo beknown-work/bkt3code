@@ -23,6 +23,7 @@ import {
   UserId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { SourceControlProfileId } from "./sourceControl.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -526,6 +527,9 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   ownerUserId: OwnerUserIdField,
   memberUserIds: MemberUserIdsField,
@@ -600,6 +604,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   ownerUserId: OwnerUserIdField,
   memberUserIds: MemberUserIdsField,
@@ -755,6 +762,9 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): session priority. Absent means "unprioritised".
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
@@ -897,6 +907,14 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadSourceControlProfileSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.source-control-profile.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  sourceControlProfileId: SourceControlProfileId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -905,6 +923,9 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): lets single-shot creators (MCP, the Linear bridge)
   // set a priority at creation time.
@@ -1200,6 +1221,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadSourceControlProfileSetCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
@@ -1239,6 +1261,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.owner-transferred",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.source-control-profile-set",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1300,6 +1323,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdByUserId: Schema.optional(Schema.NullOr(UserId)),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): session priority at creation time.
@@ -1381,6 +1407,13 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   updatedAt: IsoDateTime,
+});
+
+export const ThreadSourceControlProfileSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  previousSourceControlProfileId: Schema.NullOr(SourceControlProfileId),
+  sourceControlProfileId: SourceControlProfileId,
+  changedAt: IsoDateTime,
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({
@@ -1663,6 +1696,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.source-control-profile-set"),
+    payload: ThreadSourceControlProfileSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

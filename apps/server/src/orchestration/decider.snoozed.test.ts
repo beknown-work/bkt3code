@@ -41,6 +41,7 @@ function makeReadModel(input: {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         latestTurn: null,
         ownerUserId: null,
         memberUserIds: [],

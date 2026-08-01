@@ -24,6 +24,7 @@ import {
   GitCommandError,
   ProviderDriverKind,
   ProviderInstanceId,
+  SourceControlProfileId,
   TextGenerationError,
 } from "@t3tools/contracts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -36,6 +37,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { withSourceControlExecutionEnvironment } from "../sourceControl/SourceControlExecutionEnvironment.ts";
 import * as GitManager from "./GitManager.ts";
 
 interface FakeGhScenario {
@@ -958,6 +960,45 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(first.pr?.number).toBe(113);
       expect(second.pr?.number).toBe(113);
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(1);
+    }),
+  );
+
+  it.effect("separates remote status caches by source-control profile", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/profile-status-cache"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/profile-status-cache"]);
+
+      const existingPr = {
+        number: 114,
+        title: "Profile-scoped cached PR",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/114",
+        baseRefName: "main",
+        headRefName: "feature/profile-status-cache",
+      };
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          prListSequence: [JSON.stringify([existingPr]), JSON.stringify([existingPr])],
+        },
+      });
+      const alice = {
+        profileId: SourceControlProfileId.make("alice"),
+        environment: { GH_TOKEN: "alice-token" },
+      };
+      const bob = {
+        profileId: SourceControlProfileId.make("bob"),
+        environment: { GH_TOKEN: "bob-token" },
+      };
+
+      yield* withSourceControlExecutionEnvironment(manager.status({ cwd: repoDir }), alice);
+      yield* withSourceControlExecutionEnvironment(manager.status({ cwd: repoDir }), alice);
+      yield* withSourceControlExecutionEnvironment(manager.status({ cwd: repoDir }), bob);
+
+      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
     }),
   );
 

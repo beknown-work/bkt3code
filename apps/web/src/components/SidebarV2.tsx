@@ -527,7 +527,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? vcsEnvironment.status({
           environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
+          input: { cwd: gitCwd, threadId: thread.id },
         })
       : null,
   );

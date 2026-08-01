@@ -31,7 +31,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
     selectedThread !== null && selectedThreadCwd !== null
       ? vcsEnvironment.status({
           environmentId: selectedThread.environmentId,
-          input: { cwd: selectedThreadCwd },
+          input: { cwd: selectedThreadCwd, threadId: selectedThread.id },
         })
       : null,
   );
@@ -78,6 +78,14 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
         contentContainerClassName="gap-4 px-5 pt-2"
       >
         <View className="gap-3 rounded-[22px] border border-border bg-card px-4 py-4">
+          {gitActions.actingProfileLogin ? (
+            <View className="flex-row items-center justify-between gap-3">
+              <Text className="text-foreground-muted text-sm font-medium">Identity</Text>
+              <Text className="text-foreground text-base font-t3-bold">
+                Commit as @{gitActions.actingProfileLogin}
+              </Text>
+            </View>
+          ) : null}
           <View className="flex-row items-center justify-between gap-3">
             <Text className="text-foreground-muted text-sm font-medium">Branch</Text>
             <Text className="text-foreground text-base font-t3-bold">

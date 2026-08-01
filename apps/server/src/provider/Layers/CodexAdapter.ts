@@ -15,6 +15,7 @@ import {
   type ProviderEvent,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
+  type ProviderRateLimitUpdate,
   type ProviderRequestKind,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -26,6 +27,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -40,6 +42,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -146,6 +149,102 @@ function readPayload<A>(
 function trimText(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+type CodexRateLimitWindow = {
+  readonly usedPercent: number;
+  readonly resetsAt?: number | null;
+  readonly windowDurationMins?: number | null;
+};
+
+type CodexRateLimitBucket = {
+  readonly limitId?: string | null;
+  readonly limitName?: string | null;
+  readonly primary?: CodexRateLimitWindow | null;
+  readonly secondary?: CodexRateLimitWindow | null;
+};
+
+function normalizeCodexRateLimitWindows(
+  buckets: ReadonlyArray<readonly [string, CodexRateLimitBucket]>,
+) {
+  return buckets.flatMap(([fallbackId, bucket]) => {
+    const bucketId = trimText(bucket.limitId) ?? fallbackId;
+    const bucketName = trimText(bucket.limitName);
+    return (["primary", "secondary"] as const).flatMap((position) => {
+      const window = bucket[position];
+      if (
+        window === null ||
+        window === undefined ||
+        !Number.isFinite(window.usedPercent) ||
+        window.usedPercent < 0 ||
+        window.usedPercent > 100
+      ) {
+        return [];
+      }
+      const duration = window.windowDurationMins ?? undefined;
+      const resetsAt = window.resetsAt ?? undefined;
+      return [
+        {
+          windowId: `codex:${bucketId}:${position}`,
+          label: bucketName
+            ? `${bucketName} ${position}`
+            : position === "primary"
+              ? "Primary"
+              : "Secondary",
+          usedPercent: window.usedPercent,
+          resetsAt:
+            resetsAt !== undefined && Number.isFinite(resetsAt) && resetsAt > 0
+              ? DateTime.makeUnsafe(resetsAt * 1_000)
+              : null,
+          ...(duration !== undefined && Number.isInteger(duration) && duration >= 0
+            ? { windowDurationMinutes: duration }
+            : {}),
+          category: duration !== undefined && duration >= 10_080 ? "weekly" : "rolling",
+        } as const,
+      ];
+    });
+  });
+}
+
+export function normalizeCodexRateLimitRead(
+  response: EffectCodexSchema.V2GetAccountRateLimitsResponse,
+  observedAt: DateTime.Utc,
+): ProviderRateLimitUpdate {
+  const multiBucketEntries = Object.entries(response.rateLimitsByLimitId ?? {});
+  const buckets: ReadonlyArray<readonly [string, CodexRateLimitBucket]> =
+    multiBucketEntries.length > 0 ? multiBucketEntries : [["default", response.rateLimits]];
+  const windows = normalizeCodexRateLimitWindows(buckets);
+  return {
+    mode: "replace",
+    availability: windows.length > 0 ? "available" : "not-applicable",
+    windows,
+    observedAt,
+  };
+}
+
+export function normalizeCodexRateLimitNotification(
+  notification: EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+  observedAt: DateTime.Utc,
+): ProviderRateLimitUpdate {
+  const bucket = notification.rateLimits;
+  const windows = normalizeCodexRateLimitWindows([[trimText(bucket.limitId) ?? "default", bucket]]);
+  return {
+    mode: "merge",
+    // This notification is explicitly sparse. An empty window set means
+    // "no fields changed", not that subscription quotas stopped applying.
+    availability: "available",
+    windows,
+    observedAt,
+  };
+}
+
+function codexRateLimitRefreshError(observedAt: DateTime.Utc): ProviderRateLimitUpdate {
+  return {
+    mode: "merge",
+    availability: "error",
+    windows: [],
+    observedAt,
+  };
 }
 
 const FATAL_CODEX_STDERR_SNIPPETS = ["failed to connect to websocket"];
@@ -1126,7 +1225,11 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "account/rateLimits/updated") {
-    if (!readPayload(EffectCodexSchema.V2AccountRateLimitsUpdatedNotification, event.payload)) {
+    const payload = readPayload(
+      EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+      event.payload,
+    );
+    if (!payload) {
       return [];
     }
     return [
@@ -1134,7 +1237,38 @@ function mapToRuntimeEvents(
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          rateLimits: event.payload ?? {},
+          rateLimits: normalizeCodexRateLimitNotification(
+            payload,
+            DateTime.makeUnsafe(event.createdAt),
+          ),
+        },
+      },
+    ];
+  }
+
+  if (event.method === "account/rateLimits/read") {
+    const payload = readPayload(EffectCodexSchema.V2GetAccountRateLimitsResponse, event.payload);
+    if (!payload) {
+      return [];
+    }
+    return [
+      {
+        type: "account.rate-limits.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          rateLimits: normalizeCodexRateLimitRead(payload, DateTime.makeUnsafe(event.createdAt)),
+        },
+      },
+    ];
+  }
+
+  if (event.method === "account/rateLimits/readFailed") {
+    return [
+      {
+        type: "account.rate-limits.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          rateLimits: codexRateLimitRefreshError(DateTime.makeUnsafe(event.createdAt)),
         },
       },
     ];
@@ -1375,7 +1509,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
 
-  const startSession: CodexAdapterShape["startSession"] = (input) =>
+  const startSession: CodexAdapterShape["startSession"] = (input, executionOptions) =>
     Effect.scoped(
       Effect.gen(function* () {
         if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1396,13 +1530,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const sessionEnvironment = executionOptions?.environment
+          ? mergeSourceControlEnvironment(
+              options?.environment ?? process.env,
+              executionOptions.environment,
+            )
+          : options?.environment;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
-          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          ...(options?.environment ? { environment: options.environment } : {}),
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, sessionEnvironment),
+          ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -1415,7 +1555,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...(options?.environment ?? process.env),
+                  ...(sessionEnvironment ?? process.env),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
                 appServerArgs: [

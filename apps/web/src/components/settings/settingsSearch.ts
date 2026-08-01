@@ -4,6 +4,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/source-control"
+  | "/settings/users"
   | "/settings/connections"
   // T3-CUSTOM(expbkt3): fork-only settings sections.
   | "/settings/projects"
@@ -29,6 +30,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
   "/settings/source-control": "Source Control",
+  "/settings/users": "Users",
   "/settings/connections": "Connections",
   // T3-CUSTOM(expbkt3): fork-only settings sections.
   "/settings/projects": "Projects",
@@ -148,6 +150,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "source-control",
     title: "Source control",
     to: "/settings/source-control",
+  },
+  {
+    id: "users",
+    title: "Users",
+    to: "/settings/users",
   },
   {
     id: "remote-environments",

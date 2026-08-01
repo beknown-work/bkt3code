@@ -138,7 +138,10 @@ function makeHarness(input: {
 }
 
 /** The sweep runs on a forked fiber doing async SQL, so assertions poll. */
-const waitUntil = (predicate: () => Effect.Effect<boolean>, remaining = 300): Effect.Effect<void> =>
+const waitUntil = <R>(
+  predicate: () => Effect.Effect<boolean, never, R>,
+  remaining = 300,
+): Effect.Effect<void, never, R> =>
   Effect.flatMap(predicate(), (satisfied) =>
     satisfied
       ? Effect.void

@@ -150,6 +150,7 @@ const seedThread = Effect.fn("seedThread")(function* () {
     runtimeMode: "approval-required",
     branch: null,
     worktreePath: process.cwd(),
+    sourceControlProfileId: null,
     createdAt: CREATED_AT,
   });
   yield* engine.dispatch({

@@ -29,6 +29,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   ProviderAdapterProcessError,
@@ -1203,10 +1204,24 @@ export function makeOpenCodeAdapter(
     });
 
     const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
-      function* (input) {
+      function* (input, executionOptions) {
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
+        if (serverUrl && executionOptions?.environment) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue:
+              "Thread-owned GitHub attribution is not supported by an external OpenCode server.",
+          });
+        }
+        const sessionEnvironment = executionOptions?.environment
+          ? mergeSourceControlEnvironment(
+              options?.environment ?? process.env,
+              executionOptions.environment,
+            )
+          : options?.environment;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
         const existing = sessions.get(input.threadId);
@@ -1226,7 +1241,7 @@ export function makeOpenCodeAdapter(
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
                 serverUrl,
-                ...(options?.environment ? { environment: options.environment } : {}),
+                ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,

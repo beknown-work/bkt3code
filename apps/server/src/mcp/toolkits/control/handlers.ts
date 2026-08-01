@@ -845,6 +845,7 @@ const handlers = {
                 interactionMode,
                 branch: input.branch ?? null,
                 worktreePath: input.worktreePath ?? null,
+                sourceControlProfileId: null,
                 createdAt,
                 // T3-CUSTOM(expbkt3): session priority.
                 priority: input.priority ?? null,
@@ -876,6 +877,7 @@ const handlers = {
           interactionMode,
           branch: input.branch ?? null,
           worktreePath: input.worktreePath ?? null,
+          sourceControlProfileId: null,
           createdAt,
           // T3-CUSTOM(expbkt3): session priority.
           priority: input.priority ?? null,
