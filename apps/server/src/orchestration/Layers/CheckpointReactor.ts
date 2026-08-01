@@ -782,13 +782,15 @@ const make = Effect.gen(function* () {
         onSome: (profiles) =>
           profiles.resolveThreadExecutionContext(thread.id, thread.sourceControlProfileId, {}),
       });
-      yield* providerService.rollbackConversation(
-        {
-          threadId: sessionRuntime.value.threadId,
-          numTurns: rolledBackTurns,
-        },
-        sourceControlContext ? { environment: sourceControlContext.environment } : undefined,
-      );
+      const rollbackInput = {
+        threadId: sessionRuntime.value.threadId,
+        numTurns: rolledBackTurns,
+      };
+      yield* sourceControlContext
+        ? providerService.rollbackConversation(rollbackInput, {
+            environment: sourceControlContext.environment,
+          })
+        : providerService.rollbackConversation(rollbackInput);
     }
 
     const staleCheckpointRefs: Array<CheckpointRef> = [];
