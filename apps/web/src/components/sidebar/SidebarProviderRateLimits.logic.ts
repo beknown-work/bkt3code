@@ -45,6 +45,7 @@ export interface ProviderRateLimitRowView {
   readonly freshness: ProviderRateLimitFreshness;
   readonly observedAt: DateTime.Utc | null;
   readonly lastRefreshFailed: boolean;
+  readonly source: "live" | "cache";
   readonly windows: ReadonlyArray<ProviderRateLimitWindowView>;
 }
 
@@ -71,9 +72,15 @@ function windowView(
   now: number,
   stale: boolean,
 ): ProviderRateLimitWindowView {
-  if (stale) return { window, remainingPercent: null, status: "stale" };
   if (window.resetsAt !== null && DateTime.toEpochMillis(window.resetsAt) <= now) {
-    return { window, remainingPercent: null, status: "awaiting-refresh" };
+    return {
+      window,
+      remainingPercent: roundedRemaining(window.usedPercent),
+      status: "awaiting-refresh",
+    };
+  }
+  if (stale) {
+    return { window, remainingPercent: roundedRemaining(window.usedPercent), status: "stale" };
   }
   return { window, remainingPercent: roundedRemaining(window.usedPercent), status: "active" };
 }
@@ -96,12 +103,19 @@ function unknownRow(
     freshness: "unknown",
     observedAt: null,
     lastRefreshFailed: false,
+    source: "live",
     windows: [],
   };
 }
 
-function projectRow(snapshot: ProviderRateLimitSnapshot, now: number): ProviderRateLimitRowView {
-  const stale = isSnapshotStale(snapshot, now);
+function projectRow(
+  snapshot: ProviderRateLimitSnapshot,
+  now: number,
+  source: "live" | "cache",
+): ProviderRateLimitRowView {
+  const stale =
+    snapshot.availability === "available" &&
+    (source === "cache" || snapshot.lastRefreshFailed || isSnapshotStale(snapshot, now));
   const windows = snapshot.windows
     .map((window) => windowView(window, now, stale))
     .toSorted(
@@ -109,22 +123,35 @@ function projectRow(snapshot: ProviderRateLimitSnapshot, now: number): ProviderR
         (left.remainingPercent ?? Number.POSITIVE_INFINITY) -
         (right.remainingPercent ?? Number.POSITIVE_INFINITY),
     );
-  const remainingValues = windows.flatMap((window) =>
+  const activeRemainingValues = windows.flatMap((window) =>
+    window.status !== "active" || window.remainingPercent === null ? [] : [window.remainingPercent],
+  );
+  const lastKnownRemainingValues = windows.flatMap((window) =>
     window.remainingPercent === null ? [] : [window.remainingPercent],
   );
+  const remainingValues = stale
+    ? lastKnownRemainingValues
+    : activeRemainingValues.length > 0
+      ? activeRemainingValues
+      : lastKnownRemainingValues;
   const remainingPercent =
     snapshot.availability === "available" && remainingValues.length > 0
       ? Math.min(...remainingValues)
       : null;
-  const freshness: ProviderRateLimitFreshness = stale
-    ? "stale"
-    : snapshot.availability === "not-applicable"
+  const hasOnlyExpiredWindows =
+    snapshot.availability === "available" &&
+    windows.length > 0 &&
+    activeRemainingValues.length === 0;
+  const freshness: ProviderRateLimitFreshness =
+    snapshot.availability === "not-applicable"
       ? "not-applicable"
       : snapshot.availability === "error"
         ? "error"
-        : snapshot.observedAt === null
-          ? "unknown"
-          : "fresh";
+        : stale || hasOnlyExpiredWindows
+          ? "stale"
+          : snapshot.observedAt === null
+            ? "unknown"
+            : "fresh";
 
   return {
     driverKind: snapshot.driverKind,
@@ -132,28 +159,53 @@ function projectRow(snapshot: ProviderRateLimitSnapshot, now: number): ProviderR
     displayName: displayName(snapshot.driverKind),
     availability: snapshot.availability,
     remainingPercent,
-    tone: providerRateLimitTone(remainingPercent),
+    tone: freshness === "fresh" ? providerRateLimitTone(remainingPercent) : "unknown",
     freshness,
     observedAt: snapshot.observedAt,
     lastRefreshFailed: snapshot.lastRefreshFailed,
+    source,
     windows,
   };
+}
+
+function canUseLiveSnapshot(snapshot: ProviderRateLimitSnapshot): boolean {
+  return (
+    snapshot.availability === "not-applicable" ||
+    (snapshot.availability === "available" &&
+      snapshot.observedAt !== null &&
+      snapshot.windows.length > 0)
+  );
 }
 
 export function buildProviderRateLimitRows(input: {
   readonly providers: ReadonlyArray<ProviderRateLimitHeaderProvider>;
   readonly entries: ReadonlyArray<ProviderRateLimitSnapshot>;
+  readonly cachedEntries?: ReadonlyArray<ProviderRateLimitSnapshot>;
   readonly now: number;
 }): ReadonlyArray<ProviderRateLimitRowView> {
   const entryById = new Map(input.entries.map((entry) => [entry.providerInstanceId, entry]));
+  const cachedEntryById = new Map(
+    (input.cachedEntries ?? []).map((entry) => [entry.providerInstanceId, entry]),
+  );
   const providerById = new Map(input.providers.map((provider) => [provider.instanceId, provider]));
 
   return DISPLAY_ORDER.flatMap((driverKind) => {
     const defaultId = defaultInstanceIdForDriver(driverKind);
     const provider = providerById.get(defaultId);
     if (!provider?.enabled) return [];
-    const entry = entryById.get(defaultId);
-    return [entry === undefined ? unknownRow(driverKind, defaultId) : projectRow(entry, input.now)];
+    const liveEntry = entryById.get(defaultId);
+    if (liveEntry !== undefined && canUseLiveSnapshot(liveEntry)) {
+      return [projectRow(liveEntry, input.now, "live")];
+    }
+    const cachedEntry = cachedEntryById.get(defaultId);
+    if (cachedEntry !== undefined && cachedEntry.availability === "available") {
+      return [projectRow(cachedEntry, input.now, "cache")];
+    }
+    return [
+      liveEntry === undefined
+        ? unknownRow(driverKind, defaultId)
+        : projectRow(liveEntry, input.now, "live"),
+    ];
   });
 }
 
@@ -163,7 +215,9 @@ export function summarizeProviderRateLimitRows(
   const readings = rows.map((row) =>
     row.remainingPercent === null
       ? `${row.displayName} unavailable`
-      : `${row.displayName} ${row.remainingPercent}% remaining`,
+      : `${row.displayName} ${row.remainingPercent}% remaining${
+          row.source === "cache" ? ", cached" : row.freshness === "stale" ? ", stale" : ""
+        }`,
   );
   return `Provider usage limits: ${readings.join("; ")}`;
 }
