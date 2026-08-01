@@ -168,6 +168,9 @@ export class TerminalManager extends Context.Service<
      */
     readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
+    /** Whether a terminal in the thread currently owns a running child command. */
+    readonly hasRunningCommand: (threadId: string) => Effect.Effect<boolean>;
+
     /**
      * Subscribe to terminal runtime events with a direct callback.
      *
@@ -1139,6 +1142,28 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+const TERMINAL_SENSITIVE_ENVIRONMENT_KEYS = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+] as const;
+
+function redactTerminalSensitiveOutput(
+  value: string,
+  runtimeEnv: Record<string, string> | null,
+): string {
+  if (runtimeEnv === null) return value;
+  let redacted = value;
+  for (const key of TERMINAL_SENSITIVE_ENVIRONMENT_KEYS) {
+    const secret = runtimeEnv[key];
+    if (secret && secret.length >= 8) {
+      redacted = redacted.replaceAll(secret, "[REDACTED]");
+    }
+  }
+  return redacted;
+}
+
 interface TerminalManagerOptions {
   logsDir: string;
   historyLineLimit?: number;
@@ -1671,9 +1696,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
 
         if (nextEvent.type === "output") {
+          const redactedOutput = redactTerminalSensitiveOutput(nextEvent.data, session.runtimeEnv);
           const sanitized = sanitizeTerminalHistoryChunk(
             session.pendingHistoryControlSequence,
-            nextEvent.data,
+            redactedOutput,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
           if (sanitized.visibleText.length > 0) {
@@ -1690,7 +1716,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId: session.terminalId,
             sequence: eventStamp.sequence,
             history: sanitized.visibleText.length > 0 ? session.history : null,
-            data: nextEvent.data,
+            data: redactedOutput,
           } as const;
         }
 
@@ -2654,6 +2680,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }),
     );
 
+  const hasRunningCommand: TerminalManager["Service"]["hasRunningCommand"] = (threadId) =>
+    SynchronizedRef.get(managerStateRef).pipe(
+      Effect.map((state) =>
+        Array.from(state.sessions.values()).some(
+          (session) =>
+            session.threadId === threadId &&
+            session.status === "running" &&
+            session.hasRunningSubprocess,
+        ),
+      ),
+    );
+
   return TerminalManager.of({
     open,
     attachStream,
@@ -2662,6 +2700,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     clear,
     restart,
     close,
+    hasRunningCommand,
     subscribe,
     subscribeMetadata,
   });

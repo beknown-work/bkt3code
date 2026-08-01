@@ -72,6 +72,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    sourceControlProfileId: null,
     ...overrides,
   };
 }
@@ -137,6 +138,7 @@ describe("buildLoadingThreadFromShell", () => {
       interactionMode: "default",
       branch: "main",
       worktreePath: null,
+      sourceControlProfileId: null,
       latestTurn: null,
       createdAt: now,
       updatedAt: now,

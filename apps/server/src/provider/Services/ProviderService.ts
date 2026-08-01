@@ -22,7 +22,6 @@ import type {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ThreadId,
-  UserId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -34,6 +33,7 @@ import type {
   InterruptAcknowledgement,
   ProviderAdapterCapabilities,
   ProviderSessionInspection,
+  ProviderSessionExecutionOptions,
   VerifiedTermination,
 } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
@@ -48,8 +48,7 @@ export interface ProviderServiceShape {
   readonly startSession: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
-    /** T3-CUSTOM(expbkt3): User whose delegated MCP grants back this ACP generation. */
-    executionContext?: { readonly actorUserId: UserId | null },
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**
@@ -57,6 +56,7 @@ export interface ProviderServiceShape {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
@@ -64,6 +64,7 @@ export interface ProviderServiceShape {
    */
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   readonly inspectSession: (
@@ -83,6 +84,7 @@ export interface ProviderServiceShape {
    */
   readonly respondToRequest: (
     input: ProviderRespondToRequestInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -90,6 +92,7 @@ export interface ProviderServiceShape {
    */
   readonly respondToUserInput: (
     input: ProviderRespondToUserInputInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -120,10 +123,13 @@ export interface ProviderServiceShape {
   /**
    * Roll back provider conversation state by a number of turns.
    */
-  readonly rollbackConversation: (input: {
-    readonly threadId: ThreadId;
-    readonly numTurns: number;
-  }) => Effect.Effect<void, ProviderServiceError>;
+  readonly rollbackConversation: (
+    input: {
+      readonly threadId: ThreadId;
+      readonly numTurns: number;
+    },
+    options?: ProviderSessionExecutionOptions,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

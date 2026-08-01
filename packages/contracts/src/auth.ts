@@ -1,7 +1,8 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import { AuthSessionId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
+import { AuthSessionId, EnvironmentUserId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
 
 /**
  * Declares the server's overall authentication posture.
@@ -186,8 +187,19 @@ export const userIdFromSubject = (subject: string): UserId | null => {
 
 export const AuthBrowserSessionRequest = Schema.Struct({
   credential: TrimmedNonEmptyString,
+  identityToken: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthBrowserSessionRequest = typeof AuthBrowserSessionRequest.Type;
+
+export const AuthIdentityBindingRequest = Schema.Struct({
+  identityToken: TrimmedNonEmptyString,
+});
+export type AuthIdentityBindingRequest = typeof AuthIdentityBindingRequest.Type;
+
+export const AuthIdentityBindingResult = Schema.Struct({
+  userId: EnvironmentUserId,
+});
+export type AuthIdentityBindingResult = typeof AuthIdentityBindingResult.Type;
 
 export const AuthBrowserSessionResult = Schema.Struct({
   authenticated: Schema.Literal(true),
@@ -222,6 +234,7 @@ export const AuthTokenExchangeRequest = Schema.Struct({
   client_label: Schema.optionalKey(TrimmedNonEmptyString),
   client_device_type: Schema.optionalKey(AuthClientMetadataDeviceType),
   client_os: Schema.optionalKey(TrimmedNonEmptyString),
+  identity_token: Schema.optionalKey(TrimmedNonEmptyString),
 }).pipe(HttpApiSchema.asFormUrlEncoded());
 export type AuthTokenExchangeRequest = typeof AuthTokenExchangeRequest.Type;
 
@@ -271,6 +284,7 @@ export type AuthClientMetadata = typeof AuthClientMetadata.Type;
 
 export const AuthClientSession = Schema.Struct({
   sessionId: AuthSessionId,
+  userId: Schema.NullOr(EnvironmentUserId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   subject: TrimmedNonEmptyString,
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,

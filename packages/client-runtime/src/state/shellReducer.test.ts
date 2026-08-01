@@ -32,6 +32,7 @@ const stubThread = {
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access" as const,
   interactionMode: "default" as const,
+  sourceControlProfileId: null,
   branch: null,
   worktreePath: null,
   latestTurn: null,

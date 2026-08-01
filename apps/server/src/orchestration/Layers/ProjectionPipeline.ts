@@ -670,6 +670,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            sourceControlProfileId: event.payload.sourceControlProfileId,
             latestTurnId: null,
             ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
@@ -886,6 +887,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
             updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.source-control-profile-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            sourceControlProfileId: event.payload.sourceControlProfileId,
+            updatedAt: event.payload.changedAt,
           });
           return;
         }

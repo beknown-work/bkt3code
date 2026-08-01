@@ -235,6 +235,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         });
         bootstrapProjectId = nextProjectId;

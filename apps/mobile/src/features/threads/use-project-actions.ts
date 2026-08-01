@@ -8,6 +8,7 @@ import {
   type ModelSelection,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type SourceControlProfileId,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
@@ -37,6 +38,7 @@ export function useCreateProjectThread() {
       readonly interactionMode: ProviderInteractionMode;
       readonly initialMessageText: string;
       readonly initialAttachments: ReadonlyArray<DraftComposerImageAttachment>;
+      readonly sourceControlProfileId?: SourceControlProfileId | null;
       /** Reuse identifiers from a queued pending task instead of minting new ones. */
       readonly turnMetadata?: TurnCommandMetadata;
     }) => {
@@ -70,6 +72,7 @@ export function useCreateProjectThread() {
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,
           interactionMode: input.interactionMode,
+          sourceControlProfileId: input.sourceControlProfileId ?? null,
           workspaceMode: input.envMode,
           branch: input.branch,
           worktreePath: input.worktreePath,

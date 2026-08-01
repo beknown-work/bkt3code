@@ -538,6 +538,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: DateTime.formatIso(yield* DateTime.now),
         });
       }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));

@@ -388,6 +388,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdByUserId: actor,
+          sourceControlProfileId: command.sourceControlProfileId,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -946,6 +947,39 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.source-control-profile.set": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        thread.latestTurn?.state === "running" ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} is busy and its source-control owner cannot change`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.source-control-profile-set",
+        payload: {
+          threadId: command.threadId,
+          previousSourceControlProfileId: thread.sourceControlProfileId,
+          sourceControlProfileId: command.sourceControlProfileId,
+          changedAt: command.createdAt,
         },
       };
     }

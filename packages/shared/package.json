@@ -123,6 +123,10 @@
       "types": "./src/relayAuth.ts",
       "import": "./src/relayAuth.ts"
     },
+    "./clerkIdentity": {
+      "types": "./src/clerkIdentity.ts",
+      "import": "./src/clerkIdentity.ts"
+    },
     "./relayUrl": {
       "types": "./src/relayUrl.ts",
       "import": "./src/relayUrl.ts"

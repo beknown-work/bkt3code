@@ -108,6 +108,7 @@ export function buildLocalDraftThread(
     memberUserIds: [],
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
+    sourceControlProfileId: null,
     checkpoints: [],
     rollingSummary: null,
     turnSummaries: [],

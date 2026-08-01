@@ -6,22 +6,43 @@ import {
   settlePromise,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Effect from "effect/Effect";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { runtime } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useAtomCommand } from "../state/use-atom-command";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
+import {
+  readManagedClerkIdentityToken,
+  setManagedClerkIdentityTokenProvider,
+} from "./managedIdentity";
 
-let relayTokenProvider: (() => Promise<string | null>) | null = null;
+export { readManagedClerkIdentityToken as readManagedRelayClerkToken };
 
-export async function readManagedRelayClerkToken(): Promise<string | null> {
-  return relayTokenProvider?.() ?? null;
+export function ManagedClerkIdentityAuthProvider({ children }: { readonly children: ReactNode }) {
+  const { getToken, isLoaded, isSignedIn } = useAuth({
+    treatPendingAsSignedOut: false,
+  });
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      setReady(false);
+      return;
+    }
+
+    setManagedClerkIdentityTokenProvider(isSignedIn ? () => getToken() : null);
+    setReady(true);
+  }, [getToken, isLoaded, isSignedIn]);
+
+  useEffect(() => () => setManagedClerkIdentityTokenProvider(null), []);
+
+  return ready ? children : null;
 }
 
 export function deactivateManagedRelayAuthentication(): void {
-  relayTokenProvider = null;
+  setManagedClerkIdentityTokenProvider(null);
   setManagedRelaySession(appAtomRegistry, null);
 }
 
@@ -29,7 +50,7 @@ export function activateManagedRelayAuthentication(
   accountId: string,
   readClerkToken: () => Promise<string | null>,
 ): void {
-  relayTokenProvider = readClerkToken;
+  setManagedClerkIdentityTokenProvider(readClerkToken);
   setManagedRelaySession(appAtomRegistry, {
     accountId,
     readClerkToken,
@@ -46,9 +67,11 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
   });
   const observedAccountRef = useRef<string | null | undefined>(undefined);
   const accountTransitionRef = useRef<Promise<void> | null>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (!isLoaded) {
+      setReady(false);
       return;
     }
 
@@ -79,6 +102,7 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
 
     if (!isSignedIn || !userId) {
       deactivateManagedRelayAuthentication();
+      setReady(true);
       if (previousAccount !== null) {
         void queueAccountCleanup();
       }
@@ -87,6 +111,7 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
       const activateSession = () => {
         if (!cancelled) {
           activateManagedRelayAuthentication(userId, tokenProvider);
+          setReady(true);
         }
       };
       const activateAfterTransition = (transition: Promise<void>) => {
@@ -99,6 +124,7 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
         })();
       };
       if (previousAccount !== undefined && previousAccount !== null && previousAccount !== userId) {
+        setReady(false);
         deactivateManagedRelayAuthentication();
         activateAfterTransition(queueAccountCleanup());
       } else {
@@ -112,5 +138,5 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
 
   useEffect(() => () => deactivateManagedRelayAuthentication(), []);
 
-  return children;
+  return ready ? children : null;
 }

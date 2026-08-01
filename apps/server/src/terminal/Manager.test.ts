@@ -970,6 +970,30 @@ it.layer(
     }),
   );
 
+  it.effect("redacts injected GitHub credentials from terminal output and history", () =>
+    Effect.gen(function* () {
+      const credential = "github_pat_terminal_secret";
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput({ env: { GH_TOKEN: credential } }));
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData(`token=${credential}\n`);
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "output")),
+        "1200 millis",
+      );
+      yield* manager.close({ threadId: "thread-1" });
+
+      const outputEvent = (yield* getEvents).find((event) => event.type === "output");
+      expect(outputEvent).toMatchObject({ data: "token=[REDACTED]\n" });
+      const reopened = yield* manager.open(openInput({ env: { GH_TOKEN: credential } }));
+      expect(reopened.history).toContain("token=[REDACTED]");
+      expect(reopened.history).not.toContain(credential);
+    }),
+  );
+
   it.effect("strips replay-unsafe terminal query and reply sequences from persisted history", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();

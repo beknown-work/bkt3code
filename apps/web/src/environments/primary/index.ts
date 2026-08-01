@@ -14,6 +14,7 @@ export {
 } from "./context";
 
 export {
+  bindPrimaryEnvironmentClerkIdentity,
   createServerPairingCredential,
   fetchSessionState,
   isPrimaryEnvironmentPairingCredentialRejectedError,

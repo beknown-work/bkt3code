@@ -21,11 +21,13 @@ import {
 
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { readManagedClerkIdentityToken } from "../../cloud/managedIdentity";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
   "exchange-bootstrap-credential",
   "exchange-clerk-session",
+  "bind-current-identity",
   "fetch-environment-descriptor",
   "create-pairing-credential",
   "list-pairing-links",
@@ -130,6 +132,7 @@ export interface ServerPairingLinkRecord {
 
 export interface ServerClientSessionRecord {
   readonly sessionId: AuthSessionId;
+  readonly userId: string | null;
   readonly subject: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly method: ServerAuthSessionMethod;
@@ -232,9 +235,17 @@ function readEnvironmentHttpErrorStatus(error: EnvironmentHttpCommonErrorType): 
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBrowserSessionResult> {
   return retryTransientBootstrap(async () => {
     try {
+      const identityToken = await readManagedClerkIdentityToken();
       return await runPrimaryHttp(
         PrimaryEnvironmentHttpClient.pipe(
-          Effect.flatMap((client) => client.auth.browserSession({ payload: { credential } })),
+          Effect.flatMap((client) =>
+            client.auth.browserSession({
+              payload: {
+                credential,
+                ...(identityToken ? { identityToken } : {}),
+              },
+            }),
+          ),
         ),
       );
     } catch (error) {
@@ -294,6 +305,26 @@ async function exchangeClerkSession(token: string): Promise<AuthBrowserSessionRe
     }
     throw PrimaryEnvironmentRequestError.fromCause({
       operation: "exchange-clerk-session",
+      cause: error,
+    });
+  }
+}
+
+export async function bindPrimaryEnvironmentClerkIdentity(identityToken: string): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.auth.bindIdentity({
+            headers: {},
+            payload: { identityToken },
+          }),
+        ),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "bind-current-identity",
       cause: error,
     });
   }
@@ -380,6 +411,8 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   const bootstrapCredential = getDesktopBootstrapCredential();
   const currentSession = await fetchSessionState();
   if (currentSession.authenticated) {
+    const identityToken = await readManagedClerkIdentityToken();
+    if (identityToken) await bindPrimaryEnvironmentClerkIdentity(identityToken);
     return { status: "authenticated" };
   }
 
@@ -511,6 +544,7 @@ export async function listServerClientSessions(): Promise<
     );
     return clientSessions.map((clientSession) => ({
       sessionId: clientSession.sessionId,
+      userId: clientSession.userId,
       subject: clientSession.subject,
       scopes: clientSession.scopes,
       method: clientSession.method,

@@ -411,7 +411,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     thread.branch != null && gitCwd !== null
       ? vcsEnvironment.status({
           environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
+          input: { cwd: gitCwd, threadId: thread.id },
         })
       : null,
   );

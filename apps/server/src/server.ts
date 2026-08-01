@@ -83,6 +83,8 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
+import * as ThreadSourceControlActionLock from "./sourceControl/ThreadSourceControlActionLock.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -90,6 +92,8 @@ import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http
 import { ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ClerkIdentityVerifier from "./auth/ClerkIdentityVerifier.ts";
+import * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
 import {
   connectHttpApiLayer,
   reconcileDesiredCloudLink,
@@ -292,6 +296,12 @@ const SourceControlRepositoryServiceLayerLive = SourceControlRepositoryService.l
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
 );
 
+const SourceControlProfileServiceLayerLive = SourceControlProfileService.layer.pipe(
+  Layer.provide(GitHubCli.layer.pipe(Layer.provide(VcsProcess.layer))),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(ServerSecretStore.layer),
+);
+
 const ReviewLayerLive = ReviewService.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
@@ -342,9 +352,16 @@ const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(T3ProjectFileLoader.layer),
 );
 
-const AuthLayerLive = EnvironmentAuth.layer.pipe(
+const EnvironmentAuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provide(ServerSecretStore.layer),
+);
+
+const AuthLayerLive = EnvironmentUserService.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provideMerge(EnvironmentAuthLayerLive),
+  Layer.provideMerge(ClerkIdentityVerifier.layer),
 );
 
 const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
@@ -376,7 +393,13 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
-  Layer.provideMerge(SourceControlProviderRegistryLayerLive),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      SourceControlProviderRegistryLayerLive,
+      SourceControlProfileServiceLayerLive,
+      ThreadSourceControlActionLock.layer,
+    ),
+  ),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderExecutionRuntimeLayerLive),

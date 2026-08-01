@@ -37,7 +37,10 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { ClerkDirectory } from "./ClerkDirectory.ts";
+import * as ClerkIdentityVerifier from "./ClerkIdentityVerifier.ts";
+import * as EnvironmentUserService from "./EnvironmentUserService.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -206,6 +209,60 @@ export const authHttpApiLayer = HttpApiBuilder.group(
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
     const clerkDirectory = yield* ClerkDirectory;
+    const clerkIdentity = yield* ClerkIdentityVerifier.ClerkIdentityVerifier;
+    const users = yield* EnvironmentUserService.EnvironmentUserService;
+    const settings = yield* ServerSettings.ServerSettingsService;
+
+    const resolveIdentity = (
+      token: string | undefined,
+    ): Effect.Effect<
+      ClerkIdentityVerifier.VerifiedClerkIdentity | null,
+      EnvironmentAuthInvalidError | EnvironmentInternalError
+    > =>
+      Effect.gen(function* () {
+        const identityMode = yield* settings.getSettings.pipe(
+          Effect.map((current) => current.environmentUserIdentityMode),
+          Effect.catch((error) => failEnvironmentInternal("identity_management_failed", error)),
+        );
+        if (!token) {
+          return identityMode === "required"
+            ? yield* failEnvironmentAuthInvalid("missing_identity")
+            : null;
+        }
+        const identity = yield* clerkIdentity.verify(token).pipe(
+          Effect.catchTag("EnvironmentUserManagementError", (error) =>
+            Effect.gen(function* () {
+              return error.reason === "identity-not-configured"
+                ? yield* failEnvironmentInternal("identity_management_failed", error)
+                : yield* failEnvironmentAuthInvalid("invalid_identity");
+            }),
+          ),
+        );
+        yield* users.assertAllowed(identity.userId).pipe(
+          Effect.catchTag("EnvironmentUserManagementError", (error) =>
+            Effect.gen(function* () {
+              return error.reason === "identity-blocked"
+                ? yield* failEnvironmentAuthInvalid("blocked_identity")
+                : yield* failEnvironmentInternal("identity_management_failed", error);
+            }),
+          ),
+        );
+        return identity;
+      }).pipe(Effect.withSpan("environment.auth.resolveIdentity"));
+
+    const persistIdentity = Effect.fn("environment.auth.persistIdentity")(function* (
+      identity: ClerkIdentityVerifier.VerifiedClerkIdentity | null,
+      administrativeGrant: boolean,
+    ) {
+      if (identity === null) return;
+      yield* users
+        .admit(identity, { administrativeGrant })
+        .pipe(
+          Effect.catchTag("EnvironmentUserManagementError", (error) =>
+            failEnvironmentInternal("identity_management_failed", error),
+          ),
+        );
+    });
 
     return handlers
       .handle(
@@ -227,9 +284,22 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
+            const identity = yield* resolveIdentity(args.payload.identityToken);
             const result = yield* serverAuth.createBrowserSession(
               args.payload.credential,
               deriveAuthClientMetadata({ request }),
+              identity ? { userId: identity.userId } : undefined,
+            );
+            yield* persistIdentity(
+              identity,
+              result.response.scopes.includes(AuthAccessWriteScope),
+            ).pipe(
+              Effect.tapError(() =>
+                sessions.verify(result.sessionToken).pipe(
+                  Effect.flatMap((session) => sessions.revoke(session.sessionId)),
+                  Effect.ignore,
+                ),
+              ),
             );
             const sessionCookies = yield* Effect.fromResult(
               Cookies.set(Cookies.empty, sessions.cookieName, result.sessionToken, {
@@ -299,6 +369,30 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         ),
       )
       .handle(
+        "bindIdentity",
+        Effect.fn("environment.auth.bindIdentity")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const session = yield* EnvironmentAuthenticatedPrincipal;
+            const identity = yield* resolveIdentity(args.payload.identityToken);
+            if (identity === null) {
+              return yield* failEnvironmentAuthInvalid("missing_identity");
+            }
+            yield* persistIdentity(identity, session.scopes.has(AuthAccessWriteScope));
+            yield* sessions
+              .bindUserId(session.sessionId, identity.userId)
+              .pipe(
+                Effect.catchIf(SessionStore.isSessionCredentialInternalError, (error) =>
+                  failEnvironmentInternal("identity_management_failed", error),
+                ),
+              );
+            yield* appendCredentialResponseHeaders;
+            return { userId: identity.userId };
+          },
+          Effect.catchTag("EnvironmentAuthInvalidError", appendDpopChallengeOnUnauthorized),
+        ),
+      )
+      .handle(
         "token",
         Effect.fn("environment.auth.token")(
           function* (args) {
@@ -335,8 +429,9 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                   ),
                 )
               : undefined;
+            const identity = yield* resolveIdentity(args.payload.identity_token);
             yield* appendCredentialResponseHeaders;
-            return yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+            const result = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
               requestedScopes,
               deriveAuthClientMetadata({
@@ -349,8 +444,25 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                   ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
                 },
               }),
-              proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
+              proofKeyThumbprint || identity
+                ? {
+                    ...(proofKeyThumbprint ? { proofKeyThumbprint } : {}),
+                    ...(identity ? { userId: identity.userId } : {}),
+                  }
+                : undefined,
             );
+            yield* persistIdentity(
+              identity,
+              result.scope.split(" ").includes(AuthAccessWriteScope),
+            ).pipe(
+              Effect.tapError(() =>
+                sessions.verify(result.access_token).pipe(
+                  Effect.flatMap((session) => sessions.revoke(session.sessionId)),
+                  Effect.ignore,
+                ),
+              ),
+            );
+            return result;
           },
           traceRelayRequest,
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
