@@ -29,6 +29,8 @@ import {
 } from "../provider/Services/ProviderService.ts";
 import { ThreadExecutionSupervisor } from "./ThreadExecutionSupervisor.ts";
 import { ThreadExecutionSupervisorLive } from "./ThreadExecutionSupervisorLive.ts";
+// T3-CUSTOM(expbkt3): the supervisor journals session-recovery intent.
+import { layer as SessionRecoveryStateLayer } from "../persistence/SessionRecoveryState.ts";
 
 const threadId = ThreadId.make("thread-execution-supervisor");
 const provider = ProviderDriverKind.make("codex");
@@ -73,6 +75,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),
@@ -167,6 +171,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),
@@ -237,6 +243,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),
@@ -281,6 +289,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),
@@ -316,6 +326,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),
@@ -371,6 +383,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),
@@ -419,6 +433,8 @@ layer("ThreadExecutionSupervisor", (it) => {
         latestSequence: Effect.succeed(0),
       } as OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        // T3-CUSTOM(expbkt3): session recovery desired-state journal.
+        Layer.provide(SessionRecoveryStateLayer),
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
         Layer.provide(NodeServices.layer),

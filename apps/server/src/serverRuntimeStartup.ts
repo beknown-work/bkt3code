@@ -37,6 +37,8 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+// T3-CUSTOM(expbkt3): automatic session recovery.
+import { SessionRecovery } from "./recovery/SessionRecovery.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -296,6 +298,8 @@ export const make = Effect.gen(function* () {
   const keybindings = yield* Keybindings.Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+  // T3-CUSTOM(expbkt3): automatic session recovery.
+  const sessionRecovery = yield* SessionRecovery;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -355,6 +359,17 @@ export const make = Effect.gen(function* () {
     // projection is loaded, and before commands are accepted.
     yield* Effect.logDebug("startup phase: stale session reconciliation");
     yield* runStartupPhase("sessions.reconcile", runStaleSessionReconciliation);
+
+    // T3-CUSTOM(expbkt3): the reconciliation above settles what the restart
+    // killed; this starts the sweep that reconnects the subset a user actually
+    // meant to be running. Ordered after it so the sweep's first pass reads
+    // fully settled state, and started here rather than with the reactors so
+    // it can never observe a half-reconciled projection.
+    yield* Effect.logDebug("startup phase: session recovery");
+    yield* runStartupPhase(
+      "sessions.recover",
+      sessionRecovery.start().pipe(Scope.provide(reactorScope)),
+    );
 
     // Team mode only: assign legacy (pre-ownership) threads/projects to the
     // configured default owner. No-op + fail-soft in single-user mode / on a

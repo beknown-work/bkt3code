@@ -26,6 +26,9 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
+// T3-CUSTOM(expbkt3): automatic session recovery.
+import * as SessionRecoveryState from "./persistence/SessionRecoveryState.ts";
+import { SessionRecoveryLive } from "./recovery/SessionRecoveryLive.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
@@ -359,14 +362,31 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
+// T3-CUSTOM(expbkt3): the supervisor records session recovery desired-state,
+// so its repository is composed in here rather than at every call site.
+const SessionRecoveryStateLayerLive = SessionRecoveryState.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 const ExecutionLayerLive = ThreadExecutionSupervisorLive.pipe(
   Layer.provide(ProviderLayerLive),
   Layer.provide(OrchestrationLayerLive),
   Layer.provide(PersistenceLayerLive),
+  Layer.provide(SessionRecoveryStateLayerLive),
 );
+
+// T3-CUSTOM(expbkt3): reconnects sessions killed by a restart or a provider
+// crash. Depends on the supervisor for live snapshots, so it composes after it.
+const SessionRecoveryLayerLive = SessionRecoveryLive.pipe(
+  Layer.provide(ExecutionLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+  Layer.provide(SessionRecoveryStateLayerLive),
+);
+
 const ProviderExecutionRuntimeLayerLive = Layer.mergeAll(
   ProviderRuntimeLayerLive,
   ExecutionLayerLive,
+  SessionRecoveryLayerLive,
 );
 
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(

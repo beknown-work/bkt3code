@@ -31,6 +31,11 @@ import {
   withMetrics,
 } from "../observability/Metrics.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+// T3-CUSTOM(expbkt3): session recovery desired-state.
+import {
+  SessionRecoveryStateRepository,
+  type SessionRecoveryStateRepositoryError,
+} from "../persistence/SessionRecoveryState.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import {
   ThreadExecutionSupervisor,
@@ -106,6 +111,8 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const crypto = yield* Crypto.Crypto;
   const provider = yield* ProviderService;
   const orchestration = yield* OrchestrationEngineService;
+  // T3-CUSTOM(expbkt3): desired-state journal for automatic session recovery.
+  const recoveryState = yield* SessionRecoveryStateRepository;
   const authorityEpoch = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
   const state = new Map<ThreadId, ThreadExecutionSnapshot>();
   const stopOperations = new Map<string, string>();
@@ -222,10 +229,89 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     },
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — session recovery desired-state.
+  //
+  // Recovery bookkeeping must never break execution, so every write is
+  // fail-soft. The cost of a lost write is bounded: a missed "running" simply
+  // means no auto-reconnect, and a missed "stopped" is caught by the sweep's
+  // live-snapshot check before it can restart anything a user stopped.
+  const recordRecoveryIntent = (
+    operation: Effect.Effect<void, SessionRecoveryStateRepositoryError>,
+    context: { readonly threadId: ThreadId; readonly reason: string },
+  ) =>
+    operation.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("session.recovery.intent-write-failed", {
+          threadId: context.threadId,
+          reason: context.reason,
+          cause,
+        }),
+      ),
+    );
+
+  const recordRecoveryIntentForEvent = (
+    event: ProviderRuntimeEvent,
+    before: ThreadExecutionSnapshot | undefined,
+  ) =>
+    Effect.gen(function* () {
+      const at = yield* nowIso;
+      const threadId = event.threadId;
+      switch (event.type) {
+        // A settled turn — completed, or aborted by the provider — is not
+        // something to reconnect. Only an unasked-for death is.
+        case "turn.completed":
+        case "turn.aborted":
+          return yield* recordRecoveryIntent(
+            recoveryState.markStopped({ threadId, reason: `turn-settled:${event.type}`, at }),
+            { threadId, reason: "turn-settled" },
+          );
+        case "session.exited": {
+          const failed = event.payload.exitKind === "error";
+          const hadLiveTurn = before?.turn != null && !isTerminalTurn(before);
+          const wasAskedToStop = before?.turn?.stopRequestedAt != null;
+          if (failed && hadLiveTurn && !wasAskedToStop) {
+            // The session died mid-turn with nobody asking: leave the desired
+            // state at "running" so the sweep reconnects it.
+            return yield* recordRecoveryIntent(
+              recoveryState.noteUnexpectedDown({
+                threadId,
+                reason: "session-exited-error",
+                at,
+              }),
+              { threadId, reason: "session-exited-error" },
+            );
+          }
+          return yield* recordRecoveryIntent(
+            recoveryState.markStopped({
+              threadId,
+              reason: failed ? "session-exited-error-settled" : "session-exited-graceful",
+              at,
+            }),
+            { threadId, reason: "session-exited" },
+          );
+        }
+        default:
+          return;
+      }
+    });
+  // T3-CUSTOM(expbkt3): END
+
   const publish = Effect.fn("ThreadExecutionSupervisor.publish")(function* (
     snapshot: ThreadExecutionSnapshot,
   ) {
     state.set(snapshot.threadId, snapshot);
+    // T3-CUSTOM(expbkt3): a freshly admitted turn is explicit intent to run.
+    if (snapshot.turn?.state === "starting" && snapshot.canStop) {
+      yield* recordRecoveryIntent(
+        recoveryState.markRunning({
+          threadId: snapshot.threadId,
+          executionId: snapshot.turn.executionId,
+          reason: "turn-admitted",
+          at: snapshot.observedAt,
+        }),
+        { threadId: snapshot.threadId, reason: "turn-admitted" },
+      );
+    }
     const gaugeCounts = new Map<string, number>();
     for (const entry of state.values()) {
       const key = `${entry.providerSession.providerInstanceId ?? "unknown"}\u0000${entry.activity}`;
@@ -698,7 +784,11 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         default:
           return null;
       }
-    });
+    }).pipe(
+      // T3-CUSTOM(expbkt3): record recovery intent from the same event, using
+      // the pre-transition snapshot to tell a mid-turn crash from a settle.
+      Effect.tap(() => recordRecoveryIntentForEvent(event, currentSnapshot)),
+    );
   };
 
   const getSnapshot: ThreadExecutionSupervisorShape["getSnapshot"] = (threadId) =>
@@ -748,7 +838,19 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           lastError: error,
         },
       };
-    });
+    }).pipe(
+      // T3-CUSTOM(expbkt3): a deterministic turn-start failure (bad config,
+      // missing binary) will fail identically on every retry — never let
+      // infrastructure loop on it.
+      Effect.tap(() =>
+        Effect.flatMap(nowIso, (at) =>
+          recordRecoveryIntent(
+            recoveryState.markStopped({ threadId, reason: "turn-start-failed", at }),
+            { threadId, reason: "turn-start-failed" },
+          ),
+        ),
+      ),
+    );
 
   const awaitTerminal = (threadId: ThreadId, executionId: string, timeoutMs: number) =>
     Effect.gen(function* () {
@@ -786,6 +888,16 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     "ThreadExecutionSupervisor.stopExecution",
   )(function* (input) {
     const initial = yield* getSnapshot(input.threadId);
+    // T3-CUSTOM(expbkt3): the user asked for this stop. Record the intent
+    // before anything else — including on the already-stopped path, where the
+    // intent is just as real — so recovery can never race a stop request and
+    // reconnect a session somebody deliberately ended.
+    yield* recordRecoveryIntent(
+      Effect.flatMap(nowIso, (at) =>
+        recoveryState.markStopped({ threadId: input.threadId, reason: "user-stop", at }),
+      ),
+      { threadId: input.threadId, reason: "user-stop" },
+    );
     const executionId = initial.turn?.executionId;
     if (executionId !== undefined) {
       const completed = completedStopOperations.get(executionId);
