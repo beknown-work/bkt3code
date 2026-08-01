@@ -62,6 +62,8 @@ import {
   OrchestrationSearchThreadsInput,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
+  OrchestrationReplayEventsError,
+  OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
   OrchestrationStopExecutionError,
 } from "./orchestration.ts";
@@ -757,6 +759,13 @@ export const WsOrchestrationSearchThreadsRpc = Rpc.make(ORCHESTRATION_WS_METHODS
   error: Schema.Union([OrchestrationSearchThreadsError, EnvironmentAuthorizationError]),
 });
 
+// T3-CUSTOM(expbkt3)
+export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.replayEvents, {
+  payload: OrchestrationReplayEventsInput,
+  success: OrchestrationRpcSchemas.replayEvents.output,
+  error: Schema.Union([OrchestrationReplayEventsError, EnvironmentAuthorizationError]),
+});
+
 export const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
   {
@@ -922,6 +931,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
+  WsOrchestrationReplayEventsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,

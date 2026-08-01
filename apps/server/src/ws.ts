@@ -1154,7 +1154,7 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.searchThreads]: (input) =>
+        [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.replayEvents,
             Stream.runCollect(

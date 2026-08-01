@@ -292,6 +292,12 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    // T3-CUSTOM(expbkt3): catch-up summary members the fork adds to the
+    // TextGeneration service; unused by git tests but required by the type.
+    updateRollingSummary: () =>
+      Effect.die("updateRollingSummary is not exercised by GitManager tests"),
+    generateCatchupSummary: () =>
+      Effect.die("generateCatchupSummary is not exercised by GitManager tests"),
     ...overrides,
   };
 

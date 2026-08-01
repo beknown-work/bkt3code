@@ -560,6 +560,9 @@ function useCreateProject(environment: EnvironmentOption | null) {
       const command = buildProjectCreateCommand({
         commandId: CommandId.make(uuidv4()),
         projectId,
+        // T3-CUSTOM(expbkt3): the fork's create command carries an explicit
+        // title; upstream infers it from the path at this call site.
+        title: inferProjectTitleFromPath(workspaceRoot),
         workspaceRoot,
         createdAt: new Date().toISOString(),
       });

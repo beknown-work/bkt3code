@@ -20,7 +20,6 @@ const invocation: McpInvocationContext.McpInvocationScope = {
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["t3.read", "t3.control", "t3.plan", "t3.session.create"]),
   issuedAt: 1,
-  expiresAt: Number.MAX_SAFE_INTEGER,
 };
 const accessControl = OrchestrationAccessControl.of({
   actorFor: () => Option.some(actorUserId),

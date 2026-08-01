@@ -27,6 +27,8 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   stopExecution: "orchestration.stopExecution",
+  // T3-CUSTOM(expbkt3)
+  replayEvents: "orchestration.replayEvents",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
@@ -1846,7 +1848,21 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
+// T3-CUSTOM(expbkt3)
+export const OrchestrationReplayEventsInput = Schema.Struct({
+  fromSequenceExclusive: NonNegativeInt,
+});
+export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInput.Type;
+
+const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
+export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
+
 export const OrchestrationRpcSchemas = {
+  // T3-CUSTOM(expbkt3)
+  replayEvents: {
+    input: OrchestrationReplayEventsInput,
+    output: OrchestrationReplayEventsResult,
+  },
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
@@ -1928,6 +1944,15 @@ export class ThreadTurnAdmissionConflictError extends Schema.TaggedErrorClass<Th
     expectedExecutionRevision: NonNegativeInt,
     actualExecutionRevision: NonNegativeInt,
     activity: ThreadExecutionActivity,
+  },
+) {}
+
+// T3-CUSTOM(expbkt3)
+export class OrchestrationReplayEventsError extends Schema.TaggedErrorClass<OrchestrationReplayEventsError>()(
+  "OrchestrationReplayEventsError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

@@ -38,6 +38,8 @@ export interface McpCredentialRequest {
 
 export interface McpIssuedCredential {
   readonly config: McpProviderSession.McpProviderSessionConfig;
+  /** T3-CUSTOM(expbkt3): when the login backing this credential expires. */
+  readonly expiresAt: number;
 }
 
 /** An authenticated login that keeps a provider MCP credential authorized. */
