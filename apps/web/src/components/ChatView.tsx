@@ -5985,7 +5985,6 @@ function ChatViewContent(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
-            sourceControlIdentityMode={sourceControlIdentityMode}
             sourceControlProfiles={sourceControlProfiles}
             sourceControlProfileId={activeSourceControlProfileId}
             onNewThreadInProject={handleNewThreadInActiveProject}

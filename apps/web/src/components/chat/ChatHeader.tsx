@@ -4,7 +4,6 @@ import {
   type ProjectScript,
   type ResolvedKeybindingsConfig,
   type GitHubSourceControlProfile,
-  type SourceControlIdentityMode,
   type SourceControlProfileId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -42,7 +41,6 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
   gitCwd: string | null;
-  sourceControlIdentityMode: SourceControlIdentityMode;
   sourceControlProfiles: ReadonlyArray<GitHubSourceControlProfile>;
   sourceControlProfileId: SourceControlProfileId | null;
   onNewThreadInProject: () => void;
@@ -81,7 +79,6 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   rightPanelOpen,
   gitCwd,
-  sourceControlIdentityMode,
   sourceControlProfiles,
   sourceControlProfileId,
   onNewThreadInProject,
@@ -164,29 +161,9 @@ export const ChatHeader = memo(function ChatHeader({
           />
         ) : null}
         {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): the member avatars represent thread ownership;
+            GitHub identity stays implicit and follows the durable owner. */}
         <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
-        {sourceControlIdentityMode === "thread-profile" ? (
-          <div className="flex items-center gap-1.5">
-            {selectedSourceControlProfile?.avatarUrl ? (
-              <img
-                src={selectedSourceControlProfile.avatarUrl}
-                alt=""
-                className="size-5 rounded-full"
-                referrerPolicy="no-referrer"
-              />
-            ) : null}
-            {/* T3-CUSTOM(expbkt3): identity is read-only here and follows the
-                durable thread owner managed through Users. */}
-            <span
-              className="max-w-40 truncate text-xs text-muted-foreground"
-              aria-label="Thread owner's GitHub identity"
-            >
-              {selectedSourceControlProfile
-                ? `@${selectedSourceControlProfile.login}`
-                : "Owner needs GitHub"}
-            </span>
-          </div>
-        ) : null}
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
