@@ -128,6 +128,8 @@ describe("environment shell synchronization", () => {
         saveServerConfig: () => Effect.void,
         loadVcsRefs: () => Effect.succeed(Option.none()),
         saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
         clear: () => Effect.void,
       });
       const shellState = yield* makeEnvironmentShellState().pipe(
@@ -497,6 +499,8 @@ describe("environment shell synchronization", () => {
         saveServerConfig: () => Effect.void,
         loadVcsRefs: () => Effect.succeed(Option.none()),
         saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
         clear: () => Effect.void,
       });
       const shellState = yield* makeEnvironmentShellState().pipe(
