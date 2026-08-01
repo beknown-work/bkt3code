@@ -101,6 +101,13 @@ These exist on the box and are not in the repository:
 - **Clerk secrets** — `clerk.conf` systemd drop-ins under
   `/etc/systemd/system/<unit>.d/`, sourcing `EnvironmentFile=-/home/ubuntu/.t3/<state-dir>/clerk.env`.
   Reinstalling a unit file does not remove drop-ins, but `systemctl revert` does.
+  These cover the **server runtime only**. `VITE_CLERK_PUBLISHABLE_KEY` is baked
+  into the SPA at build time, and builds now run in CI, so it comes from the
+  `VITE_CLERK_PUBLISHABLE_KEY` Actions variable instead — see the "Build web
+  client" step in each deploy workflow. Drop it and team mode goes silently off
+  in the browser (no sign-in gate, no member tagging) while the server stays in
+  team mode; the page still loads, so nothing fails loudly. Any future
+  `VITE_`-prefixed setting on this box has the same split.
 - **Memory limits** — applied with `systemctl set-property`, persisted under
   `/etc/systemd/system.control/<unit>.d/`. These _override_ the values committed
   in the unit files, so check the live value with
