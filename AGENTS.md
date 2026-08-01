@@ -29,6 +29,8 @@ How to update an environment: merge to its branch. The branch's GitHub Actions w
 
 Deploying restarts the target service, which **kills the agent sessions hosted on it** — a bkt3 deploy ends the session that triggered it and interrupts every other in-flight turn on bkt3. Trigger manual deploys from the other instance or from a human shell, and warn the user before merging to `bkmain`.
 
+**Ship to `expbkmain` first.** Every fork change — features, not just upstream merges — goes to `expbkmain` and is verified running at expbkt3.dev.beknown.live before it merges to `bkmain`. bkt3 hosts the team's live coding sessions, so a regression there interrupts real work, and the failure modes that matter most (migrations against an existing database, startup ordering, provider processes) only appear on a real deploy. expbkt3 is cheap to break: reset it from `bkmain`, merge the branch, wait for the timer, and exercise the change in the browser. Only then open or merge the `bkmain` PR.
+
 ## Building features that survive upstream merges
 
 We track a fast-moving upstream. Every line this fork changes inside an upstream-owned file is a line that has to be re-resolved, by hand, on every future merge — and a merge that touches 25 files of core code costs a day and risks silently dropping fork behavior. Cost is driven by _where_ we write code far more than by how much we write.

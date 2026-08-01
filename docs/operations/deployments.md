@@ -134,17 +134,24 @@ cat /home/ubuntu/.t3/bkt3-dev/deployed-sha
 git ls-remote origin bkmain
 ```
 
-Ship a fork change: open a PR against `bkmain`, let CI verify it, merge. The
-timer deploys within a minute of the merge commit's run turning green.
-
-Test a drastic change (upstream merge, risky refactor) before production:
+Ship a fork change: **stage it on `expbkmain` first**, verify it running at
+`https://expbkt3.dev.beknown.live`, then open a PR against `bkmain`, let CI
+verify it, and merge. The timer deploys within a minute of the merge commit's
+run turning green.
 
 ```bash
 git push origin <topic-branch>:refs/heads/expbkmain   # or --force-with-lease
 ```
 
-Verify at `https://expbkt3.dev.beknown.live`, then merge the topic branch into
-`bkmain` through a PR and reset `expbkmain` from `bkmain`.
+This applies to ordinary features, not only to upstream merges and risky
+refactors. bkt3 hosts the team's live coding sessions, so a regression there
+interrupts real work — and the failures that matter most (migrations meeting an
+existing database, startup ordering, provider process lifecycle) only surface on
+a real deploy. expbkt3 is disposable: it is reset from `bkmain` between
+experiments.
+
+After the `bkmain` PR merges, reset `expbkmain` from `bkmain` so the next
+experiment starts from production.
 
 Update the upstream mirror and `t3.dev`: see
 [`deploy/t3/README.md`](../../deploy/t3/README.md#branch-maintenance).
