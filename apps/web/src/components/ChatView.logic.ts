@@ -124,6 +124,9 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
     activities: [],
     checkpoints: [],
     deletedAt: null,
+    // T3-CUSTOM(expbkt3): catch-up summary fields the fork adds to Thread.
+    rollingSummary: null,
+    turnSummaries: [],
   };
 }
 

@@ -82,7 +82,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const { environments } = useEnvironments();
   // T3-CUSTOM(expbkt3): BEGIN — derive experimental global attention/running counters.
   const threads = useThreadShells();
-  const stageLabel = useSidebarStageLabel();
+  const stageLabel = useEnvironmentStageLabel();
   const counts = useMemo(() => summarizeSidebarSessions(threads), [threads]);
   // T3-CUSTOM(expbkt3): END
   const syncing = environments.some(

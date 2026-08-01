@@ -150,6 +150,9 @@ describe("buildLoadingThreadFromShell", () => {
       hasPendingApprovals: false,
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
+      // T3-CUSTOM(expbkt3): multi-user ownership fields on ThreadShell.
+      ownerUserId: null,
+      memberUserIds: [],
     } satisfies ThreadShell;
 
     expect(buildLoadingThreadFromShell(shell)).toMatchObject({

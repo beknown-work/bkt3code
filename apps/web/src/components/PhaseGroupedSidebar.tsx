@@ -690,7 +690,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   // did this wrap up" — the same timestamp they sort by.
   const timeLabel =
     section === "snoozed" && row.thread.snoozedUntil != null
-      ? snoozeWakeLabel(row.thread.snoozedUntil, new Date())
+      ? snoozeWakeLabel(row.thread.snoozedUntil, { now: new Date().toISOString() })
       : formatRelativeTimeLabel(
           (section === "settled" ? resolveSettledTimestamp(row.thread) : null) ??
             row.thread.updatedAt,
