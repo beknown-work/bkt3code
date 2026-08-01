@@ -2,11 +2,10 @@
  * ownershipBackfill - One-time legacy ownership assignment for team mode.
  *
  * Runs at startup (after migrations) only when Clerk team mode is configured.
- * Assigns every pre-ownership thread/project row (owner_user_id IS NULL) to the
- * configured default owner, resolved from `T3CODE_DEFAULT_OWNER_USER_ID` or, as
- * a fallback, `T3CODE_DEFAULT_OWNER_EMAIL` via Clerk. Idempotent (only touches
- * null rows) and fail-soft: if the owner can't be resolved (e.g. Clerk is
- * unreachable) it logs a warning and converges on a later boot.
+ * Restores a creator from durable events or legacy membership first, then
+ * assigns any remaining ownerless thread/project to the configured default or
+ * earliest active administrator. Idempotent and fail-soft: if the fallback
+ * owner cannot be resolved it logs a warning and converges on a later boot.
  *
  * @module ownershipBackfill
  */
@@ -17,55 +16,109 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ClerkDirectory } from "../auth/ClerkDirectory.ts";
 import { ServerConfig } from "../config.ts";
 
-/**
- * Repairs the legacy relay shape where the historical assignee was persisted
- * as a member on an ownerless entity, then assigns the default owner only to
- * entities that truly have no owner or assignee.
- */
+/** Assigns every collaborative projection a deterministic durable owner. */
 export const backfillProjectionOwnership = Effect.fn("backfillProjectionOwnership")(function* (
   adminUserId: UserId,
 ) {
   const sql = yield* SqlClient.SqlClient;
 
-  // Earlier startup backfills assigned the configured default owner to every
-  // null owner. Relay-imported entities already had their historical assignee
-  // represented by a system-added member row, so that default owner displaced
-  // the visible assignee after a restart. Restore those exact legacy rows to
-  // ownerless + assigned; their member record remains the durable assignment.
-  const restoredThreadResult = yield* sql`
+  // Prefer the actor recorded by modern created events. This repairs a stale
+  // projection without rewriting event history.
+  const creatorThreadResult = yield* sql`
     UPDATE projection_threads AS thread
-    SET owner_user_id = NULL
-    WHERE owner_user_id = ${adminUserId}
-      AND EXISTS (
-        SELECT 1
-        FROM orchestration_events AS created
-        WHERE created.event_type = 'thread.created'
-          AND created.stream_id = thread.thread_id
-          AND json_extract(created.payload_json, '$.createdByUserId') IS NULL
-      )
-      AND EXISTS (
-        SELECT 1
-        FROM projection_thread_members AS member
-        WHERE member.thread_id = thread.thread_id
-          AND member.added_by_user_id IS NULL
-      )
+    SET owner_user_id = (
+      SELECT json_extract(created.payload_json, '$.createdByUserId')
+      FROM orchestration_events AS created
+      WHERE created.event_type = 'thread.created'
+        AND created.stream_id = thread.thread_id
+        AND json_extract(created.payload_json, '$.createdByUserId') IS NOT NULL
+      ORDER BY created.stream_version ASC
+      LIMIT 1
+    )
+    WHERE (owner_user_id IS NULL OR owner_user_id = ${adminUserId})
       AND NOT EXISTS (
         SELECT 1
         FROM orchestration_events AS transferred
         WHERE transferred.event_type = 'thread.owner-transferred'
           AND transferred.stream_id = thread.thread_id
       )
+      AND EXISTS (
+        SELECT 1
+        FROM orchestration_events AS created
+        WHERE created.event_type = 'thread.created'
+          AND created.stream_id = thread.thread_id
+          AND json_extract(created.payload_json, '$.createdByUserId') IS NOT NULL
+      )
   `;
-  const restoredProjectResult = yield* sql`
+  const creatorProjectResult = yield* sql`
     UPDATE projection_projects AS project
-    SET owner_user_id = NULL
-    WHERE owner_user_id = ${adminUserId}
+    SET owner_user_id = (
+      SELECT json_extract(created.payload_json, '$.createdByUserId')
+      FROM orchestration_events AS created
+      WHERE created.event_type = 'project.created'
+        AND created.stream_id = project.project_id
+        AND json_extract(created.payload_json, '$.createdByUserId') IS NOT NULL
+      ORDER BY created.stream_version ASC
+      LIMIT 1
+    )
+    WHERE (owner_user_id IS NULL OR owner_user_id = ${adminUserId})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM orchestration_events AS transferred
+        WHERE transferred.event_type = 'project.owner-transferred'
+          AND transferred.stream_id = project.project_id
+      )
       AND EXISTS (
         SELECT 1
         FROM orchestration_events AS created
         WHERE created.event_type = 'project.created'
           AND created.stream_id = project.project_id
-          AND json_extract(created.payload_json, '$.createdByUserId') IS NULL
+          AND json_extract(created.payload_json, '$.createdByUserId') IS NOT NULL
+      )
+  `;
+
+  // Pre-identity imports stored the historical assignee as a system-added
+  // member. Promote that person instead of assigning the environment admin.
+  const legacyThreadResult = yield* sql`
+    UPDATE projection_threads AS thread
+    SET owner_user_id = (
+      SELECT member.user_id
+      FROM projection_thread_members AS member
+      WHERE member.thread_id = thread.thread_id
+        AND member.added_by_user_id IS NULL
+      ORDER BY member.added_at ASC, member.user_id ASC
+      LIMIT 1
+    )
+    WHERE (owner_user_id IS NULL OR owner_user_id = ${adminUserId})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM orchestration_events AS transferred
+        WHERE transferred.event_type = 'thread.owner-transferred'
+          AND transferred.stream_id = thread.thread_id
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM projection_thread_members AS member
+        WHERE member.thread_id = thread.thread_id
+          AND member.added_by_user_id IS NULL
+      )
+  `;
+  const legacyProjectResult = yield* sql`
+    UPDATE projection_projects AS project
+    SET owner_user_id = (
+      SELECT member.user_id
+      FROM projection_project_members AS member
+      WHERE member.project_id = project.project_id
+        AND member.added_by_user_id IS NULL
+      ORDER BY member.added_at ASC, member.user_id ASC
+      LIMIT 1
+    )
+    WHERE (owner_user_id IS NULL OR owner_user_id = ${adminUserId})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM orchestration_events AS transferred
+        WHERE transferred.event_type = 'project.owner-transferred'
+          AND transferred.stream_id = project.project_id
       )
       AND EXISTS (
         SELECT 1
@@ -73,40 +126,70 @@ export const backfillProjectionOwnership = Effect.fn("backfillProjectionOwnershi
         WHERE member.project_id = project.project_id
           AND member.added_by_user_id IS NULL
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM orchestration_events AS transferred
-        WHERE transferred.event_type = 'project.owner-transferred'
-          AND transferred.stream_id = project.project_id
-      )
   `;
 
-  const threadResult = yield* sql`
+  // If older data has members but no creator metadata, the earliest member is
+  // the best durable owner. Truly unassigned rows fall back to the configured
+  // administrator, so collaborative mode never exposes an ownerless thread.
+  yield* sql`
     UPDATE projection_threads AS thread
-    SET owner_user_id = ${adminUserId}
+    SET owner_user_id = (
+      SELECT member.user_id
+      FROM projection_thread_members AS member
+      WHERE member.thread_id = thread.thread_id
+      ORDER BY member.added_at ASC, member.user_id ASC
+      LIMIT 1
+    )
     WHERE owner_user_id IS NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM projection_thread_members AS member
+      AND EXISTS (
+        SELECT 1 FROM projection_thread_members AS member
         WHERE member.thread_id = thread.thread_id
       )
   `;
-  const projectResult = yield* sql`
+  yield* sql`
     UPDATE projection_projects AS project
-    SET owner_user_id = ${adminUserId}
+    SET owner_user_id = (
+      SELECT member.user_id
+      FROM projection_project_members AS member
+      WHERE member.project_id = project.project_id
+      ORDER BY member.added_at ASC, member.user_id ASC
+      LIMIT 1
+    )
     WHERE owner_user_id IS NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM projection_project_members AS member
+      AND EXISTS (
+        SELECT 1 FROM projection_project_members AS member
         WHERE member.project_id = project.project_id
       )
+  `;
+  const threadResult = yield* sql`
+    UPDATE projection_threads SET owner_user_id = ${adminUserId} WHERE owner_user_id IS NULL
+  `;
+  const projectResult = yield* sql`
+    UPDATE projection_projects SET owner_user_id = ${adminUserId} WHERE owner_user_id IS NULL
+  `;
+
+  yield* sql`
+    DELETE FROM projection_thread_members
+    WHERE user_id = (
+      SELECT thread.owner_user_id FROM projection_threads AS thread
+      WHERE thread.thread_id = projection_thread_members.thread_id
+    )
+  `;
+  yield* sql`
+    DELETE FROM projection_project_members
+    WHERE user_id = (
+      SELECT project.owner_user_id FROM projection_projects AS project
+      WHERE project.project_id = projection_project_members.project_id
+    )
   `;
 
   return {
     restoredThreads:
-      (restoredThreadResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+      ((creatorThreadResult as { readonly rowsAffected?: number }).rowsAffected ?? 0) +
+      ((legacyThreadResult as { readonly rowsAffected?: number }).rowsAffected ?? 0),
     restoredProjects:
-      (restoredProjectResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
+      ((creatorProjectResult as { readonly rowsAffected?: number }).rowsAffected ?? 0) +
+      ((legacyProjectResult as { readonly rowsAffected?: number }).rowsAffected ?? 0),
     threadsUpdated: (threadResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
     projectsUpdated: (projectResult as { readonly rowsAffected?: number }).rowsAffected ?? null,
   };
@@ -121,19 +204,30 @@ export const runOwnershipBackfill = Effect.gen(function* () {
   }
 
   const clerkDirectory = yield* ClerkDirectory;
+  const sql = yield* SqlClient.SqlClient;
   const explicitOwnerId =
     clerkAuth.defaultOwnerUserId !== undefined ? (clerkAuth.defaultOwnerUserId as UserId) : null;
-  const adminUserId: UserId | null =
+  const configuredAdminUserId: UserId | null =
     explicitOwnerId ??
     (clerkAuth.defaultOwnerEmail !== undefined
       ? yield* clerkDirectory
           .findUserIdByEmail(clerkAuth.defaultOwnerEmail)
           .pipe(Effect.orElseSucceed(() => null))
       : null);
+  const localAdmin = yield* sql<{ readonly userId: string }>`
+    SELECT user_id AS "userId"
+    FROM environment_users
+    WHERE role = 'admin' AND status = 'active'
+    ORDER BY first_seen_at ASC, user_id ASC
+    LIMIT 1
+  `;
+  const adminUserId: UserId | null =
+    configuredAdminUserId ??
+    (localAdmin[0] === undefined ? null : (localAdmin[0].userId as UserId));
 
   if (adminUserId === null) {
     yield* Effect.logWarning(
-      "ownership backfill skipped: could not resolve the default owner; will retry next boot",
+      "ownership backfill skipped: could not resolve a configured or active admin owner; will retry next boot",
       {
         defaultOwnerUserId: clerkAuth.defaultOwnerUserId ?? null,
         defaultOwnerEmail: clerkAuth.defaultOwnerEmail ?? null,

@@ -2,7 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentUserId,
   SourceControlProfileId,
+  ThreadId,
+  UserId,
   type ServerSettings,
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
@@ -143,6 +146,68 @@ it.layer(NodeServices.layer)("SourceControlProfileService", (it) => {
       const validationEnvironment = harness.validationEnvironments[0];
       assert.strictEqual(validationEnvironment?.GH_TOKEN, "alice-token");
       assert.isUndefined(validationEnvironment?.GITHUB_TOKEN);
+    }),
+  );
+
+  it.effect("resolves a thread's GitHub identity from its durable owner", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const profile = yield* harness.service.upsert({
+        label: "Alice",
+        gitName: "Alice Example",
+        gitEmail: "42+alice@users.noreply.github.com",
+        credential: "alice-token",
+      });
+      yield* Ref.update(harness.settings, (settings) => ({
+        ...settings,
+        sourceControlProfiles: {
+          ...settings.sourceControlProfiles,
+          [profile.id]: {
+            ...settings.sourceControlProfiles[profile.id]!,
+            ownerUserId: EnvironmentUserId.make("user-alice"),
+          },
+        },
+      }));
+
+      const context = yield* harness.service.resolveThreadExecutionContext(
+        ThreadId.make("thread-alice"),
+        UserId.make("user-alice"),
+        {},
+      );
+
+      assert.strictEqual(context?.profileId, profile.id);
+      assert.strictEqual(context?.login, "alice");
+      assert.strictEqual(context?.environment.GH_TOKEN, "alice-token");
+
+      const replacementProfile = yield* harness.service.upsert({
+        label: "Bob",
+        gitName: "Bob Example",
+        gitEmail: "84+bob@users.noreply.github.com",
+        credential: "bob-token",
+      });
+      yield* Ref.update(harness.settings, (settings) => ({
+        ...settings,
+        sourceControlProfiles: {
+          ...settings.sourceControlProfiles,
+          [profile.id]: {
+            ...settings.sourceControlProfiles[profile.id]!,
+            ownerUserId: null,
+          },
+          [replacementProfile.id]: {
+            ...settings.sourceControlProfiles[replacementProfile.id]!,
+            ownerUserId: EnvironmentUserId.make("user-alice"),
+          },
+        },
+      }));
+
+      const reassignedContext = yield* harness.service.resolveThreadExecutionContext(
+        ThreadId.make("thread-alice"),
+        UserId.make("user-alice"),
+        {},
+      );
+      assert.strictEqual(reassignedContext?.profileId, replacementProfile.id);
+      assert.strictEqual(reassignedContext?.login, "bob");
+      assert.strictEqual(reassignedContext?.environment.GH_TOKEN, "bob-token");
     }),
   );
 

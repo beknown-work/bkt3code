@@ -48,7 +48,11 @@ export function useSelectedThreadGitActions() {
   );
   const actingProfileLogin =
     sourceControlProfiles.data?.profiles.find(
-      (profile) => profile.id === selectedThread?.sourceControlProfileId,
+      // T3-CUSTOM(expbkt3): GitHub identity follows durable ownership.
+      (profile) =>
+        profile.ownerUserId !== null &&
+        selectedThread?.ownerUserId != null &&
+        String(profile.ownerUserId) === String(selectedThread.ownerUserId),
     )?.login ?? null;
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const runStackedAction = useAtomCommand(

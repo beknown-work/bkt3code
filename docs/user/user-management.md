@@ -19,7 +19,7 @@ web, desktop, or mobile client. Administrators can:
 - sign a user out of every environment session;
 - add and maintain GitHub profiles;
 - connect one GitHub profile to each user;
-- enable required Clerk identity and per-thread GitHub attribution.
+- enable required Clerk identity and owner-based GitHub attribution.
 
 T3 Code prevents demoting or blocking the last active administrator. Blocking a user immediately
 revokes that user's environment sessions. Clerk controls the person's sign-in account; the T3
@@ -39,11 +39,12 @@ an expiring fine-grained personal access token, a Git commit name, and a verifie
 GitHub-provided noreply email. Tokens are write-only and are stored in the environment's server
 secret store.
 
-Assign exactly one profile to each user, then enable **Require a GitHub owner per thread**. New
-threads choose an owner, and commits, pushes, pull requests, reviews, integrated terminals, and
-locally managed agents use that owner's GitHub profile. A profile can be assigned to only one user.
-Thread ownership controls attribution, not access: trusted collaborators may still work in or
-transfer another person's thread.
+Assign exactly one profile to each user, then enable **Use each thread owner's GitHub identity**.
+The user who creates a thread becomes its owner automatically. Commits, pushes, pull requests,
+reviews, integrated terminals, and locally managed agents use the profile currently assigned to
+that durable owner. A profile can be assigned to only one user. Thread ownership controls
+attribution, not access: trusted collaborators may still work in or transfer another person's
+thread, and future GitHub activity switches to the new owner's profile after a transfer.
 
 If a user is blocked, a token is disconnected, or a thread has no valid owner, authenticated GitHub
 operations fail instead of falling back to a machine-wide account.

@@ -18,7 +18,6 @@ import {
   type DiscoveredLocalServerList,
   type OrchestrationCommand,
   type GitActionProgressEvent,
-  type GitHubSourceControlProfile,
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
@@ -53,7 +52,6 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
-  EventId,
   SourceControlProfileError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -954,11 +952,10 @@ const makeWsRpcLayer = (
               Stream.flatMap((items) => Stream.fromIterable(items)),
             );
 
-      const dispatchNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
+      const authorizeNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
         Effect.gen(function* () {
           // Team mode: reject commands on threads/projects this operator can't
-          // access before they reach the engine; the actor is stamped onto the
-          // resulting events and any thread it creates.
+          // access before they reach the engine.
           if (actorUserId !== null) {
             const allowed = yield* checkCommandAccess(
               accessControl,
@@ -982,8 +979,13 @@ const makeWsRpcLayer = (
               });
             }
           }
-          return yield* orchestrationCommandDispatcher.dispatch(normalizedCommand, { actorUserId });
         });
+      const dispatchAuthorizedCommand = (normalizedCommand: OrchestrationCommand) =>
+        orchestrationCommandDispatcher.dispatch(normalizedCommand, { actorUserId });
+      const dispatchNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
+        authorizeNormalizedCommand(normalizedCommand).pipe(
+          Effect.andThen(dispatchAuthorizedCommand(normalizedCommand)),
+        );
       const withThreadExecution = Effect.fn("ws.withThreadExecution")(function* <
         T extends { readonly id: ThreadId; readonly latestTurn: OrchestrationLatestTurn | null },
       >(thread: T) {
@@ -1056,13 +1058,6 @@ const makeWsRpcLayer = (
           | SourceControlProfileService.SourceControlExecutionContext["profileId"]
           | undefined,
       ) {
-        if (profileId !== undefined) {
-          const context = yield* sourceControlProfiles.resolveExecutionContext(profileId, {});
-          return {
-            profileId: context.profileId,
-            environment: context.environment,
-          };
-        }
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(
             () =>
@@ -1074,11 +1069,31 @@ const makeWsRpcLayer = (
           ),
         );
         if (settings.sourceControlIdentityMode === "thread-profile") {
-          return yield* new SourceControlProfileError({
-            operation: "resolve-profile",
-            reason: "missing-profile",
-            detail: "Select a GitHub profile before continuing.",
-          });
+          if (currentSession.userId === null) {
+            return yield* new SourceControlProfileError({
+              operation: "resolve-profile",
+              reason: "missing-profile",
+              detail: "Sign in before using authenticated source-control operations.",
+            });
+          }
+          const context = yield* sourceControlProfiles.resolveUserExecutionContext(
+            UserId.make(currentSession.userId),
+            {},
+          );
+          if (context === null) {
+            return null;
+          }
+          return {
+            profileId: context.profileId,
+            environment: context.environment,
+          };
+        }
+        if (profileId !== undefined) {
+          const context = yield* sourceControlProfiles.resolveExecutionContext(profileId, {});
+          return {
+            profileId: context.profileId,
+            environment: context.environment,
+          };
         }
         return null;
       });
@@ -1129,7 +1144,7 @@ const makeWsRpcLayer = (
         }
         const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
           threadId,
-          thread.value.sourceControlProfileId,
+          thread.value.ownerUserId,
           {},
         );
         return context === null
@@ -1250,7 +1265,7 @@ const makeWsRpcLayer = (
           }
           const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
             threadId,
-            thread.value.sourceControlProfileId,
+            thread.value.ownerUserId,
             {},
           );
           if (context === null) {
@@ -1281,42 +1296,71 @@ const makeWsRpcLayer = (
                 // authenticated environment user's linked GitHub profile. This
                 // also closes the profile-query loading race in every client.
                 const assignedProfileId =
-                  currentSession.userId === null
+                  actorUserId === null
                     ? null
                     : (Object.values(sourceControlSettings.sourceControlProfiles).find(
-                        (profile) => profile.ownerUserId === currentSession.userId,
+                        (profile) =>
+                          profile.ownerUserId !== null &&
+                          String(profile.ownerUserId) === String(actorUserId),
                       )?.id ?? null);
                 normalizedCommand = applyAssignedSourceControlProfile(
                   normalizedCommand,
                   assignedProfileId,
                 );
-                const requestedProfileId =
+                const creationProfileId =
                   normalizedCommand.type === "thread.create"
                     ? normalizedCommand.sourceControlProfileId
                     : normalizedCommand.type === "thread.turn.start" &&
                         normalizedCommand.bootstrap?.createThread
                       ? normalizedCommand.bootstrap.createThread.sourceControlProfileId
-                      : normalizedCommand.type === "thread.turn.start"
-                        ? (Option.getOrNull(
-                            yield* projectionSnapshotQuery.getThreadShellById(
-                              normalizedCommand.threadId,
-                            ),
-                          )?.sourceControlProfileId ?? null)
-                        : undefined;
-                if (requestedProfileId === null) {
+                      : undefined;
+                if (creationProfileId === null) {
                   return yield* new OrchestrationDispatchCommandError({
-                    message: "Select a GitHub owner for this thread before continuing.",
+                    message:
+                      "Assign a connected GitHub profile to your user in Settings before creating a thread.",
                   });
                 }
-                if (requestedProfileId !== undefined) {
-                  const validation =
-                    normalizedCommand.type === "thread.turn.start" &&
-                    !normalizedCommand.bootstrap?.createThread
-                      ? sourceControlProfiles.resolveThreadExecutionContext(
-                          normalizedCommand.threadId,
-                          requestedProfileId,
-                        )
-                      : sourceControlProfiles.resolveExecutionContext(requestedProfileId);
+                let validation: Effect.Effect<unknown, SourceControlProfileError> | null = null;
+                if (creationProfileId !== undefined) {
+                  validation = sourceControlProfiles.resolveExecutionContext(creationProfileId);
+                } else if (normalizedCommand.type === "thread.owner.transfer") {
+                  validation = sourceControlProfiles.resolveThreadExecutionContext(
+                    normalizedCommand.threadId,
+                    normalizedCommand.userId,
+                  );
+                } else if (normalizedCommand.type === "thread.turn.start") {
+                  const threadId = normalizedCommand.threadId;
+                  validation = projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+                    Effect.mapError(
+                      () =>
+                        new SourceControlProfileError({
+                          operation: "resolve-thread-profile",
+                          reason: "thread-not-found",
+                          detail: "Could not read the selected thread.",
+                          threadId,
+                        }),
+                    ),
+                    Effect.flatMap(
+                      Option.match({
+                        onNone: () =>
+                          Effect.fail(
+                            new SourceControlProfileError({
+                              operation: "resolve-thread-profile",
+                              reason: "thread-not-found",
+                              detail: "The selected thread no longer exists.",
+                              threadId,
+                            }),
+                          ),
+                        onSome: (thread) =>
+                          sourceControlProfiles.resolveThreadExecutionContext(
+                            threadId,
+                            thread.ownerUserId,
+                          ),
+                      }),
+                    ),
+                  );
+                }
+                if (validation !== null) {
                   yield* validation.pipe(
                     Effect.mapError(
                       (error) =>
@@ -1342,10 +1386,92 @@ const makeWsRpcLayer = (
                         Effect.orElseSucceed(() => false),
                       )
                   : false;
-              const dispatchEffect = dispatchNormalizedCommand(normalizedCommand);
+              const dispatchEffect =
+                normalizedCommand.type === "thread.owner.transfer"
+                  ? Effect.gen(function* () {
+                      yield* authorizeNormalizedCommand(normalizedCommand);
+                      const threadOption = yield* projectionSnapshotQuery
+                        .getThreadDetailById(normalizedCommand.threadId)
+                        .pipe(
+                          Effect.mapError(
+                            (cause) =>
+                              new OrchestrationDispatchCommandError({
+                                message: "Could not read the thread before transferring ownership.",
+                                cause,
+                              }),
+                          ),
+                        );
+                      if (Option.isNone(threadOption)) {
+                        return yield* new OrchestrationDispatchCommandError({
+                          message: "The selected thread no longer exists.",
+                        });
+                      }
+                      const thread = threadOption.value;
+                      if (yield* terminalManager.hasRunningCommand(normalizedCommand.threadId)) {
+                        return yield* new OrchestrationDispatchCommandError({
+                          message: "Wait for the active terminal command before changing owner.",
+                        });
+                      }
+                      if (
+                        thread.latestTurn?.state === "running" ||
+                        thread.session?.status === "starting" ||
+                        thread.session?.status === "running"
+                      ) {
+                        return yield* new OrchestrationDispatchCommandError({
+                          message: "Wait for the active provider turn before changing owner.",
+                        });
+                      }
+                      if (thread.session !== null && thread.session.status !== "stopped") {
+                        yield* providerService
+                          .stopSession({ threadId: normalizedCommand.threadId })
+                          .pipe(
+                            Effect.mapError(
+                              (cause) =>
+                                new OrchestrationDispatchCommandError({
+                                  message:
+                                    "The provider session could not be stopped before changing owner.",
+                                  cause,
+                                }),
+                            ),
+                          );
+                      }
+                      yield* terminalManager.close({ threadId: normalizedCommand.threadId }).pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationDispatchCommandError({
+                              message:
+                                "The thread terminals could not be closed before changing owner.",
+                              cause,
+                            }),
+                        ),
+                      );
+                      const result = yield* dispatchAuthorizedCommand(normalizedCommand);
+                      yield* terminalManager
+                        .close({ threadId: normalizedCommand.threadId })
+                        .pipe(Effect.ignore);
+                      return result;
+                    })
+                  : dispatchNormalizedCommand(normalizedCommand);
               const result = yield* normalizedCommand.type === "thread.turn.start"
                 ? sourceControlActionLock.runExclusive(normalizedCommand.threadId, dispatchEffect)
-                : dispatchEffect;
+                : normalizedCommand.type === "thread.owner.transfer"
+                  ? sourceControlActionLock
+                      .tryRunExclusive(normalizedCommand.threadId, dispatchEffect)
+                      .pipe(
+                        Effect.flatMap(
+                          Option.match({
+                            onNone: () =>
+                              Effect.fail(
+                                new OrchestrationDispatchCommandError({
+                                  message:
+                                    "Wait for the active turn or Git action before changing owner.",
+                                }),
+                              ),
+                            onSome: Effect.succeed,
+                          }),
+                        ),
+                      )
+                  : dispatchEffect;
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -2206,172 +2332,18 @@ const makeWsRpcLayer = (
         [WS_METHODS.sourceControlThreadOwnerSet]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlThreadOwnerSet,
-            Effect.gen(function* () {
-              const switchProgram: Effect.Effect<
-                GitHubSourceControlProfile,
-                SourceControlProfileError
-              > = Effect.gen(function* () {
-                const target = yield* sourceControlProfiles.test({
-                  profileId: input.sourceControlProfileId,
-                });
-                const profileList = yield* sourceControlProfiles.list;
-                if (
-                  profileList.profiles.find(
-                    (profile) => profile.id === input.sourceControlProfileId,
-                  )?.archived === true
-                ) {
-                  return yield* new SourceControlProfileError({
-                    operation: "switch-thread-owner",
-                    reason: "archived-profile",
-                    detail: "Archived GitHub profiles cannot own new thread activity.",
-                    profileId: input.sourceControlProfileId,
-                    threadId: input.threadId,
-                  });
-                }
-
-                if (yield* terminalManager.hasRunningCommand(input.threadId)) {
-                  return yield* new SourceControlProfileError({
-                    operation: "switch-thread-owner",
-                    reason: "thread-busy",
-                    detail: "Wait for the active terminal command to finish before changing owner.",
-                    profileId: input.sourceControlProfileId,
-                    threadId: input.threadId,
-                  });
-                }
-                const threadOption = yield* projectionSnapshotQuery
-                  .getThreadDetailById(input.threadId)
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "switch-thread-owner",
-                          reason: "thread-not-found",
-                          detail: "Could not read the selected thread.",
-                          profileId: input.sourceControlProfileId,
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                if (Option.isNone(threadOption)) {
-                  return yield* new SourceControlProfileError({
-                    operation: "switch-thread-owner",
-                    reason: "thread-not-found",
-                    detail: "The selected thread no longer exists.",
-                    profileId: input.sourceControlProfileId,
-                    threadId: input.threadId,
-                  });
-                }
-                const thread = threadOption.value;
-                if (thread.sourceControlProfileId === input.sourceControlProfileId) {
-                  return target;
-                }
-                if (
-                  thread.latestTurn?.state === "running" ||
-                  thread.session?.status === "starting" ||
-                  thread.session?.status === "running"
-                ) {
-                  return yield* new SourceControlProfileError({
-                    operation: "switch-thread-owner",
-                    reason: "thread-busy",
-                    detail: "Wait for the active provider turn to finish before changing owner.",
-                    profileId: input.sourceControlProfileId,
-                    threadId: input.threadId,
-                  });
-                }
-
-                if (thread.session !== null && thread.session.status !== "stopped") {
-                  yield* providerService.stopSession({ threadId: input.threadId }).pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "switch-thread-owner",
-                          reason: "thread-busy",
-                          detail: "The provider session could not be stopped safely.",
-                          profileId: input.sourceControlProfileId,
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                }
-                yield* terminalManager.close({ threadId: input.threadId }).pipe(
-                  Effect.mapError(
-                    () =>
-                      new SourceControlProfileError({
-                        operation: "switch-thread-owner",
-                        reason: "thread-busy",
-                        detail: "The thread's terminals could not be closed safely.",
-                        profileId: input.sourceControlProfileId,
-                        threadId: input.threadId,
-                      }),
-                  ),
-                );
-
-                const changedAt = yield* nowIso;
-                const ownerCommandId = CommandId.make(
-                  yield* crypto.randomUUIDv4.pipe(Effect.orDie),
-                );
-                yield* orchestrationEngine
-                  .dispatch({
-                    type: "thread.source-control-profile.set",
-                    commandId: ownerCommandId,
-                    threadId: input.threadId,
-                    sourceControlProfileId: input.sourceControlProfileId,
-                    createdAt: changedAt,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "switch-thread-owner",
-                          reason: "thread-busy",
-                          detail: "Thread state changed while its owner was being switched.",
-                          profileId: input.sourceControlProfileId,
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                yield* orchestrationEngine
-                  .dispatch({
-                    type: "thread.activity.append",
-                    commandId: CommandId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
-                    threadId: input.threadId,
-                    activity: {
-                      id: EventId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
-                      tone: "info",
-                      kind: "source-control.owner-changed",
-                      summary: `GitHub owner changed from ${thread.sourceControlProfileId ?? "unassigned"} to @${target.login}`,
-                      payload: {
-                        previousSourceControlProfileId: thread.sourceControlProfileId,
-                        sourceControlProfileId: input.sourceControlProfileId,
-                        login: target.login,
-                        initiatingSessionId: currentSessionId,
-                      },
-                      turnId: null,
-                      createdAt: changedAt,
-                    },
-                    createdAt: changedAt,
-                  })
-                  .pipe(Effect.ignore({ log: true }));
-                // Close again after projection to catch a terminal that raced the
-                // pre-switch cleanup. New opens resolve the new owner.
-                yield* terminalManager.close({ threadId: input.threadId }).pipe(Effect.ignore);
-                return target;
-              });
-              const switchResult = yield* sourceControlActionLock.tryRunExclusive(
-                input.threadId,
-                switchProgram,
-              );
-              if (Option.isNone(switchResult)) {
-                return yield* new SourceControlProfileError({
-                  operation: "switch-thread-owner",
-                  reason: "thread-busy",
-                  detail: "Wait for the active turn or Git action to finish before changing owner.",
-                  profileId: input.sourceControlProfileId,
-                  threadId: input.threadId,
-                });
-              }
-              return switchResult.value;
-            }),
+            // T3-CUSTOM(expbkt3): GitHub identity follows durable T3
+            // ownership. Keep this RPC decodable for older clients.
+            Effect.fail(
+              new SourceControlProfileError({
+                operation: "switch-thread-owner",
+                reason: "validation-failed",
+                detail:
+                  "GitHub identity follows the durable thread owner. Transfer thread ownership instead.",
+                profileId: input.sourceControlProfileId,
+                threadId: input.threadId,
+              }),
+            ),
             { "rpc.aggregate": "source-control-profile" },
           ),
         [WS_METHODS.sourceControlConvertRemote]: (input) =>
@@ -2403,7 +2375,7 @@ const makeWsRpcLayer = (
                 }
                 const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
                   input.threadId,
-                  threadOption.value.sourceControlProfileId,
+                  threadOption.value.ownerUserId,
                 );
                 const environment = context?.environment ?? process.env;
                 const current = yield* gitVcsDriver

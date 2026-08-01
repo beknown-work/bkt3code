@@ -87,7 +87,7 @@ describe("applyAssignedSourceControlProfile", () => {
     }
   });
 
-  it("preserves an explicit owner selection", () => {
+  it("overrides an explicit profile with the creator's assigned profile", () => {
     const command = applyAssignedSourceControlProfile(
       createThreadCommand(explicitProfileId),
       assignedProfileId,
@@ -95,12 +95,21 @@ describe("applyAssignedSourceControlProfile", () => {
 
     expect(command.type).toBe("thread.create");
     if (command.type === "thread.create") {
-      expect(command.sourceControlProfileId).toBe(explicitProfileId);
+      expect(command.sourceControlProfileId).toBe(assignedProfileId);
     }
   });
 
   it("leaves creation unowned when the authenticated user has no assignment", () => {
     const command = applyAssignedSourceControlProfile(createThreadCommand(null), null);
+
+    expect(command.type).toBe("thread.create");
+    if (command.type === "thread.create") {
+      expect(command.sourceControlProfileId).toBeNull();
+    }
+  });
+
+  it("rejects a client-selected profile when there is no authenticated user assignment", () => {
+    const command = applyAssignedSourceControlProfile(createThreadCommand(explicitProfileId), null);
 
     expect(command.type).toBe("thread.create");
     if (command.type === "thread.create") {

@@ -22,7 +22,6 @@ import {
   type ProjectId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
-  type SourceControlProfileId,
   type SourceControlRepositoryInfo,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
@@ -566,9 +565,6 @@ function OpenCommandPaletteDialog(props: {
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
     reportFailure: false,
   });
-  const setSourceControlThreadOwner = useAtomCommand(sourceControlEnvironment.setThreadOwner, {
-    reportFailure: false,
-  });
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -614,7 +610,6 @@ function OpenCommandPaletteDialog(props: {
   );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
-  const [cloneProfileId, setCloneProfileId] = useState<SourceControlProfileId | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
   const projectGroupingSettings = useMemo(
@@ -772,6 +767,8 @@ function OpenCommandPaletteDialog(props: {
       desktopLocalBootstraps.find((bootstrap) => bootstrap.httpBaseUrl === displayUrl)?.id ?? null
     );
   }, [browseEnvironment, browseEnvironmentIsDesktopLocal, desktopLocalBootstraps]);
+  // T3-CUSTOM(expbkt3): clone identity comes from the signed-in user, so the
+  // palette discovers repositories without exposing a profile selector.
   const sourceControlDiscovery = useEnvironmentQuery(
     browseEnvironmentId === null
       ? null
@@ -780,27 +777,6 @@ function OpenCommandPaletteDialog(props: {
           input: {},
         }),
   );
-  const sourceControlProfiles = useEnvironmentQuery(
-    browseEnvironmentId === null
-      ? null
-      : sourceControlEnvironment.profiles({ environmentId: browseEnvironmentId, input: {} }),
-  );
-  const assignableSourceControlProfiles = useMemo(
-    () =>
-      (sourceControlProfiles.data?.profiles ?? []).filter(
-        (profile) => !profile.archived && profile.credentialStatus === "connected",
-      ),
-    [sourceControlProfiles.data?.profiles],
-  );
-  const sourceControlIdentityMode = sourceControlProfiles.data?.identityMode ?? "machine";
-  useEffect(() => {
-    if (sourceControlIdentityMode !== "thread-profile") {
-      return;
-    }
-    if (!assignableSourceControlProfiles.some((profile) => profile.id === cloneProfileId)) {
-      setCloneProfileId(assignableSourceControlProfiles[0]?.id ?? null);
-    }
-  }, [assignableSourceControlProfiles, cloneProfileId, sourceControlIdentityMode]);
   const browseEnvironmentPlatform = getEnvironmentBrowsePlatform(
     browseEnvironment?.serverConfig?.environment.platform.os,
   );
@@ -841,24 +817,6 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadId = activeThread?.id;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
-  const activeThreadProfilesQuery = useEnvironmentQuery(
-    activeThread && currentProjectEnvironmentId
-      ? sourceControlEnvironment.profiles({
-          environmentId: currentProjectEnvironmentId,
-          input: {},
-        })
-      : null,
-  );
-  const activeThreadAssignableProfiles = useMemo(
-    () =>
-      (activeThreadProfilesQuery.data?.profiles ?? []).filter(
-        (profile) =>
-          !profile.archived &&
-          profile.credentialStatus === "connected" &&
-          profile.id !== activeThread?.sourceControlProfileId,
-      ),
-    [activeThread?.sourceControlProfileId, activeThreadProfilesQuery.data?.profiles],
-  );
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
   const currentProjectCwd = currentProjectId
     ? (projectCwdById.get(currentProjectId) ?? null)
@@ -1514,67 +1472,6 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  if (
-    activeThread &&
-    activeThreadProfilesQuery.data?.identityMode === "thread-profile" &&
-    activeThreadAssignableProfiles.length > 0
-  ) {
-    actionItems.push({
-      kind: "submenu",
-      value: "action:change-github-owner",
-      searchTerms: ["github", "source control", "identity", "owner", "profile", "change"],
-      title: "Change GitHub owner",
-      description: "Restart the thread under another GitHub profile",
-      icon: <GitHubIcon className={ITEM_ICON_CLASS} />,
-      addonIcon: <GitHubIcon className={ADDON_ICON_CLASS} />,
-      groups: [
-        {
-          value: "github-profiles",
-          label: "GitHub profiles",
-          items: activeThreadAssignableProfiles.map((profile) => ({
-            kind: "action",
-            value: `action:change-github-owner:${profile.id}`,
-            searchTerms: [profile.label, profile.login, "github", "owner", "profile"],
-            title: profile.label,
-            description: `@${profile.login}`,
-            icon: <GitHubIcon className={ITEM_ICON_CLASS} />,
-            run: async () => {
-              if (
-                !window.confirm(
-                  `Change this thread's GitHub owner to @${profile.login}? The provider session and terminals will restart. Earlier commits and pull requests keep their original attribution.`,
-                )
-              ) {
-                return;
-              }
-              const result = await setSourceControlThreadOwner({
-                environmentId: activeThread.environmentId,
-                input: {
-                  threadId: activeThread.id,
-                  sourceControlProfileId: profile.id,
-                },
-              });
-              if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-                const error = squashAtomCommandFailure(result);
-                toastManager.add(
-                  stackedThreadToast({
-                    type: "error",
-                    title: "Could not change GitHub owner",
-                    description:
-                      error instanceof Error
-                        ? error.message
-                        : "Try again after the thread is idle.",
-                  }),
-                );
-                return;
-              }
-              setOpen(false);
-            },
-          })),
-        },
-      ],
-    });
-  }
-
   actionItems.push({
     kind: "action",
     value: "action:source-control-settings",
@@ -1830,7 +1727,6 @@ function OpenCommandPaletteDialog(props: {
         input: {
           provider,
           repository: rawRepository,
-          ...(cloneProfileId ? { sourceControlProfileId: cloneProfileId } : {}),
         },
       });
       setIsRemoteProjectLookingUp(false);
@@ -1854,8 +1750,9 @@ function OpenCommandPaletteDialog(props: {
         source: addProjectCloneFlow.source,
         repositoryInput: rawRepository,
         repository,
-        remoteUrl:
-          provider === "github" && cloneProfileId !== null ? repository.url : repository.sshUrl,
+        // T3-CUSTOM(expbkt3): GitHub identity is resolved from the signed-in
+        // user, so collaborative clones always use token-free HTTPS remotes.
+        remoteUrl: provider === "github" ? repository.url : repository.sshUrl,
       });
       setHighlightedItemValue(null);
       setQuery(destinationPath);
@@ -1904,7 +1801,6 @@ function OpenCommandPaletteDialog(props: {
       input: {
         remoteUrl: addProjectCloneFlow.remoteUrl,
         destinationPath,
-        ...(cloneProfileId ? { sourceControlProfileId: cloneProfileId } : {}),
       },
     });
     setIsRemoteProjectCloning(false);
@@ -2038,8 +1934,7 @@ function OpenCommandPaletteDialog(props: {
     addProjectCloneFlow?.step === "repository" &&
     query.trim().length > 0 &&
     canCreateProjectInEnvironment(browseEnvironment?.connection.phase) &&
-    !isRemoteProjectPending &&
-    (sourceControlIdentityMode !== "thread-profile" || cloneProfileId !== null);
+    !isRemoteProjectPending;
   const fileManagerName = getLocalFileManagerName(navigator.platform);
   const canOpenProjectFromFileManager =
     isBrowsing &&
@@ -2417,31 +2312,6 @@ function OpenCommandPaletteDialog(props: {
               </span>
             </span>
           </div>
-        </div>
-      ) : null}
-      {addProjectCloneFlow && sourceControlIdentityMode === "thread-profile" ? (
-        <div className="px-4 pt-2">
-          <label className="flex items-center gap-2 text-muted-foreground text-xs">
-            GitHub identity
-            <select
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-foreground"
-              value={cloneProfileId ?? ""}
-              onChange={(event) =>
-                setCloneProfileId(
-                  (event.currentTarget.value as SourceControlProfileId | "") || null,
-                )
-              }
-            >
-              <option value="" disabled>
-                Select a connected profile
-              </option>
-              {assignableSourceControlProfiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.label} (@{profile.login})
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       ) : null}
       <CommandPaletteResults

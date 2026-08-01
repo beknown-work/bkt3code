@@ -242,9 +242,9 @@ function EnvironmentProfiles(props: {
   const confirmModeChange = () => {
     const nextMode = mode === "machine" ? "thread-profile" : "machine";
     Alert.alert(
-      nextMode === "thread-profile" ? "Enable per-thread identity?" : "Use machine identity?",
+      nextMode === "thread-profile" ? "Use user GitHub identities?" : "Use machine identity?",
       nextMode === "thread-profile"
-        ? "New and existing threads will need a connected GitHub owner. GitHub writes fail closed when no owner is assigned."
+        ? "Each new thread is owned by its creator automatically. Existing threads keep their durable owner, and GitHub activity uses the profile assigned to that user."
         : "Git and GitHub commands may use the environment's shared machine credentials.",
       [
         { text: "Cancel", style: "cancel" },
@@ -389,7 +389,7 @@ function EnvironmentProfiles(props: {
           <View className="min-w-0 flex-1 gap-1">
             <Text className="text-base font-t3-bold">Attribution mode</Text>
             <Text className="text-xs text-foreground-muted">
-              {mode === "thread-profile" ? "Per-thread GitHub profile" : "Machine credentials"}
+              {mode === "thread-profile" ? "Thread owner's GitHub profile" : "Machine credentials"}
             </Text>
           </View>
           <Text className="text-sm text-foreground-muted">Change</Text>

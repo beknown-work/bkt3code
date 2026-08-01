@@ -12,7 +12,6 @@ import {
   type ServerProvider,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
-  type SourceControlProfileId,
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
@@ -221,6 +220,7 @@ import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
+import { useCurrentUserId } from "../state/identity";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
@@ -1199,9 +1199,6 @@ function ChatViewContent(props: ChatViewProps) {
   const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, {
     reportFailure: false,
   });
-  const setSourceControlThreadOwner = useAtomCommand(sourceControlEnvironment.setThreadOwner, {
-    reportFailure: false,
-  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1232,12 +1229,7 @@ function ChatViewContent(props: ChatViewProps) {
   const sourceControlProfilesQuery = useEnvironmentQuery(
     sourceControlEnvironment.profiles({ environmentId, input: {} }),
   );
-  const [draftSourceControlProfileId, setDraftSourceControlProfileId] =
-    useState<SourceControlProfileId | null>(null);
-  useEffect(() => {
-    const stored = window.localStorage.getItem(`t3:last-source-control-profile:${environmentId}`);
-    setDraftSourceControlProfileId(stored ? (stored as SourceControlProfileId) : null);
-  }, [draftId, environmentId]);
+  const currentUserId = useCurrentUserId();
   const routeServerThreadShell = useThreadShell(routeKind === "server" ? routeThreadRef : null);
   const serverThread = useThread(routeThreadRef, { waitForShell: draftThread !== null });
   const loadingServerThread = useMemo(
@@ -1491,52 +1483,19 @@ function ChatViewContent(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const sourceControlProfiles = sourceControlProfilesQuery.data?.profiles ?? [];
   const sourceControlIdentityMode = sourceControlProfilesQuery.data?.identityMode ?? "machine";
-  const assignableSourceControlProfiles = sourceControlProfiles.filter(
-    (profile) => !profile.archived && profile.credentialStatus === "connected",
-  );
-  const defaultSourceControlProfileId =
-    assignableSourceControlProfiles.find((profile) => profile.id === draftSourceControlProfileId)
-      ?.id ??
-    assignableSourceControlProfiles[0]?.id ??
-    null;
-  const activeSourceControlProfileId = isServerThread
-    ? (activeThread?.sourceControlProfileId ?? null)
-    : sourceControlIdentityMode === "thread-profile"
-      ? defaultSourceControlProfileId
+  // T3-CUSTOM(expbkt3): draft identity follows its creator; persisted thread
+  // identity follows the durable owner projected by the server.
+  const sourceControlOwnerUserId = isServerThread
+    ? (activeThread?.ownerUserId ?? null)
+    : currentUserId;
+  const activeSourceControlProfileId =
+    sourceControlIdentityMode === "thread-profile" && sourceControlOwnerUserId !== null
+      ? (sourceControlProfiles.find(
+          (profile) =>
+            profile.ownerUserId !== null &&
+            String(profile.ownerUserId) === String(sourceControlOwnerUserId),
+        )?.id ?? null)
       : null;
-  const handleSourceControlProfileChange = useCallback(
-    async (profileId: SourceControlProfileId) => {
-      window.localStorage.setItem(`t3:last-source-control-profile:${environmentId}`, profileId);
-      if (!isServerThread) {
-        setDraftSourceControlProfileId(profileId);
-        return;
-      }
-      if (!activeThread || activeThread.sourceControlProfileId === profileId) return;
-      if (
-        !window.confirm(
-          "Change this thread's GitHub owner? The provider session and terminals will restart. Earlier commits and pull requests keep their original attribution.",
-        )
-      ) {
-        return;
-      }
-      const result = await setSourceControlThreadOwner({
-        environmentId,
-        input: { threadId: activeThread.id, sourceControlProfileId: profileId },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not change GitHub owner",
-            description:
-              error instanceof Error ? error.message : "Try again after the thread is idle.",
-          }),
-        );
-      }
-    },
-    [activeThread, environmentId, isServerThread, setSourceControlThreadOwner],
-  );
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   const runningTerminalIds = useThreadRunningTerminalIds({
@@ -6029,9 +5988,6 @@ function ChatViewContent(props: ChatViewProps) {
             sourceControlIdentityMode={sourceControlIdentityMode}
             sourceControlProfiles={sourceControlProfiles}
             sourceControlProfileId={activeSourceControlProfileId}
-            onSourceControlProfileChange={(profileId) => {
-              void handleSourceControlProfileChange(profileId);
-            }}
             onNewThreadInProject={handleNewThreadInActiveProject}
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}

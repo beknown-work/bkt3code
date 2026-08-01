@@ -45,7 +45,6 @@ interface ChatHeaderProps {
   sourceControlIdentityMode: SourceControlIdentityMode;
   sourceControlProfiles: ReadonlyArray<GitHubSourceControlProfile>;
   sourceControlProfileId: SourceControlProfileId | null;
-  onSourceControlProfileChange: (profileId: SourceControlProfileId) => void;
   onNewThreadInProject: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
@@ -85,7 +84,6 @@ export const ChatHeader = memo(function ChatHeader({
   sourceControlIdentityMode,
   sourceControlProfiles,
   sourceControlProfileId,
-  onSourceControlProfileChange,
   onNewThreadInProject,
   onRunProjectScript,
   onAddProjectScript,
@@ -177,33 +175,16 @@ export const ChatHeader = memo(function ChatHeader({
                 referrerPolicy="no-referrer"
               />
             ) : null}
-            <select
-              aria-label="GitHub thread owner"
-              className="h-7 max-w-40 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              value={sourceControlProfileId ?? ""}
-              onChange={(event) => {
-                const profile = sourceControlProfiles.find(
-                  (candidate) => candidate.id === event.currentTarget.value,
-                );
-                if (profile) onSourceControlProfileChange(profile.id);
-              }}
+            {/* T3-CUSTOM(expbkt3): identity is read-only here and follows the
+                durable thread owner managed through Users. */}
+            <span
+              className="max-w-40 truncate text-xs text-muted-foreground"
+              aria-label="Thread owner's GitHub identity"
             >
-              <option value="" disabled>
-                Select GitHub owner
-              </option>
-              {sourceControlProfiles
-                .filter((profile) => !profile.archived)
-                .map((profile) => (
-                  <option
-                    key={profile.id}
-                    value={profile.id}
-                    disabled={profile.credentialStatus !== "connected"}
-                  >
-                    @{profile.login}
-                    {profile.credentialStatus !== "connected" ? " — reconnect" : ""}
-                  </option>
-                ))}
-            </select>
+              {selectedSourceControlProfile
+                ? `@${selectedSourceControlProfile.login}`
+                : "Owner needs GitHub"}
+            </span>
           </div>
         ) : null}
         {activeProjectScripts && (

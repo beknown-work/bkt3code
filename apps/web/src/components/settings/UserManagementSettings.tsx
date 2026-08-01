@@ -198,10 +198,10 @@ export function UserManagementSettingsPanel() {
           </div>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-sm font-medium">Require a GitHub owner per thread</p>
+              <p className="text-sm font-medium">Use each thread owner's GitHub identity</p>
               <p className="text-xs text-muted-foreground">
-                Commits, pushes, pull requests, reviews, terminals, and agents use that owner's
-                profile and never fall back to the machine account.
+                The creator owns a new thread automatically. GitHub activity always follows the
+                durable owner's profile assigned below and never falls back to the machine account.
               </p>
             </div>
             <Switch

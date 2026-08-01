@@ -779,8 +779,9 @@ const make = Effect.gen(function* () {
     if (rolledBackTurns > 0) {
       const sourceControlContext = yield* Option.match(sourceControlProfiles, {
         onNone: () => Effect.succeed(null),
+        // T3-CUSTOM(expbkt3): attribution follows durable thread ownership.
         onSome: (profiles) =>
-          profiles.resolveThreadExecutionContext(thread.id, thread.sourceControlProfileId, {}),
+          profiles.resolveThreadExecutionContext(thread.id, thread.ownerUserId, {}),
       });
       const rollbackInput = {
         threadId: sessionRuntime.value.threadId,

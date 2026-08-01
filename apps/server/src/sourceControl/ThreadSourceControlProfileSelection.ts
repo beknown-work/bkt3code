@@ -4,16 +4,10 @@ export function applyAssignedSourceControlProfile(
   command: OrchestrationCommand,
   assignedProfileId: SourceControlProfileId | null,
 ): OrchestrationCommand {
-  if (assignedProfileId === null) {
-    return command;
-  }
-  if (command.type === "thread.create" && command.sourceControlProfileId === null) {
+  if (command.type === "thread.create") {
     return { ...command, sourceControlProfileId: assignedProfileId };
   }
-  if (
-    command.type === "thread.turn.start" &&
-    command.bootstrap?.createThread?.sourceControlProfileId === null
-  ) {
+  if (command.type === "thread.turn.start" && command.bootstrap?.createThread) {
     return {
       ...command,
       bootstrap: {
