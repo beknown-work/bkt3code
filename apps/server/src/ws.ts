@@ -1085,25 +1085,26 @@ const makeWsRpcLayer = (
       const resolveThreadSourceControlEnvironment = Effect.fn(
         "ws.resolveThreadSourceControlEnvironment",
       )(function* (threadId: ThreadId | undefined) {
-        if (threadId === undefined) {
-          const settings = yield* serverSettings.getSettings.pipe(
-            Effect.mapError(
-              () =>
-                new SourceControlProfileError({
-                  operation: "resolve-thread-profile",
-                  reason: "profile-persist-failed",
-                  detail: "Could not read source-control identity settings.",
-                }),
-            ),
-          );
-          if (settings.sourceControlIdentityMode === "thread-profile") {
-            return yield* new SourceControlProfileError({
-              operation: "resolve-thread-profile",
-              reason: "missing-profile",
-              detail: "This Git operation must identify its owning thread.",
-            });
-          }
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(
+            () =>
+              new SourceControlProfileError({
+                operation: "resolve-thread-profile",
+                reason: "profile-persist-failed",
+                detail: "Could not read source-control identity settings.",
+                ...(threadId !== undefined ? { threadId } : {}),
+              }),
+          ),
+        );
+        if (settings.sourceControlIdentityMode === "machine") {
           return null;
+        }
+        if (threadId === undefined) {
+          return yield* new SourceControlProfileError({
+            operation: "resolve-thread-profile",
+            reason: "missing-profile",
+            detail: "This Git operation must identify its owning thread.",
+          });
         }
 
         const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
@@ -1213,6 +1214,20 @@ const makeWsRpcLayer = (
       ): Effect.Effect<A, SourceControlProfileError> =>
         Effect.gen(function* () {
           const threadId = ThreadId.make(input.threadId);
+          const settings = yield* serverSettings.getSettings.pipe(
+            Effect.mapError(
+              () =>
+                new SourceControlProfileError({
+                  operation: "resolve-terminal-profile",
+                  reason: "profile-persist-failed",
+                  detail: "Could not read source-control identity settings.",
+                  threadId,
+                }),
+            ),
+          );
+          if (settings.sourceControlIdentityMode === "machine") {
+            return input;
+          }
           const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
             Effect.mapError(
               () =>
