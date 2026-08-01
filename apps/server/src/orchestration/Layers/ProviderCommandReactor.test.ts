@@ -366,7 +366,9 @@ describe("ProviderCommandReactor", () => {
         const engine = yield* OrchestrationEngineService;
         return {
           readEvents: engine.readEvents,
-          dispatch: (command) => {
+          // T3-CUSTOM(expbkt3): forward dispatch options; actorUserId rides on
+          // them and the fork's credential-handoff behaviour depends on it.
+          dispatch: (command, options) => {
             if (command.type === "thread.title.regeneration.complete") {
               titleRegenerationCompletionDispatchAttempts += 1;
               if (
@@ -376,7 +378,7 @@ describe("ProviderCommandReactor", () => {
                 return Effect.die(new Error("Injected title regeneration completion failure"));
               }
             }
-            return engine.dispatch(command);
+            return engine.dispatch(command, options);
           },
           get streamDomainEvents() {
             return engine.streamDomainEvents;

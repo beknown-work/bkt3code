@@ -383,9 +383,14 @@ export const T3DispatchCommandTool = mutatingTool(
     description:
       "External-operator escape hatch for advanced T3 automation. Dispatch any validated OrchestrationCommand through T3's durable command gate. Not available to an in-session agent; prefer the focused tools whenever possible.",
     parameters: Schema.Struct({
-      command: described(
-        Schema.Unknown,
-        "A complete OrchestrationCommand object conforming to the current T3 contracts schema.",
+      // Schema.Unknown drops a schema-level description in the generated JSON
+      // schema, so annotate the key instead — the agent needs to be told what
+      // to pass here.
+      command: Schema.Unknown.pipe(
+        Schema.annotateKey({
+          description:
+            "A complete OrchestrationCommand object conforming to the current T3 contracts schema.",
+        }),
       ),
     }),
     success: Schema.Unknown,
