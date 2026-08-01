@@ -1,13 +1,15 @@
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type SourceControlProfileId } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -48,6 +50,9 @@ import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
+import { useEnvironmentQuery } from "../../state/query";
+import { sourceControlEnvironment } from "../../state/sourceControl";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useCreateProjectThread } from "./use-project-actions";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
@@ -99,6 +104,50 @@ export function NewTaskDraftScreen(props: {
     connectedEnvironments.find(
       (environment) => environment.environmentId === selectedProject.environmentId,
     )?.connectionState === "connected";
+  const sourceControlProfilesQuery = useEnvironmentQuery(
+    selectedProject === null
+      ? null
+      : sourceControlEnvironment.profiles({
+          environmentId: selectedProject.environmentId,
+          input: {},
+        }),
+  );
+  const sourceControlIdentityMode = sourceControlProfilesQuery.data?.identityMode ?? "machine";
+  const mobilePreferences = useAtomValue(mobilePreferencesAtom);
+  const updateMobilePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const lastSourceControlProfileByEnvironment = AsyncResult.isSuccess(mobilePreferences)
+    ? (mobilePreferences.value.lastSourceControlProfileByEnvironment ?? {})
+    : {};
+  const assignableSourceControlProfiles = useMemo(
+    () =>
+      (sourceControlProfilesQuery.data?.profiles ?? []).filter(
+        (profile) => !profile.archived && profile.credentialStatus === "connected",
+      ),
+    [sourceControlProfilesQuery.data?.profiles],
+  );
+  const [sourceControlProfileId, setSourceControlProfileId] =
+    useState<SourceControlProfileId | null>(null);
+  useEffect(() => {
+    if (sourceControlIdentityMode !== "thread-profile") {
+      return;
+    }
+    if (!assignableSourceControlProfiles.some((profile) => profile.id === sourceControlProfileId)) {
+      const lastProfileId = selectedProject
+        ? lastSourceControlProfileByEnvironment[selectedProject.environmentId]
+        : undefined;
+      setSourceControlProfileId(
+        assignableSourceControlProfiles.find((profile) => profile.id === lastProfileId)?.id ??
+          assignableSourceControlProfiles[0]?.id ??
+          null,
+      );
+    }
+  }, [
+    assignableSourceControlProfiles,
+    lastSourceControlProfileByEnvironment,
+    selectedProject,
+    sourceControlIdentityMode,
+    sourceControlProfileId,
+  ]);
   const promptInputRef = useRef<ComposerEditorHandle>(null);
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -684,6 +733,19 @@ export function NewTaskDraftScreen(props: {
     flow.startFromOrigin,
     flow.workspaceMode,
   ]);
+  const sourceControlProfileMenuActions = useMemo(
+    () =>
+      assignableSourceControlProfiles.map((profile) => ({
+        id: `source-control-profile:${profile.id}`,
+        title: profile.label,
+        subtitle: `@${profile.login}`,
+        state: profile.id === sourceControlProfileId ? ("on" as const) : undefined,
+      })),
+    [assignableSourceControlProfiles, sourceControlProfileId],
+  );
+  const selectedSourceControlProfile =
+    assignableSourceControlProfiles.find((profile) => profile.id === sourceControlProfileId) ??
+    null;
 
   const selectedEnvironmentLabel =
     flow.environments.find(
@@ -718,6 +780,22 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     flow.selectEnvironment(EnvironmentId.make(event.slice("environment:".length)));
+  }
+
+  function handleSourceControlProfileMenuAction(event: string) {
+    if (!event.startsWith("source-control-profile:")) {
+      return;
+    }
+    const profileId = event.slice("source-control-profile:".length) as SourceControlProfileId;
+    setSourceControlProfileId(profileId);
+    if (selectedProject) {
+      updateMobilePreferences({
+        lastSourceControlProfileByEnvironment: {
+          ...lastSourceControlProfileByEnvironment,
+          [selectedProject.environmentId]: profileId,
+        },
+      });
+    }
   }
 
   function handleOptionsMenuAction(event: string) {
@@ -820,6 +898,7 @@ export function NewTaskDraftScreen(props: {
       !modelSelection ||
       initialMessageText.length === 0 ||
       flow.submitting ||
+      (sourceControlIdentityMode === "thread-profile" && sourceControlProfileId === null) ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
       return;
@@ -839,7 +918,7 @@ export function NewTaskDraftScreen(props: {
             createdAt: editingPendingTask.createdAt,
           }
         : makeTurnCommandMetadata();
-      const message = flow.buildPendingTaskMessage(metadata);
+      const message = flow.buildPendingTaskMessage(metadata, sourceControlProfileId ?? undefined);
       if (!message) {
         return;
       }
@@ -885,6 +964,7 @@ export function NewTaskDraftScreen(props: {
       startFromOrigin,
       runtimeMode,
       interactionMode,
+      sourceControlProfileId,
       initialMessageText,
       initialAttachments: draft.attachments,
       ...(editingPendingTask
@@ -956,6 +1036,7 @@ export function NewTaskDraftScreen(props: {
     isIncomingShareReady &&
     !isImportingShare &&
     !flow.submitting &&
+    (sourceControlIdentityMode !== "thread-profile" || sourceControlProfileId !== null) &&
     !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
   const promptEditor = (
     <ComposerEditor
@@ -1046,6 +1127,25 @@ export function NewTaskDraftScreen(props: {
           label={workspaceLabel}
         />
       </ControlPillMenu>
+      {sourceControlIdentityMode === "thread-profile" ? (
+        <ControlPillMenu
+          actions={sourceControlProfileMenuActions}
+          onPressAction={({ nativeEvent }) =>
+            handleSourceControlProfileMenuAction(nativeEvent.event)
+          }
+        >
+          <ComposerToolbarTrigger
+            accessibilityLabel="GitHub identity"
+            disabled={isIncomingShareTransferPending}
+            icon="person.crop.circle"
+            label={
+              selectedSourceControlProfile
+                ? `@${selectedSourceControlProfile.login}`
+                : "GitHub owner"
+            }
+          />
+        </ControlPillMenu>
+      ) : null}
     </>
   );
 

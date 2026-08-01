@@ -75,6 +75,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
@@ -3325,7 +3326,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   };
 
   const startSession: ClaudeAdapterShape["startSession"] = Effect.fn("startSession")(
-    function* (input) {
+    function* (input, executionOptions) {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -3359,6 +3360,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
+      const sessionEnvironment = executionOptions?.environment
+        ? mergeSourceControlEnvironment(claudeEnvironment, executionOptions.environment)
+        : claudeEnvironment;
       const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
       const sessionId = existingResumeSessionId ?? newSessionId;
 
@@ -3732,7 +3736,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         includePartialMessages: true,
         canUseTool,
         env: {
-          ...claudeEnvironment,
+          ...sessionEnvironment,
           ...(mcpSession
             ? {
                 T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),

@@ -43,7 +43,10 @@ import {
   ProviderValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterShape,
+  ProviderSessionExecutionOptions,
+} from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -90,27 +93,28 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
-  const startSession = vi.fn((input: ProviderSessionStartInput) =>
-    Effect.sync(() => {
-      const now = "2026-01-01T00:00:00.000Z";
-      const session: ProviderSession = {
-        provider,
-        ...(input.providerInstanceId !== undefined
-          ? { providerInstanceId: input.providerInstanceId }
-          : {}),
-        status: "ready",
-        runtimeMode: input.runtimeMode,
-        threadId: input.threadId,
-        resumeCursor: input.resumeCursor ?? {
-          opaque: `resume-${String(input.threadId)}`,
-        },
-        cwd: input.cwd ?? process.cwd(),
-        createdAt: now,
-        updatedAt: now,
-      };
-      sessions.set(session.threadId, session);
-      return session;
-    }),
+  const startSession = vi.fn(
+    (input: ProviderSessionStartInput, _options?: ProviderSessionExecutionOptions) =>
+      Effect.sync(() => {
+        const now = "2026-01-01T00:00:00.000Z";
+        const session: ProviderSession = {
+          provider,
+          ...(input.providerInstanceId !== undefined
+            ? { providerInstanceId: input.providerInstanceId }
+            : {}),
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          resumeCursor: input.resumeCursor ?? {
+            opaque: `resume-${String(input.threadId)}`,
+          },
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        };
+        sessions.set(session.threadId, session);
+        return session;
+      }),
   );
 
   const sendTurn = vi.fn(
@@ -900,6 +904,67 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       assert.equal(yield* provider.inspectSession(threadId), null);
       assert.equal(Exit.isFailure(yield* Fiber.await(startFiber)), true);
+    }),
+  );
+
+  it.effect("forwards the server-only source-control environment to the selected adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-source-control-environment");
+      const environment = {
+        GH_TOKEN: "alice-token",
+        GIT_AUTHOR_NAME: "Alice Example",
+      };
+
+      yield* provider.startSession(
+        threadId,
+        {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        },
+        { environment },
+      );
+
+      assert.deepEqual(routing.codex.startSession.mock.calls.at(-1)?.[1], { environment });
+      yield* provider.stopSession({ threadId });
+      routing.codex.startSession.mockClear();
+    }),
+  );
+
+  it.effect("fails closed when a profile-owned session recovery omits its environment", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-profile-recovery");
+      const environment = { GH_TOKEN: "alice-token", GIT_AUTHOR_NAME: "Alice Example" };
+      yield* provider.startSession(
+        threadId,
+        {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        },
+        { environment },
+      );
+      yield* routing.codex.stopAll();
+      routing.codex.startSession.mockClear();
+
+      const failure = yield* Effect.flip(
+        provider.sendTurn({ threadId, input: "resume", attachments: [] }),
+      );
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "without its source-control identity environment");
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+
+      yield* provider.sendTurn({ threadId, input: "resume", attachments: [] }, { environment });
+      assert.deepEqual(routing.codex.startSession.mock.calls.at(-1)?.[1], { environment });
+      yield* provider.stopSession({ threadId });
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
     }),
   );
 

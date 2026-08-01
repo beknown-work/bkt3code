@@ -64,6 +64,7 @@ const BASE_THREAD: OrchestrationThread = {
   },
   runtimeMode: "full-access",
   interactionMode: "default",
+  sourceControlProfileId: null,
   branch: "main",
   worktreePath: null,
   latestTurn: null,

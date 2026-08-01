@@ -270,6 +270,7 @@ export function useThreadOutboxDrain(): void {
           modelSelection,
           runtimeMode: queuedMessage.runtimeMode ?? DEFAULT_RUNTIME_MODE,
           interactionMode: queuedMessage.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
+          sourceControlProfileId: creation.sourceControlProfileId ?? null,
           workspaceMode: creation.workspaceMode,
           branch: creation.branch,
           worktreePath: creation.worktreePath,

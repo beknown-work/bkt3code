@@ -88,6 +88,14 @@ export function resolveClerkPublishableKey(): string | null {
   return resolveCloudPublicConfig().clerkPublishableKey;
 }
 
+export type AppClerkMode = "disabled" | "identity" | "cloud";
+
+export function resolveAppClerkMode(): AppClerkMode {
+  const config = resolveCloudPublicConfig();
+  if (!config.clerkPublishableKey) return "disabled";
+  return config.clerkJwtTemplate && config.relayUrl ? "cloud" : "identity";
+}
+
 export function resolveRelayClerkTokenOptions() {
   const { clerkJwtTemplate } = resolveCloudPublicConfig();
   if (!clerkJwtTemplate) {

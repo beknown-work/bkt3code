@@ -11,12 +11,8 @@ import "@fontsource/jetbrains-mono/500.css";
 import "./index.css";
 
 import { isElectron } from "./env";
-import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
-import {
-  hasClerkPublicConfig,
-  hasCloudPublicConfig,
-  resolveClerkPublishableKey,
-} from "./cloud/publicConfig";
+import { ManagedClerkIdentityAuthProvider, ManagedRelayAuthProvider } from "./cloud/managedAuth";
+import { resolveAppClerkMode, resolveClerkPublishableKey } from "./cloud/publicConfig";
 import { TeamIdentityBridge } from "./components/clerk/TeamIdentityBridge";
 import { getRouter } from "./router";
 import {
@@ -36,22 +32,25 @@ if (isElectron) {
 }
 
 const clerkPublishableKey = resolveClerkPublishableKey();
+const clerkMode = resolveAppClerkMode();
 
 const app = <AppRoot router={router} />;
+const authenticatedApp =
+  clerkMode === "cloud" ? <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider> : app;
 
-// Inside Clerk: mirror the signed-in user into the identity atom (team mode),
-// and keep the managed relay auth bridge only when full cloud config is present
-// (publish-only Clerk sign-in does not need the relay JWT template / relay URL).
+// Inside Clerk, expose the token to standalone identity binding and mirror the
+// signed-in user for the existing team-mode access controls. Full cloud builds
+// additionally activate the managed relay session.
 const clerkChildren = (
-  <>
+  <ManagedClerkIdentityAuthProvider>
     <TeamIdentityBridge />
-    {hasCloudPublicConfig() ? <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider> : app}
-  </>
+    {authenticatedApp}
+  </ManagedClerkIdentityAuthProvider>
 );
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {clerkPublishableKey && hasClerkPublicConfig() ? (
+    {clerkPublishableKey && clerkMode !== "disabled" ? (
       isElectron ? (
         <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
           {clerkChildren}

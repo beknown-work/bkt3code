@@ -54,6 +54,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/providers": BotIcon,
   "/settings/source-control": GitBranchIcon,
+  "/settings/users": UsersIcon,
   "/settings/connections": Link2Icon,
   // T3-CUSTOM(expbkt3): fork-only settings sections.
   "/settings/projects": FolderCogIcon,

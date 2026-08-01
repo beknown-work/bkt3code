@@ -44,6 +44,7 @@ const snapshot: OrchestrationShellSnapshot = {
       interactionMode: "default",
       branch: "feature/repair",
       worktreePath: "/work/bridge-feature",
+      sourceControlProfileId: null,
       latestTurn: null,
       ownerUserId: null,
       memberUserIds: [],

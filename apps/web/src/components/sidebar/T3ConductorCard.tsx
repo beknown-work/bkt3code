@@ -300,6 +300,7 @@ export function T3ConductorCard({
               interactionMode: conductor.interactionMode,
               branch: null,
               worktreePath: null,
+              sourceControlProfileId: null,
               createdAt,
             },
           },

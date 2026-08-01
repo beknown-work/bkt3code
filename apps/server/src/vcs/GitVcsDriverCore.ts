@@ -36,6 +36,10 @@ import {
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
 import { ServerConfig } from "../config.ts";
+import {
+  CurrentSourceControlExecutionEnvironment,
+  mergeSourceControlEnvironment,
+} from "../sourceControl/SourceControlExecutionEnvironment.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -105,6 +109,7 @@ type TraceTailState = {
 class StatusRemoteRefreshCacheKey extends Data.Class<{
   gitCommonDir: string;
   remoteName: string;
+  sourceControlProfileId: string | null;
 }> {}
 
 function statusUpstreamRefreshFailureCooldown(consecutiveFailures: number): Duration.Duration {
@@ -710,6 +715,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...input,
         args: [...input.args],
       } as const;
+      const sourceControlExecutionEnvironment = yield* CurrentSourceControlExecutionEnvironment;
       const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const appendTruncationMarker = input.appendTruncationMarker ?? false;
@@ -732,8 +738,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ChildProcess.make("git", commandInput.args, {
               cwd: commandInput.cwd,
               env: {
-                ...process.env,
-                ...input.env,
+                ...(sourceControlExecutionEnvironment
+                  ? mergeSourceControlEnvironment(
+                      { ...process.env, ...input.env },
+                      sourceControlExecutionEnvironment.environment,
+                    )
+                  : { ...process.env, ...input.env }),
                 ...trace2Monitor.env,
               },
             }),
@@ -1196,7 +1206,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const statusRemoteRefreshFailureCounts = new Map<string, number>();
   const statusRemoteRefreshFailureKey = (cacheKey: StatusRemoteRefreshCacheKey) =>
-    `${cacheKey.gitCommonDir}\0${cacheKey.remoteName}`;
+    `${cacheKey.gitCommonDir}\0${cacheKey.remoteName}\0${cacheKey.sourceControlProfileId ?? "machine"}`;
   const recordStatusRemoteRefreshFailure = (cacheKey: StatusRemoteRefreshCacheKey) => {
     const key = statusRemoteRefreshFailureKey(cacheKey);
     const nextCount = (statusRemoteRefreshFailureCounts.get(key) ?? 0) + 1;
@@ -1239,6 +1249,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const refreshStatusUpstreamIfStale = Effect.fn("refreshStatusUpstreamIfStale")(function* (
     cwd: string,
   ) {
+    const sourceControlExecutionEnvironment = yield* CurrentSourceControlExecutionEnvironment;
     const upstream = yield* resolveCurrentUpstream(cwd);
     if (!upstream) return;
     const gitCommonDir = yield* resolveGitCommonDir(cwd);
@@ -1247,6 +1258,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       new StatusRemoteRefreshCacheKey({
         gitCommonDir,
         remoteName: upstream.remoteName,
+        sourceControlProfileId: sourceControlExecutionEnvironment?.profileId ?? null,
       }),
     );
   });

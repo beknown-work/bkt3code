@@ -30,6 +30,7 @@ export interface Preferences {
    * see `resolveThreadListV2Enabled`.
    */
   readonly threadListV2Enabled?: boolean;
+  readonly lastSourceControlProfileByEnvironment?: Readonly<Record<string, string>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -81,6 +82,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     threadListV2Enabled?: boolean;
+    lastSourceControlProfileByEnvironment?: Readonly<Record<string, string>>;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -112,6 +114,17 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListV2Enabled === "boolean") {
     preferences.threadListV2Enabled = parsed.threadListV2Enabled;
+  }
+  if (
+    typeof parsed.lastSourceControlProfileByEnvironment === "object" &&
+    parsed.lastSourceControlProfileByEnvironment !== null &&
+    !Array.isArray(parsed.lastSourceControlProfileByEnvironment)
+  ) {
+    preferences.lastSourceControlProfileByEnvironment = Object.fromEntries(
+      Object.entries(parsed.lastSourceControlProfileByEnvironment).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
   }
   return preferences;
 }

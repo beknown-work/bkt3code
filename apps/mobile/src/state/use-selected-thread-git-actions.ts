@@ -16,6 +16,8 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { useBranches } from "../state/queries";
+import { useEnvironmentQuery } from "../state/query";
+import { sourceControlEnvironment } from "../state/sourceControl";
 import { threadEnvironment } from "../state/threads";
 import { vcsActionManager, vcsEnvironment } from "../state/vcs";
 import { uuidv4 } from "../lib/uuid";
@@ -36,11 +38,24 @@ export function useSelectedThreadGitActions() {
   const createWorktree = useAtomCommand(vcsEnvironment.createWorktree, { reportFailure: false });
   const pull = useAtomCommand(vcsEnvironment.pull, { reportFailure: false });
   const { selectedThread, selectedThreadProject } = useThreadSelection();
+  const sourceControlProfiles = useEnvironmentQuery(
+    selectedThread === null
+      ? null
+      : sourceControlEnvironment.profiles({
+          environmentId: selectedThread.environmentId,
+          input: {},
+        }),
+  );
+  const actingProfileLogin =
+    sourceControlProfiles.data?.profiles.find(
+      (profile) => profile.id === selectedThread?.sourceControlProfileId,
+    )?.login ?? null;
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const runStackedAction = useAtomCommand(
     vcsActionManager.runStackedAction({
       environmentId: selectedThread?.environmentId ?? null,
       cwd: selectedThreadCwd,
+      threadId: selectedThread?.id ?? null,
     }),
     { reportFailure: false },
   );
@@ -86,11 +101,15 @@ export function useSelectedThreadGitActions() {
         return null;
       }
 
-      const target = { environmentId: selectedThread.environmentId, cwd };
+      const target = {
+        environmentId: selectedThread.environmentId,
+        cwd,
+        threadId: selectedThread.id,
+      };
       const execute = () =>
         refreshStatus({
           environmentId: selectedThread.environmentId,
-          input: { cwd },
+          input: { cwd, threadId: selectedThread.id },
         });
       const result = options?.quiet
         ? await execute()
@@ -140,6 +159,7 @@ export function useSelectedThreadGitActions() {
       const target = {
         environmentId: selectedThread.environmentId,
         cwd: selectedThreadCwd,
+        threadId: selectedThread.id,
       };
       setPendingConnectionError(null);
       const run = () =>
@@ -299,7 +319,7 @@ export function useSelectedThreadGitActions() {
       async ({ thread, cwd }) => {
         const result = await pull({
           environmentId: thread.environmentId,
-          input: { cwd },
+          input: { cwd, threadId: thread.id },
         });
         if (AsyncResult.isFailure(result)) {
           return result;
@@ -373,6 +393,7 @@ export function useSelectedThreadGitActions() {
   );
 
   return {
+    actingProfileLogin,
     refreshSelectedThreadGitStatus,
     refreshSelectedThreadBranches,
     onCheckoutSelectedThreadBranch,

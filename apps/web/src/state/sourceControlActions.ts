@@ -15,6 +15,7 @@ import type {
   GitStackedAction,
   SourceControlCloneProtocol,
   SourceControlRepositoryVisibility,
+  SourceControlProfileId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -39,6 +40,8 @@ export type SourceControlActionKind =
 export interface SourceControlActionScope {
   readonly environmentId: EnvironmentId | null;
   readonly cwd: string | null;
+  readonly threadId?: ThreadId | null;
+  readonly sourceControlProfileId?: SourceControlProfileId | null;
 }
 
 interface SourceControlActionState<
@@ -123,6 +126,8 @@ function resolveScope(scope: SourceControlActionScope) {
   return {
     environmentId: scope.environmentId,
     cwd: scope.cwd,
+    threadId: scope.threadId ?? null,
+    sourceControlProfileId: scope.sourceControlProfileId ?? null,
   };
 }
 
@@ -167,7 +172,7 @@ export function useVcsPullAction(scope: SourceControlActionScope) {
     scope.environmentId !== null && scope.cwd !== null
       ? vcsEnvironment.status({
           environmentId: scope.environmentId,
-          input: { cwd: scope.cwd },
+          input: { cwd: scope.cwd, ...(scope.threadId ? { threadId: scope.threadId } : {}) },
         })
       : null,
   );
@@ -186,7 +191,7 @@ export function useVcsPullAction(scope: SourceControlActionScope) {
     }
     return pull({
       environmentId: target.environmentId,
-      input: { cwd: target.cwd },
+      input: { cwd: target.cwd, ...(target.threadId ? { threadId: target.threadId } : {}) },
     });
   }, [pull, scope]);
   return useAction({
@@ -206,7 +211,7 @@ export function useGitStackedAction(scope: SourceControlActionScope) {
     scope.environmentId !== null && scope.cwd !== null
       ? vcsEnvironment.status({
           environmentId: scope.environmentId,
-          input: { cwd: scope.cwd },
+          input: { cwd: scope.cwd, ...(scope.threadId ? { threadId: scope.threadId } : {}) },
         })
       : null,
   );
@@ -261,7 +266,7 @@ export function useSourceControlPublishRepositoryAction(scope: SourceControlActi
     scope.environmentId !== null && scope.cwd !== null
       ? vcsEnvironment.status({
           environmentId: scope.environmentId,
-          input: { cwd: scope.cwd },
+          input: { cwd: scope.cwd, ...(scope.threadId ? { threadId: scope.threadId } : {}) },
         })
       : null,
   );
@@ -289,6 +294,9 @@ export function useSourceControlPublishRepositoryAction(scope: SourceControlActi
         environmentId: target.environmentId,
         input: {
           cwd: target.cwd,
+          ...(target.sourceControlProfileId
+            ? { sourceControlProfileId: target.sourceControlProfileId }
+            : {}),
           ...input,
         },
       });
@@ -346,6 +354,7 @@ export interface PullRequestResolutionTarget {
   readonly environmentId: EnvironmentId | null;
   readonly cwd: string | null;
   readonly reference: string | null;
+  readonly threadId?: ThreadId | null;
 }
 
 export function readCachedPullRequestResolution(
@@ -359,7 +368,11 @@ export function readCachedPullRequestResolution(
       appAtomRegistry.get(
         gitEnvironment.pullRequestResolution({
           environmentId: target.environmentId,
-          input: { cwd: target.cwd, reference: target.reference },
+          input: {
+            cwd: target.cwd,
+            reference: target.reference,
+            ...(target.threadId ? { threadId: target.threadId } : {}),
+          },
         }),
       ),
     ),
@@ -374,6 +387,7 @@ export function usePullRequestResolutionState(target: PullRequestResolutionTarge
           input: {
             cwd: target.cwd,
             reference: target.reference,
+            ...(target.threadId ? { threadId: target.threadId } : {}),
           },
         })
       : null,

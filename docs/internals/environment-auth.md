@@ -28,6 +28,19 @@ managed relay connectivity:
 The desktop bootstrap credential and command-line administrative bootstrap
 credentials additionally grant `access:read access:write relay:write`.
 
+Scopes authorize a device session; they do not identify the human using it. When Clerk-backed user
+identity is present, the session also stores an `EnvironmentUserId` derived from the verified Clerk
+`sub` claim. `EnvironmentUserService` owns the durable local user directory, roles, blocked state,
+live presence, session revocation, and the one-to-one link to a source-control profile. Clerk remains
+the identity provider, while the environment remains authoritative for local administration.
+
+`environmentUserIdentityMode` controls admission. `optional` preserves compatibility with clients
+that do not submit identity. `required` rejects unidentified sessions and revokes unidentified
+legacy sessions when an administrator enables it. Invalid and blocked identities fail closed.
+Administrative user, profile, and identity-policy mutations require both the existing RPC scope and
+an active environment user with role `admin`; the last active administrator cannot be demoted or
+blocked.
+
 ## Authentication Flows
 
 ### Browser Session
@@ -55,6 +68,16 @@ Clients may additionally submit `client_label`, `client_device_type`, and
 device that established the session. These are presentation hints only; the
 environment derives transport metadata such as IP address and user agent from
 the request and does not use these fields for authorization.
+
+Managed clients may also submit the write-only `identity_token` extension. The server verifies it
+directly against Clerk and persists only normalized public claims plus the Clerk subject; the JWT is
+not stored. DPoP token caches are keyed by that subject, so switching Clerk accounts cannot reuse the
+previous user's environment access token.
+
+An already-authenticated browser upgrades through `POST /api/auth/identity`. The endpoint accepts a
+write-only Clerk token, verifies it, admits or refreshes the durable user, and binds the current
+environment session to that user. This avoids requiring existing desktop and browser users to
+manually re-pair after the user-directory migration.
 
 The response has the token-exchange shape:
 
@@ -133,6 +156,9 @@ records to scoped records. It deletes existing pairing links and sessions while
 leaving non-authentication environment state unchanged. Upgraded clients must
 pair again; old `owner` or `client` credentials are never silently mapped to new
 capabilities.
+
+Migration `037_EnvironmentUsers` creates the durable environment-user directory and adds nullable
+`user_id` attribution to auth sessions. It does not synthesize users from old device sessions.
 
 ## Relay Boundary
 

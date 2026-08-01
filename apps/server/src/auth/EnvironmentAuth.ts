@@ -9,6 +9,7 @@ import {
   type AuthClientSession,
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
+  type EnvironmentUserId,
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
@@ -60,6 +61,7 @@ export interface IssuedBearerSession {
 
 export interface AuthenticatedSession {
   readonly sessionId: AuthSessionId;
+  readonly userId: EnvironmentUserId | null;
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
@@ -414,6 +416,7 @@ export class EnvironmentAuth extends Context.Service<
     readonly createBrowserSession: (
       credential: string,
       requestMetadata: AuthClientMetadata,
+      input?: { readonly userId?: EnvironmentUserId },
     ) => Effect.Effect<
       {
         readonly response: AuthBrowserSessionResult;
@@ -449,6 +452,7 @@ export class EnvironmentAuth extends Context.Service<
       requestMetadata: AuthClientMetadata,
       input?: {
         readonly proofKeyThumbprint?: string;
+        readonly userId?: EnvironmentUserId;
       },
     ) => Effect.Effect<
       AuthAccessTokenResult,
@@ -602,6 +606,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map((session) => ({
         sessionId: session.sessionId,
+        userId: session.userId,
         subject: session.subject,
         method: session.method,
         scopes: session.scopes,
@@ -677,6 +682,7 @@ export const make = Effect.gen(function* () {
   const createBrowserSession: EnvironmentAuth["Service"]["createBrowserSession"] = (
     credential,
     requestMetadata,
+    input,
   ) =>
     bootstrapCredentials.consume(credential).pipe(
       Effect.mapError(toBootstrapExchangeError),
@@ -686,6 +692,7 @@ export const make = Effect.gen(function* () {
             method: "browser-session-cookie",
             subject: grant.subject,
             scopes: grant.scopes,
+            ...(input?.userId ? { userId: input.userId } : {}),
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -762,6 +769,7 @@ export const make = Effect.gen(function* () {
                       ttl: Duration.hours(1),
                     }
                   : {}),
+                ...(input?.userId ? { userId: input.userId } : {}),
                 client: {
                   ...requestMetadata,
                   ...(grant.label ? { label: grant.label } : {}),
@@ -1000,6 +1008,7 @@ export const make = Effect.gen(function* () {
           return yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
             Effect.map((session) => ({
               sessionId: session.sessionId,
+              userId: session.userId,
               subject: session.subject,
               method: session.method,
               scopes: session.scopes,

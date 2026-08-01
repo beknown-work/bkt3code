@@ -171,8 +171,26 @@ import {
   SourceControlRepositoryError,
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
+  GitHubSourceControlProfile,
+  SourceControlProfilesListResult,
+  SourceControlProfileUpsertInput,
+  SourceControlProfileIdInput,
+  SourceControlProfileReplaceCredentialInput,
+  SourceControlProfileArchiveInput,
+  SourceControlThreadOwnerSetInput,
+  SourceControlConvertRemoteInput,
+  SourceControlConvertRemoteResult,
+  SourceControlProfileError,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  EnvironmentUser,
+  EnvironmentUserDirectoryResult,
+  EnvironmentUserIdInput,
+  EnvironmentUserManagementError,
+  EnvironmentUserSourceControlProfileSetInput,
+  EnvironmentUserUpdateInput,
+} from "./users.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -266,6 +284,20 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  sourceControlProfilesList: "sourceControl.profiles.list",
+  sourceControlProfilesUpsert: "sourceControl.profiles.upsert",
+  sourceControlProfilesTest: "sourceControl.profiles.test",
+  sourceControlProfilesReplaceCredential: "sourceControl.profiles.replaceCredential",
+  sourceControlProfilesDisconnect: "sourceControl.profiles.disconnect",
+  sourceControlProfilesArchive: "sourceControl.profiles.archive",
+  sourceControlThreadOwnerSet: "sourceControl.threadOwner.set",
+  sourceControlConvertRemote: "sourceControl.remote.convertToHttps",
+
+  // Environment user management methods
+  usersList: "users.list",
+  usersUpdate: "users.update",
+  usersRevokeSessions: "users.revokeSessions",
+  usersSourceControlProfileSet: "users.sourceControlProfile.set",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -351,7 +383,11 @@ export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
 export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   payload: Schema.Struct({ patch: ServerSettingsPatch }),
   success: ServerSettings,
-  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    ServerSettingsError,
+    EnvironmentUserManagementError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_METHODS.personalMcpGetProfile, {
@@ -460,14 +496,22 @@ export const WsSourceControlLookupRepositoryRpc = Rpc.make(
   {
     payload: SourceControlRepositoryLookupInput,
     success: SourceControlRepositoryInfo,
-    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+    error: Schema.Union([
+      SourceControlRepositoryError,
+      SourceControlProfileError,
+      EnvironmentAuthorizationError,
+    ]),
   },
 );
 
 export const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceControlCloneRepository, {
   payload: SourceControlCloneRepositoryInput,
   success: SourceControlCloneRepositoryResult,
-  error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    SourceControlRepositoryError,
+    SourceControlProfileError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsSourceControlPublishRepositoryRpc = Rpc.make(
@@ -475,9 +519,111 @@ export const WsSourceControlPublishRepositoryRpc = Rpc.make(
   {
     payload: SourceControlPublishRepositoryInput,
     success: SourceControlPublishRepositoryResult,
-    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+    error: Schema.Union([
+      SourceControlRepositoryError,
+      SourceControlProfileError,
+      EnvironmentAuthorizationError,
+    ]),
   },
 );
+
+export const WsSourceControlProfilesListRpc = Rpc.make(WS_METHODS.sourceControlProfilesList, {
+  payload: Schema.Struct({}),
+  success: SourceControlProfilesListResult,
+  error: Schema.Union([SourceControlProfileError, EnvironmentAuthorizationError]),
+});
+
+export const WsSourceControlProfilesUpsertRpc = Rpc.make(WS_METHODS.sourceControlProfilesUpsert, {
+  payload: SourceControlProfileUpsertInput,
+  success: GitHubSourceControlProfile,
+  error: Schema.Union([
+    SourceControlProfileError,
+    EnvironmentUserManagementError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsSourceControlProfilesTestRpc = Rpc.make(WS_METHODS.sourceControlProfilesTest, {
+  payload: SourceControlProfileIdInput,
+  success: GitHubSourceControlProfile,
+  error: Schema.Union([
+    SourceControlProfileError,
+    EnvironmentUserManagementError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsSourceControlProfilesReplaceCredentialRpc = Rpc.make(
+  WS_METHODS.sourceControlProfilesReplaceCredential,
+  {
+    payload: SourceControlProfileReplaceCredentialInput,
+    success: GitHubSourceControlProfile,
+    error: Schema.Union([
+      SourceControlProfileError,
+      EnvironmentUserManagementError,
+      EnvironmentAuthorizationError,
+    ]),
+  },
+);
+
+export const WsSourceControlProfilesDisconnectRpc = Rpc.make(
+  WS_METHODS.sourceControlProfilesDisconnect,
+  {
+    payload: SourceControlProfileIdInput,
+    success: GitHubSourceControlProfile,
+    error: Schema.Union([
+      SourceControlProfileError,
+      EnvironmentUserManagementError,
+      EnvironmentAuthorizationError,
+    ]),
+  },
+);
+
+export const WsSourceControlProfilesArchiveRpc = Rpc.make(WS_METHODS.sourceControlProfilesArchive, {
+  payload: SourceControlProfileArchiveInput,
+  success: GitHubSourceControlProfile,
+  error: Schema.Union([
+    SourceControlProfileError,
+    EnvironmentUserManagementError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsSourceControlThreadOwnerSetRpc = Rpc.make(WS_METHODS.sourceControlThreadOwnerSet, {
+  payload: SourceControlThreadOwnerSetInput,
+  success: GitHubSourceControlProfile,
+  error: Schema.Union([SourceControlProfileError, EnvironmentAuthorizationError]),
+});
+
+export const WsSourceControlConvertRemoteRpc = Rpc.make(WS_METHODS.sourceControlConvertRemote, {
+  payload: SourceControlConvertRemoteInput,
+  success: SourceControlConvertRemoteResult,
+  error: Schema.Union([SourceControlProfileError, EnvironmentAuthorizationError]),
+});
+
+export const WsUsersListRpc = Rpc.make(WS_METHODS.usersList, {
+  payload: Schema.Struct({}),
+  success: EnvironmentUserDirectoryResult,
+  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
+});
+
+export const WsUsersUpdateRpc = Rpc.make(WS_METHODS.usersUpdate, {
+  payload: EnvironmentUserUpdateInput,
+  success: EnvironmentUser,
+  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
+});
+
+export const WsUsersRevokeSessionsRpc = Rpc.make(WS_METHODS.usersRevokeSessions, {
+  payload: EnvironmentUserIdInput,
+  success: EnvironmentUser,
+  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
+});
+
+export const WsUsersSourceControlProfileSetRpc = Rpc.make(WS_METHODS.usersSourceControlProfileSet, {
+  payload: EnvironmentUserSourceControlProfileSetInput,
+  success: EnvironmentUser,
+  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
+});
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
@@ -529,39 +675,59 @@ export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    GitManagerServiceError,
+    SourceControlProfileError,
+    EnvironmentAuthorizationError,
+  ]),
   stream: true,
 });
 
 export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
   payload: VcsPullInput,
   success: VcsPullResult,
-  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  error: Schema.Union([GitCommandError, SourceControlProfileError, EnvironmentAuthorizationError]),
 });
 
 export const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   payload: VcsStatusInput,
   success: VcsStatusResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    GitManagerServiceError,
+    SourceControlProfileError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsGitRunStackedActionRpc = Rpc.make(WS_METHODS.gitRunStackedAction, {
   payload: GitRunStackedActionInput,
   success: GitActionProgressEvent,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    GitManagerServiceError,
+    SourceControlProfileError,
+    EnvironmentAuthorizationError,
+  ]),
   stream: true,
 });
 
 export const WsGitResolvePullRequestRpc = Rpc.make(WS_METHODS.gitResolvePullRequest, {
   payload: GitPullRequestRefInput,
   success: GitResolvePullRequestResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    GitManagerServiceError,
+    SourceControlProfileError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullRequestThread, {
   payload: GitPreparePullRequestThreadInput,
   success: GitPreparePullRequestThreadResult,
-  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  error: Schema.Union([
+    GitManagerServiceError,
+    SourceControlProfileError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
@@ -612,13 +778,13 @@ export const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPrevie
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   payload: TerminalOpenInput,
   success: TerminalSessionSnapshot,
-  error: Schema.Union([TerminalError, EnvironmentAuthorizationError]),
+  error: Schema.Union([TerminalError, SourceControlProfileError, EnvironmentAuthorizationError]),
 });
 
 export const WsTerminalAttachRpc = Rpc.make(WS_METHODS.terminalAttach, {
   payload: TerminalAttachInput,
   success: TerminalAttachStreamEvent,
-  error: Schema.Union([TerminalError, EnvironmentAuthorizationError]),
+  error: Schema.Union([TerminalError, SourceControlProfileError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
@@ -640,7 +806,7 @@ export const WsTerminalClearRpc = Rpc.make(WS_METHODS.terminalClear, {
 export const WsTerminalRestartRpc = Rpc.make(WS_METHODS.terminalRestart, {
   payload: TerminalRestartInput,
   success: TerminalSessionSnapshot,
-  error: Schema.Union([TerminalError, EnvironmentAuthorizationError]),
+  error: Schema.Union([TerminalError, SourceControlProfileError, EnvironmentAuthorizationError]),
 });
 
 export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
@@ -887,6 +1053,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsSourceControlProfilesListRpc,
+  WsSourceControlProfilesUpsertRpc,
+  WsSourceControlProfilesTestRpc,
+  WsSourceControlProfilesReplaceCredentialRpc,
+  WsSourceControlProfilesDisconnectRpc,
+  WsSourceControlProfilesArchiveRpc,
+  WsSourceControlThreadOwnerSetRpc,
+  WsSourceControlConvertRemoteRpc,
+  WsUsersListRpc,
+  WsUsersUpdateRpc,
+  WsUsersRevokeSessionsRpc,
+  WsUsersSourceControlProfileSetRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,

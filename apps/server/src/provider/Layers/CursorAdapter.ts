@@ -43,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   ProviderAdapterProcessError,
@@ -484,7 +485,7 @@ export function makeCursorAdapter(
         });
       }).pipe(Effect.onError(() => Effect.sync(() => (ctx.stopped = false))));
 
-    const startSession: CursorAdapterShape["startSession"] = (input) =>
+    const startSession: CursorAdapterShape["startSession"] = (input, executionOptions) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -540,9 +541,15 @@ export function makeCursorAdapter(
             : cursorSettings;
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const sessionEnvironment = executionOptions?.environment
+            ? mergeSourceControlEnvironment(
+                options?.environment ?? process.env,
+                executionOptions.environment,
+              )
+            : options?.environment;
           const acp = yield* makeCursorAcpRuntime({
             cursorSettings: effectiveCursorSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),

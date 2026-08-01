@@ -12,6 +12,12 @@ import {
   RuntimeMode,
 } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  GitHubSourceControlProfileMetadata,
+  SourceControlIdentityMode,
+  SourceControlProfileId,
+} from "./sourceControl.ts";
+import { EnvironmentUserIdentityMode } from "./users.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -613,6 +619,16 @@ export const ServerSettings = Schema.Struct({
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  sourceControlIdentityMode: SourceControlIdentityMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("machine" as const)),
+  ),
+  environmentUserIdentityMode: EnvironmentUserIdentityMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("optional" as const)),
+  ),
+  sourceControlProfiles: Schema.Record(
+    SourceControlProfileId,
+    GitHubSourceControlProfileMetadata,
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -757,6 +773,11 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  sourceControlIdentityMode: Schema.optionalKey(SourceControlIdentityMode),
+  environmentUserIdentityMode: Schema.optionalKey(EnvironmentUserIdentityMode),
+  sourceControlProfiles: Schema.optionalKey(
+    Schema.Record(SourceControlProfileId, GitHubSourceControlProfileMetadata),
+  ),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

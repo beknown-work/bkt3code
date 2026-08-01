@@ -74,6 +74,7 @@ export function applyThreadDetailEvent(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          sourceControlProfileId: event.payload.sourceControlProfileId,
           latestTurn: null,
           ownerUserId: event.payload.createdByUserId ?? null,
           memberUserIds: [],
@@ -97,6 +98,18 @@ export function applyThreadDetailEvent(
 
     case "thread.deleted":
       return { kind: "deleted" };
+
+    case "thread.source-control-profile-set":
+      return event.payload.threadId === thread.id
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              sourceControlProfileId: event.payload.sourceControlProfileId,
+              updatedAt: event.payload.changedAt,
+            },
+          }
+        : { kind: "unchanged" };
 
     case "thread.archived":
       return {

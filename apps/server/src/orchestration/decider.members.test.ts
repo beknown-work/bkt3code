@@ -74,6 +74,7 @@ const seedReadModel = Effect.gen(function* () {
       branch: null,
       worktreePath: null,
       createdByUserId: OWNER,
+      sourceControlProfileId: null,
       createdAt: NOW,
       updatedAt: NOW,
     },
