@@ -11,14 +11,11 @@ import {
   type OrchestrationCommand,
   type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -89,377 +86,263 @@ function makeThreadShell(threadId: ThreadId, archivedAt: string | null = null) {
   };
 }
 
+function makeHarness(input: {
+  readonly snapshots?: ReadonlyMap<string, ThreadExecutionSnapshot>;
+  readonly shells?: ReadonlyMap<string, ReturnType<typeof makeThreadShell>>;
+  readonly maxAttempts?: number;
+  readonly healthyUptimeMs?: number;
+}) {
+  const dispatched: Array<OrchestrationCommand> = [];
+
+  const engine = {
+    readEvents: () => Stream.empty,
+    dispatch: (command: OrchestrationCommand) =>
+      Effect.sync(() => {
+        dispatched.push(command);
+        return { sequence: dispatched.length };
+      }),
+    streamDomainEvents: Stream.empty,
+    latestSequence: Effect.succeed(0),
+  } as unknown as typeof OrchestrationEngineService.Service;
+
+  const supervisor = {
+    getSnapshot: (threadId: ThreadId) =>
+      Effect.succeed(input.snapshots?.get(String(threadId)) ?? makeSnapshot(threadId)),
+  } as unknown as typeof ThreadExecutionSupervisor.Service;
+
+  const snapshotQuery = {
+    getThreadShellById: (threadId: ThreadId) =>
+      Effect.succeed(
+        Option.some(
+          input.shells?.get(String(threadId)) ?? makeThreadShell(threadId),
+        ) as Option.Option<never>,
+      ),
+  } as unknown as typeof ProjectionSnapshotQuery.Service;
+
+  const layer = makeSessionRecoveryLive({
+    // Long interval: each test drives the immediate first sweep and asserts on
+    // it, rather than racing a timer.
+    sweepIntervalMs: 60_000,
+    maxAttempts: input.maxAttempts ?? 10,
+    healthyUptimeMs: input.healthyUptimeMs ?? 5 * 60 * 1000,
+  }).pipe(
+    Layer.provide(Layer.succeed(ThreadExecutionSupervisor, supervisor)),
+    Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+    Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
+    Layer.provideMerge(SessionRecoveryStateLayer),
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  return { dispatched, layer };
+}
+
+/** The sweep runs on a forked fiber doing async SQL, so assertions poll. */
+const waitUntil = (predicate: () => Effect.Effect<boolean>, remaining = 300): Effect.Effect<void> =>
+  Effect.flatMap(predicate(), (satisfied) =>
+    satisfied
+      ? Effect.void
+      : remaining <= 0
+        ? Effect.die(new Error("Timed out waiting for the recovery sweep."))
+        : Effect.flatMap(Effect.sleep("10 millis"), () => waitUntil(predicate, remaining - 1)),
+  );
+
+/** Let the first sweep finish when asserting that nothing should happen. */
+const settle = Effect.sleep("300 millis");
+
+const startRecovery = Effect.flatMap(SessionRecovery, (recovery) => recovery.start());
+
+const readRow = (threadId: ThreadId) =>
+  Effect.flatMap(SessionRecoveryStateRepository, (repo) => repo.getByThreadId({ threadId })).pipe(
+    Effect.map(Option.getOrNull),
+    Effect.orDie,
+  );
+
+const markRunning = (threadId: ThreadId, executionId: string) =>
+  Effect.flatMap(SessionRecoveryStateRepository, (repo) =>
+    repo.markRunning({ threadId, executionId, reason: "turn-admitted", at: now }),
+  ).pipe(Effect.orDie);
+
+const restartsIn = (dispatched: ReadonlyArray<OrchestrationCommand>) =>
+  dispatched.filter((command) => command.type === "thread.session.restart");
+
 describe("SessionRecovery", () => {
-  let runtime: ManagedRuntime.ManagedRuntime<
-    SessionRecovery | SessionRecoveryStateRepository,
-    unknown
-  > | null = null;
-  let scope: Scope.Closeable | null = null;
-
-  afterEach(async () => {
-    if (scope) await Effect.runPromise(Scope.close(scope, Exit.void));
-    scope = null;
-    if (runtime) await runtime.dispose();
-    runtime = null;
-  });
-
-  function createHarness(input: {
-    readonly snapshots: ReadonlyMap<string, ThreadExecutionSnapshot>;
-    readonly shells?: ReadonlyMap<string, ReturnType<typeof makeThreadShell>>;
-    readonly maxAttempts?: number;
-    readonly healthyUptimeMs?: number;
-  }) {
-    const dispatched: Array<OrchestrationCommand> = [];
-
-    const engine = {
-      readEvents: () => Stream.empty,
-      dispatch: (command: OrchestrationCommand) =>
-        Effect.sync(() => {
-          dispatched.push(command);
-          return { sequence: dispatched.length };
-        }),
-      streamDomainEvents: Stream.empty,
-      latestSequence: Effect.succeed(0),
-    } as unknown as typeof OrchestrationEngineService.Service;
-
-    const supervisor = {
-      getSnapshot: (threadId: ThreadId) =>
-        Effect.succeed(input.snapshots.get(String(threadId)) ?? makeSnapshot(threadId)),
-    } as unknown as typeof ThreadExecutionSupervisor.Service;
-
-    const snapshotQuery = {
-      getThreadShellById: (threadId: ThreadId) => {
-        const shell = input.shells?.get(String(threadId)) ?? makeThreadShell(threadId);
-        return Effect.succeed(Option.some(shell) as Option.Option<never>);
-      },
-    } as unknown as typeof ProjectionSnapshotQuery.Service;
-
-    const layer = makeSessionRecoveryLive({
-      // Long interval: these tests drive the sweep through start() once and
-      // assert on the first pass rather than racing a timer.
-      sweepIntervalMs: 60_000,
-      maxAttempts: input.maxAttempts ?? 10,
-      healthyUptimeMs: input.healthyUptimeMs ?? 5 * 60 * 1000,
-    }).pipe(
-      Layer.provide(Layer.succeed(ThreadExecutionSupervisor, supervisor)),
-      Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
-      Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
-      Layer.provideMerge(SessionRecoveryStateLayer),
-      Layer.provideMerge(SqlitePersistenceMemory),
-      Layer.provideMerge(NodeServices.layer),
-    );
-
-    runtime = ManagedRuntime.make(layer);
-    return { dispatched };
-  }
-
-  /** Start the service; its first sweep runs immediately on a forked fiber. */
-  async function startRecovery() {
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const recovery = yield* SessionRecovery;
-        yield* recovery.start().pipe(Scope.provide(scope!));
-      }),
-    );
-  }
-
-  /** The sweep does async SQL, so assertions poll rather than yield-count. */
-  async function waitFor(predicate: () => boolean | Promise<boolean>, attempts = 500) {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (await predicate()) return;
-      await runtime!.runPromise(Effect.sleep("10 millis"));
-    }
-    throw new Error("Timed out waiting for the recovery sweep.");
-  }
-
-  /** Give the sweep room to run, for assertions that nothing should happen. */
-  async function settle() {
-    await runtime!.runPromise(Effect.sleep("300 millis"));
-  }
-
-  const readRow = (threadId: ThreadId) =>
-    runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        return yield* repo.getByThreadId({ threadId });
-      }),
-    );
-
-  it("reconnects a session that went down while it was meant to be running", async () => {
+  it.live("reconnects a session that went down while it was meant to be running", () => {
     const threadId = ThreadId.make("thread-down");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-      }),
-    );
+    return Effect.gen(function* () {
+      yield* markRunning(threadId, "exec-1");
+      yield* startRecovery;
+      yield* waitUntil(() => Effect.sync(() => restartsIn(harness.dispatched).length > 0));
 
-    await startRecovery();
-    await waitFor(() => dispatched.some((command) => command.type === "thread.session.restart"));
-
-    const restarts = dispatched.filter((command) => command.type === "thread.session.restart");
-    expect(restarts).toHaveLength(1);
-    expect(restarts[0]?.threadId).toBe(threadId);
-    expect(Option.getOrNull(await readRow(threadId))?.attempts).toBe(1);
+      const restarts = restartsIn(harness.dispatched);
+      expect(restarts).toHaveLength(1);
+      expect(restarts[0]?.threadId).toBe(threadId);
+      expect((yield* readRow(threadId))?.attempts).toBe(1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("leaves an intentionally stopped session alone", async () => {
+  it.live("leaves an intentionally stopped session alone", () => {
     const threadId = ThreadId.make("thread-user-stopped");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "stopped" })]]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        // The user pressed stop.
-        yield* repo.markStopped({ threadId, reason: "user-stop", at: now });
-      }),
-    );
+    return Effect.gen(function* () {
+      const repo = yield* SessionRecoveryStateRepository;
+      yield* markRunning(threadId, "exec-1");
+      // The user pressed stop.
+      yield* repo.markStopped({ threadId, reason: "user-stop", at: now }).pipe(Effect.orDie);
 
-    await startRecovery();
-    await settle();
+      yield* startRecovery;
+      yield* settle;
 
-    expect(dispatched.filter((command) => command.type === "thread.session.restart")).toHaveLength(
-      0,
-    );
+      expect(restartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("never disturbs a thread whose execution is still live", async () => {
+  it.live("never disturbs a thread whose execution is still live", () => {
     const threadId = ThreadId.make("thread-live");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       snapshots: new Map([
         [
           String(threadId),
-          makeSnapshot(threadId, {
-            sessionState: "ready",
-            activity: "active",
-            canStop: true,
-          }),
+          makeSnapshot(threadId, { sessionState: "ready", activity: "active", canStop: true }),
         ],
       ]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-      }),
-    );
+    return Effect.gen(function* () {
+      yield* markRunning(threadId, "exec-1");
+      yield* startRecovery;
+      yield* settle;
 
-    await startRecovery();
-    await settle();
-
-    expect(dispatched.filter((command) => command.type === "thread.session.restart")).toHaveLength(
-      0,
-    );
+      expect(restartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("gives up once the attempt budget is spent", async () => {
+  it.live("gives up once the attempt budget is spent", () => {
     const threadId = ThreadId.make("thread-hopeless");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       maxAttempts: 2,
       snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        // Already burned one attempt; the next one is the last.
-        yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now });
-      }),
-    );
+    return Effect.gen(function* () {
+      const repo = yield* SessionRecoveryStateRepository;
+      yield* markRunning(threadId, "exec-1");
+      // Already burned one attempt; the next one is the last.
+      yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now }).pipe(Effect.orDie);
 
-    await startRecovery();
-    await waitFor(async () => Option.getOrNull(await readRow(threadId))?.gaveUpAt != null);
+      yield* startRecovery;
+      yield* waitUntil(() => Effect.map(readRow(threadId), (row) => row?.gaveUpAt != null));
 
-    expect(Option.getOrNull(await readRow(threadId))?.gaveUpAt).not.toBe(null);
-    expect(
-      dispatched.some(
-        (command) =>
-          command.type === "thread.activity.append" &&
-          command.activity.kind === "session.auto-reconnect-gave-up",
-      ),
-    ).toBe(true);
+      expect((yield* readRow(threadId))?.gaveUpAt).not.toBe(null);
+      expect(
+        harness.dispatched.some(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === "session.auto-reconnect-gave-up",
+        ),
+      ).toBe(true);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("stops retrying a thread it has given up on", async () => {
+  it.live("stops retrying a thread it has given up on", () => {
     const threadId = ThreadId.make("thread-gave-up");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       maxAttempts: 2,
       snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        yield* repo.recordGaveUp({ threadId, at: now });
-      }),
-    );
+    return Effect.gen(function* () {
+      const repo = yield* SessionRecoveryStateRepository;
+      yield* markRunning(threadId, "exec-1");
+      yield* repo.recordGaveUp({ threadId, at: now }).pipe(Effect.orDie);
 
-    await startRecovery();
-    await settle();
+      yield* startRecovery;
+      yield* settle;
 
-    expect(dispatched.filter((command) => command.type === "thread.session.restart")).toHaveLength(
-      0,
-    );
+      expect(restartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("clears the attempt budget once a reconnected session proves healthy", async () => {
+  it.live("clears the attempt budget once a reconnected session proves healthy", () => {
     const threadId = ThreadId.make("thread-healthy");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       healthyUptimeMs: 0,
       snapshots: new Map([
         [String(threadId), makeSnapshot(threadId, { sessionState: "ready", startedAt: now })],
       ]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now });
-      }),
-    );
+    return Effect.gen(function* () {
+      const repo = yield* SessionRecoveryStateRepository;
+      yield* markRunning(threadId, "exec-1");
+      yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now }).pipe(Effect.orDie);
 
-    await startRecovery();
-    await waitFor(async () => Option.getOrNull(await readRow(threadId))?.recoveredAt != null);
+      yield* startRecovery;
+      yield* waitUntil(() => Effect.map(readRow(threadId), (row) => row?.recoveredAt != null));
 
-    const row = await readRow(threadId);
-    expect(Option.getOrNull(row)?.attempts).toBe(0);
-    expect(Option.getOrNull(row)?.recoveredAt).not.toBe(null);
-    expect(dispatched.filter((command) => command.type === "thread.session.restart")).toHaveLength(
-      0,
-    );
+      const row = yield* readRow(threadId);
+      expect(row?.attempts).toBe(0);
+      expect(row?.recoveredAt).not.toBe(null);
+      expect(restartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("stops tracking an archived thread", async () => {
+  it.live("stops tracking an archived thread", () => {
     const threadId = ThreadId.make("thread-archived");
-    const { dispatched } = createHarness({
+    const harness = makeHarness({
       snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
       shells: new Map([[String(threadId), makeThreadShell(threadId, now)]]),
     });
 
-    await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-      }),
-    );
+    return Effect.gen(function* () {
+      yield* markRunning(threadId, "exec-1");
+      yield* startRecovery;
+      yield* waitUntil(() =>
+        Effect.map(readRow(threadId), (row) => row?.desiredState === "stopped"),
+      );
 
-    await startRecovery();
-    await waitFor(
-      async () => Option.getOrNull(await readRow(threadId))?.desiredState === "stopped",
-    );
-
-    expect(Option.getOrNull(await readRow(threadId))?.desiredState).toBe("stopped");
-    expect(dispatched.filter((command) => command.type === "thread.session.restart")).toHaveLength(
-      0,
-    );
+      expect((yield* readRow(threadId))?.desiredState).toBe("stopped");
+      expect(restartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("refunds the attempt budget when a new turn is admitted", async () => {
+  it.effect("refunds the attempt budget when a new turn is admitted", () => {
     const threadId = ThreadId.make("thread-new-turn");
-    createHarness({
-      snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
-    });
+    const harness = makeHarness({});
 
-    const row = await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now });
-        yield* repo.recordGaveUp({ threadId, at: now });
-        // A fresh user turn is explicit intent and restores the budget.
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-2",
-          reason: "turn-admitted",
-          at: now,
-        });
-        return yield* repo.getByThreadId({ threadId });
-      }),
-    );
+    return Effect.gen(function* () {
+      const repo = yield* SessionRecoveryStateRepository;
+      yield* markRunning(threadId, "exec-1");
+      yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now }).pipe(Effect.orDie);
+      yield* repo.recordGaveUp({ threadId, at: now }).pipe(Effect.orDie);
+      // A fresh user turn is explicit intent and restores the budget.
+      yield* markRunning(threadId, "exec-2");
 
-    expect(Option.getOrNull(row)?.attempts).toBe(0);
-    expect(Option.getOrNull(row)?.gaveUpAt).toBe(null);
-    expect(Option.getOrNull(row)?.desiredState).toBe("running");
+      const row = yield* readRow(threadId);
+      expect(row?.attempts).toBe(0);
+      expect(row?.gaveUpAt).toBe(null);
+      expect(row?.desiredState).toBe("running");
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 
-  it("does not refund the budget when the same execution re-publishes", async () => {
+  it.effect("does not refund the budget when the same execution re-publishes", () => {
     const threadId = ThreadId.make("thread-same-exec");
-    createHarness({
-      snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
-    });
+    const harness = makeHarness({});
 
-    const row = await runtime!.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* SessionRecoveryStateRepository;
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now });
-        yield* repo.markRunning({
-          threadId,
-          executionId: "exec-1",
-          reason: "turn-admitted",
-          at: now,
-        });
-        return yield* repo.getByThreadId({ threadId });
-      }),
-    );
+    return Effect.gen(function* () {
+      const repo = yield* SessionRecoveryStateRepository;
+      yield* markRunning(threadId, "exec-1");
+      yield* repo.recordAttempt({ threadId, at: now, nextAttemptAt: now }).pipe(Effect.orDie);
+      yield* markRunning(threadId, "exec-1");
 
-    expect(Option.getOrNull(row)?.attempts).toBe(1);
+      expect((yield* readRow(threadId))?.attempts).toBe(1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 });
