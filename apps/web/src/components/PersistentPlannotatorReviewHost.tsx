@@ -20,12 +20,19 @@ interface PersistentPlannotatorFocusSurfaceProps {
   visible: boolean;
 }
 
+export function hidePlannotatorReview(threadRef: ScopedThreadRef): void {
+  useRightPanelStore.getState().close(threadRef);
+}
+
 const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFocusSurface({
   threadRef,
   surface,
   visible,
 }: PersistentPlannotatorFocusSurfaceProps) {
-  const close = useCallback(() => {
+  const hide = useCallback(() => {
+    hidePlannotatorReview(threadRef);
+  }, [threadRef]);
+  const remove = useCallback(() => {
     useRightPanelStore.getState().closeSurface(threadRef, surface.id);
   }, [surface.id, threadRef]);
   const handleDecision = useCallback(
@@ -33,16 +40,16 @@ const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFoc
       if (decision === "approved") {
         useComposerDraftStore.getState().setInteractionMode(threadRef, "default");
       }
-      close();
+      remove();
     },
-    [close, threadRef],
+    [remove, threadRef],
   );
 
   return (
     <PlannotatorFocusSurface
       url={surface.url}
       visible={visible}
-      onClose={close}
+      onClose={hide}
       onDecision={handleDecision}
     />
   );
