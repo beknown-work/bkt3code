@@ -598,11 +598,6 @@ const buildAppUnderTest = (options?: {
             })
           : Layer.empty,
       ),
-      // T3-CUSTOM(expbkt3): the dispatcher can seed a provider binding when a
-      // thread attaches to an external session. Router tests never do, so keep
-      // these fail-closed rather than wiring real provider layers in.
-      Layer.provide(Layer.mock(ProviderService.ProviderService)({})),
-      Layer.provide(Layer.mock(ProviderSessionDirectory)({})),
       // T3-CUSTOM(expbkt3): Router tests do not exercise personal credential
       // persistence. Keep the new RPC dependency fail-closed and in memory.
       Layer.provide(
@@ -777,6 +772,12 @@ const buildAppUnderTest = (options?: {
             rollbackConversation: () => Effect.die("provider service not stubbed"),
             streamEvents: Stream.empty,
             ...options?.layers?.providerService,
+          }),
+          // T3-CUSTOM(expbkt3): the dispatcher seeds a provider binding when a
+          // thread attaches to an external session. Router tests never attach,
+          // so this stays fail-closed.
+          Layer.mock(ProviderSessionDirectory)({
+            upsert: () => Effect.die("provider session directory not stubbed"),
           }),
           ThreadSourceControlActionLock.layer,
         ),
