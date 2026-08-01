@@ -55,6 +55,9 @@ import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
+// T3-CUSTOM(expbkt3): PhaseGroupedSidebar consumes this context; the provider
+// must wrap the app tree or the experimental sidebar throws on mount.
+import { OpenAddProjectCommandPaletteProvider } from "../commandPaletteContext";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
@@ -444,29 +447,31 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   );
 
   return (
-    <ComposerHandleContext value={composerHandleRef}>
-      <CommandDialog
-        open={state.open}
-        onOpenChange={(open, eventDetails) => {
-          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
-            eventDetails.cancel();
-            toggleMode("command");
-            return;
-          }
-          setOpen(open);
-        }}
-      >
-        {children}
-        <CommandPaletteDialog
+    <OpenAddProjectCommandPaletteProvider openAddProject={openAddProject}>
+      <ComposerHandleContext value={composerHandleRef}>
+        <CommandDialog
           open={state.open}
-          mode={state.mode}
-          openIntent={state.openIntent}
-          setOpen={setOpen}
-          openOverlayMode={toggleMode}
-          clearOpenIntent={clearOpenIntent}
-        />
-      </CommandDialog>
-    </ComposerHandleContext>
+          onOpenChange={(open, eventDetails) => {
+            if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+              eventDetails.cancel();
+              toggleMode("command");
+              return;
+            }
+            setOpen(open);
+          }}
+        >
+          {children}
+          <CommandPaletteDialog
+            open={state.open}
+            mode={state.mode}
+            openIntent={state.openIntent}
+            setOpen={setOpen}
+            openOverlayMode={toggleMode}
+            clearOpenIntent={clearOpenIntent}
+          />
+        </CommandDialog>
+      </ComposerHandleContext>
+    </OpenAddProjectCommandPaletteProvider>
   );
 }
 
