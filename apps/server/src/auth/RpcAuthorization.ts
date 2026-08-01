@@ -34,6 +34,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.personalMcpRotateToken]: AuthOrchestrationOperateScope,
   [WS_METHODS.personalMcpRevokeToken]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeServerResources]: AuthOrchestrationReadScope,
+  [WS_METHODS.subscribeProviderRateLimits]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.subscribeShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,

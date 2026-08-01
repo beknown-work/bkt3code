@@ -10,6 +10,7 @@
 - [Source control integrations](./user/source-control.md)
 - [T3 Code MCP control center](./user/t3-mcp-control.md)
 - [Background service (Linux)](./user/background-service.md)
+- [Provider usage limits](./user/provider-limits.md)
 - Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md)
 
 Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
@@ -27,6 +28,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [Scripts](./internals/scripts.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
+- [Provider rate limits](./internals/provider-rate-limits.md)
 - [Remote environments](./internals/remote.md)
 - [Server updates](./internals/server-updates.md)
 - [Resource telemetry](./internals/resource-telemetry.md)

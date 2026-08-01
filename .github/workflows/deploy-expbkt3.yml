@@ -51,11 +51,14 @@ jobs:
       - name: Test
         run: pnpm exec vp run test
 
+      # See deploy-bkt3.yml: the Clerk publishable key must be baked in here or
+      # the deployed SPA runs with team mode silently off.
       - name: Build experimental web client
         run: pnpm exec vp run --filter @t3tools/web build
         env:
           VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true"
           VITE_T3_CONDUCTOR: "true"
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
 
       - name: Build server bundle
         run: pnpm exec vp run --filter t3 build:bundle

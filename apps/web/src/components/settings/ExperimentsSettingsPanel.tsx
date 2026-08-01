@@ -21,6 +21,9 @@ export function ExperimentsSettingsPanel() {
     (settings) => settings.phaseGroupedSidebarEnabled,
   );
   const resourceMonitorEnabled = useClientSettings((settings) => settings.resourceMonitorEnabled);
+  const providerRateLimitsEnabled = useClientSettings(
+    (settings) => settings.providerRateLimitsEnabled,
+  );
   const updateSettings = useUpdateClientSettings();
 
   return (
@@ -76,6 +79,33 @@ export function ExperimentsSettingsPanel() {
             />
           }
         />
+        {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
+          <SettingsRow
+            title="Provider usage limits"
+            description="Show compact Codex and Claude subscription-limit bars in the sidebar header. The indicator wraps below the T3 Code brand when the sidebar is too narrow."
+            resetAction={
+              providerRateLimitsEnabled !== DEFAULT_UNIFIED_SETTINGS.providerRateLimitsEnabled ? (
+                <SettingResetButton
+                  label="provider usage limits"
+                  onClick={() =>
+                    updateSettings({
+                      providerRateLimitsEnabled: DEFAULT_UNIFIED_SETTINGS.providerRateLimitsEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={providerRateLimitsEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ providerRateLimitsEnabled: Boolean(checked) })
+                }
+                aria-label="Show provider usage limits"
+              />
+            }
+          />
+        ) : null}
       </SettingsSection>
       {/* T3-CUSTOM(expbkt3): BEGIN — experimental operator MCP settings seam. */}
       {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (

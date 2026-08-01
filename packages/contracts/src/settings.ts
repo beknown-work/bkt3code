@@ -110,6 +110,7 @@ export const ClientSettingsSchema = Schema.Struct({
   phaseGroupedSidebarEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  providerRateLimitsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   resourceMonitorEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
@@ -841,6 +842,7 @@ export const ClientSettingsPatch = Schema.Struct({
     ),
   ),
   phaseGroupedSidebarEnabled: Schema.optionalKey(Schema.Boolean),
+  providerRateLimitsEnabled: Schema.optionalKey(Schema.Boolean),
   resourceMonitorEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
