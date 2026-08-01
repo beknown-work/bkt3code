@@ -73,6 +73,15 @@ this box, and no GitHub-hosted runner reaches it.
 5. The deployed commit is recorded in `<state-dir>/deployed-sha`, separately from
    the worktree HEAD.
 
+The artifact carries only `apps/web/dist` and `apps/server/dist`. The server
+bundle resolves its runtime dependencies from `node_modules` on the host, so
+`deploy.sh` runs `pnpm install --frozen-lockfile` whenever `pnpm-lock.yaml`
+changes (tracked by hash in `<state-dir>/deployed-lock`). Without that step a
+dependency bump ships a new bundle against old packages and the service crashes
+on start — an upstream `effect` bump did exactly that, and the health check
+rolled it back every minute. Installing packages is not building application
+code.
+
 **Application code is never built on this server.** The dev-server compute policy
 forbids repo-wide installs, builds, and test suites here; they have OOM-crashed
 the box. CI builds the artifact, the host only installs it.

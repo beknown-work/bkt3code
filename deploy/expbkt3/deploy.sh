@@ -69,6 +69,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The artifact carries only apps/*/dist. The server bundle resolves its
+# runtime dependencies from node_modules on this host, so a dependency bump
+# upstream leaves the new bundle loading old packages and crashing at start
+# (effect beta.78 vs beta.102 did exactly that). Sync dependencies whenever the
+# lockfile moves. This installs packages; it does not build application code.
+LOCK_HASH_FILE="/home/ubuntu/.t3/expbkt3-dev/deployed-lock"
+LOCK_HASH="$(sha256sum "$REPO_DIR/pnpm-lock.yaml" | cut -d" " -f1)"
+if [[ "$LOCK_HASH" != "$(cat "$LOCK_HASH_FILE" 2>/dev/null || true)" ]]; then
+  echo "==> Lockfile changed; installing dependencies"
+  pnpm --dir "$REPO_DIR" install --frozen-lockfile
+  install -d -m 0700 "$(dirname "$LOCK_HASH_FILE")"
+  printf '%s\n' "$LOCK_HASH" >"$LOCK_HASH_FILE"
+else
+  echo "==> Dependencies already match the lockfile"
+fi
+
 echo "==> Downloading GitHub-built artifact $ARTIFACT_NAME"
 gh run download "$WORKFLOW_RUN_ID" \
   --repo "$REPOSITORY" \
