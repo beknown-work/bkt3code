@@ -5,11 +5,19 @@ import { useEffect, useMemo, useState } from "react";
 
 import { ClaudeAI, OpenAI } from "../Icons";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { cn } from "../../lib/utils";
 import { useActiveEnvironmentId } from "../../state/entities";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import {
+  EMPTY_PROVIDER_RATE_LIMIT_CACHE,
+  providerRateLimitCacheEntries,
+  ProviderRateLimitCacheDocumentSchema,
+  PROVIDER_RATE_LIMIT_CACHE_STORAGE_KEY,
+  updateProviderRateLimitCache,
+} from "./SidebarProviderRateLimits.cache";
 import {
   buildProviderRateLimitRows,
   providerRateLimitBoundaryTimes,
@@ -34,6 +42,9 @@ function formatLocalDateTime(value: DateTime.Utc): string {
 }
 
 function freshnessLabel(row: ProviderRateLimitRowView): string {
+  if (row.source === "cache") {
+    return "Cached; provider currently unavailable";
+  }
   if (row.lastRefreshFailed && row.availability === "available") {
     return "Latest refresh failed; showing the last valid reading";
   }
@@ -65,13 +76,20 @@ function ProviderRateLimitProgressRow({
 }) {
   const remaining = row.remainingPercent;
   return (
-    <span className="flex h-3 items-center gap-1" data-provider={row.driverKind}>
+    <span
+      className={cn("flex h-3 items-center gap-1", row.freshness === "stale" && "opacity-60")}
+      data-freshness={row.freshness}
+      data-provider={row.driverKind}
+      data-source={row.source}
+    >
       <ProviderRateLimitIcon row={row} />
       <span
         aria-hidden="true"
         className={cn(
-          "h-1.5 w-8 shrink-0 overflow-hidden rounded-full",
-          onBackdrop ? "bg-white/20" : "bg-muted",
+          "h-1.5 w-8 shrink-0 overflow-hidden rounded-full border",
+          onBackdrop
+            ? "border-white/25 bg-neutral-950/30"
+            : "border-neutral-500/25 bg-neutral-500/20",
         )}
       >
         <span
@@ -229,14 +247,28 @@ export function SidebarProviderRateLimits({ onBackdrop }: { onBackdrop: boolean 
       ? serverEnvironment.providerRateLimits({ environmentId, input: {} })
       : null,
   );
+  const [cache, setCache] = useLocalStorage(
+    PROVIDER_RATE_LIMIT_CACHE_STORAGE_KEY,
+    EMPTY_PROVIDER_RATE_LIMIT_CACHE,
+    ProviderRateLimitCacheDocumentSchema,
+  );
+  useEffect(() => {
+    if (environmentId === null || data == null) return;
+    setCache((current) => updateProviderRateLimitCache(current, environmentId, data.entries));
+  }, [data, environmentId, setCache]);
+  const cachedEntries = useMemo(
+    () => providerRateLimitCacheEntries(cache, environmentId),
+    [cache, environmentId],
+  );
   const provisionalRows = useMemo(
     () =>
       buildProviderRateLimitRows({
         providers: config?.providers ?? [],
         entries: data?.entries ?? [],
+        cachedEntries,
         now: Date.now(),
       }),
-    [config?.providers, data?.entries],
+    [cachedEntries, config?.providers, data?.entries],
   );
   const now = useBoundaryClock(provisionalRows);
   const rows = useMemo(
@@ -244,9 +276,10 @@ export function SidebarProviderRateLimits({ onBackdrop }: { onBackdrop: boolean 
       buildProviderRateLimitRows({
         providers: config?.providers ?? [],
         entries: data?.entries ?? [],
+        cachedEntries,
         now,
       }),
-    [config?.providers, data?.entries, now],
+    [cachedEntries, config?.providers, data?.entries, now],
   );
 
   if (!supported) return null;
