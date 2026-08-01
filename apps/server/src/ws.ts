@@ -503,8 +503,6 @@ const makeWsRpcLayer = (
           ),
         );
 
-
-
       const enrichProjectEvent = (
         event: OrchestrationEvent,
       ): Effect.Effect<OrchestrationEvent, never, never> => {

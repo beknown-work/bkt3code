@@ -31,7 +31,7 @@ Deploying restarts the target service, which **kills the agent sessions hosted o
 
 ## Building features that survive upstream merges
 
-We track a fast-moving upstream. Every line this fork changes inside an upstream-owned file is a line that has to be re-resolved, by hand, on every future merge — and a merge that touches 25 files of core code costs a day and risks silently dropping fork behavior. Cost is driven by *where* we write code far more than by how much we write.
+We track a fast-moving upstream. Every line this fork changes inside an upstream-owned file is a line that has to be re-resolved, by hand, on every future merge — and a merge that touches 25 files of core code costs a day and risks silently dropping fork behavior. Cost is driven by _where_ we write code far more than by how much we write.
 
 **Nudge the developer toward these when a change starts editing upstream files.** Say it plainly: "this can be built as an additive module instead of editing `ChatView.tsx`; that keeps the next upstream merge cheap." If they still want the inline edit, do it — just make the seam as small as possible and mark it.
 

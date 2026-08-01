@@ -195,8 +195,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       // login expiry (the authenticated login that produced it has ended).
       Array.from(records).filter(
         ([, record]) =>
-          timestamp <= record.expiresAt &&
-          timestamp - record.lastAliveAt <= livenessWindowMs,
+          timestamp <= record.expiresAt && timestamp - record.lastAliveAt <= livenessWindowMs,
       ),
     );
     return next.size === records.size ? records : next;
@@ -290,7 +289,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         for (const [existingHash, existingRecord] of next) {
           if (existingRecord.scope.threadId === scope.threadId) next.delete(existingHash);
         }
-        next.set(tokenHash, { tokenHash, scope, loginSessionIds, lastAliveAt: issuedAt, expiresAt });
+        next.set(tokenHash, {
+          tokenHash,
+          scope,
+          loginSessionIds,
+          lastAliveAt: issuedAt,
+          expiresAt,
+        });
         return { records: next };
       });
       return {
