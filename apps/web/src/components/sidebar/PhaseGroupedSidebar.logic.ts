@@ -261,13 +261,22 @@ export function phaseSidebarRowClassName(
     // bright red for the user-input branch below.
     !needsUserInput &&
       priority === 0 &&
-      "bg-orange-500/40 text-foreground ring-1 ring-inset ring-orange-500/80 shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/50 dark:bg-orange-500/35",
+      cn(
+        "bg-orange-500/40 text-foreground ring-1 ring-inset shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/50 dark:bg-orange-500/35",
+        isActive ? (isSelected ? "ring-primary/40" : "ring-primary/30") : "ring-orange-500/80",
+      ),
     !needsUserInput &&
       priority === 1 &&
-      "bg-orange-500/20 text-foreground ring-1 ring-inset ring-orange-500/40 shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/25 dark:bg-orange-500/18",
+      cn(
+        "bg-orange-500/20 text-foreground ring-1 ring-inset shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/25 dark:bg-orange-500/18",
+        isActive ? (isSelected ? "ring-primary/40" : "ring-primary/30") : "ring-orange-500/40",
+      ),
     !needsUserInput &&
       priority === 2 &&
-      "bg-orange-500/10 text-foreground ring-1 ring-inset ring-orange-500/20 shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/15 dark:bg-orange-500/9",
+      cn(
+        "bg-orange-500/10 text-foreground ring-1 ring-inset shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/15 dark:bg-orange-500/9",
+        isActive ? (isSelected ? "ring-primary/40" : "ring-primary/30") : "ring-orange-500/20",
+      ),
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",

@@ -71,6 +71,14 @@ describe("phaseSidebarRowClassName", () => {
     expect(className).toContain("ring-red-500/60");
     expect(className).toContain("motion-reduce:animate-none");
   });
+
+  it("keeps the active border blue while preserving the P0 orange surface", () => {
+    const className = phaseSidebarRowClassName(true, false, false, 0);
+
+    expect(className).toContain("bg-orange-500/40");
+    expect(className).toContain("ring-primary/30");
+    expect(className).not.toContain("ring-orange-500/80");
+  });
 });
 
 describe("resolvePhaseSidebarCheckoutMetadata", () => {
