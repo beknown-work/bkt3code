@@ -320,6 +320,63 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   }),
 );
 
+// T3-CUSTOM(expbkt3): delegated creators can nominate the durable thread owner.
+it.effect("accepts ownerUserId in direct and bootstrapped thread creation", () =>
+  Effect.gen(function* () {
+    const direct = yield* decodeOrchestrationCommand({
+      type: "thread.create",
+      commandId: "cmd-thread-owner",
+      threadId: "thread-owner",
+      projectId: "project-1",
+      title: "Owned thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      ownerUserId: "user-linear-starter",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const bootstrapped = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-owner",
+      threadId: "thread-owner",
+      message: {
+        messageId: "msg-owner",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      bootstrap: {
+        createThread: {
+          projectId: "project-1",
+          title: "Owned bootstrap thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          ownerUserId: "user-linear-starter",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(direct.type, "thread.create");
+    if (direct.type === "thread.create") {
+      assert.strictEqual(direct.ownerUserId, "user-linear-starter");
+    }
+    assert.strictEqual(bootstrapped.bootstrap?.createThread?.ownerUserId, "user-linear-starter");
+  }),
+);
+
 it.effect("decodes thread.created runtime mode for historical events", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadCreatedPayload({

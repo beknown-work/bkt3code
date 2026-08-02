@@ -46,5 +46,11 @@ that durable owner. A profile can be assigned to only one user. Thread ownership
 attribution, not access: trusted collaborators may still work in or transfer another person's
 thread, and future GitHub activity switches to the new owner's profile after a transfer.
 
+Sessions created by a trusted external integration follow the same rule when the integration
+identifies the initiating T3 user. For example, a new Linear agent session is owned immediately by
+the matched human starter, before its first provider turn begins. Existing externally created
+threads are not reassigned; reconciliation may add their starter as a member without changing the
+durable owner.
+
 If a user is blocked, a token is disconnected, or a thread has no valid owner, authenticated GitHub
 operations fail instead of falling back to a machine-wide account.
