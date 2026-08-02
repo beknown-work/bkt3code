@@ -262,20 +262,35 @@ export function phaseSidebarRowClassName(
     !needsUserInput &&
       priority === 0 &&
       cn(
-        "bg-orange-500/40 text-foreground ring-1 ring-inset shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/50 dark:bg-orange-500/35",
-        isActive ? (isSelected ? "ring-primary/40" : "ring-primary/30") : "ring-orange-500/80",
+        "bg-orange-500/40 text-foreground ring-1 ring-inset hover:bg-orange-500/50 dark:bg-orange-500/35",
+        isActive
+          ? cn(
+              isSelected ? "ring-primary/80" : "ring-primary/70",
+              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+            )
+          : "ring-orange-500/80 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
       ),
     !needsUserInput &&
       priority === 1 &&
       cn(
-        "bg-orange-500/20 text-foreground ring-1 ring-inset shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/25 dark:bg-orange-500/18",
-        isActive ? (isSelected ? "ring-primary/40" : "ring-primary/30") : "ring-orange-500/40",
+        "bg-orange-500/20 text-foreground ring-1 ring-inset hover:bg-orange-500/25 dark:bg-orange-500/18",
+        isActive
+          ? cn(
+              isSelected ? "ring-primary/80" : "ring-primary/70",
+              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+            )
+          : "ring-orange-500/40 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
       ),
     !needsUserInput &&
       priority === 2 &&
       cn(
-        "bg-orange-500/10 text-foreground ring-1 ring-inset shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/15 dark:bg-orange-500/9",
-        isActive ? (isSelected ? "ring-primary/40" : "ring-primary/30") : "ring-orange-500/20",
+        "bg-orange-500/10 text-foreground ring-1 ring-inset hover:bg-orange-500/15 dark:bg-orange-500/9",
+        isActive
+          ? cn(
+              isSelected ? "ring-primary/80" : "ring-primary/70",
+              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+            )
+          : "ring-orange-500/20 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
       ),
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&

@@ -131,6 +131,8 @@ import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
 import { T3ConductorCard } from "./sidebar/T3ConductorCard";
 import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
+import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
+import { shouldShowRunningSessionGlint } from "./sidebar/RunningSessionGlint.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -848,6 +850,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         onDoubleClick={() => onStartRename(row)}
         onContextMenu={(event) => void handleContextMenu(event)}
       >
+        {shouldShowRunningSessionGlint(row.phaseId, section) ? <RunningSessionGlint /> : null}
         {active ? (
           <span
             aria-hidden

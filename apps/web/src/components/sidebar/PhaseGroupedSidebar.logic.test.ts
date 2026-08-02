@@ -76,7 +76,10 @@ describe("phaseSidebarRowClassName", () => {
     const className = phaseSidebarRowClassName(true, false, false, 0);
 
     expect(className).toContain("bg-orange-500/40");
-    expect(className).toContain("ring-primary/30");
+    expect(className).toContain("ring-primary/70");
+    expect(className).toContain(
+      "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+    );
     expect(className).not.toContain("ring-orange-500/80");
   });
 });
