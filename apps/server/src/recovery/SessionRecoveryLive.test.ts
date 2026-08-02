@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -168,6 +169,31 @@ const markRunning = (threadId: ThreadId, executionId: string) =>
 
 const restartsIn = (dispatched: ReadonlyArray<OrchestrationCommand>) =>
   dispatched.filter((command) => command.type === "thread.session.restart");
+
+const turnStartsIn = (dispatched: ReadonlyArray<OrchestrationCommand>) =>
+  dispatched.filter((command) => command.type === "thread.turn.start");
+
+/** Seed a user message so the sweep sees work that was asked for. */
+const seedUserMessage = (threadId: ThreadId, messageId: string, text: string) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql`
+      INSERT INTO projection_thread_messages
+        (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
+      VALUES (${messageId}, ${String(threadId)}, NULL, 'user', ${text}, 0, ${now}, ${now})
+    `,
+  ).pipe(Effect.asVoid, Effect.orDie);
+
+/** Seed a turn that picked the message up, so it counts as delivered. */
+const seedTurnFor = (threadId: ThreadId, turnId: string) =>
+  Effect.flatMap(
+    SqlClient.SqlClient,
+    (sql) => sql`
+      INSERT INTO projection_turns
+        (thread_id, turn_id, state, requested_at, checkpoint_turn_count, checkpoint_files_json)
+      VALUES (${String(threadId)}, ${turnId}, 'completed', ${now}, 0, '[]')
+    `,
+  ).pipe(Effect.asVoid, Effect.orDie);
 
 describe("SessionRecovery", () => {
   it.live("reconnects a session that went down while it was meant to be running", () => {
@@ -346,6 +372,70 @@ describe("SessionRecovery", () => {
       yield* markRunning(threadId, "exec-1");
 
       expect((yield* readRow(threadId))?.attempts).toBe(1);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+  // T3-CUSTOM(expbkt3): a turn that dies before it starts leaves the message
+  // unread; reconnecting alone would strand it forever.
+  it.live("re-runs a message whose turn never started", () => {
+    const threadId = ThreadId.make("thread-undelivered");
+    const harness = makeHarness({
+      snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "stopped" })]]),
+    });
+
+    return Effect.gen(function* () {
+      yield* seedUserMessage(threadId, "msg-undelivered", "Plan the Linear issue");
+      yield* markRunning(threadId, "exec-1");
+
+      yield* startRecovery;
+      yield* waitUntil(() => Effect.sync(() => turnStartsIn(harness.dispatched).length > 0));
+
+      const starts = turnStartsIn(harness.dispatched);
+      expect(starts).toHaveLength(1);
+      // Same message id: the projection dedupes, so the transcript keeps one copy.
+      expect(starts[0]?.message.messageId).toBe("msg-undelivered");
+      expect(starts[0]?.message.text).toBe("Plan the Linear issue");
+      // A plain reconnect would have left the work unread.
+      expect(restartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.live("only reconnects when a turn already picked the message up", () => {
+    const threadId = ThreadId.make("thread-delivered");
+    const harness = makeHarness({
+      snapshots: new Map([[String(threadId), makeSnapshot(threadId, { sessionState: "failed" })]]),
+    });
+
+    return Effect.gen(function* () {
+      yield* seedUserMessage(threadId, "msg-delivered", "Already running");
+      yield* seedTurnFor(threadId, "turn-1");
+      yield* markRunning(threadId, "exec-1");
+
+      yield* startRecovery;
+      yield* waitUntil(() => Effect.sync(() => restartsIn(harness.dispatched).length > 0));
+
+      // Half-finished agent work must never be replayed unattended.
+      expect(turnStartsIn(harness.dispatched)).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  });
+
+  it.live("re-runs undelivered work even when the session looks healthy", () => {
+    const threadId = ThreadId.make("thread-ready-but-idle");
+    const harness = makeHarness({
+      healthyUptimeMs: 0,
+      snapshots: new Map([
+        [String(threadId), makeSnapshot(threadId, { sessionState: "ready", startedAt: now })],
+      ]),
+    });
+
+    return Effect.gen(function* () {
+      yield* seedUserMessage(threadId, "msg-idle", "Nobody ran this");
+      yield* markRunning(threadId, "exec-1");
+
+      yield* startRecovery;
+      yield* waitUntil(() => Effect.sync(() => turnStartsIn(harness.dispatched).length > 0));
+
+      // Reconnected-and-idle is not "recovered" while work is outstanding.
+      expect((yield* readRow(threadId))?.recoveredAt).toBe(null);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   });
 });
