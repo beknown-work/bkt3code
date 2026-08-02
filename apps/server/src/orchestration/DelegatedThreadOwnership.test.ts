@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect } from "vitest";
 import {
   CommandId,
   MessageId,
@@ -70,7 +69,7 @@ const bootstrapCreate = (ownerUserId?: UserId): OrchestrationCommand => ({
   createdAt,
 });
 
-describe("resolveDelegatedThreadOwner", () => {
+it.layer(NodeServices.layer)("resolveDelegatedThreadOwner", (it) => {
   it("uses the authenticated actor instead of a supplied owner", () => {
     expect(resolveDelegatedThreadOwner(bootstrapCreate(OWNER), ACTOR)).toBe(ACTOR);
   });
@@ -108,7 +107,8 @@ describe("resolveDelegatedThreadOwner", () => {
         ],
       };
       const actor = resolveDelegatedThreadOwner(command, null);
-      const event = yield* decideOrchestrationCommand({ command, readModel, actor });
+      const decided = yield* decideOrchestrationCommand({ command, readModel, actor });
+      const event = Array.isArray(decided) ? decided[0] : decided;
 
       expect(event.type).toBe("thread.created");
       if (event.type !== "thread.created") return;
@@ -116,6 +116,6 @@ describe("resolveDelegatedThreadOwner", () => {
 
       const projected = yield* projectEvent(readModel, { ...event, sequence: 1 });
       expect(projected.threads[0]?.ownerUserId).toBe(OWNER);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }),
   );
 });
