@@ -83,8 +83,9 @@ import { ThreadExecutionSupervisor } from "./execution/ThreadExecutionSupervisor
 import { OrchestrationAccessControl } from "./orchestration/Services/AccessControl.ts";
 import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
 import { ClerkDirectory, ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
-import { filterShellSnapshot, isOwnerOrMember } from "./orchestration/accessRules.ts";
-import { checkCommandAccess } from "./orchestration/commandAccess.ts";
+// T3-CUSTOM(expbkt3): per-connection access control helpers
+import { filterShellSnapshot } from "./orchestration/accessRules.ts";
+import { makeWsVisibility } from "./orchestration/wsVisibility.ts";
 import { awaitShellProjectionSequence } from "./orchestration/shellProjectionBarrier.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -350,48 +351,20 @@ const makeWsRpcLayer = (
       // Stable for the connection's identity, so resolve once.
       const actorIsAdmin =
         actorUserId === null ? false : yield* clerkDirectory.isOrgAdmin(actorUserId);
-      // The set of thread/project ids the operator may see (active + archived),
-      // derived from the filtered shell snapshots. Used to filter raw event
-      // replays.
-      const visibleAggregateIdsForActor = (userId: UserId) =>
-        Effect.all([
-          projectionSnapshotQuery.getShellSnapshot(),
-          projectionSnapshotQuery.getArchivedShellSnapshot(),
-        ]).pipe(
-          Effect.map(([activeSnapshot, archivedSnapshot]) => {
-            const active = filterShellSnapshot(activeSnapshot, userId);
-            const archived = filterShellSnapshot(archivedSnapshot, userId);
-            const threadIds = new Set<string>([
-              ...active.threads.map((thread) => thread.id),
-              ...archived.threads.map((thread) => thread.id),
-            ]);
-            const projectIds = new Set<string>([
-              ...active.projects.map((project) => project.id),
-              ...archived.projects.map((project) => project.id),
-            ]);
-            return { threadIds, projectIds };
-          }),
-        );
-      // Guard a per-thread read; denials read as "not found" (no existence leak)
-      // and are re-wrapped into each caller's error type.
-      const requireThreadAccess = (
-        threadId: ThreadId,
-      ): Effect.Effect<void, OrchestrationGetSnapshotError> =>
-        actorUserId === null
-          ? Effect.void
-          : accessControl.canAccessThread(actorUserId, threadId).pipe(
-              Effect.orElseSucceed(() => false),
-              Effect.flatMap((allowed) =>
-                allowed
-                  ? Effect.void
-                  : Effect.fail(
-                      new OrchestrationGetSnapshotError({
-                        message: `Thread ${threadId} was not found`,
-                        cause: threadId,
-                      }),
-                    ),
-              ),
-            );
+      // T3-CUSTOM(expbkt3): BEGIN per-connection access control (wsVisibility.ts)
+      const {
+        visibleAggregateIdsForActor,
+        requireThreadAccess,
+        applyShellVisibility,
+        applyShellItemVisibility,
+        authorizeNormalizedCommand,
+      } = makeWsVisibility({
+        projectionSnapshotQuery,
+        accessControl,
+        actorUserId,
+        actorIsAdmin,
+      });
+      // T3-CUSTOM(expbkt3): END
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -813,173 +786,6 @@ const makeWsRpcLayer = (
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
-      // Team mode: transform a global shell delta into what the operating user
-      // may see. A thread/project that becomes visible (e.g. the user is tagged)
-      // is forwarded as an upsert — for a project tag we also emit upserts for
-      // all of the project's now-visible threads. A thread/project that is no
-      // longer visible (untagged) is converted to a removal so it disappears
-      // live from the sidebar. Removals pass through unchanged.
-      const shellEventsForActor = (
-        event: OrchestrationShellStreamEvent,
-        userId: UserId,
-      ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamEvent>, never, never> => {
-        switch (event.kind) {
-          case "thread-removed":
-          case "project-removed":
-            return Effect.succeed([event]);
-          case "thread-upserted": {
-            const thread = event.thread;
-            // A thread is delivered only if the user owns it or is tagged on it
-            // directly (project membership does not reveal threads). When it is
-            // visible, resolve the parent project so the thread arrives together
-            // with its container shell — otherwise it lands in the sidebar with
-            // no project to group under ("unknown project").
-            if (!isOwnerOrMember(thread, userId)) {
-              return Effect.succeed([
-                {
-                  kind: "thread-removed" as const,
-                  sequence: event.sequence,
-                  threadId: thread.id,
-                },
-              ]);
-            }
-            return projectionSnapshotQuery.getProjectShellById(thread.projectId).pipe(
-              Effect.map((projectOption) => {
-                const project = Option.getOrNull(projectOption);
-                return project !== null
-                  ? [
-                      { kind: "project-upserted" as const, sequence: event.sequence, project },
-                      event,
-                    ]
-                  : [event];
-              }),
-              Effect.orElseSucceed(() => [event]),
-            );
-          }
-          case "project-upserted": {
-            const project = event.project;
-            const directlyVisible = isOwnerOrMember(project, userId);
-            if (directlyVisible) {
-              // Owner/member: the project is visible. Do NOT fan out its threads
-              // — a project tag grants workspace access, not thread visibility.
-              return Effect.succeed([event]);
-            }
-            // Otherwise the project only appears if it contains a thread the user
-            // can see directly; if not, remove it from their sidebar.
-            return projectionSnapshotQuery.listThreadShellsByProjectId(project.id).pipe(
-              Effect.map((threads) => {
-                const hasVisibleThread = threads.some((thread) => isOwnerOrMember(thread, userId));
-                if (hasVisibleThread) {
-                  return [event];
-                }
-                return [
-                  {
-                    kind: "project-removed" as const,
-                    sequence: event.sequence,
-                    projectId: project.id,
-                  },
-                ];
-              }),
-              Effect.orElseSucceed(() =>
-                directlyVisible
-                  ? [event]
-                  : [
-                      {
-                        kind: "project-removed" as const,
-                        sequence: event.sequence,
-                        projectId: project.id,
-                      },
-                    ],
-              ),
-            );
-          }
-        }
-      };
-
-      // Wrap a shell-event stream with per-user visibility (no-op for an
-      // unrestricted operator).
-      const applyShellVisibility = <E, R>(
-        stream: Stream.Stream<OrchestrationShellStreamEvent, E, R>,
-      ): Stream.Stream<OrchestrationShellStreamEvent, E, R> =>
-        actorUserId === null
-          ? stream
-          : stream.pipe(
-              Stream.mapEffect((event) => shellEventsForActor(event, actorUserId)),
-              Stream.flatMap((events) => Stream.fromIterable(events)),
-            );
-
-      const applyShellItemVisibility = <E, R>(
-        stream: Stream.Stream<OrchestrationShellStreamItem, E, R>,
-      ): Stream.Stream<OrchestrationShellStreamItem, E, R> =>
-        actorUserId === null
-          ? stream
-          : stream.pipe(
-              Stream.mapEffect(
-                (
-                  item,
-                ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamItem>, never, never> => {
-                  switch (item.kind) {
-                    case "project-upserted":
-                    case "project-removed":
-                    case "thread-upserted":
-                    case "thread-removed":
-                      return shellEventsForActor(item, actorUserId);
-                    case "execution":
-                      return projectionSnapshotQuery
-                        .getThreadShellById(item.execution.threadId)
-                        .pipe(
-                          Effect.map((thread) =>
-                            Option.isSome(thread) && isOwnerOrMember(thread.value, actorUserId)
-                              ? ([item] as ReadonlyArray<OrchestrationShellStreamItem>)
-                              : ([] as ReadonlyArray<OrchestrationShellStreamItem>),
-                          ),
-                          Effect.orElseSucceed(
-                            (): ReadonlyArray<OrchestrationShellStreamItem> => [],
-                          ),
-                        );
-                    case "snapshot":
-                      return Effect.succeed<ReadonlyArray<OrchestrationShellStreamItem>>([
-                        {
-                          ...item,
-                          snapshot: filterShellSnapshot(item.snapshot, actorUserId),
-                        },
-                      ]);
-                    case "synchronized":
-                      return Effect.succeed<ReadonlyArray<OrchestrationShellStreamItem>>([item]);
-                  }
-                },
-              ),
-              Stream.flatMap((items) => Stream.fromIterable(items)),
-            );
-
-      const authorizeNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
-        Effect.gen(function* () {
-          // Team mode: reject commands on threads/projects this operator can't
-          // access before they reach the engine.
-          if (actorUserId !== null) {
-            const allowed = yield* checkCommandAccess(
-              accessControl,
-              actorUserId,
-              actorIsAdmin,
-              normalizedCommand,
-            ).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: "Failed to authorize orchestration command",
-                    cause,
-                  }),
-              ),
-            );
-            if (!allowed) {
-              // Reads as "not found" — no existence leak.
-              return yield* new OrchestrationDispatchCommandError({
-                message: "Thread or project not found.",
-                cause: normalizedCommand.type,
-              });
-            }
-          }
-        });
       const dispatchAuthorizedCommand = (normalizedCommand: OrchestrationCommand) =>
         orchestrationCommandDispatcher.dispatch(normalizedCommand, { actorUserId });
       const dispatchNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
