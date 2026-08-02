@@ -24,6 +24,7 @@ import {
   matchesPhaseSidebarFilters,
   partitionPhaseSidebarRows,
   phaseSidebarPriorityBadgeClassName,
+  phaseSidebarCanForceStopAgent,
   phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
   phaseSidebarPriorityRank,
@@ -81,6 +82,26 @@ describe("phaseSidebarRowClassName", () => {
       "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
     );
     expect(className).not.toContain("ring-orange-500/80");
+    expect(className).not.toContain("inset_3px_0_0_0_var(--color-orange-500)");
+  });
+});
+
+describe("phase sidebar running controls", () => {
+  it("keeps force stop available for a recorded session even when it looks stopped", () => {
+    const stoppedSession = {
+      threadId,
+      status: "stopped" as const,
+      providerName: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerThreadId: null,
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: now,
+    };
+
+    expect(phaseSidebarCanForceStopAgent(stoppedSession)).toBe(true);
+    expect(phaseSidebarCanForceStopAgent(null)).toBe(false);
   });
 });
 

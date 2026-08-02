@@ -298,6 +298,11 @@ export function phaseSidebarRowClassName(
   );
 }
 
+/** A stopped projection can still hide a live provider, so any recorded session remains stoppable. */
+export function phaseSidebarCanForceStopAgent(session: ThreadShell["session"]): boolean {
+  return session !== null;
+}
+
 export interface PhaseSidebarRepositoryOption {
   readonly key: string;
   readonly label: string;

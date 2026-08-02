@@ -104,6 +104,7 @@ import {
   partitionPhaseSidebarRows,
   // T3-CUSTOM(expbkt3): Session priority badge tone.
   phaseSidebarPriorityBadgeClassName,
+  phaseSidebarCanForceStopAgent,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
@@ -612,6 +613,7 @@ interface PhaseThreadRowProps {
   readonly onCancelRename: () => void;
   readonly onNavigate: (threadRef: ScopedThreadRef) => void;
   readonly onReconnect: (threadRef: ScopedThreadRef) => Promise<void>;
+  readonly onForceStop: (row: PhaseSidebarRow) => void;
   readonly onArchive: (row: PhaseSidebarRow) => void;
   readonly onDelete: (row: PhaseSidebarRow) => void;
   readonly onSettle: (row: PhaseSidebarRow) => void;
@@ -639,6 +641,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onCancelRename,
     onNavigate,
     onReconnect,
+    onForceStop,
     onArchive,
     onDelete,
     onSettle,
@@ -792,6 +795,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         ...settlementItems,
         ...snoozeItems,
         {
+          id: "force-stop-agent",
+          label: "Force stop agent",
+          disabled: !phaseSidebarCanForceStopAgent(row.thread.session),
+          destructive: true,
+        },
+        {
           id: "reconnect-session",
           label: "Reconnect session",
           disabled: !canReconnectThreadSession(row.thread),
@@ -826,6 +835,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       if (choice) onSetPriority(row, choice.value);
     }
     // T3-CUSTOM(expbkt3): END
+    if (action === "force-stop-agent") onForceStop(row);
     if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
       await navigator.clipboard.writeText(workspacePath);
@@ -1173,6 +1183,7 @@ export function PhaseGroupedSidebar() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
@@ -1672,6 +1683,15 @@ export function PhaseGroupedSidebar() {
     },
     [updateThreadMetadata],
   );
+  const forceStopAgent = useCallback(
+    (row: PhaseSidebarRow) => {
+      void forceStopThreadSession({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id },
+      });
+    },
+    [forceStopThreadSession],
+  );
   // T3-CUSTOM(expbkt3): END
   const requestArchive = useCallback(
     async (row: PhaseSidebarRow) => {
@@ -1884,6 +1904,7 @@ export function PhaseGroupedSidebar() {
         onCancelRename={cancelRename}
         onNavigate={navigateToRow}
         onReconnect={reconnectThreadSession}
+        onForceStop={forceStopAgent}
         onArchive={handleArchive}
         onDelete={requestDelete}
         onSettle={attemptSettle}
