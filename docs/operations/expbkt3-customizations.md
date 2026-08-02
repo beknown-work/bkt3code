@@ -56,6 +56,35 @@ permanent fork surface and keep them marked instead.
 
 Everything outside this table should follow the flag rule in `AGENTS.md`.
 
+## Deliberately not extracted
+
+Not every fork seam is worth moving to a fork-owned file. These were evaluated
+and left in place on purpose — re-deriving the decision costs more than reading
+it:
+
+- **`server.ts` fork layers.** Extracting the fork layer graph behind a factory
+  saves roughly 80 lines, but the factory needs one generic parameter per
+  upstream layer (plus Effect diagnostic suppressions) to keep the service types
+  flowing. That makes the file that composes the whole server runtime harder to
+  read, and mis-ordering `provide` vs `provideMerge` fails only on a real boot.
+  `server.ts` is already among the best-marked files in the fork and its
+  conflicts are mechanical, so the seams stay inline and marked.
+- **`ProjectionSnapshotQuery.ts` column threading**, **`ProviderService.ts`
+  parameter threading**, contract struct field additions, and web component JSX
+  mounts. There is no hook shape that removes these; marker discipline is the
+  only available lever.
+- **`ws.ts` `stopExecution` / `replayEvents` handlers.** They reach into
+  ws.ts-local replay machinery (`clamp`, `projectActivityEvent`,
+  `enrichOrchestrationEvents`); injecting all of it costs more seam than the
+  extraction saves.
+
+Semantic divergence is the expensive kind of fork change — where we _replaced_
+an upstream algorithm rather than adding to it. Those merge cleanly and then
+break at runtime, so they deserve the loudest markers: the `dispatch`
+acknowledgement-timeout rewrite in `client-runtime/operations/commands.ts`, the
+turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
+`ProviderCommandReactor.ts`, and session teardown in `CodexAdapter.ts`.
+
 ## Feature ownership
 
 | Area                      | Dedicated implementation                                                                                        | Upstream-facing seams                                                                   |
