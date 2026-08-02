@@ -1,0 +1,36 @@
+# T3-CUSTOM(expbkt3): Enforce fork marker discipline on upstream-owned files.
+#
+# Fork edits inside files that upstream also owns must sit inside
+# T3-CUSTOM(expbkt3) markers, so the weekly upstream merge can be resolved by
+# reading the diff rather than archaeology. scripts/fork-marker-baseline.json
+# tolerates the existing backlog and can only shrink.
+name: Fork markers
+
+on:
+  pull_request:
+    branches: [bkmain, expbkmain]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-markers-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  markers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # merge-base against the upstream mirror needs full history.
+          fetch-depth: 0
+
+      - name: Fetch upstream mirror
+        run: git fetch origin main --no-tags
+
+      # Node built-ins only — no dependency install, so this stays under a minute.
+      - name: Check fork markers
+        run: node scripts/check-fork-markers.ts

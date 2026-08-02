@@ -20,6 +20,42 @@ Find every marked boundary with:
 rg 'T3-CUSTOM\\(expbkt3\\)'
 ```
 
+Marker discipline is enforced in CI by `scripts/check-fork-markers.ts`
+(`.github/workflows/fork-markers.yml`). It diffs the branch against
+`origin/main` — the byte-pure upstream mirror — and fails when a hunk in an
+upstream-owned file sits outside a marker. Files the fork _added_ are
+fork-owned and skipped; ownership is decided by git status, never by sniffing
+file contents, because upstream-owned files routinely carry a marked fork import
+near the top.
+
+`scripts/fork-marker-baseline.json` grandfathers the files that were already
+non-compliant when the check landed. It is a ratchet: a new violation in a file
+outside the baseline fails, and a baselined file that becomes fully compliant
+also fails, with an instruction to drop it from the list. Regenerate with
+`node scripts/check-fork-markers.ts --write-baseline` (add `--force` only when
+deliberately adopting new violations).
+
+## Core exceptions — permanently fork-owned, not flag-gated
+
+Most fork features sit behind a flag so upstream's code path stays intact and a
+post-merge regression can be isolated by switching ours off. The subsystems
+below are deliberate exceptions: they are load-bearing infrastructure whose
+"off" path would be a second, untested execution mode — flag-gating them would
+_increase_ merge and correctness risk rather than reduce it. Treat them as
+permanent fork surface and keep them marked instead.
+
+| Subsystem                         | Why it is not flag-gated                                                                                    |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| User management / Clerk team mode | The reason the fork exists. Already conditioned on `T3CODE_CLERK_SECRET_KEY` being configured.              |
+| Ownership + access control        | A disabled access-control path is a data-exposure bug, not a fallback. Part of user management in practice. |
+| ThreadExecutionSupervisor         | Turn admission and execution revisions are in the dispatch path; a bypass mode would be a second scheduler. |
+| Session recovery                  | Reconnect-after-restart has no meaningful "off" state — off is just the pre-existing stuck-session bug.     |
+| Thread priority                   | A projection column plus ordering. Nothing to disable; the sidebar that consumes it is itself flag-gated.   |
+| Shell projection barrier          | Sync-correctness hardening. Disabling it reintroduces the drift it was written to fix.                      |
+| Plannotator plan review           | Relied on daily and mounted unconditionally; documented here rather than retrofitted behind a flag.         |
+
+Everything outside this table should follow the flag rule in `AGENTS.md`.
+
 ## Feature ownership
 
 | Area                      | Dedicated implementation                                                                                        | Upstream-facing seams                                                                   |

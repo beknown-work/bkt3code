@@ -1,0 +1,235 @@
+/**
+ * T3-CUSTOM(expbkt3): Fork marker discipline check.
+ *
+ * Every fork edit inside an upstream-owned file must sit inside a
+ * `T3-CUSTOM(expbkt3)` marker, so that whoever resolves the weekly upstream
+ * merge can tell at a glance which side owns each hunk. This script enforces
+ * that on newly modified regions while tolerating the existing backlog through
+ * a ratchet file that can only shrink.
+ *
+ * Usage:
+ *   node scripts/check-fork-markers.ts              # verify (CI)
+ *   node scripts/check-fork-markers.ts --write-baseline [--force]
+ *
+ * Files ADDED by the fork are fork-owned and skipped. Files MODIFIED relative
+ * to the upstream mirror are checked hunk by hunk.
+ *
+ * Runs under bare `node` in CI with no dependency install, so it deliberately
+ * uses node builtins and console rather than the Effect APIs.
+ */
+// @effect-diagnostics nodeBuiltinImport:off - runs without node_modules in CI.
+// @effect-diagnostics globalConsole:off - plain CLI output, no Effect runtime.
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const MARKER = "T3-CUSTOM(expbkt3)";
+const BASELINE_PATH = "scripts/fork-marker-baseline.json";
+
+/** The byte-pure upstream mirror. CI has no `upstream` remote configured. */
+const UPSTREAM_REF = process.env.FORK_UPSTREAM_REF ?? "origin/main";
+
+/**
+ * Paths exempt from marker discipline: test files (fork behaviour is covered by
+ * fork-owned tests, and marking assertions adds noise), generated files, docs,
+ * and fork-owned CI/config surfaces.
+ */
+const EXEMPT_PATTERNS: ReadonlyArray<RegExp> = [
+  /\.test\.tsx?$/,
+  /\.gen\.ts$/,
+  /routeTree\.gen\.ts$/,
+  /^docs\//,
+  /^AGENTS\.md$/,
+  /^\.github\//,
+  /^deploy\//,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /(^|\/)package\.json$/,
+  /\.md$/,
+];
+
+/** How far above a hunk a single-line marker still counts as covering it. */
+const MARKER_LOOKBEHIND_LINES = 3;
+
+interface Violation {
+  readonly file: string;
+  readonly startLine: number;
+  readonly lineCount: number;
+}
+
+function git(args: ReadonlyArray<string>): string {
+  return execFileSync("git", [...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+}
+
+function isExempt(path: string): boolean {
+  return EXEMPT_PATTERNS.some((pattern) => pattern.test(path));
+}
+
+/**
+ * Line numbers (1-indexed, in the HEAD version of the file) that sit inside a
+ * BEGIN/END marker block or on a line carrying a single-line marker.
+ */
+function markedLines(contents: string): ReadonlySet<number> {
+  const marked = new Set<number>();
+  const lines = contents.split("\n");
+  let blockDepth = 0;
+  lines.forEach((line, index) => {
+    const lineNumber = index + 1;
+    const hasMarker = line.includes(MARKER);
+    if (hasMarker && line.includes("BEGIN")) {
+      blockDepth += 1;
+      marked.add(lineNumber);
+      return;
+    }
+    if (hasMarker && line.includes("END")) {
+      marked.add(lineNumber);
+      blockDepth = Math.max(0, blockDepth - 1);
+      return;
+    }
+    if (blockDepth > 0 || hasMarker) {
+      marked.add(lineNumber);
+    }
+  });
+  return marked;
+}
+
+function changedFiles(base: string): { modified: string[]; added: string[] } {
+  const raw = git(["diff", "--name-status", "-z", base, "HEAD"]);
+  const parts = raw.split("\0").filter((part) => part.length > 0);
+  const modified: string[] = [];
+  const added: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const status = parts[index] ?? "";
+    if (status.startsWith("R") || status.startsWith("C")) {
+      // rename/copy carries two paths; treat the destination as modified
+      const destination = parts[index + 2];
+      if (destination !== undefined) modified.push(destination);
+      index += 2;
+      continue;
+    }
+    const path = parts[index + 1];
+    index += 1;
+    if (path === undefined) continue;
+    if (status === "A") added.push(path);
+    else if (status === "M") modified.push(path);
+  }
+  return { modified, added };
+}
+
+/** Added-line hunks of `file`, as [startLineInHead, lineCount]. */
+function addedHunks(base: string, file: string): ReadonlyArray<readonly [number, number]> {
+  const diff = git(["diff", "-U0", base, "HEAD", "--", file]);
+  const hunks: Array<readonly [number, number]> = [];
+  for (const line of diff.split("\n")) {
+    const match = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (match === null) continue;
+    const start = Number(match[1]);
+    const count = match[2] === undefined ? 1 : Number(match[2]);
+    // count === 0 is a pure deletion: nothing in HEAD to mark.
+    if (count > 0) hunks.push([start, count]);
+  }
+  return hunks;
+}
+
+function findViolations(base: string, files: ReadonlyArray<string>): Violation[] {
+  const violations: Violation[] = [];
+  for (const file of files) {
+    if (isExempt(file) || !existsSync(file)) continue;
+    // Ownership comes from git status, never from content: an upstream-owned
+    // file often carries a marked fork import near the top, and sniffing for
+    // that would exempt the entire file from the check.
+    const contents = readFileSync(file, "utf8");
+    const marked = markedLines(contents);
+    for (const [start, count] of addedHunks(base, file)) {
+      const covered = Array.from({ length: count }, (_, offset) => start + offset).every((line) =>
+        marked.has(line),
+      );
+      if (covered) continue;
+      const lookbehind = Array.from(
+        { length: MARKER_LOOKBEHIND_LINES },
+        (_, offset) => start - offset - 1,
+      ).some((line) => marked.has(line));
+      if (lookbehind) continue;
+      violations.push({ file, startLine: start, lineCount: count });
+    }
+  }
+  return violations;
+}
+
+function readBaseline(): ReadonlySet<string> {
+  if (!existsSync(BASELINE_PATH)) return new Set();
+  const parsed: unknown = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+  const files = (parsed as { files?: unknown }).files;
+  return new Set(
+    Array.isArray(files) ? files.filter((f): f is string => typeof f === "string") : [],
+  );
+}
+
+function main(): number {
+  const argv = process.argv.slice(2);
+  const writeBaseline = argv.includes("--write-baseline");
+  const force = argv.includes("--force");
+
+  const base = git(["merge-base", "HEAD", UPSTREAM_REF]).trim();
+  const { modified, added } = changedFiles(base);
+  const violations = findViolations(base, modified);
+  const offending = new Set(violations.map((violation) => violation.file));
+
+  if (writeBaseline) {
+    const previous = readBaseline();
+    const next = [...offending].filter((file) => force || previous.has(file)).sort();
+    writeFileSync(BASELINE_PATH, `${JSON.stringify({ files: next }, null, 2)}\n`);
+    console.log(
+      `Wrote ${BASELINE_PATH} with ${next.length} file(s)` +
+        (force ? " (--force: existing violations adopted)" : ""),
+    );
+    return 0;
+  }
+
+  const baseline = readBaseline();
+  const unmarked = [...offending].filter((file) => !baseline.has(file)).sort();
+  const nowClean = [...baseline].filter((file) => !offending.has(file)).sort();
+
+  if (unmarked.length > 0) {
+    console.error(
+      `\nFork edits to upstream-owned files must sit inside ${MARKER} markers.\n` +
+        `Wrap each region with "// ${MARKER}: BEGIN" / "// ${MARKER}: END",\n` +
+        `or put a single-line "// ${MARKER}: <why>" comment directly above it.\n`,
+    );
+    for (const file of unmarked) {
+      console.error(`  ${file}`);
+      for (const violation of violations.filter((entry) => entry.file === file)) {
+        const end = violation.startLine + violation.lineCount - 1;
+        console.error(`    lines ${violation.startLine}-${end} are unmarked`);
+      }
+    }
+  }
+
+  if (nowClean.length > 0) {
+    console.error(
+      `\nThese files are now fully marked — remove them from ${BASELINE_PATH}\n` +
+        "so the ratchet cannot loosen again:\n",
+    );
+    for (const file of nowClean) console.error(`  ${file}`);
+  }
+
+  if (unmarked.length === 0 && nowClean.length === 0) {
+    const skipped = baseline.size;
+    console.log(
+      `Fork marker check passed. ${modified.length} modified upstream file(s), ` +
+        `${added.length} fork-owned file(s) added, ${skipped} file(s) still in the baseline.`,
+    );
+    return 0;
+  }
+  return 1;
+}
+
+// Only run when invoked directly, so the test can import the helpers.
+const invokedPath = process.argv[1];
+if (
+  invokedPath !== undefined &&
+  resolve(invokedPath) === resolve(import.meta.dirname, "check-fork-markers.ts")
+) {
+  process.exit(main());
+}
+
+export { isExempt, markedLines };
