@@ -97,6 +97,8 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { useUiStateStore } from "../uiStateStore";
+// T3-CUSTOM(expbkt3): Visit timestamps include the latest completion after hydration.
+import { resolveThreadVisitTimestamp } from "../threadVisitTimestamp";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -1883,20 +1885,26 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!serverThread?.id) return;
-    const threadUpdatedAt = Date.parse(serverThread.updatedAt);
+    // T3-CUSTOM(expbkt3): A restarted client can hydrate completion after the shell timestamp.
+    const visitedAt = resolveThreadVisitTimestamp({
+      threadUpdatedAt: serverThread.updatedAt,
+      latestTurnCompletedAt: serverThread.latestTurn?.completedAt,
+    });
+    const threadUpdatedAt = Date.parse(visitedAt);
     if (Number.isNaN(threadUpdatedAt)) return;
     const lastVisitedAt = activeThreadLastVisitedAt ? Date.parse(activeThreadLastVisitedAt) : NaN;
     if (!Number.isNaN(lastVisitedAt) && lastVisitedAt >= threadUpdatedAt) return;
 
     markThreadVisited(
       scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
-      serverThread.updatedAt,
+      visitedAt,
     );
   }, [
     activeThreadLastVisitedAt,
     markThreadVisited,
     serverThread?.environmentId,
     serverThread?.id,
+    serverThread?.latestTurn?.completedAt,
     serverThread?.updatedAt,
   ]);
 
