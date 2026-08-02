@@ -23,7 +23,7 @@ import {
   UserId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { SourceControlProfileId } from "./sourceControl.ts";
+import { SourceControlProfileId } from "./sourceControlProfiles.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",

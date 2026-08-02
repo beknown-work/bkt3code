@@ -9,31 +9,40 @@ import {
   createEnvironmentRpcQueryAtomFamily,
 } from "./runtime.ts";
 import {
-  type AddProjectMemberInput,
   type CreateProjectInput,
   type DeleteProjectInput,
-  type RemoveProjectMemberInput,
-  type TransferProjectOwnershipInput,
   type UpdateProjectInput,
-  addProjectMember,
   createProject,
   deleteProject,
-  removeProjectMember,
-  transferProjectOwnership,
   updateProject,
 } from "../operations/commands.ts";
+// T3-CUSTOM(expbkt3): BEGIN fork command creators
+import {
+  type AddProjectMemberInput,
+  type RemoveProjectMemberInput,
+  type TransferProjectOwnershipInput,
+  addProjectMember,
+  removeProjectMember,
+  transferProjectOwnership,
+} from "../operations/commandsFork.ts";
+// T3-CUSTOM(expbkt3): END
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
-export { OrchestrationCommandAcknowledgementTimeoutError } from "../operations/commands.ts";
+// T3-CUSTOM(expbkt3): acknowledgement timeout error
+export { OrchestrationCommandAcknowledgementTimeoutError } from "../operations/commandAck.ts";
 
 export type {
-  AddProjectMemberInput,
   CreateProjectInput,
   DeleteProjectInput,
-  RemoveProjectMemberInput,
-  TransferProjectOwnershipInput,
   UpdateProjectInput,
 } from "../operations/commands.ts";
+// T3-CUSTOM(expbkt3): BEGIN fork command input types
+export type {
+  AddProjectMemberInput,
+  RemoveProjectMemberInput,
+  TransferProjectOwnershipInput,
+} from "../operations/commandsFork.ts";
+// T3-CUSTOM(expbkt3): END
 
 export interface OptimisticProjectFile {
   readonly data: ProjectReadFileResult;

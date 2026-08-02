@@ -83,8 +83,11 @@ import { ThreadExecutionSupervisor } from "./execution/ThreadExecutionSupervisor
 import { OrchestrationAccessControl } from "./orchestration/Services/AccessControl.ts";
 import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
 import { ClerkDirectory, ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
-import { filterShellSnapshot, isOwnerOrMember } from "./orchestration/accessRules.ts";
-import { checkCommandAccess } from "./orchestration/commandAccess.ts";
+// T3-CUSTOM(expbkt3): fork RPC handlers
+import { makeForkWsHandlers } from "./wsForkHandlers.ts";
+// T3-CUSTOM(expbkt3): per-connection access control helpers
+import { filterShellSnapshot } from "./orchestration/accessRules.ts";
+import { makeWsVisibility } from "./orchestration/wsVisibility.ts";
 import { awaitShellProjectionSequence } from "./orchestration/shellProjectionBarrier.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -350,48 +353,20 @@ const makeWsRpcLayer = (
       // Stable for the connection's identity, so resolve once.
       const actorIsAdmin =
         actorUserId === null ? false : yield* clerkDirectory.isOrgAdmin(actorUserId);
-      // The set of thread/project ids the operator may see (active + archived),
-      // derived from the filtered shell snapshots. Used to filter raw event
-      // replays.
-      const visibleAggregateIdsForActor = (userId: UserId) =>
-        Effect.all([
-          projectionSnapshotQuery.getShellSnapshot(),
-          projectionSnapshotQuery.getArchivedShellSnapshot(),
-        ]).pipe(
-          Effect.map(([activeSnapshot, archivedSnapshot]) => {
-            const active = filterShellSnapshot(activeSnapshot, userId);
-            const archived = filterShellSnapshot(archivedSnapshot, userId);
-            const threadIds = new Set<string>([
-              ...active.threads.map((thread) => thread.id),
-              ...archived.threads.map((thread) => thread.id),
-            ]);
-            const projectIds = new Set<string>([
-              ...active.projects.map((project) => project.id),
-              ...archived.projects.map((project) => project.id),
-            ]);
-            return { threadIds, projectIds };
-          }),
-        );
-      // Guard a per-thread read; denials read as "not found" (no existence leak)
-      // and are re-wrapped into each caller's error type.
-      const requireThreadAccess = (
-        threadId: ThreadId,
-      ): Effect.Effect<void, OrchestrationGetSnapshotError> =>
-        actorUserId === null
-          ? Effect.void
-          : accessControl.canAccessThread(actorUserId, threadId).pipe(
-              Effect.orElseSucceed(() => false),
-              Effect.flatMap((allowed) =>
-                allowed
-                  ? Effect.void
-                  : Effect.fail(
-                      new OrchestrationGetSnapshotError({
-                        message: `Thread ${threadId} was not found`,
-                        cause: threadId,
-                      }),
-                    ),
-              ),
-            );
+      // T3-CUSTOM(expbkt3): BEGIN per-connection access control (wsVisibility.ts)
+      const {
+        visibleAggregateIdsForActor,
+        requireThreadAccess,
+        applyShellVisibility,
+        applyShellItemVisibility,
+        authorizeNormalizedCommand,
+      } = makeWsVisibility({
+        projectionSnapshotQuery,
+        accessControl,
+        actorUserId,
+        actorIsAdmin,
+      });
+      // T3-CUSTOM(expbkt3): END
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -813,173 +788,6 @@ const makeWsRpcLayer = (
           Stream.flatMap((items) => Stream.fromIterable(items)),
         );
 
-      // Team mode: transform a global shell delta into what the operating user
-      // may see. A thread/project that becomes visible (e.g. the user is tagged)
-      // is forwarded as an upsert — for a project tag we also emit upserts for
-      // all of the project's now-visible threads. A thread/project that is no
-      // longer visible (untagged) is converted to a removal so it disappears
-      // live from the sidebar. Removals pass through unchanged.
-      const shellEventsForActor = (
-        event: OrchestrationShellStreamEvent,
-        userId: UserId,
-      ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamEvent>, never, never> => {
-        switch (event.kind) {
-          case "thread-removed":
-          case "project-removed":
-            return Effect.succeed([event]);
-          case "thread-upserted": {
-            const thread = event.thread;
-            // A thread is delivered only if the user owns it or is tagged on it
-            // directly (project membership does not reveal threads). When it is
-            // visible, resolve the parent project so the thread arrives together
-            // with its container shell — otherwise it lands in the sidebar with
-            // no project to group under ("unknown project").
-            if (!isOwnerOrMember(thread, userId)) {
-              return Effect.succeed([
-                {
-                  kind: "thread-removed" as const,
-                  sequence: event.sequence,
-                  threadId: thread.id,
-                },
-              ]);
-            }
-            return projectionSnapshotQuery.getProjectShellById(thread.projectId).pipe(
-              Effect.map((projectOption) => {
-                const project = Option.getOrNull(projectOption);
-                return project !== null
-                  ? [
-                      { kind: "project-upserted" as const, sequence: event.sequence, project },
-                      event,
-                    ]
-                  : [event];
-              }),
-              Effect.orElseSucceed(() => [event]),
-            );
-          }
-          case "project-upserted": {
-            const project = event.project;
-            const directlyVisible = isOwnerOrMember(project, userId);
-            if (directlyVisible) {
-              // Owner/member: the project is visible. Do NOT fan out its threads
-              // — a project tag grants workspace access, not thread visibility.
-              return Effect.succeed([event]);
-            }
-            // Otherwise the project only appears if it contains a thread the user
-            // can see directly; if not, remove it from their sidebar.
-            return projectionSnapshotQuery.listThreadShellsByProjectId(project.id).pipe(
-              Effect.map((threads) => {
-                const hasVisibleThread = threads.some((thread) => isOwnerOrMember(thread, userId));
-                if (hasVisibleThread) {
-                  return [event];
-                }
-                return [
-                  {
-                    kind: "project-removed" as const,
-                    sequence: event.sequence,
-                    projectId: project.id,
-                  },
-                ];
-              }),
-              Effect.orElseSucceed(() =>
-                directlyVisible
-                  ? [event]
-                  : [
-                      {
-                        kind: "project-removed" as const,
-                        sequence: event.sequence,
-                        projectId: project.id,
-                      },
-                    ],
-              ),
-            );
-          }
-        }
-      };
-
-      // Wrap a shell-event stream with per-user visibility (no-op for an
-      // unrestricted operator).
-      const applyShellVisibility = <E, R>(
-        stream: Stream.Stream<OrchestrationShellStreamEvent, E, R>,
-      ): Stream.Stream<OrchestrationShellStreamEvent, E, R> =>
-        actorUserId === null
-          ? stream
-          : stream.pipe(
-              Stream.mapEffect((event) => shellEventsForActor(event, actorUserId)),
-              Stream.flatMap((events) => Stream.fromIterable(events)),
-            );
-
-      const applyShellItemVisibility = <E, R>(
-        stream: Stream.Stream<OrchestrationShellStreamItem, E, R>,
-      ): Stream.Stream<OrchestrationShellStreamItem, E, R> =>
-        actorUserId === null
-          ? stream
-          : stream.pipe(
-              Stream.mapEffect(
-                (
-                  item,
-                ): Effect.Effect<ReadonlyArray<OrchestrationShellStreamItem>, never, never> => {
-                  switch (item.kind) {
-                    case "project-upserted":
-                    case "project-removed":
-                    case "thread-upserted":
-                    case "thread-removed":
-                      return shellEventsForActor(item, actorUserId);
-                    case "execution":
-                      return projectionSnapshotQuery
-                        .getThreadShellById(item.execution.threadId)
-                        .pipe(
-                          Effect.map((thread) =>
-                            Option.isSome(thread) && isOwnerOrMember(thread.value, actorUserId)
-                              ? ([item] as ReadonlyArray<OrchestrationShellStreamItem>)
-                              : ([] as ReadonlyArray<OrchestrationShellStreamItem>),
-                          ),
-                          Effect.orElseSucceed(
-                            (): ReadonlyArray<OrchestrationShellStreamItem> => [],
-                          ),
-                        );
-                    case "snapshot":
-                      return Effect.succeed<ReadonlyArray<OrchestrationShellStreamItem>>([
-                        {
-                          ...item,
-                          snapshot: filterShellSnapshot(item.snapshot, actorUserId),
-                        },
-                      ]);
-                    case "synchronized":
-                      return Effect.succeed<ReadonlyArray<OrchestrationShellStreamItem>>([item]);
-                  }
-                },
-              ),
-              Stream.flatMap((items) => Stream.fromIterable(items)),
-            );
-
-      const authorizeNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
-        Effect.gen(function* () {
-          // Team mode: reject commands on threads/projects this operator can't
-          // access before they reach the engine.
-          if (actorUserId !== null) {
-            const allowed = yield* checkCommandAccess(
-              accessControl,
-              actorUserId,
-              actorIsAdmin,
-              normalizedCommand,
-            ).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: "Failed to authorize orchestration command",
-                    cause,
-                  }),
-              ),
-            );
-            if (!allowed) {
-              // Reads as "not found" — no existence leak.
-              return yield* new OrchestrationDispatchCommandError({
-                message: "Thread or project not found.",
-                cause: normalizedCommand.type,
-              });
-            }
-          }
-        });
       const dispatchAuthorizedCommand = (normalizedCommand: OrchestrationCommand) =>
         orchestrationCommandDispatcher.dispatch(normalizedCommand, { actorUserId });
       const dispatchNormalizedCommand = (normalizedCommand: OrchestrationCommand) =>
@@ -1283,7 +1091,32 @@ const makeWsRpcLayer = (
           return { ...input, env } as A;
         });
 
+      // T3-CUSTOM(expbkt3): BEGIN fork RPC handlers (wsForkHandlers.ts)
+      const forkHandlers = makeForkWsHandlers({
+        currentSessionId,
+        actorUserId,
+        personalMcpUserId,
+        personalMcpProfiles,
+        sourceControlProfiles,
+        environmentUsers,
+        systemResourceMonitor,
+        providerRateLimits,
+        projectionSnapshotQuery,
+        orchestrationEngine,
+        gitVcsDriver,
+        executionSupervisor,
+        sourceControlActionLock,
+        enrichOrchestrationEvents,
+        observeRpcEffect,
+        observeRpcStream,
+        requireThreadAccess,
+        visibleAggregateIdsForActor,
+      });
+      // T3-CUSTOM(expbkt3): END
+
       return WsRpcGroup.of({
+        // T3-CUSTOM(expbkt3): fork RPC handlers live in wsForkHandlers.ts
+        ...forkHandlers,
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -1542,42 +1375,6 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.getTurnDiff,
-            Effect.gen(function* () {
-              yield* requireThreadAccess(input.threadId);
-              return yield* checkpointDiffQuery.getTurnDiff(input);
-            }).pipe(
-              Effect.mapError((cause) =>
-                isOrchestrationGetTurnDiffError(cause)
-                  ? cause
-                  : new OrchestrationGetTurnDiffError({
-                      message: "Failed to load turn diff",
-                      cause,
-                    }),
-              ),
-            ),
-            { "rpc.aggregate": "orchestration" },
-          ),
-        [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: (input) =>
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.getFullThreadDiff,
-            Effect.gen(function* () {
-              yield* requireThreadAccess(input.threadId);
-              return yield* checkpointDiffQuery.getFullThreadDiff(input);
-            }).pipe(
-              Effect.mapError((cause) =>
-                isOrchestrationGetFullThreadDiffError(cause)
-                  ? cause
-                  : new OrchestrationGetFullThreadDiffError({
-                      message: "Failed to load full thread diff",
-                      cause,
-                    }),
-              ),
-            ),
-            { "rpc.aggregate": "orchestration" },
-          ),
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.replayEvents,
@@ -1613,6 +1410,42 @@ const makeWsRpcLayer = (
                     message: "Failed to replay orchestration events",
                     cause,
                   }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getTurnDiff,
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId);
+              return yield* checkpointDiffQuery.getTurnDiff(input);
+            }).pipe(
+              Effect.mapError((cause) =>
+                isOrchestrationGetTurnDiffError(cause)
+                  ? cause
+                  : new OrchestrationGetTurnDiffError({
+                      message: "Failed to load turn diff",
+                      cause,
+                    }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getFullThreadDiff,
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId);
+              return yield* checkpointDiffQuery.getFullThreadDiff(input);
+            }).pipe(
+              Effect.mapError((cause) =>
+                isOrchestrationGetFullThreadDiffError(cause)
+                  ? cause
+                  : new OrchestrationGetFullThreadDiffError({
+                      message: "Failed to load full thread diff",
+                      cause,
+                    }),
               ),
             ),
             { "rpc.aggregate": "orchestration" },
@@ -2059,30 +1892,6 @@ const makeWsRpcLayer = (
             },
           );
         },
-        [WS_METHODS.personalMcpGetProfile]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpGetProfile,
-            personalMcpProfiles.get(personalMcpUserId),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
-        [WS_METHODS.personalMcpUpdateProfile]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpUpdateProfile,
-            personalMcpProfiles.update(personalMcpUserId, input),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
-        [WS_METHODS.personalMcpRotateToken]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpRotateToken,
-            personalMcpProfiles.rotateExternalToken(personalMcpUserId),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
-        [WS_METHODS.personalMcpRevokeToken]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpRevokeToken,
-            personalMcpProfiles.revokeExternalToken(personalMcpUserId),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
@@ -2256,178 +2065,6 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "source-control",
             },
-          ),
-        [WS_METHODS.sourceControlProfilesList]: (_input) =>
-          observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {
-            "rpc.aggregate": "source-control-profile",
-          }),
-        [WS_METHODS.sourceControlProfilesUpsert]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesUpsert,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.upsert(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesTest]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesTest,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.test(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesReplaceCredential]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesReplaceCredential,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.replaceCredential(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesDisconnect]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesDisconnect,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.disconnect(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesArchive]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesArchive,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.archive(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.usersList]: (_input) =>
-          observeRpcEffect(WS_METHODS.usersList, environmentUsers.list(currentSessionId), {
-            "rpc.aggregate": "users",
-          }),
-        [WS_METHODS.usersUpdate]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.usersUpdate,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(environmentUsers.update(input))),
-            { "rpc.aggregate": "users" },
-          ),
-        [WS_METHODS.usersRevokeSessions]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.usersRevokeSessions,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(environmentUsers.revokeSessions(input))),
-            { "rpc.aggregate": "users" },
-          ),
-        [WS_METHODS.usersSourceControlProfileSet]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.usersSourceControlProfileSet,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(environmentUsers.setSourceControlProfile(input))),
-            { "rpc.aggregate": "users" },
-          ),
-        [WS_METHODS.sourceControlThreadOwnerSet]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlThreadOwnerSet,
-            // T3-CUSTOM(expbkt3): GitHub identity follows durable T3
-            // ownership. Keep this RPC decodable for older clients.
-            Effect.fail(
-              new SourceControlProfileError({
-                operation: "switch-thread-owner",
-                reason: "validation-failed",
-                detail:
-                  "GitHub identity follows the durable thread owner. Transfer thread ownership instead.",
-                profileId: input.sourceControlProfileId,
-                threadId: input.threadId,
-              }),
-            ),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlConvertRemote]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlConvertRemote,
-            sourceControlActionLock.runExclusive(
-              input.threadId,
-              Effect.gen(function* () {
-                const threadOption = yield* projectionSnapshotQuery
-                  .getThreadShellById(input.threadId)
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "convert-remote",
-                          reason: "thread-not-found",
-                          detail: "Could not read the selected thread.",
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                if (Option.isNone(threadOption)) {
-                  return yield* new SourceControlProfileError({
-                    operation: "convert-remote",
-                    reason: "thread-not-found",
-                    detail: "The selected thread no longer exists.",
-                    threadId: input.threadId,
-                  });
-                }
-                const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
-                  input.threadId,
-                  threadOption.value.ownerUserId,
-                );
-                const environment = context?.environment ?? process.env;
-                const current = yield* gitVcsDriver
-                  .execute({
-                    operation: "SourceControlRemote.getUrl",
-                    cwd: input.cwd,
-                    args: ["remote", "get-url", input.remoteName],
-                    env: environment,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "convert-remote",
-                          reason: "remote-not-found",
-                          detail: `Git remote '${input.remoteName}' could not be read.`,
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                const previousUrl = current.stdout.trim();
-                const remoteUrl = githubSshRemoteToHttps(previousUrl);
-                if (remoteUrl === null) {
-                  return yield* new SourceControlProfileError({
-                    operation: "convert-remote",
-                    reason: "ssh-remote",
-                    detail: "The selected remote is not a GitHub SSH URL that can be converted.",
-                    threadId: input.threadId,
-                  });
-                }
-                yield* gitVcsDriver
-                  .execute({
-                    operation: "SourceControlRemote.setUrl",
-                    cwd: input.cwd,
-                    args: ["remote", "set-url", input.remoteName, remoteUrl],
-                    env: environment,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "convert-remote",
-                          reason: "validation-failed",
-                          detail: "The GitHub remote could not be converted to HTTPS.",
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                return { remoteName: input.remoteName, previousUrl, remoteUrl };
-              }),
-            ),
-            { "rpc.aggregate": "source-control-profile" },
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(
@@ -2941,14 +2578,6 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.subscribeServerResources]: (_input) =>
-          observeRpcStream(WS_METHODS.subscribeServerResources, systemResourceMonitor.stream, {
-            "rpc.aggregate": "server",
-          }),
-        [WS_METHODS.subscribeProviderRateLimits]: (_input) =>
-          observeRpcStream(WS_METHODS.subscribeProviderRateLimits, providerRateLimits.stream, {
-            "rpc.aggregate": "server",
-          }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,

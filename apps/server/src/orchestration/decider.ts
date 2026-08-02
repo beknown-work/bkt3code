@@ -14,9 +14,6 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
   requireActiveProjectWorkspaceRootAbsent,
-  requireMemberAddable,
-  requireMemberRemovable,
-  requireOwnershipTransferable,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -24,6 +21,8 @@ import {
   requireThreadAbsent,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
+// T3-CUSTOM(expbkt3): fork command decisions
+import { decideForkOrchestrationCommand, isForkOrchestrationCommand } from "./deciderForkCases.ts";
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -236,6 +235,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   OrchestrationCommandInvariantError | PlatformError.PlatformError,
   Crypto.Crypto
 > {
+  // T3-CUSTOM(expbkt3): BEGIN fork commands are decided in deciderForkCases.ts.
+  // Narrowing here keeps upstream's `command satisfies never` default exhaustive.
+  if (isForkOrchestrationCommand(command)) {
+    return yield* decideForkOrchestrationCommand({ command, readModel, actor, withEventBase });
+  }
+  // T3-CUSTOM(expbkt3): END
+
   switch (command.type) {
     case "project.create": {
       yield* requireProjectAbsent({
@@ -723,192 +729,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.member.add": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      yield* requireMemberAddable({
-        commandType: command.type,
-        entityLabel: `thread '${command.threadId}'`,
-        ownerUserId: thread.ownerUserId,
-        memberUserIds: thread.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.member-added",
-        payload: {
-          threadId: command.threadId,
-          userId: command.userId,
-          addedByUserId: actor,
-          addedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.member.remove": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      yield* requireMemberRemovable({
-        commandType: command.type,
-        entityLabel: `thread '${command.threadId}'`,
-        ownerUserId: thread.ownerUserId,
-        memberUserIds: thread.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.member-removed",
-        payload: {
-          threadId: command.threadId,
-          userId: command.userId,
-          removedByUserId: actor,
-          removedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.owner.transfer": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      yield* requireOwnershipTransferable({
-        commandType: command.type,
-        entityLabel: `thread '${command.threadId}'`,
-        ownerUserId: thread.ownerUserId,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.owner-transferred",
-        payload: {
-          threadId: command.threadId,
-          previousOwnerUserId: thread.ownerUserId,
-          ownerUserId: command.userId,
-          transferredByUserId: actor,
-          transferredAt: occurredAt,
-        },
-      };
-    }
-
-    case "project.member.add": {
-      const project = yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
-      yield* requireMemberAddable({
-        commandType: command.type,
-        entityLabel: `project '${command.projectId}'`,
-        ownerUserId: project.ownerUserId,
-        memberUserIds: project.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.member-added",
-        payload: {
-          projectId: command.projectId,
-          userId: command.userId,
-          addedByUserId: actor,
-          addedAt: occurredAt,
-        },
-      };
-    }
-
-    case "project.member.remove": {
-      const project = yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
-      yield* requireMemberRemovable({
-        commandType: command.type,
-        entityLabel: `project '${command.projectId}'`,
-        ownerUserId: project.ownerUserId,
-        memberUserIds: project.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.member-removed",
-        payload: {
-          projectId: command.projectId,
-          userId: command.userId,
-          removedByUserId: actor,
-          removedAt: occurredAt,
-        },
-      };
-    }
-
-    case "project.owner.transfer": {
-      const project = yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
-      yield* requireOwnershipTransferable({
-        commandType: command.type,
-        entityLabel: `project '${command.projectId}'`,
-        ownerUserId: project.ownerUserId,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.owner-transferred",
-        payload: {
-          projectId: command.projectId,
-          previousOwnerUserId: project.ownerUserId,
-          ownerUserId: command.userId,
-          transferredByUserId: actor,
-          transferredAt: occurredAt,
-        },
-      };
-    }
-
     case "thread.runtime-mode.set": {
       yield* requireThread({
         readModel,
@@ -951,39 +771,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.source-control-profile.set": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (
-        thread.latestTurn?.state === "running" ||
-        thread.session?.status === "starting" ||
-        thread.session?.status === "running"
-      ) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `thread ${command.threadId} is busy and its source-control owner cannot change`,
-        });
-      }
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.source-control-profile-set",
-        payload: {
-          threadId: command.threadId,
-          previousSourceControlProfileId: thread.sourceControlProfileId,
-          sourceControlProfileId: command.sourceControlProfileId,
-          changedAt: command.createdAt,
         },
       };
     }
@@ -1219,27 +1006,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.session.restart": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.session-restart-requested",
-        payload: {
-          threadId: command.threadId,
-          createdAt: command.createdAt,
-        },
-      };
-    }
-
     case "thread.session.set": {
       const thread = yield* requireThread({
         readModel,
@@ -1389,54 +1155,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,
           completedAt: command.completedAt,
-        },
-      };
-    }
-
-    case "thread.catchup-summary.request": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.catchup-summary-requested",
-        payload: {
-          threadId: command.threadId,
-          turnId: command.turnId,
-          createdAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.catchup-summary.update": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.catchup-summary-updated",
-        payload: {
-          threadId: command.threadId,
-          turnId: command.turnId,
-          assistantMessageId: command.assistantMessageId,
-          rollingSummary: command.rollingSummary,
-          displaySummary: command.displaySummary,
-          progress: command.progress,
-          createdAt: command.createdAt,
         },
       };
     }

@@ -29,12 +29,12 @@ import {
   archiveThread,
   createProject,
   createThread,
-  OrchestrationCommandAcknowledgementTimeoutError,
-  restartThreadSession,
   settleThread,
   stopThreadSession,
   unsettleThread,
 } from "./commands.ts";
+import { OrchestrationCommandAcknowledgementTimeoutError } from "./commandAck.ts";
+import { restartThreadSession } from "./commandsFork.ts";
 
 const TEST_CRYPTO_LAYER = Layer.succeed(
   Crypto.Crypto,
