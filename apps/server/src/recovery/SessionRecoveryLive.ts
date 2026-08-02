@@ -8,15 +8,28 @@
  *
  * This sweep closes that gap for exactly the threads a user meant to be
  * running, as recorded in session_recovery_state (see the repository module for
- * why intent needs its own table). It reconnects the provider *session* only,
- * via the existing thread.session.restart command, and deliberately never
- * re-sends the interrupted turn: replaying half-finished agent work with no
- * human watching is the dangerous half of "auto-recovery", so a recovered
- * thread lands at ready and waits.
+ * why intent needs its own table).
+ *
+ * Recovery has two moves, and picking between them is the whole design:
+ *
+ *   - When the agent already produced work for the latest message, only the
+ *     *session* is reconnected (thread.session.restart). Replaying a
+ *     half-finished turn with no human watching is the dangerous half of
+ *     "auto-recovery", so that thread lands at ready and waits.
+ *   - When the latest user message never got a turn at all, reconnecting alone
+ *     is useless: the session comes back ready and then sits idle forever with
+ *     the message undelivered. This is what a turn that dies milliseconds after
+ *     admission looks like — an agent-authored message from the Linear bridge
+ *     that never ran. There is no partial work to corrupt, so the turn is
+ *     re-dispatched with the *same* message id (the message projection is
+ *     idempotent by id, so it does not duplicate in the transcript).
+ *
+ * Both moves share the one attempt budget, so a thread that cannot be revived
+ * still gives up rather than retrying forever.
  *
  * @module SessionRecoveryLive
  */
-import { CommandId, EventId, type ThreadId } from "@t3tools/contracts";
+import { CommandId, EventId, MessageId, type ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -25,7 +38,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -56,6 +72,13 @@ export interface SessionRecoveryLiveOptions {
   readonly autoResumeTurn?: boolean;
 }
 
+/** The newest user message on a thread, used to detect undelivered work. */
+const LatestUserMessageRow = Schema.Struct({
+  messageId: Schema.String,
+  text: Schema.String,
+  createdAt: Schema.String,
+});
+
 const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
   Effect.gen(function* () {
     const recoveryState = yield* SessionRecoveryStateRepository;
@@ -63,6 +86,49 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
     const snapshotQuery = yield* ProjectionSnapshotQuery;
     const engine = yield* OrchestrationEngineService;
     const crypto = yield* Crypto.Crypto;
+    const sql = yield* SqlClient.SqlClient;
+
+    const findLatestUserMessage = SqlSchema.findOneOption({
+      Request: Schema.Struct({ threadId: Schema.String }),
+      Result: LatestUserMessageRow,
+      execute: ({ threadId }) =>
+        sql`
+          SELECT message_id AS "messageId", text, created_at AS "createdAt"
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId} AND role = 'user'
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1
+        `,
+    });
+
+    const countTurnsSince = SqlSchema.findOne({
+      Request: Schema.Struct({ threadId: Schema.String, since: Schema.String }),
+      Result: Schema.Struct({ turns: Schema.Number }),
+      execute: ({ threadId, since }) =>
+        sql`
+          SELECT COUNT(*) AS "turns"
+          FROM projection_turns
+          WHERE thread_id = ${threadId} AND requested_at >= ${since}
+        `,
+    });
+
+    /**
+     * Work the user (or the bridge acting for them) asked for that no turn ever
+     * picked up. A turn requested at or after the message means the work was
+     * delivered — whatever happened to it afterwards is the other branch's
+     * problem, and must not be replayed here.
+     */
+    const findUndeliveredWork = Effect.fn("SessionRecovery.findUndeliveredWork")(function* (
+      threadId: ThreadId,
+    ) {
+      const message = yield* findLatestUserMessage({ threadId: String(threadId) });
+      if (Option.isNone(message)) return null;
+      const counted = yield* countTurnsSince({
+        threadId: String(threadId),
+        since: message.value.createdAt,
+      });
+      return counted.turns > 0 ? null : message.value;
+    });
 
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
     const maxAttempts = Math.max(1, options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
@@ -73,12 +139,22 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
     const serverId = (tag: string) =>
       crypto.randomUUIDv4.pipe(Effect.map((uuid) => `server:${tag}:${uuid}`));
 
-    /** Reconnect one thread. Attempts are counted before the dispatch so a
-        crash mid-attempt still consumes budget instead of looping. */
+    /** Reconnect one thread, and re-deliver its message when no turn ever ran.
+        Attempts are counted before the dispatch so a crash mid-attempt still
+        consumes budget instead of looping. */
     const attemptRecovery = Effect.fn("SessionRecovery.attempt")(function* (input: {
       readonly threadId: ThreadId;
       readonly attempts: number;
       readonly now: string;
+      readonly undelivered: {
+        readonly messageId: string;
+        readonly text: string;
+      } | null;
+      readonly thread: {
+        readonly modelSelection: unknown;
+        readonly runtimeMode: string;
+        readonly interactionMode: string;
+      } | null;
     }) {
       const nextAttemptAt = yield* DateTime.now.pipe(
         Effect.map((instant) =>
@@ -91,6 +167,8 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
         nextAttemptAt,
       });
 
+      const redelivering = input.undelivered !== null && input.thread !== null;
+
       if (input.attempts === 0) {
         yield* engine
           .dispatch({
@@ -100,8 +178,10 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
             activity: {
               id: EventId.make(yield* crypto.randomUUIDv4),
               tone: "info",
-              kind: "session.auto-reconnect",
-              summary: "Reconnecting the session after an unexpected stop",
+              kind: redelivering ? "session.auto-redeliver" : "session.auto-reconnect",
+              summary: redelivering
+                ? "Re-running a message whose turn never started"
+                : "Reconnecting the session after an unexpected stop",
               payload: {},
               turnId: null,
               createdAt: input.now,
@@ -111,17 +191,40 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
           .pipe(Effect.ignoreCause({ log: true }));
       }
 
-      yield* engine.dispatch({
-        type: "thread.session.restart",
-        commandId: CommandId.make(yield* serverId("session-recovery")),
-        threadId: input.threadId,
-        createdAt: input.now,
-      });
+      if (redelivering && input.undelivered && input.thread) {
+        // Starting a turn also ensures the provider session, so this both
+        // revives the session and delivers the work a plain restart would
+        // have left sitting unread. Same message id: the projection dedupes
+        // by id, so the transcript keeps one copy.
+        yield* engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(yield* serverId("session-recovery-turn")),
+          threadId: input.threadId,
+          message: {
+            messageId: MessageId.make(input.undelivered.messageId),
+            role: "user",
+            text: input.undelivered.text,
+            attachments: [],
+          },
+          modelSelection: input.thread.modelSelection as never,
+          runtimeMode: input.thread.runtimeMode as never,
+          interactionMode: input.thread.interactionMode as never,
+          createdAt: input.now,
+        });
+      } else {
+        yield* engine.dispatch({
+          type: "thread.session.restart",
+          commandId: CommandId.make(yield* serverId("session-recovery")),
+          threadId: input.threadId,
+          createdAt: input.now,
+        });
+      }
 
       yield* Effect.logInfo("session.recovery.attempt", {
         threadId: input.threadId,
         attempt: input.attempts + 1,
         maxAttempts,
+        mode: redelivering ? "redeliver-turn" : "reconnect-session",
       });
     });
 
@@ -159,8 +262,17 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
         return;
       }
 
+      // Work nobody ever ran. A reconnect alone would leave this sitting unread
+      // forever, so it is worth an attempt even when the session looks healthy.
+      const undelivered = yield* findUndeliveredWork(row.threadId);
+      const threadDefaults = {
+        modelSelection: shell.value.modelSelection as unknown,
+        runtimeMode: String(shell.value.runtimeMode),
+        interactionMode: String(shell.value.interactionMode),
+      };
+
       const sessionState = snapshot.providerSession.state;
-      if (sessionState === "ready" || sessionState === "starting") {
+      if ((sessionState === "ready" || sessionState === "starting") && undelivered === null) {
         const startedAt = Date.parse(snapshot.providerSession.startedAt ?? "");
         const upFor = Number.isFinite(startedAt) ? Date.parse(now) - startedAt : 0;
         if (row.attempts > 0 && row.recoveredAt === null && upFor >= healthyUptimeMs) {
@@ -190,10 +302,17 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
         return;
       }
 
-      // The session is down (absent | stopped | failed) and nobody asked for
-      // that. Reconnect it, or give up if the budget is spent.
+      // Either the session is down (absent | stopped | failed) with nobody
+      // asking for that, or it is up but holding work that never ran. Both are
+      // an attempt; both give up when the budget is spent.
       if (row.attempts + 1 >= maxAttempts) {
-        yield* attemptRecovery({ threadId: row.threadId, attempts: row.attempts, now });
+        yield* attemptRecovery({
+          threadId: row.threadId,
+          attempts: row.attempts,
+          now,
+          undelivered,
+          thread: threadDefaults,
+        });
         yield* recoveryState.recordGaveUp({ threadId: row.threadId, at: now });
         yield* engine
           .dispatch({
@@ -219,7 +338,13 @@ const makeSessionRecovery = (options?: SessionRecoveryLiveOptions) =>
         return;
       }
 
-      yield* attemptRecovery({ threadId: row.threadId, attempts: row.attempts, now });
+      yield* attemptRecovery({
+        threadId: row.threadId,
+        attempts: row.attempts,
+        now,
+        undelivered,
+        thread: threadDefaults,
+      });
     });
 
     const sweep = Effect.gen(function* () {
