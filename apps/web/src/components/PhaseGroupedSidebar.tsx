@@ -159,14 +159,8 @@ const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
   // T3-CUSTOM(expbkt3): Urgent question phase is visually distinct from lifecycle work.
   needs_input: "animate-pulse bg-red-500",
   plan_ready: "bg-primary",
-  ready_for_review: "bg-emerald-500",
-  ready_to_merge: "bg-violet-500",
   planning: "bg-info",
   implementing: "bg-success",
-  in_review: "bg-amber-500",
-  merging: "bg-violet-500",
-  merged: "bg-purple-500",
-  checking: "bg-muted-foreground/45",
   ready: "bg-muted-foreground/45",
 };
 
@@ -848,12 +842,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseSidebarRowClassName(
-          active,
-          selected,
-          needsUserInput,
-          row.thread.priority === 0,
-        )}
+        className={phaseSidebarRowClassName(active, selected, needsUserInput, row.thread.priority)}
         aria-current={active ? "page" : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
@@ -970,17 +959,14 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </span>
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
-          {/* T3-CUSTOM(expbkt3): P0 is loud because it is the one level that
-              claims attention across every lifecycle group; P1-P4 stay quiet
-              markers so they read as metadata, not alarms. */}
           {row.thread.priority != null ? (
             <span
               aria-label={`Priority ${formatThreadPriority(row.thread.priority)}`}
               data-testid={`phase-thread-priority-${row.thread.id}`}
               className={cn(
                 "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide",
-                row.thread.priority === 0
-                  ? "bg-amber-500 text-white shadow-sm"
+                row.thread.priority <= 2
+                  ? "bg-red-500 text-white shadow-sm"
                   : "bg-muted-foreground/15 text-muted-foreground",
               )}
             >
@@ -1427,7 +1413,7 @@ export function PhaseGroupedSidebar() {
   useEffect(() => {
     const next = new Map(lastKnownPhaseByThreadKeyRef.current);
     for (const row of allRows) {
-      if (allEnvironmentShellsLive || row.phaseId !== "checking") {
+      if (allEnvironmentShellsLive) {
         next.set(
           scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
           row.phaseId,

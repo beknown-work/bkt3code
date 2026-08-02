@@ -34,7 +34,7 @@ describe("phase sidebar filter store", () => {
   it("clears selections without changing store actions", () => {
     usePhaseSidebarFilterStore.setState({
       repositoryKeys: ["repo-1"],
-      phaseIds: ["ready_for_review"],
+      phaseIds: ["planning"],
       providerKinds: ["codex"],
     });
     usePhaseSidebarFilterStore.getState().clearAll();

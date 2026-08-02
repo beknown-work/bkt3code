@@ -85,7 +85,7 @@ describe("sidebar session counters", () => {
     expect(threadIsRunning(makeThread({ execution: makeExecution("idle") }))).toBe(false);
   });
 
-  it("excludes archived threads and permits attention/running overlap", () => {
+  it("counts every non-archived, unsettled thread and running work", () => {
     expect(
       summarizeSidebarSessions([
         makeThread({ hasPendingApprovals: true, execution: makeExecution("blocked") }),
@@ -98,7 +98,11 @@ describe("sidebar session counters", () => {
           hasPendingUserInput: true,
           archivedAt: "2026-07-26T00:01:00.000Z",
         }),
+        makeThread({
+          id: ThreadId.make("thread-4"),
+          settledAt: "2026-07-26T00:01:00.000Z",
+        }),
       ]),
-    ).toEqual({ attention: 1, running: 2 });
+    ).toEqual({ unsettled: 2, running: 2 });
   });
 });
