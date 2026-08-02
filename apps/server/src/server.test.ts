@@ -7398,10 +7398,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect(
-    "bootstraps first-send worktree turns through the HTTP API before dispatching turn start",
+    // T3-CUSTOM(expbkt3): delegated HTTP bootstrap ownership must be atomic with first turn.
+    "assigns delegated bootstrap owner before dispatching the first turn",
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const dispatchedActorUserIds: Array<UserId | null> = [];
         const bootstrapGitOperations: string[] = [];
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
@@ -7476,9 +7478,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               refreshStatus,
             },
             orchestrationEngine: {
-              dispatch: (command) =>
+              dispatch: (command, options) =>
                 Effect.sync(() => {
                   dispatchedCommands.push(command);
+                  dispatchedActorUserIds.push(options?.actorUserId ?? null);
                   return { sequence: dispatchedCommands.length };
                 }),
               readEvents: () => Stream.empty,
@@ -7513,6 +7516,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               branch: "main",
               worktreePath: null,
               sourceControlProfileId: null,
+              ownerUserId: UserId.make("user-linear-starter"),
               createdAt,
             },
             prepareWorktree: {
@@ -7549,6 +7553,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "thread.turn.start",
           ],
         );
+        assert.equal(dispatchedActorUserIds[0], "user-linear-starter");
+        assert.equal(dispatchedActorUserIds[4], "user-linear-starter");
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           refName: fetchedOriginCommit,

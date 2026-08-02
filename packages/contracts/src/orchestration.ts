@@ -765,6 +765,8 @@ const ThreadCreateCommand = Schema.Struct({
   sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // T3-CUSTOM(expbkt3): trusted external creators may nominate the durable owner.
+  ownerUserId: Schema.optional(UserId),
   createdAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): session priority. Absent means "unprioritised".
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
@@ -926,6 +928,8 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   sourceControlProfileId: Schema.NullOr(SourceControlProfileId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // T3-CUSTOM(expbkt3): trusted external creators may nominate the durable owner.
+  ownerUserId: Schema.optional(UserId),
   createdAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): lets single-shot creators (MCP, the Linear bridge)
   // set a priority at creation time.
