@@ -23,6 +23,7 @@ import {
   filterVisiblePhaseSidebarRows,
   matchesPhaseSidebarFilters,
   partitionPhaseSidebarRows,
+  phaseSidebarPriorityBadgeClassName,
   phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
   phaseSidebarPriorityRank,
@@ -922,11 +923,15 @@ describe("phase sidebar priority", () => {
     ]);
   });
 
-  it("colors P0, P1, and P2 rows with decreasing red intensity", () => {
-    expect(phaseSidebarRowClassName(false, false, false, 0)).toContain("bg-red-500/40");
-    expect(phaseSidebarRowClassName(false, false, false, 1)).toContain("bg-red-500/20");
-    expect(phaseSidebarRowClassName(false, false, false, 2)).toContain("bg-red-500/10");
-    expect(phaseSidebarRowClassName(false, false, true, 0)).not.toContain("bg-red-500/40");
-    expect(phaseSidebarRowClassName(false, false, false, 3)).not.toContain("bg-red-500/");
+  it("colors priority rows orange while reserving red for input-needed alerts", () => {
+    expect(phaseSidebarRowClassName(false, false, false, 0)).toContain("bg-orange-500/40");
+    expect(phaseSidebarRowClassName(false, false, false, 1)).toContain("bg-orange-500/20");
+    expect(phaseSidebarRowClassName(false, false, false, 2)).toContain("bg-orange-500/10");
+    expect(phaseSidebarRowClassName(false, false, false, 0)).not.toContain("bg-red-500/");
+    expect(phaseSidebarRowClassName(false, false, true, 0)).toContain("bg-red-500/20");
+    expect(phaseSidebarRowClassName(false, false, false, 3)).not.toContain("bg-orange-500/");
+    expect(phaseSidebarPriorityBadgeClassName(0)).toContain("bg-orange-500");
+    expect(phaseSidebarPriorityBadgeClassName(0)).not.toContain("bg-red-500");
+    expect(phaseSidebarPriorityBadgeClassName(3)).toContain("bg-muted-foreground/15");
   });
 });

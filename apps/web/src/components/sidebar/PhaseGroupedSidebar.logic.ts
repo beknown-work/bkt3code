@@ -257,15 +257,17 @@ export function phaseSidebarRowClassName(
         : isActive
           ? "bg-primary/10 text-foreground font-semibold ring-1 ring-inset ring-primary/30 hover:bg-primary/15 dark:bg-primary/16"
           : "text-muted-foreground hover:bg-accent hover:text-foreground",
+    // T3-CUSTOM(expbkt3): Priority uses the Linear-attention orange; reserve
+    // bright red for the user-input branch below.
     !needsUserInput &&
       priority === 0 &&
-      "bg-red-500/40 text-foreground ring-1 ring-inset ring-red-500/80 shadow-[inset_3px_0_0_0_var(--color-red-500)] hover:bg-red-500/50 dark:bg-red-500/35",
+      "bg-orange-500/40 text-foreground ring-1 ring-inset ring-orange-500/80 shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/50 dark:bg-orange-500/35",
     !needsUserInput &&
       priority === 1 &&
-      "bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/40 shadow-[inset_3px_0_0_0_var(--color-red-500)] hover:bg-red-500/25 dark:bg-red-500/18",
+      "bg-orange-500/20 text-foreground ring-1 ring-inset ring-orange-500/40 shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/25 dark:bg-orange-500/18",
     !needsUserInput &&
       priority === 2 &&
-      "bg-red-500/10 text-foreground ring-1 ring-inset ring-red-500/20 shadow-[inset_3px_0_0_0_var(--color-red-500)] hover:bg-red-500/15 dark:bg-red-500/9",
+      "bg-orange-500/10 text-foreground ring-1 ring-inset ring-orange-500/20 shadow-[inset_3px_0_0_0_var(--color-orange-500)] hover:bg-orange-500/15 dark:bg-orange-500/9",
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
@@ -490,6 +492,13 @@ export const PHASE_SIDEBAR_UNPRIORITISED_RANK = 5;
 /** T3-CUSTOM(expbkt3): render label for a priority value ("P0".."P4"). */
 export function formatThreadPriority(priority: number): string {
   return `P${priority}`;
+}
+
+/** T3-CUSTOM(expbkt3): Keep the priority pill aligned with the row's orange tone. */
+export function phaseSidebarPriorityBadgeClassName(priority: number): string {
+  return priority <= 2
+    ? "bg-orange-500 text-black shadow-sm"
+    : "bg-muted-foreground/15 text-muted-foreground";
 }
 
 /** T3-CUSTOM(expbkt3): the priority values offered in the row context menu. */

@@ -5,7 +5,7 @@
 import type { ThreadShell } from "../../types";
 
 export interface SidebarSessionCounts {
-  readonly unsettled: number;
+  readonly nonRunning: number;
   readonly running: number;
 }
 
@@ -34,14 +34,17 @@ export function threadIsRunning(thread: ThreadShell): boolean {
 export function summarizeSidebarSessions(
   threads: ReadonlyArray<ThreadShell>,
 ): SidebarSessionCounts {
-  let unsettled = 0;
+  let nonRunning = 0;
   let running = 0;
 
   for (const thread of threads) {
-    if (thread.archivedAt !== null) continue;
-    if (thread.settledAt === null) unsettled += 1;
-    if (threadIsRunning(thread)) running += 1;
+    if (thread.archivedAt !== null || thread.settledAt !== null) continue;
+    if (threadIsRunning(thread)) {
+      running += 1;
+    } else {
+      nonRunning += 1;
+    }
   }
 
-  return { unsettled, running };
+  return { nonRunning, running };
 }

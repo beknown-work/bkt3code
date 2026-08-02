@@ -102,6 +102,8 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   partitionPhaseSidebarRows,
+  // T3-CUSTOM(expbkt3): Session priority badge tone.
+  phaseSidebarPriorityBadgeClassName,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
@@ -966,9 +968,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               data-testid={`phase-thread-priority-${row.thread.id}`}
               className={cn(
                 "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide",
-                row.thread.priority <= 2
-                  ? "bg-red-500 text-white shadow-sm"
-                  : "bg-muted-foreground/15 text-muted-foreground",
+                // T3-CUSTOM(expbkt3): Match the Linear-attention orange.
+                phaseSidebarPriorityBadgeClassName(row.thread.priority),
               )}
             >
               {formatThreadPriority(row.thread.priority)}
