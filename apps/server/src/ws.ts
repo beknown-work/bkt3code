@@ -83,6 +83,8 @@ import { ThreadExecutionSupervisor } from "./execution/ThreadExecutionSupervisor
 import { OrchestrationAccessControl } from "./orchestration/Services/AccessControl.ts";
 import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
 import { ClerkDirectory, ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
+// T3-CUSTOM(expbkt3): fork RPC handlers
+import { makeForkWsHandlers } from "./wsForkHandlers.ts";
 // T3-CUSTOM(expbkt3): per-connection access control helpers
 import { filterShellSnapshot } from "./orchestration/accessRules.ts";
 import { makeWsVisibility } from "./orchestration/wsVisibility.ts";
@@ -1089,7 +1091,32 @@ const makeWsRpcLayer = (
           return { ...input, env } as A;
         });
 
+      // T3-CUSTOM(expbkt3): BEGIN fork RPC handlers (wsForkHandlers.ts)
+      const forkHandlers = makeForkWsHandlers({
+        currentSessionId,
+        actorUserId,
+        personalMcpUserId,
+        personalMcpProfiles,
+        sourceControlProfiles,
+        environmentUsers,
+        systemResourceMonitor,
+        providerRateLimits,
+        projectionSnapshotQuery,
+        orchestrationEngine,
+        gitVcsDriver,
+        executionSupervisor,
+        sourceControlActionLock,
+        enrichOrchestrationEvents,
+        observeRpcEffect,
+        observeRpcStream,
+        requireThreadAccess,
+        visibleAggregateIdsForActor,
+      });
+      // T3-CUSTOM(expbkt3): END
+
       return WsRpcGroup.of({
+        // T3-CUSTOM(expbkt3): fork RPC handlers live in wsForkHandlers.ts
+        ...forkHandlers,
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -1348,42 +1375,6 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.getTurnDiff,
-            Effect.gen(function* () {
-              yield* requireThreadAccess(input.threadId);
-              return yield* checkpointDiffQuery.getTurnDiff(input);
-            }).pipe(
-              Effect.mapError((cause) =>
-                isOrchestrationGetTurnDiffError(cause)
-                  ? cause
-                  : new OrchestrationGetTurnDiffError({
-                      message: "Failed to load turn diff",
-                      cause,
-                    }),
-              ),
-            ),
-            { "rpc.aggregate": "orchestration" },
-          ),
-        [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: (input) =>
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.getFullThreadDiff,
-            Effect.gen(function* () {
-              yield* requireThreadAccess(input.threadId);
-              return yield* checkpointDiffQuery.getFullThreadDiff(input);
-            }).pipe(
-              Effect.mapError((cause) =>
-                isOrchestrationGetFullThreadDiffError(cause)
-                  ? cause
-                  : new OrchestrationGetFullThreadDiffError({
-                      message: "Failed to load full thread diff",
-                      cause,
-                    }),
-              ),
-            ),
-            { "rpc.aggregate": "orchestration" },
-          ),
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.replayEvents,
@@ -1419,6 +1410,42 @@ const makeWsRpcLayer = (
                     message: "Failed to replay orchestration events",
                     cause,
                   }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getTurnDiff,
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId);
+              return yield* checkpointDiffQuery.getTurnDiff(input);
+            }).pipe(
+              Effect.mapError((cause) =>
+                isOrchestrationGetTurnDiffError(cause)
+                  ? cause
+                  : new OrchestrationGetTurnDiffError({
+                      message: "Failed to load turn diff",
+                      cause,
+                    }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getFullThreadDiff,
+            Effect.gen(function* () {
+              yield* requireThreadAccess(input.threadId);
+              return yield* checkpointDiffQuery.getFullThreadDiff(input);
+            }).pipe(
+              Effect.mapError((cause) =>
+                isOrchestrationGetFullThreadDiffError(cause)
+                  ? cause
+                  : new OrchestrationGetFullThreadDiffError({
+                      message: "Failed to load full thread diff",
+                      cause,
+                    }),
               ),
             ),
             { "rpc.aggregate": "orchestration" },
@@ -1865,30 +1892,6 @@ const makeWsRpcLayer = (
             },
           );
         },
-        [WS_METHODS.personalMcpGetProfile]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpGetProfile,
-            personalMcpProfiles.get(personalMcpUserId),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
-        [WS_METHODS.personalMcpUpdateProfile]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpUpdateProfile,
-            personalMcpProfiles.update(personalMcpUserId, input),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
-        [WS_METHODS.personalMcpRotateToken]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpRotateToken,
-            personalMcpProfiles.rotateExternalToken(personalMcpUserId),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
-        [WS_METHODS.personalMcpRevokeToken]: (_input) =>
-          observeRpcEffect(
-            WS_METHODS.personalMcpRevokeToken,
-            personalMcpProfiles.revokeExternalToken(personalMcpUserId),
-            { "rpc.aggregate": "personal-mcp" },
-          ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
@@ -2062,178 +2065,6 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "source-control",
             },
-          ),
-        [WS_METHODS.sourceControlProfilesList]: (_input) =>
-          observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {
-            "rpc.aggregate": "source-control-profile",
-          }),
-        [WS_METHODS.sourceControlProfilesUpsert]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesUpsert,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.upsert(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesTest]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesTest,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.test(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesReplaceCredential]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesReplaceCredential,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.replaceCredential(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesDisconnect]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesDisconnect,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.disconnect(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlProfilesArchive]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlProfilesArchive,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(sourceControlProfiles.archive(input))),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.usersList]: (_input) =>
-          observeRpcEffect(WS_METHODS.usersList, environmentUsers.list(currentSessionId), {
-            "rpc.aggregate": "users",
-          }),
-        [WS_METHODS.usersUpdate]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.usersUpdate,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(environmentUsers.update(input))),
-            { "rpc.aggregate": "users" },
-          ),
-        [WS_METHODS.usersRevokeSessions]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.usersRevokeSessions,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(environmentUsers.revokeSessions(input))),
-            { "rpc.aggregate": "users" },
-          ),
-        [WS_METHODS.usersSourceControlProfileSet]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.usersSourceControlProfileSet,
-            environmentUsers
-              .assertAdministrator(currentSessionId)
-              .pipe(Effect.andThen(environmentUsers.setSourceControlProfile(input))),
-            { "rpc.aggregate": "users" },
-          ),
-        [WS_METHODS.sourceControlThreadOwnerSet]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlThreadOwnerSet,
-            // T3-CUSTOM(expbkt3): GitHub identity follows durable T3
-            // ownership. Keep this RPC decodable for older clients.
-            Effect.fail(
-              new SourceControlProfileError({
-                operation: "switch-thread-owner",
-                reason: "validation-failed",
-                detail:
-                  "GitHub identity follows the durable thread owner. Transfer thread ownership instead.",
-                profileId: input.sourceControlProfileId,
-                threadId: input.threadId,
-              }),
-            ),
-            { "rpc.aggregate": "source-control-profile" },
-          ),
-        [WS_METHODS.sourceControlConvertRemote]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.sourceControlConvertRemote,
-            sourceControlActionLock.runExclusive(
-              input.threadId,
-              Effect.gen(function* () {
-                const threadOption = yield* projectionSnapshotQuery
-                  .getThreadShellById(input.threadId)
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "convert-remote",
-                          reason: "thread-not-found",
-                          detail: "Could not read the selected thread.",
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                if (Option.isNone(threadOption)) {
-                  return yield* new SourceControlProfileError({
-                    operation: "convert-remote",
-                    reason: "thread-not-found",
-                    detail: "The selected thread no longer exists.",
-                    threadId: input.threadId,
-                  });
-                }
-                const context = yield* sourceControlProfiles.resolveThreadExecutionContext(
-                  input.threadId,
-                  threadOption.value.ownerUserId,
-                );
-                const environment = context?.environment ?? process.env;
-                const current = yield* gitVcsDriver
-                  .execute({
-                    operation: "SourceControlRemote.getUrl",
-                    cwd: input.cwd,
-                    args: ["remote", "get-url", input.remoteName],
-                    env: environment,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "convert-remote",
-                          reason: "remote-not-found",
-                          detail: `Git remote '${input.remoteName}' could not be read.`,
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                const previousUrl = current.stdout.trim();
-                const remoteUrl = githubSshRemoteToHttps(previousUrl);
-                if (remoteUrl === null) {
-                  return yield* new SourceControlProfileError({
-                    operation: "convert-remote",
-                    reason: "ssh-remote",
-                    detail: "The selected remote is not a GitHub SSH URL that can be converted.",
-                    threadId: input.threadId,
-                  });
-                }
-                yield* gitVcsDriver
-                  .execute({
-                    operation: "SourceControlRemote.setUrl",
-                    cwd: input.cwd,
-                    args: ["remote", "set-url", input.remoteName, remoteUrl],
-                    env: environment,
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      () =>
-                        new SourceControlProfileError({
-                          operation: "convert-remote",
-                          reason: "validation-failed",
-                          detail: "The GitHub remote could not be converted to HTTPS.",
-                          threadId: input.threadId,
-                        }),
-                    ),
-                  );
-                return { remoteName: input.remoteName, previousUrl, remoteUrl };
-              }),
-            ),
-            { "rpc.aggregate": "source-control-profile" },
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(
@@ -2747,14 +2578,6 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.subscribeServerResources]: (_input) =>
-          observeRpcStream(WS_METHODS.subscribeServerResources, systemResourceMonitor.stream, {
-            "rpc.aggregate": "server",
-          }),
-        [WS_METHODS.subscribeProviderRateLimits]: (_input) =>
-          observeRpcStream(WS_METHODS.subscribeProviderRateLimits, providerRateLimits.stream, {
-            "rpc.aggregate": "server",
-          }),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,
