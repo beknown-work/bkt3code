@@ -19,9 +19,9 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off - runs without node_modules in CI.
 // @effect-diagnostics globalConsole:off - plain CLI output, no Effect runtime.
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 const MARKER = "T3-CUSTOM(expbkt3)";
 const BASELINE_PATH = "scripts/fork-marker-baseline.json";
@@ -57,7 +57,10 @@ interface Violation {
 }
 
 function git(args: ReadonlyArray<string>): string {
-  return execFileSync("git", [...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  return NodeChildProcess.execFileSync("git", [...args], {
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
 }
 
 function isExempt(path: string): boolean {
@@ -133,11 +136,11 @@ function addedHunks(base: string, file: string): ReadonlyArray<readonly [number,
 function findViolations(base: string, files: ReadonlyArray<string>): Violation[] {
   const violations: Violation[] = [];
   for (const file of files) {
-    if (isExempt(file) || !existsSync(file)) continue;
+    if (isExempt(file) || !NodeFS.existsSync(file)) continue;
     // Ownership comes from git status, never from content: an upstream-owned
     // file often carries a marked fork import near the top, and sniffing for
     // that would exempt the entire file from the check.
-    const contents = readFileSync(file, "utf8");
+    const contents = NodeFS.readFileSync(file, "utf8");
     const marked = markedLines(contents);
     for (const [start, count] of addedHunks(base, file)) {
       const covered = Array.from({ length: count }, (_, offset) => start + offset).every((line) =>
@@ -156,8 +159,8 @@ function findViolations(base: string, files: ReadonlyArray<string>): Violation[]
 }
 
 function readBaseline(): ReadonlySet<string> {
-  if (!existsSync(BASELINE_PATH)) return new Set();
-  const parsed: unknown = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+  if (!NodeFS.existsSync(BASELINE_PATH)) return new Set();
+  const parsed: unknown = JSON.parse(NodeFS.readFileSync(BASELINE_PATH, "utf8"));
   const files = (parsed as { files?: unknown }).files;
   return new Set(
     Array.isArray(files) ? files.filter((f): f is string => typeof f === "string") : [],
@@ -165,9 +168,9 @@ function readBaseline(): ReadonlySet<string> {
 }
 
 function main(): number {
-  const argv = process.argv.slice(2);
-  const writeBaseline = argv.includes("--write-baseline");
-  const force = argv.includes("--force");
+  const argv = new Set(process.argv.slice(2));
+  const writeBaseline = argv.has("--write-baseline");
+  const force = argv.has("--force");
 
   const base = git(["merge-base", "HEAD", UPSTREAM_REF]).trim();
   const { modified, added } = changedFiles(base);
@@ -177,7 +180,7 @@ function main(): number {
   if (writeBaseline) {
     const previous = readBaseline();
     const next = [...offending].filter((file) => force || previous.has(file)).sort();
-    writeFileSync(BASELINE_PATH, `${JSON.stringify({ files: next }, null, 2)}\n`);
+    NodeFS.writeFileSync(BASELINE_PATH, `${JSON.stringify({ files: next }, null, 2)}\n`);
     console.log(
       `Wrote ${BASELINE_PATH} with ${next.length} file(s)` +
         (force ? " (--force: existing violations adopted)" : ""),
@@ -227,7 +230,7 @@ function main(): number {
 const invokedPath = process.argv[1];
 if (
   invokedPath !== undefined &&
-  resolve(invokedPath) === resolve(import.meta.dirname, "check-fork-markers.ts")
+  NodePath.resolve(invokedPath) === NodePath.resolve(import.meta.dirname, "check-fork-markers.ts")
 ) {
   process.exit(main());
 }

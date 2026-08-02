@@ -22,7 +22,6 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
-  ThreadSourceControlProfileSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -34,19 +33,11 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
-  ThreadMemberAddedPayload,
-  ThreadMemberRemovedPayload,
-  ThreadOwnerTransferredPayload,
-  ProjectMemberAddedPayload,
-  ProjectMemberRemovedPayload,
-  ProjectOwnerTransferredPayload,
-  ThreadCatchupSummaryUpdatedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
-const MAX_THREAD_TURN_SUMMARIES = 200;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
