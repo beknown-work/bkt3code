@@ -94,7 +94,7 @@ export function ThreadMembersControl({
       const confirmed = window.confirm(
         `Transfer thread ownership to ${label}?${
           thread?.ownerUserId === null ? "" : " The previous owner will remain a member."
-        }`,
+        } The provider session and terminals will restart, and future GitHub activity will use the new owner's profile.`,
       );
       if (!confirmed) return;
       setPending((prev) => new Set(prev).add(userId));

@@ -1,9 +1,11 @@
+import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   mergePlannotatorAnnotationHistory,
   parsePlannotatorDecision,
   parsePlannotatorSubmission,
+  PLANNOTATOR_DRAFT_PERSIST_SCRIPT,
   plannotatorPreferenceCookies,
   rewritePlannotatorHtml,
 } from "./model.ts";
@@ -185,6 +187,27 @@ describe("parsePlannotatorDecision", () => {
 });
 
 describe("rewritePlannotatorHtml", () => {
+  it("runs only Plannotator draft saves on the next browser task", () => {
+    const calls: Array<{ delay: number; args: unknown[] }> = [];
+    const window = {
+      setTimeout: (_handler: unknown, delay: number, ...args: unknown[]) => {
+        calls.push({ delay, args });
+        return calls.length;
+      },
+    };
+    NodeVM.runInNewContext(PLANNOTATOR_DRAFT_PERSIST_SCRIPT, { window });
+
+    window.setTimeout(() => "/api/draft", 500, "draft-argument");
+    window.setTimeout(() => "unrelated", 500);
+    window.setTimeout(() => "/api/draft", 250);
+
+    expect(calls).toEqual([
+      { delay: 0, args: ["draft-argument"] },
+      { delay: 500, args: [] },
+      { delay: 250, args: [] },
+    ]);
+  });
+
   it("rewrites static root paths and injects runtime networking shims", () => {
     const rewritten = rewritePlannotatorHtml(
       '<html><head></head><body><script src="/assets/app.js"></script></body></html>',
@@ -210,6 +233,7 @@ describe("rewritePlannotatorHtml", () => {
     expect(rewritten).toContain('button.textContent.trim()!=="Restore"');
     expect(rewritten).toContain("button.click()");
     expect(rewritten).toContain("timeout=setTimeout(stop,10000)");
+    expect(rewritten).toContain(PLANNOTATOR_DRAFT_PERSIST_SCRIPT);
   });
 
   it("injects draft recovery even when Plannotator omits a head element", () => {

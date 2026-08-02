@@ -412,7 +412,19 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   const currentSession = await fetchSessionState();
   if (currentSession.authenticated) {
     const identityToken = await readManagedClerkIdentityToken();
-    if (identityToken) await bindPrimaryEnvironmentClerkIdentity(identityToken);
+    if (identityToken) {
+      try {
+        await bindPrimaryEnvironmentClerkIdentity(identityToken);
+      } catch (error) {
+        // T3-CUSTOM(expbkt3): Recover through the Clerk sign-in exchange instead of
+        // crashing the root route when a stale or incompatible identity token is rejected.
+        return {
+          status: "requires-auth",
+          auth: currentSession.auth,
+          errorMessage: error instanceof Error ? error.message : "Authentication failed.",
+        };
+      }
+    }
     return { status: "authenticated" };
   }
 

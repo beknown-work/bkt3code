@@ -29,6 +29,7 @@ import {
   SourceControlProfileId,
   ThreadId,
   ThreadTurnAdmissionConflictError,
+  UserId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -756,6 +757,7 @@ const buildAppUnderTest = (options?: {
             disconnect: () => Effect.die("source-control profile not stubbed"),
             archive: () => Effect.die("source-control profile not stubbed"),
             resolveExecutionContext: () => Effect.die("source-control profile not stubbed"),
+            resolveUserExecutionContext: () => Effect.succeed(null),
             resolveThreadExecutionContext: () => Effect.succeed(null),
             ...options?.layers?.sourceControlProfileService,
           }),
@@ -5902,16 +5904,42 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("stops the provider and terminals before changing a thread's GitHub owner", () =>
+  // T3-CUSTOM(expbkt3): GitHub attribution is derived from durable ownership.
+  it.effect("rejects legacy per-thread GitHub profile changes", () =>
     Effect.gen(function* () {
-      const aliceId = SourceControlProfileId.make("github_42");
       const bobId = SourceControlProfileId.make("github_84");
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.sourceControlThreadOwnerSet]({
+              threadId: defaultThreadId,
+              sourceControlProfileId: bobId,
+            }),
+          ),
+        ),
+      );
+
+      assert.equal(error._tag, "SourceControlProfileError");
+      if (error._tag === "SourceControlProfileError") {
+        assert.equal(error.reason, "validation-failed");
+        assertInclude(error.detail, "Transfer thread ownership instead");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("restarts thread runtimes before transferring durable ownership", () =>
+    Effect.gen(function* () {
+      const previousOwner = UserId.make("user-alice");
+      const nextOwner = UserId.make("user-bob");
+      const profileId = SourceControlProfileId.make("github_bob");
       const effects: string[] = [];
-      const dispatchedCommands: OrchestrationCommand[] = [];
       const now = "2026-01-01T00:00:00.000Z";
       const thread = {
         ...makeDefaultOrchestrationReadModel().threads[0]!,
-        sourceControlProfileId: aliceId,
+        ownerUserId: previousOwner,
         session: {
           threadId: defaultThreadId,
           status: "ready" as const,
@@ -5922,25 +5950,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           updatedAt: now,
         },
       };
-      const bob = {
-        id: bobId,
-        provider: "github" as const,
-        label: "Bob",
-        login: "bob",
-        accountId: 84,
-        avatarUrl: null,
-        gitName: "Bob Example",
-        gitEmail: "84+bob@users.noreply.github.com",
-        ownerUserId: null,
-        credentialStatus: "connected" as const,
-        archived: false,
-      };
 
       yield* buildAppUnderTest({
         layers: {
+          serverSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              sourceControlIdentityMode: "thread-profile",
+            }),
+          },
           sourceControlProfileService: {
-            test: () => Effect.succeed(bob),
-            list: Effect.succeed({ identityMode: "thread-profile", profiles: [bob] }),
+            resolveThreadExecutionContext: (_threadId, ownerUserId) =>
+              Effect.sync(() => {
+                effects.push(`profile.resolve:${ownerUserId}`);
+                return {
+                  profileId,
+                  provider: "github" as const,
+                  login: "bob",
+                  gitName: "Bob Example",
+                  gitEmail: "84+bob@users.noreply.github.com",
+                  environment: {},
+                };
+              }),
           },
           providerService: {
             stopSession: () =>
@@ -5961,37 +5992,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
-                dispatchedCommands.push(command);
                 effects.push(`dispatch:${command.type}`);
-                return { sequence: dispatchedCommands.length };
+                return { sequence: 1 };
               }),
           },
         },
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
-      const result = yield* Effect.scoped(
+      yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.sourceControlThreadOwnerSet]({
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.owner.transfer",
+            commandId: CommandId.make("cmd-transfer-thread-owner"),
             threadId: defaultThreadId,
-            sourceControlProfileId: bobId,
+            userId: nextOwner,
           }),
         ),
       );
 
-      assert.equal(result.login, "bob");
       assert.deepEqual(effects, [
+        `profile.resolve:${nextOwner}`,
         "provider.stop",
         "terminal.close",
-        "dispatch:thread.source-control-profile.set",
-        "dispatch:thread.activity.append",
+        "dispatch:thread.owner.transfer",
         "terminal.close",
       ]);
-      const ownerCommand = dispatchedCommands[0];
-      assert.equal(ownerCommand?.type, "thread.source-control-profile.set");
-      if (ownerCommand?.type === "thread.source-control-profile.set") {
-        assert.equal(ownerCommand.sourceControlProfileId, bobId);
-      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -203,6 +203,14 @@ function inlineScriptJson(value: unknown): string {
     .replaceAll("\u2029", "\\u2029");
 }
 
+// Plannotator 0.20.x debounces draft writes for 500 ms and cancels the pending
+// write when a page reload unmounts the app. T3 runs the review in API mode, so
+// target only that recognizable draft callback and persist it on the next
+// browser task. Separate user actions (including refresh) cannot overtake it,
+// while unrelated Plannotator timers retain their original delay.
+export const PLANNOTATOR_DRAFT_PERSIST_SCRIPT =
+  '(function(){var schedule=window.setTimeout;window.setTimeout=function(handler,delay){var args=Array.prototype.slice.call(arguments,2);if(delay===500&&typeof handler==="function"&&String(handler).indexOf("/api/draft")!==-1)delay=0;return schedule.apply(window,[handler,delay].concat(args))}})();';
+
 export function rewritePlannotatorHtml(
   html: string,
   proxyPrefix: string,
@@ -223,6 +231,7 @@ export function rewritePlannotatorHtml(
   const serializedPrefix = JSON.stringify(proxyPrefix);
   const serializedPreferenceCookies = inlineScriptJson(plannotatorPreferenceCookies(cookieHeader));
   const shim = `<script>(function(){var P=${serializedPrefix};var pc=${serializedPreferenceCookies};try{var hm=location.hash.match(/^#t3-preferences=([^&]*)/);var hp=hm&&JSON.parse(decodeURIComponent(hm[1]));if(hp&&typeof hp==="object"){Object.keys(hp).slice(0,64).forEach(function(k){var v=hp[k];if(/^plannotator-[A-Za-z0-9_-]{1,96}$/.test(k)&&typeof v==="string"&&v.length<=4096)pc[k]=v})}}catch(e){}function rw(u){if(typeof u!=="string")return u;if(u.charAt(0)==="/"&&u.charAt(1)!=="/"&&u.lastIndexOf(P+"/",0)!==0)return P+u;return u;}function ms(){var m={};return{getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}},key:function(i){return Object.keys(m)[i]||null},get length(){return Object.keys(m).length}}}for(var si=0;si<2;si++){var sn=si?"sessionStorage":"localStorage";try{window[sn].length}catch(e){try{Object.defineProperty(window,sn,{value:ms()})}catch(x){}}}function cg(){return Object.keys(pc).map(function(k){return k+"="+pc[k]}).join("; ")}function cs(raw){try{raw=String(raw);var first=raw.split(";",1)[0];var at=first.indexOf("=");if(at<1)return;var name=first.slice(0,at).trim();if(!/^plannotator-[A-Za-z0-9_-]{1,96}$/.test(name))return;var value=first.slice(at+1);if(/(?:^|;)\\s*max-age\\s*=\\s*0(?:;|$)/i.test(raw))delete pc[name];else pc[name]=value;window.parent.postMessage({type:"t3:plannotator-preference-cookie",cookie:raw},"*")}catch(e){}}try{Object.defineProperty(document,"cookie",{configurable:true,get:cg,set:cs})}catch(e){}var f=window.fetch;if(f)window.fetch=function(i,o){if(typeof i==="string")return f.call(this,rw(i),o);if(i&&typeof i.url==="string"){var n=rw(i.url);if(n!==i.url){try{return f.call(this,new Request(n,i),o)}catch(e){}}}return f.call(this,i,o)};var E=window.EventSource;if(E){var W=function(u,c){return new E(rw(u),c)};W.prototype=E.prototype;window.EventSource=W}var X=window.XMLHttpRequest;if(X&&X.prototype&&X.prototype.open){var op=X.prototype.open;X.prototype.open=function(m,u){try{if(arguments.length>1)arguments[1]=rw(u)}catch(e){}return op.apply(this,arguments)}}})();</script>`;
+  const draftPersistShim = `<script>${PLANNOTATOR_DRAFT_PERSIST_SCRIPT}</script>`;
   // Plannotator deliberately presents interrupted drafts behind a recovery
   // confirmation after a reload. T3 owns the `t3-reopen` opt-in and restores
   // through that native action so every draft field stays intact, including
@@ -231,6 +240,6 @@ export function rewritePlannotatorHtml(
   const draftRestoreShim = `<script>(function(){if(new URLSearchParams(location.search).get("t3-reopen")!=="1")return;var observer=null;var timeout=null;function stop(){if(observer)observer.disconnect();if(timeout)clearTimeout(timeout)}function restore(){var dialogs=document.querySelectorAll('[role="dialog"]');for(var i=0;i<dialogs.length;i++){var dialog=dialogs[i];var heading=dialog.querySelector("h1,h2,h3");if(!heading||heading.textContent.trim()!=="Draft Recovered")continue;var buttons=dialog.querySelectorAll("button");for(var j=0;j<buttons.length;j++){var button=buttons[j];if(button.textContent.trim()!=="Restore")continue;button.click();stop();return true}}return false}function start(){if(restore())return;observer=new MutationObserver(restore);observer.observe(document.documentElement,{childList:true,subtree:true});timeout=setTimeout(stop,10000)}if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start,{once:true});else start()})();</script>`;
   const headIndex = rewritten.indexOf("<head>");
   return headIndex >= 0
-    ? `${rewritten.slice(0, headIndex + "<head>".length)}${shim}${draftRestoreShim}${rewritten.slice(headIndex + "<head>".length)}`
-    : `${shim}${draftRestoreShim}${rewritten}`;
+    ? `${rewritten.slice(0, headIndex + "<head>".length)}${shim}${draftPersistShim}${draftRestoreShim}${rewritten.slice(headIndex + "<head>".length)}`
+    : `${shim}${draftPersistShim}${draftRestoreShim}${rewritten}`;
 }

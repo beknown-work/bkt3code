@@ -436,6 +436,8 @@ export class EnvironmentAuth extends Context.Service<
     readonly createClerkBrowserSession: (
       input: {
         readonly subject: string;
+        // T3-CUSTOM(expbkt3): Direct Clerk sessions retain their durable user binding.
+        readonly userId: EnvironmentUserId;
         readonly label?: string;
       },
       requestMetadata: AuthClientMetadata,
@@ -725,6 +727,8 @@ export const make = Effect.gen(function* () {
       .issue({
         method: "browser-session-cookie",
         subject: input.subject,
+        // T3-CUSTOM(expbkt3): Make the Clerk identity available to every authenticated use case.
+        userId: input.userId,
         scopes: AuthStandardClientScopes,
         client: {
           ...requestMetadata,

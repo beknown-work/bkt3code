@@ -26,12 +26,7 @@ import {
   ensureBrowseDirectoryPath,
   inferProjectTitleFromPath,
 } from "@t3tools/client-runtime/state/projects";
-import {
-  CommandId,
-  type EnvironmentId,
-  ProjectId,
-  type SourceControlProfileId,
-} from "@t3tools/contracts";
+import { CommandId, type EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -612,46 +607,6 @@ export function AddProjectRepositoryScreen(props: {
   const [repositoryInput, setRepositoryInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const profilesQuery = useEnvironmentQuery(
-    environment === null
-      ? null
-      : sourceControlEnvironment.profiles({
-          environmentId: environment.environmentId,
-          input: {},
-        }),
-  );
-  const assignableProfiles = useMemo(
-    () =>
-      (profilesQuery.data?.profiles ?? []).filter(
-        (profile) => !profile.archived && profile.credentialStatus === "connected",
-      ),
-    [profilesQuery.data?.profiles],
-  );
-  const identityMode = profilesQuery.data?.identityMode ?? "machine";
-  const [sourceControlProfileId, setSourceControlProfileId] =
-    useState<SourceControlProfileId | null>(null);
-  useEffect(() => {
-    if (identityMode !== "thread-profile") return;
-    if (!assignableProfiles.some((profile) => profile.id === sourceControlProfileId)) {
-      setSourceControlProfileId(assignableProfiles[0]?.id ?? null);
-    }
-  }, [assignableProfiles, identityMode, sourceControlProfileId]);
-  const selectedProfile =
-    assignableProfiles.find((profile) => profile.id === sourceControlProfileId) ?? null;
-  const chooseProfile = useCallback(() => {
-    Alert.alert(
-      "GitHub identity",
-      "Choose the account used to look up and clone this repository.",
-      [
-        ...assignableProfiles.map((profile) => ({
-          text: `${profile.label} (@${profile.login})`,
-          onPress: () => setSourceControlProfileId(profile.id),
-        })),
-        { text: "Cancel", style: "cancel" as const },
-      ],
-    );
-  }, [assignableProfiles]);
-
   const lookupRepository = useCallback(async () => {
     if (!environment || repositoryInput.trim().length === 0 || isSubmitting) return;
     setError(null);
@@ -666,7 +621,6 @@ export function AddProjectRepositoryScreen(props: {
           source,
           remoteUrl,
           repositoryTitle: remoteUrl,
-          ...(sourceControlProfileId ? { sourceControlProfileId } : {}),
         },
       });
       setIsSubmitting(false);
@@ -678,7 +632,6 @@ export function AddProjectRepositoryScreen(props: {
       input: {
         provider,
         repository: repositoryInput.trim(),
-        ...(sourceControlProfileId ? { sourceControlProfileId } : {}),
       },
     });
     if (AsyncResult.isFailure(result)) {
@@ -690,39 +643,21 @@ export function AddProjectRepositoryScreen(props: {
         params: {
           environmentId: environment.environmentId,
           source,
-          remoteUrl:
-            provider === "github" && sourceControlProfileId !== null
-              ? repository.url
-              : repository.sshUrl,
+          // T3-CUSTOM(expbkt3): The server resolves the signed-in user's
+          // profile, so GitHub clone flows always use token-free HTTPS.
+          remoteUrl: provider === "github" ? repository.url : repository.sshUrl,
           repositoryTitle: repository.nameWithOwner,
-          ...(sourceControlProfileId ? { sourceControlProfileId } : {}),
         },
       });
     }
     setIsSubmitting(false);
-  }, [
-    environment,
-    isSubmitting,
-    lookupRepositoryQuery,
-    navigation,
-    repositoryInput,
-    source,
-    sourceControlProfileId,
-  ]);
+  }, [environment, isSubmitting, lookupRepositoryQuery, navigation, repositoryInput, source]);
 
   return (
     <AddProjectShell>
       {error ? <ErrorBanner message={error} /> : null}
       {environment ? (
         <>
-          {identityMode === "thread-profile" ? (
-            <Pressable className="rounded-[24px] bg-card px-4 py-3" onPress={chooseProfile}>
-              <Text className="text-xs text-foreground-muted">GitHub identity</Text>
-              <Text className="mt-1 text-base font-t3-bold">
-                {selectedProfile ? `@${selectedProfile.login}` : "Select a connected profile"}
-              </Text>
-            </Pressable>
-          ) : null}
           <TextInput
             className="h-12 min-h-12 rounded-[24px] px-4 py-0 text-base leading-snug"
             value={repositoryInput}
@@ -739,11 +674,7 @@ export function AddProjectRepositoryScreen(props: {
           />
           <PrimaryActionButton
             label={source === "url" ? "Continue" : "Lookup repository"}
-            disabled={
-              isSubmitting ||
-              repositoryInput.trim().length === 0 ||
-              (identityMode === "thread-profile" && sourceControlProfileId === null)
-            }
+            disabled={isSubmitting || repositoryInput.trim().length === 0}
             onPress={() => void lookupRepository()}
             loading={isSubmitting}
           />
@@ -894,10 +825,10 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
 }
 
 export function AddProjectDestinationScreen(props: {
+  // T3-CUSTOM(expbkt3): The server resolves the acting user's GitHub profile.
   readonly environmentId?: string | string[];
   readonly remoteUrl?: string | string[];
   readonly repositoryTitle?: string | string[];
-  readonly sourceControlProfileId?: string | string[];
 }) {
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
     reportFailure: false,
@@ -906,9 +837,6 @@ export function AddProjectDestinationScreen(props: {
   const createProject = useCreateProject(environment);
   const remoteUrl = stringParam(props.remoteUrl);
   const repositoryTitle = stringParam(props.repositoryTitle);
-  const sourceControlProfileId = stringParam(
-    props.sourceControlProfileId,
-  ) as SourceControlProfileId | null;
   const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput } =
     useBrowsePathInput(environment);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -933,7 +861,6 @@ export function AddProjectDestinationScreen(props: {
       input: {
         remoteUrl,
         destinationPath: resolved.path,
-        ...(sourceControlProfileId ? { sourceControlProfileId } : {}),
       },
     });
     if (AsyncResult.isFailure(cloneResult)) {
@@ -953,7 +880,6 @@ export function AddProjectDestinationScreen(props: {
     isSubmitting,
     pathInput,
     remoteUrl,
-    sourceControlProfileId,
   ]);
 
   return (

@@ -101,7 +101,9 @@ async function installAuthApi(input: {
   readonly browserSession?: (
     credential: string,
   ) => Effect.Effect<AuthBrowserSessionResult, EnvironmentAuthInvalidError>;
-  readonly bindIdentity?: (identityToken: string) => Effect.Effect<AuthIdentityBindingResult>;
+  readonly bindIdentity?: (
+    identityToken: string,
+  ) => Effect.Effect<AuthIdentityBindingResult, EnvironmentAuthInvalidError>;
   readonly pairingCredential?: (payload: AuthCreatePairingCredentialInput) => Effect.Effect<{
     readonly id: string;
     readonly credential: string;
@@ -469,6 +471,30 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     expect(testApi.calls.bindIdentity).toEqual([{ identityToken: "signed-clerk-identity" }]);
+  });
+
+  // T3-CUSTOM(expbkt3): A stale or incompatible Clerk token must return to the
+  // auth gate instead of crashing the root route during a hard refresh.
+  it("returns to the auth gate when Clerk binding of an existing session is rejected", async () => {
+    setManagedClerkIdentityTokenProvider(async () => "signed-clerk-identity");
+    await installAuthApi({
+      session: () => authenticatedSession(LOOPBACK_AUTH),
+      bindIdentity: () =>
+        Effect.fail(
+          new EnvironmentAuthInvalidError({
+            code: "auth_invalid",
+            reason: "invalid_identity",
+            traceId: "trace-invalid-clerk-identity",
+          }),
+        ),
+    });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: LOOPBACK_AUTH,
+      errorMessage: "Primary environment request failed during bind-current-identity (HTTP 401).",
+    });
   });
 
   it("binds a Clerk identity that becomes available after administrative pairing", async () => {

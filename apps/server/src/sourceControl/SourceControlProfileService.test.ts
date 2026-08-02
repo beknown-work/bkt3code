@@ -2,7 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentUserId,
   SourceControlProfileId,
+  ThreadId,
+  UserId,
   type ServerSettings,
 } from "@t3tools/contracts";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
@@ -64,6 +67,15 @@ const makeHarness = Effect.gen(function* () {
         );
       }
       if (input.args[0] === "api" && input.args[1] === "user/emails") {
+        if (credential === "email-private-token") {
+          return Effect.fail(
+            new GitHubCli.GitHubCliCommandError({
+              command: "gh",
+              cwd: input.cwd,
+              cause: new Error("HTTP 403: Resource not accessible by personal access token"),
+            }),
+          );
+        }
         return Effect.succeed(output("[]"));
       }
       const bob = credential === "bob-token";
@@ -137,6 +149,68 @@ it.layer(NodeServices.layer)("SourceControlProfileService", (it) => {
     }),
   );
 
+  it.effect("resolves a thread's GitHub identity from its durable owner", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const profile = yield* harness.service.upsert({
+        label: "Alice",
+        gitName: "Alice Example",
+        gitEmail: "42+alice@users.noreply.github.com",
+        credential: "alice-token",
+      });
+      yield* Ref.update(harness.settings, (settings) => ({
+        ...settings,
+        sourceControlProfiles: {
+          ...settings.sourceControlProfiles,
+          [profile.id]: {
+            ...settings.sourceControlProfiles[profile.id]!,
+            ownerUserId: EnvironmentUserId.make("user-alice"),
+          },
+        },
+      }));
+
+      const context = yield* harness.service.resolveThreadExecutionContext(
+        ThreadId.make("thread-alice"),
+        UserId.make("user-alice"),
+        {},
+      );
+
+      assert.strictEqual(context?.profileId, profile.id);
+      assert.strictEqual(context?.login, "alice");
+      assert.strictEqual(context?.environment.GH_TOKEN, "alice-token");
+
+      const replacementProfile = yield* harness.service.upsert({
+        label: "Bob",
+        gitName: "Bob Example",
+        gitEmail: "84+bob@users.noreply.github.com",
+        credential: "bob-token",
+      });
+      yield* Ref.update(harness.settings, (settings) => ({
+        ...settings,
+        sourceControlProfiles: {
+          ...settings.sourceControlProfiles,
+          [profile.id]: {
+            ...settings.sourceControlProfiles[profile.id]!,
+            ownerUserId: null,
+          },
+          [replacementProfile.id]: {
+            ...settings.sourceControlProfiles[replacementProfile.id]!,
+            ownerUserId: EnvironmentUserId.make("user-alice"),
+          },
+        },
+      }));
+
+      const reassignedContext = yield* harness.service.resolveThreadExecutionContext(
+        ThreadId.make("thread-alice"),
+        UserId.make("user-alice"),
+        {},
+      );
+      assert.strictEqual(reassignedContext?.profileId, replacementProfile.id);
+      assert.strictEqual(reassignedContext?.login, "bob");
+      assert.strictEqual(reassignedContext?.environment.GH_TOKEN, "bob-token");
+    }),
+  );
+
   it.effect("rejects a replacement credential owned by another GitHub account", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness;
@@ -156,6 +230,27 @@ it.layer(NodeServices.layer)("SourceControlProfileService", (it) => {
         new TextDecoder().decode(harness.secrets.get(sourceControlProfileSecretName(profile.id))),
         "alice-token",
       );
+    }),
+  );
+
+  it.effect("explains how to recover when a token cannot read private GitHub emails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const error = yield* Effect.flip(
+        harness.service.upsert({
+          label: "Alice",
+          gitName: "Alice Example",
+          gitEmail: "alice@example.com",
+          credential: "email-private-token",
+        }),
+      );
+
+      assert.strictEqual(error.reason, "invalid-email");
+      assert.strictEqual(
+        error.detail,
+        'GitHub could not verify this email. Grant the token "Email addresses: read", or use 42+alice@users.noreply.github.com.',
+      );
+      assert.notInclude(error.detail, "email-private-token");
     }),
   );
 

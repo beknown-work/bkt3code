@@ -7,8 +7,6 @@ import {
 } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
-import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { Alert, Platform, ScrollView, View } from "react-native";
@@ -199,9 +197,6 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, "thread stop");
-  const setThreadOwner = useAtomCommand(sourceControlEnvironment.setThreadOwner, {
-    reportFailure: false,
-  });
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -271,18 +266,14 @@ function ThreadRouteContent(
   const sourceControlProfilesQuery = useEnvironmentQuery(
     environmentId === null ? null : sourceControlEnvironment.profiles({ environmentId, input: {} }),
   );
-  const threadProfileIdentityEnabled =
-    sourceControlProfilesQuery.data?.identityMode === "thread-profile";
-  const assignableSourceControlProfiles = useMemo(
-    () =>
-      (sourceControlProfilesQuery.data?.profiles ?? []).filter(
-        (profile) => !profile.archived && profile.credentialStatus === "connected",
-      ),
-    [sourceControlProfilesQuery.data?.profiles],
-  );
+  // T3-CUSTOM(expbkt3): The header displays server-owned attribution state;
+  // changing GitHub identity requires transferring durable thread ownership.
   const currentSourceControlProfile =
     (sourceControlProfilesQuery.data?.profiles ?? []).find(
-      (profile) => profile.id === selectedThread?.sourceControlProfileId,
+      (profile) =>
+        profile.ownerUserId !== null &&
+        selectedThread?.ownerUserId != null &&
+        String(profile.ownerUserId) === String(selectedThread.ownerUserId),
     ) ?? null;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
@@ -337,44 +328,6 @@ function ThreadRouteContent(
     }
     onReconnectEnvironment(environmentId);
   }, [environmentId, onReconnectEnvironment]);
-  const handleChangeSourceControlOwner = useCallback(() => {
-    if (selectedThread === null || assignableSourceControlProfiles.length === 0) {
-      Alert.alert(
-        "No connected GitHub profile",
-        "Add or reconnect a profile in Settings → Source Control first.",
-      );
-      return;
-    }
-    Alert.alert(
-      "Change GitHub owner",
-      "The provider session and open terminals will stop before ownership changes. Earlier commits and pull requests keep their original identity.",
-      [
-        ...assignableSourceControlProfiles
-          .filter((profile) => profile.id !== selectedThread.sourceControlProfileId)
-          .map((profile) => ({
-            text: `${profile.label} (@${profile.login})`,
-            onPress: async () => {
-              const result = await setThreadOwner({
-                environmentId: selectedThread.environmentId,
-                input: {
-                  threadId: selectedThread.id,
-                  sourceControlProfileId: profile.id,
-                },
-              });
-              if (AsyncResult.isFailure(result)) {
-                const error = Cause.squash(result.cause);
-                Alert.alert(
-                  "Could not change owner",
-                  error instanceof Error ? error.message : "The thread owner could not be changed.",
-                );
-              }
-            },
-          })),
-        { text: "Cancel", style: "cancel" as const },
-      ],
-    );
-  }, [assignableSourceControlProfiles, selectedThread, setThreadOwner]);
-
   /* ─── Git action progress (for overlay banner) ──────────────────── */
   const gitActionProgressTarget = useMemo(
     () => ({
@@ -675,34 +628,13 @@ function ThreadRouteContent(
   };
   const baseThreadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
   const baseCompactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
-  const sourceControlOwnerHeaderItem = useMemo(
-    () =>
-      threadProfileIdentityEnabled
-        ? withNativeGlassHeaderItem({
-            accessibilityLabel: currentSourceControlProfile
-              ? `Change GitHub owner from @${currentSourceControlProfile.login}`
-              : "Assign GitHub owner",
-            icon: { name: "person.crop.circle", type: "sfSymbol" as const },
-            identifier: "thread-source-control-owner",
-            onPress: handleChangeSourceControlOwner,
-            type: "button" as const,
-          })
-        : null,
-    [currentSourceControlProfile, handleChangeSourceControlOwner, threadProfileIdentityEnabled],
-  );
   const threadCenterHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      ...(sourceControlOwnerHeaderItem === null ? [] : [sourceControlOwnerHeaderItem]),
-      ...baseThreadCenterHeaderItems,
-    ],
-    [baseThreadCenterHeaderItems, sourceControlOwnerHeaderItem],
+    () => [...baseThreadCenterHeaderItems],
+    [baseThreadCenterHeaderItems],
   );
   const compactRightHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      ...(sourceControlOwnerHeaderItem === null ? [] : [sourceControlOwnerHeaderItem]),
-      ...baseCompactRightHeaderItems,
-    ],
-    [baseCompactRightHeaderItems, sourceControlOwnerHeaderItem],
+    () => [...baseCompactRightHeaderItems],
+    [baseCompactRightHeaderItems],
   );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
@@ -756,15 +688,6 @@ function ThreadRouteContent(
         onPress: props.onReturnToThread,
       });
     }
-    if (threadProfileIdentityEnabled) {
-      actions.push({
-        accessibilityLabel: currentSourceControlProfile
-          ? `Change GitHub owner from @${currentSourceControlProfile.login}`
-          : "Assign GitHub owner",
-        icon: "person.crop.circle",
-        onPress: handleChangeSourceControlOwner,
-      });
-    }
     if (selectedThreadCwd !== null) {
       actions.push({
         accessibilityLabel: "Open files",
@@ -794,8 +717,6 @@ function ThreadRouteContent(
     return actions;
   }, [
     fileInspector.supported,
-    currentSourceControlProfile,
-    handleChangeSourceControlOwner,
     handleOpenFilesInspector,
     handleOpenTerminal,
     handleOpenGitInspector,
@@ -803,7 +724,6 @@ function ThreadRouteContent(
     props.onReturnToThread,
     selectedThreadCwd,
     selectedThreadProject?.workspaceRoot,
-    threadProfileIdentityEnabled,
   ]);
 
   // Deep links / cold starts land with Thread as the ONLY route, where the

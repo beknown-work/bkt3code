@@ -398,8 +398,9 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<ProviderSessionExecutionOptions | undefined, ProviderAdapterRequestError> {
     const context = yield* Option.match(sourceControlProfiles, {
       onNone: () => Effect.succeed(null),
+      // T3-CUSTOM(expbkt3): attribution follows durable thread ownership.
       onSome: (profiles) =>
-        profiles.resolveThreadExecutionContext(thread.id, thread.sourceControlProfileId, {}).pipe(
+        profiles.resolveThreadExecutionContext(thread.id, thread.ownerUserId, {}).pipe(
           Effect.mapError(
             (error) =>
               new ProviderAdapterRequestError({

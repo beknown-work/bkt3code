@@ -4,7 +4,6 @@ import {
   type ProjectScript,
   type ResolvedKeybindingsConfig,
   type GitHubSourceControlProfile,
-  type SourceControlIdentityMode,
   type SourceControlProfileId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -42,10 +41,8 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
   gitCwd: string | null;
-  sourceControlIdentityMode: SourceControlIdentityMode;
   sourceControlProfiles: ReadonlyArray<GitHubSourceControlProfile>;
   sourceControlProfileId: SourceControlProfileId | null;
-  onSourceControlProfileChange: (profileId: SourceControlProfileId) => void;
   onNewThreadInProject: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
@@ -82,10 +79,8 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   rightPanelOpen,
   gitCwd,
-  sourceControlIdentityMode,
   sourceControlProfiles,
   sourceControlProfileId,
-  onSourceControlProfileChange,
   onNewThreadInProject,
   onRunProjectScript,
   onAddProjectScript,
@@ -166,46 +161,9 @@ export const ChatHeader = memo(function ChatHeader({
           />
         ) : null}
         {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): the member avatars represent thread ownership;
+            GitHub identity stays implicit and follows the durable owner. */}
         <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
-        {sourceControlIdentityMode === "thread-profile" ? (
-          <div className="flex items-center gap-1.5">
-            {selectedSourceControlProfile?.avatarUrl ? (
-              <img
-                src={selectedSourceControlProfile.avatarUrl}
-                alt=""
-                className="size-5 rounded-full"
-                referrerPolicy="no-referrer"
-              />
-            ) : null}
-            <select
-              aria-label="GitHub thread owner"
-              className="h-7 max-w-40 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              value={sourceControlProfileId ?? ""}
-              onChange={(event) => {
-                const profile = sourceControlProfiles.find(
-                  (candidate) => candidate.id === event.currentTarget.value,
-                );
-                if (profile) onSourceControlProfileChange(profile.id);
-              }}
-            >
-              <option value="" disabled>
-                Select GitHub owner
-              </option>
-              {sourceControlProfiles
-                .filter((profile) => !profile.archived)
-                .map((profile) => (
-                  <option
-                    key={profile.id}
-                    value={profile.id}
-                    disabled={profile.credentialStatus !== "connected"}
-                  >
-                    @{profile.login}
-                    {profile.credentialStatus !== "connected" ? " — reconnect" : ""}
-                  </option>
-                ))}
-            </select>
-          </div>
-        ) : null}
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}

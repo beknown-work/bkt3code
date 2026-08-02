@@ -36,7 +36,8 @@ interface EnvironmentHttpTestScenario {
   readonly browserSession?: BrowserSessionHandler;
   readonly bindIdentity?: (
     payload: AuthIdentityBindingRequest,
-  ) => Effect.Effect<AuthIdentityBindingResult>;
+    // T3-CUSTOM(expbkt3): Allow auth rejection scenarios in browser bootstrap tests.
+  ) => Effect.Effect<AuthIdentityBindingResult, EnvironmentAuthInvalidError>;
   readonly pairingCredential?: (
     payload: AuthCreatePairingCredentialInput,
   ) => Effect.Effect<AuthPairingCredentialResult>;

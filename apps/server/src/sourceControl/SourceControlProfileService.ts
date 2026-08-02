@@ -18,6 +18,7 @@ import {
   type SourceControlProfilesListResult,
   type SourceControlProfileUpsertInput,
   type ThreadId,
+  type UserId,
 } from "@t3tools/contracts";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -113,9 +114,13 @@ export class SourceControlProfileService extends Context.Service<
       profileId: SourceControlProfileId,
       baseEnvironment?: NodeJS.ProcessEnv,
     ) => Effect.Effect<SourceControlExecutionContext, SourceControlProfileError>;
+    readonly resolveUserExecutionContext: (
+      ownerUserId: UserId,
+      baseEnvironment?: NodeJS.ProcessEnv,
+    ) => Effect.Effect<SourceControlExecutionContext | null, SourceControlProfileError>;
     readonly resolveThreadExecutionContext: (
       threadId: ThreadId,
-      profileId: SourceControlProfileId | null,
+      ownerUserId: UserId | null,
       baseEnvironment?: NodeJS.ProcessEnv,
     ) => Effect.Effect<SourceControlExecutionContext | null, SourceControlProfileError>;
   }
@@ -282,6 +287,8 @@ export const make = Effect.gen(function* () {
       return;
     }
 
+    const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+
     const environment = yield* isolatedEnvironment(profileId, credential, process.env);
     const response = yield* github
       .execute({ cwd: config.cwd, args: ["api", "user/emails"], env: environment })
@@ -290,7 +297,7 @@ export const make = Effect.gen(function* () {
           profileError({
             operation: "validate-email",
             reason: "invalid-email",
-            detail: "Use a verified GitHub email or the account's GitHub-provided noreply address.",
+            detail: `GitHub could not verify this email. Grant the token "Email addresses: read", or use ${noreplyEmail}.`,
             profileId,
           }),
         ),
@@ -300,7 +307,7 @@ export const make = Effect.gen(function* () {
         profileError({
           operation: "validate-email",
           reason: "invalid-email",
-          detail: "GitHub could not confirm this commit email.",
+          detail: `GitHub could not confirm this commit email. Grant the token "Email addresses: read", or use ${noreplyEmail}.`,
           profileId,
         }),
       ),
@@ -313,7 +320,7 @@ export const make = Effect.gen(function* () {
       return yield* profileError({
         operation: "validate-email",
         reason: "invalid-email",
-        detail: "Use a verified GitHub email or the account's GitHub-provided noreply address.",
+        detail: `This email is not verified on GitHub. Use a verified email or ${noreplyEmail}.`,
         profileId,
       });
     }
@@ -593,10 +600,41 @@ export const make = Effect.gen(function* () {
         resolveContext(profileId, baseEnvironment, false),
     );
 
+  const resolveUserExecutionContext: SourceControlProfileService["Service"]["resolveUserExecutionContext"] =
+    Effect.fn("SourceControlProfileService.resolveUserExecutionContext")(function* (
+      ownerUserId,
+      baseEnvironment = process.env,
+    ) {
+      const current = yield* settings.getSettings.pipe(
+        Effect.mapError(() =>
+          profileError({
+            operation: "resolve-user-profile",
+            reason: "profile-persist-failed",
+            detail: "Could not read source-control identity settings.",
+          }),
+        ),
+      );
+      if (current.sourceControlIdentityMode === "machine") {
+        return null;
+      }
+      const profile = Object.values(current.sourceControlProfiles).find(
+        (candidate) =>
+          candidate.ownerUserId !== null && String(candidate.ownerUserId) === String(ownerUserId),
+      );
+      if (profile === undefined) {
+        return yield* profileError({
+          operation: "resolve-user-profile",
+          reason: "missing-profile",
+          detail: "Assign a connected GitHub profile to this user in Settings before continuing.",
+        });
+      }
+      return yield* resolveContext(profile.id, baseEnvironment, false);
+    });
+
   const resolveThreadExecutionContext: SourceControlProfileService["Service"]["resolveThreadExecutionContext"] =
     Effect.fn("SourceControlProfileService.resolveThreadExecutionContext")(function* (
       threadId,
-      profileId,
+      ownerUserId,
       baseEnvironment = process.env,
     ) {
       const current = yield* settings.getSettings.pipe(
@@ -612,21 +650,21 @@ export const make = Effect.gen(function* () {
       if (current.sourceControlIdentityMode === "machine") {
         return null;
       }
-      if (profileId === null) {
+      if (ownerUserId === null) {
         return yield* profileError({
           operation: "resolve-thread-profile",
           reason: "missing-profile",
-          detail: "Select a GitHub owner for this thread before continuing.",
+          detail: "This thread has no owner. Assign an owner before continuing.",
           threadId,
         });
       }
-      return yield* resolveContext(profileId, baseEnvironment, true).pipe(
+      return yield* resolveUserExecutionContext(ownerUserId, baseEnvironment).pipe(
         Effect.mapError((error) =>
           profileError({
             operation: error.operation,
             reason: error.reason,
             detail: error.detail,
-            profileId,
+            ...(error.profileId !== undefined ? { profileId: error.profileId } : {}),
             threadId,
           }),
         ),
@@ -641,6 +679,7 @@ export const make = Effect.gen(function* () {
     disconnect,
     archive,
     resolveExecutionContext,
+    resolveUserExecutionContext,
     resolveThreadExecutionContext,
   });
 });
