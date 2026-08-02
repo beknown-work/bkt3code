@@ -126,7 +126,7 @@ export interface PhaseSidebarRow {
   readonly providerName: string;
   readonly isAssignedToMe: boolean;
   readonly attentionPriority: number;
-  readonly unreadPriority: number;
+  readonly isUnreadCompletion: boolean;
   /** False on environments whose server predates thread.settle/unsettle:
       the row can never be classified settled (the user could not undo it)
       and its lifecycle affordances stay hidden. */
@@ -330,6 +330,19 @@ export function phaseSidebarNeedsUserInput(
   return thread.hasPendingUserInput || thread.execution?.turn?.state === "waiting-for-input";
 }
 
+export type PhaseSidebarAttentionKind = "input" | "approval" | "error";
+
+export function resolvePhaseSidebarAttentionKind(
+  thread: Pick<ThreadShell, "execution" | "hasPendingApprovals" | "hasPendingUserInput">,
+): PhaseSidebarAttentionKind | null {
+  if (phaseSidebarNeedsUserInput(thread)) return "input";
+  if (thread.hasPendingApprovals || thread.execution?.turn?.state === "waiting-for-approval") {
+    return "approval";
+  }
+  if (thread.execution?.activity === "failed") return "error";
+  return null;
+}
+
 export function resolvePhaseSidebarPhase(
   thread: ThreadShell,
   _status?: VcsStatusResult | null,
@@ -506,7 +519,7 @@ export function buildPhaseSidebarGroups(
           // still surface — they just no longer outrank an explicit P0.
           phaseSidebarPriorityRank(left.thread) - phaseSidebarPriorityRank(right.thread) ||
           left.attentionPriority - right.attentionPriority ||
-          left.unreadPriority - right.unreadPriority ||
+          Number(right.isUnreadCompletion) - Number(left.isUnreadCompletion) ||
           getThreadSortTimestamp(right.thread, sortOrder) -
             getThreadSortTimestamp(left.thread, sortOrder) ||
           left.thread.title.localeCompare(right.thread.title) ||

@@ -28,6 +28,7 @@ import {
   phaseSidebarPriorityRank,
   formatThreadPriority,
   reconcilePhaseSidebarFilters,
+  resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarLinearIssue,
@@ -200,7 +201,7 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     providerName: "Codex",
     isAssignedToMe: false,
     attentionPriority: 5,
-    unreadPriority: 1,
+    isUnreadCompletion: false,
     // Settlement and snooze default ON: most cases exercise the partition,
     // and the capability-gating cases opt out explicitly.
     settlementSupported: true,
@@ -347,6 +348,49 @@ describe("phase sidebar lifecycle", () => {
 
   it("does not invent a reconnect-only lifecycle group", () => {
     expect(resolvePhaseSidebarDisplayPhase("ready", "implementing")).toBe("ready");
+  });
+});
+
+describe("phase sidebar attention badges", () => {
+  it("prioritizes structured input over approval and error", () => {
+    const thread = makeThread({
+      hasPendingApprovals: true,
+      hasPendingUserInput: true,
+      execution: makeExecution({ activity: "failed" }),
+    });
+
+    expect(resolvePhaseSidebarAttentionKind(thread)).toBe("input");
+  });
+
+  it("recognizes durable and live approval requests", () => {
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ hasPendingApprovals: true }))).toBe(
+      "approval",
+    );
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ execution: makeActiveExecution("waiting-for-approval") }),
+      ),
+    ).toBe("approval");
+  });
+
+  it("recognizes failed execution after user-blocking states", () => {
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ execution: makeExecution({ activity: "failed" }) }),
+      ),
+    ).toBe("error");
+  });
+
+  it("does not add attention badges to ordinary lifecycle states", () => {
+    expect(resolvePhaseSidebarAttentionKind(makeThread())).toBeNull();
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ execution: makeActiveExecution() }))).toBe(
+      null,
+    );
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ interactionMode: "plan", execution: makeActiveExecution() }),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -831,6 +875,50 @@ describe("phase sidebar priority", () => {
     expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
       ThreadId.make("thread-early"),
       ThreadId.make("thread-late"),
+    ]);
+  });
+
+  it("sorts unread sessions before equivalent read sessions", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-read"), title: "Same title" }),
+        phaseId: "ready",
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-unread"), title: "Same title" }),
+        phaseId: "ready",
+        isUnreadCompletion: true,
+      }),
+    ];
+
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
+      ThreadId.make("thread-unread"),
+      ThreadId.make("thread-read"),
+    ]);
+  });
+
+  it("keeps explicit priority ahead of unread status", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-unread"), title: "Same title" }),
+        phaseId: "ready",
+        isUnreadCompletion: true,
+      }),
+      makeRow({
+        thread: makeThread({
+          id: ThreadId.make("thread-priority"),
+          priority: 4,
+          title: "Same title",
+        }),
+        phaseId: "ready",
+      }),
+    ];
+
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
+      ThreadId.make("thread-priority"),
+      ThreadId.make("thread-unread"),
     ]);
   });
 
