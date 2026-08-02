@@ -18,6 +18,14 @@ environment user and a profile are administrator operations surfaced under **Set
 Thread ownership can still be changed by trusted collaborators because it determines attribution,
 not access.
 
+Authenticated T3 requests always use their authenticated actor as the owner of a newly created
+thread. A scoped actorless orchestration caller may instead provide an owner while creating a
+thread, including inside an atomic first-turn bootstrap. The HTTP boundary resolves that owner
+before dispatch, so `thread.created` is projected before the provider reactor resolves the first
+turn's source-control identity. WebSocket clients cannot nominate a different owner. Omitting the
+external owner preserves ownerless creation, and no reconciliation path transfers ownership of an
+existing thread.
+
 Commit and hosting attribution are independent:
 
 - Git author and committer fields come from `GIT_AUTHOR_*` and `GIT_COMMITTER_*`.

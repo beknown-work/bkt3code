@@ -15,6 +15,8 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
 import * as OrchestrationCommandDispatcher from "./dispatchCommand.ts";
+// T3-CUSTOM(expbkt3): actorless trusted HTTP callers may delegate thread ownership.
+import { resolveDelegatedThreadOwner } from "./DelegatedThreadOwnership.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -227,21 +229,26 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               return yield* failEnvironmentInvalidRequest("invalid_command");
             }
           }
-          return yield* commandDispatcher.dispatch(normalizedCommand, { actorUserId }).pipe(
-            Effect.catchTag(
-              "ThreadTurnAdmissionConflictError",
-              (conflict) =>
-                new EnvironmentHttpConflictError({
-                  message:
-                    conflict.reason === "execution_revision_mismatch"
-                      ? "The thread execution changed before the turn could be admitted."
-                      : "The thread is not idle.",
-                }),
-            ),
-            Effect.catchTag("OrchestrationDispatchCommandError", (cause) =>
-              failEnvironmentInternal("orchestration_dispatch_failed", cause),
-            ),
-          );
+          // T3-CUSTOM(expbkt3): resolve after access checks so authenticated callers
+          // cannot impersonate a supplied owner while scoped actorless callers can.
+          const dispatchActorUserId = resolveDelegatedThreadOwner(normalizedCommand, actorUserId);
+          return yield* commandDispatcher
+            .dispatch(normalizedCommand, { actorUserId: dispatchActorUserId })
+            .pipe(
+              Effect.catchTag(
+                "ThreadTurnAdmissionConflictError",
+                (conflict) =>
+                  new EnvironmentHttpConflictError({
+                    message:
+                      conflict.reason === "execution_revision_mismatch"
+                        ? "The thread execution changed before the turn could be admitted."
+                        : "The thread is not idle.",
+                  }),
+              ),
+              Effect.catchTag("OrchestrationDispatchCommandError", (cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
         }),
       );
   }),
