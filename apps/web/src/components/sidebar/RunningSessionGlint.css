@@ -1,0 +1,58 @@
+.phase-running-session-glint {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.phase-running-session-glint::after {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 32%;
+  content: "";
+  opacity: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-primary) 14%, transparent) 42%,
+    rgb(255 255 255 / 16%) 52%,
+    color-mix(in oklab, var(--color-primary) 10%, transparent) 62%,
+    transparent 100%
+  );
+  transform: translate3d(-150%, 0, 0) skewX(-14deg);
+  will-change: transform, opacity;
+  animation: phase-running-session-glint-sweep 6s infinite;
+}
+
+@keyframes phase-running-session-glint-sweep {
+  0%,
+  78% {
+    opacity: 0;
+    transform: translate3d(-150%, 0, 0) skewX(-14deg);
+    animation-timing-function: steps(1, end);
+  }
+
+  80% {
+    opacity: 0.72;
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  94% {
+    opacity: 0.72;
+    transform: translate3d(420%, 0, 0) skewX(-14deg);
+  }
+
+  96%,
+  100% {
+    opacity: 0;
+    transform: translate3d(420%, 0, 0) skewX(-14deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phase-running-session-glint {
+    display: none;
+  }
+}
