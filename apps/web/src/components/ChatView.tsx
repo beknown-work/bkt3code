@@ -185,6 +185,8 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
+// T3-CUSTOM(expbkt3): Keep delayed draft promotion from stealing navigation.
+import { useDraftPromotionNavigationGuard } from "../hooks/useDraftPromotionNavigationGuard";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -1168,6 +1170,8 @@ function ChatViewContent(props: ChatViewProps) {
     forceExpandedMobileComposer = false,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
+  // T3-CUSTOM(expbkt3): Read live route state after asynchronous thread creation settles.
+  const shouldNavigateAfterDraftPromotion = useDraftPromotionNavigationGuard(draftId);
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
@@ -5136,11 +5140,16 @@ function ChatViewContent(props: ChatViewProps) {
       // needs to restart the healthy environment connection (which previously
       // flashed a false "not connected" warning above the composer).
       markPromotedDraftThreadByRef(createdThreadRef);
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(createdThreadRef),
-        replace: true,
-      });
+      // T3-CUSTOM(expbkt3): The originating component can finish this async
+      // send after the user has selected another thread. Only canonicalize the
+      // route while that exact draft is still active.
+      if (shouldNavigateAfterDraftPromotion()) {
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(createdThreadRef),
+          replace: true,
+        });
+      }
     }
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {
