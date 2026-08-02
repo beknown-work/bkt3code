@@ -16,7 +16,7 @@ import {
   GitHubSourceControlProfileMetadata,
   SourceControlIdentityMode,
   SourceControlProfileId,
-} from "./sourceControl.ts";
+} from "./sourceControlProfiles.ts";
 import { EnvironmentUserIdentityMode } from "./users.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
