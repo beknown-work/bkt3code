@@ -10,50 +10,35 @@
 .phase-running-session-glint::after {
   position: absolute;
   inset-block: 0;
-  left: 0;
-  width: 42%;
+  /* Seven evenly spaced bands across a 7/3-width layer keep at least three
+     inside the clipped row while three periods travel one row-width. */
+  left: -100%;
+  width: 233.333%;
   content: "";
-  opacity: 0;
-  background: linear-gradient(
+  opacity: 0.9;
+  background: repeating-linear-gradient(
     100deg,
     transparent 0%,
-    color-mix(in oklab, var(--color-primary) 24%, transparent) 40%,
-    rgb(255 255 255 / 32%) 52%,
-    color-mix(in oklab, var(--color-primary) 18%, transparent) 64%,
-    transparent 100%
+    transparent 4.8%,
+    color-mix(in oklab, var(--color-primary) 7%, transparent) 5.8%,
+    rgb(255 255 255 / 10%) 7.1%,
+    color-mix(in oklab, var(--color-primary) 5%, transparent) 8.4%,
+    transparent 9.4%,
+    transparent 14.2857%
   );
-  transform: translate3d(-150%, 0, 0) skewX(-14deg);
-  will-change: transform, opacity;
-  animation: phase-running-session-glint-sweep 2.8s infinite;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  animation: phase-running-session-glint-sweep 8.4s linear infinite;
 }
 
 @keyframes phase-running-session-glint-sweep {
-  0% {
-    opacity: 0;
-    transform: translate3d(-150%, 0, 0) skewX(-14deg);
-    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  8% {
-    opacity: 0.9;
-  }
-
-  84% {
-    opacity: 0.9;
-    transform: translate3d(360%, 0, 0) skewX(-14deg);
-  }
-
-  92%,
-  100% {
-    opacity: 0;
-    transform: translate3d(360%, 0, 0) skewX(-14deg);
+  to {
+    transform: translate3d(42.8571%, 0, 0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .phase-running-session-glint::after {
-    opacity: 0.18;
     animation: none;
-    transform: translate3d(70%, 0, 0) skewX(-14deg);
   }
 }
