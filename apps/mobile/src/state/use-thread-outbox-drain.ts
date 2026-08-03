@@ -11,6 +11,7 @@ import {
   type MessageId,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { recordThreadOutboxFailureUnsafe } from "@t3tools/client-runtime/outbox";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,10 +21,11 @@ import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn"
 import { toUploadChatImageAttachments } from "../lib/composerImages";
 import { randomHex } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
-import { useProjects, useThreadShells } from "./entities";
+import { useProjects, useServerConfigs, useThreadShells } from "./entities";
 import {
   confirmThreadOutboxMessageQueued,
   ensureThreadOutboxLoaded,
+  markThreadOutboxMessageFailed,
   removeThreadOutboxMessage,
 } from "./thread-outbox";
 import {
@@ -102,6 +104,7 @@ export function useThreadOutboxDrain(): void {
   const shellStatuses = useThreadOutboxShellStatuses();
   const threads = useThreadShells();
   const projects = useProjects();
+  const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const [retryTick, setRetryTick] = useState(0);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
@@ -122,9 +125,9 @@ export function useThreadOutboxDrain(): void {
     const reportFailure = (
       commandResult: AtomCommandResult<unknown, unknown>,
       stage: ThreadOutboxCommandStage,
-    ): boolean => {
+    ) => {
       if (!AsyncResult.isFailure(commandResult)) {
-        return false;
+        return null;
       }
       const action = resolveThreadOutboxFailureAction({
         stage,
@@ -132,6 +135,11 @@ export function useThreadOutboxDrain(): void {
         interrupted: Cause.hasInterruptsOnly(commandResult.cause),
       });
       const retry = action === "retry";
+      recordThreadOutboxFailureUnsafe({
+        kind: "delivery",
+        operation: stage,
+        outcome: retry ? "retrying" : "failed",
+      });
       console.warn("[thread-outbox] queued message delivery failed", {
         environmentId: queuedMessage.environmentId,
         threadId: queuedMessage.threadId,
@@ -140,13 +148,32 @@ export function useThreadOutboxDrain(): void {
         cause: commandResult.cause,
         retry,
       });
-      return retry;
+      return action;
     };
     const completeDelivery = async (
       deliveryResult: AtomCommandResult<unknown, unknown>,
     ): Promise<boolean> => {
-      if (reportFailure(deliveryResult, "start-turn")) {
+      const action = reportFailure(deliveryResult, "start-turn");
+      if (action === "retry") {
         return false;
+      }
+      if (action === "fail" && AsyncResult.isFailure(deliveryResult)) {
+        const failure = Cause.squash(deliveryResult.cause);
+        try {
+          await markThreadOutboxMessageFailed(
+            queuedMessage,
+            failure instanceof Error ? failure.message : String(failure),
+          );
+          return true;
+        } catch (error) {
+          console.warn("[thread-outbox] failed to persist deterministic delivery failure", {
+            environmentId: queuedMessage.environmentId,
+            threadId: queuedMessage.threadId,
+            messageId: queuedMessage.messageId,
+            error,
+          });
+          return false;
+        }
       }
 
       try {
@@ -289,7 +316,9 @@ export function useThreadOutboxDrain(): void {
     }
 
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
-      const nextQueuedMessage = queuedMessages[0];
+      const nextQueuedMessage = queuedMessages.find(
+        (message) => message.deliveryState !== "failed",
+      );
       if (!nextQueuedMessage) {
         continue;
       }
@@ -310,6 +339,9 @@ export function useThreadOutboxDrain(): void {
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
+      const durableExecutionRecovery =
+        serverConfigs.get(nextQueuedMessage.environmentId)?.environment.capabilities
+          .durableExecutionRecovery === true;
       const deliveryAction = resolveThreadOutboxDeliveryAction({
         isCreation: creation !== undefined,
         threadExists: thread !== undefined,
@@ -319,6 +351,7 @@ export function useThreadOutboxDrain(): void {
           thread?.execution?.activity === "active" ||
           thread?.execution?.activity === "blocked" ||
           thread?.execution?.activity === "stopping",
+        durableExecutionRecovery,
       });
       if (deliveryAction === "wait") {
         continue;
@@ -379,7 +412,12 @@ export function useThreadOutboxDrain(): void {
         );
         const freshThreadBusy =
           freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
-        if (deliveryAction === "send" && creation === undefined && freshThreadBusy) {
+        if (
+          deliveryAction === "send" &&
+          creation === undefined &&
+          freshThreadBusy &&
+          !durableExecutionRecovery
+        ) {
           return true;
         }
         return deliveryAction === "remove"
@@ -433,6 +471,7 @@ export function useThreadOutboxDrain(): void {
     retryTick,
     sendQueuedCreation,
     sendQueuedMessage,
+    serverConfigs,
     shellStatuses,
     threads,
   ]);

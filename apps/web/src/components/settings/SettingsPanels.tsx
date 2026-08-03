@@ -607,6 +607,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
         ? ["New worktrees start from origin"]
         : []),
+      // T3-CUSTOM(expbkt3): BEGIN — restore reports app-level thread defaults.
       ...(!Equal.equals(
         settings.defaultThreadModelSelection,
         DEFAULT_UNIFIED_SETTINGS.defaultThreadModelSelection,
@@ -620,6 +621,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.defaultThreadInteractionMode
         ? ["Default starting mode"]
         : []),
+      // T3-CUSTOM(expbkt3): END
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Add project base directory"]
         : []),
@@ -639,9 +641,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
+      // T3-CUSTOM(expbkt3): BEGIN — restore observes app-level thread defaults.
       settings.defaultThreadInteractionMode,
       settings.defaultThreadModelSelection,
       settings.defaultThreadRuntimeMode,
+      // T3-CUSTOM(expbkt3): END
       settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
       settings.environmentIdentificationMode,
@@ -684,9 +688,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
+      // T3-CUSTOM(expbkt3): BEGIN — restore app-level thread defaults atomically.
       defaultThreadModelSelection: DEFAULT_UNIFIED_SETTINGS.defaultThreadModelSelection,
       defaultThreadRuntimeMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadRuntimeMode,
       defaultThreadInteractionMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadInteractionMode,
+      // T3-CUSTOM(expbkt3): END
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
@@ -1168,7 +1174,7 @@ export function GeneralSettingsPanel() {
     textGenInstanceId,
     textGenModel,
   );
-  // T3-CUSTOM(expbkt3): app-level agent defaults are distinct from the small
+  // T3-CUSTOM(expbkt3): BEGIN — app-level agent defaults are distinct from the small
   // text-generation model used for titles and summaries.
   const defaultThreadModelSelection = settings.defaultThreadModelSelection;
   const defaultThreadInstanceEntry = textGenerationModelInstanceEntries.find(
@@ -1182,6 +1188,7 @@ export function GeneralSettingsPanel() {
     defaultThreadModelSelection.instanceId,
     defaultThreadModelSelection.model,
   );
+  // T3-CUSTOM(expbkt3): END
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
@@ -1469,6 +1476,7 @@ export function GeneralSettingsPanel() {
           }
         />
 
+        {/* T3-CUSTOM(expbkt3): BEGIN — default location has an independent reverse action. */}
         <SettingsRow
           {...searchableSetting("new-threads")}
           description="Pick the default workspace mode for newly created draft threads."
@@ -1509,6 +1517,7 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+        {/* T3-CUSTOM(expbkt3): END */}
 
         {settings.defaultThreadEnvMode === "worktree" ? (
           <SettingsRow
@@ -1540,6 +1549,7 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+        {/* T3-CUSTOM(expbkt3): BEGIN — configurable model, access, and starting defaults. */}
 
         <SettingsRow
           title="Default agent model"
@@ -1679,6 +1689,7 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+        {/* T3-CUSTOM(expbkt3): END */}
 
         <SettingsRow
           {...searchableSetting("add-project-starts-in")}

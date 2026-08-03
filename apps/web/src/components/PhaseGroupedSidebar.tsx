@@ -12,6 +12,10 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+// T3-CUSTOM(expbkt3): BEGIN — sidebar rows consume shared durable execution state.
+import { ANONYMOUS_OUTBOX_IDENTITY } from "@t3tools/client-runtime/outbox";
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
+// T3-CUSTOM(expbkt3): END
 import { ProviderDriverKind, type ScopedThreadRef, type VcsStatusResult } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
@@ -67,7 +71,8 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
-import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+// T3-CUSTOM(expbkt3): pending IndexedDB sends drive sidebar state before acknowledgement.
+import { durableThreadOutbox, threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -656,6 +661,22 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  // T3-CUSTOM(expbkt3): BEGIN — show Sending/Queued/Recovering on the next row render.
+  const currentUserId = useCurrentUserId();
+  const outboxItems = useAtomValue(
+    durableThreadOutbox.itemsValueAtom(
+      row.thread.environmentId,
+      currentUserId ?? ANONYMOUS_OUTBOX_IDENTITY,
+    ),
+  );
+  const executionPresentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem: outboxItems.some(
+      (item) => item.threadId === row.thread.id && item.deliveryState !== "failed",
+    ),
+    intent: row.thread.execution?.intent ?? null,
+    providerActivity: row.thread.execution?.activity ?? "idle",
+  });
+  // T3-CUSTOM(expbkt3): END
   const selected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const toggleThread = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -668,6 +689,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
+  const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
   // While the preset popover is open the pointer sits over the popup, not
   // the row, so the hover cluster has to stay pinned.
@@ -799,15 +821,15 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         ...settlementItems,
         ...snoozeItems,
         {
-          id: "force-stop-agent",
-          label: "Force stop agent",
-          disabled: !phaseSidebarCanForceStopAgent(row.thread.session),
-          destructive: true,
+          id: recoveryExhausted ? "dismiss-recovery" : "force-stop-agent",
+          label: recoveryExhausted ? "Dismiss recovery failure" : "Force stop agent",
+          disabled: !recoveryExhausted && !phaseSidebarCanForceStopAgent(row.thread.session),
+          destructive: !recoveryExhausted,
         },
         {
           id: "reconnect-session",
-          label: "Reconnect session",
-          disabled: !canReconnectThreadSession(row.thread),
+          label: recoveryExhausted ? "Retry recovery" : "Reconnect session",
+          disabled: !recoveryExhausted && !canReconnectThreadSession(row.thread),
         },
         { id: "copy-path", label: "Copy Path", disabled: workspacePath === null },
         {
@@ -840,6 +862,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     }
     // T3-CUSTOM(expbkt3): END
     if (action === "force-stop-agent") onForceStop(row);
+    if (action === "dismiss-recovery") onForceStop(row);
     if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
       await navigator.clipboard.writeText(workspacePath);
@@ -864,7 +887,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         onDoubleClick={() => onStartRename(row)}
         onContextMenu={(event) => void handleContextMenu(event)}
       >
-        {shouldShowRunningSessionGlint(row.phaseId, section) ? <RunningSessionGlint /> : null}
+        {executionPresentation.active || shouldShowRunningSessionGlint(row.phaseId, section) ? (
+          <RunningSessionGlint />
+        ) : null}
         {active ? (
           <span
             aria-hidden
@@ -979,6 +1004,14 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </span>
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
+          {executionPresentation.active && executionPresentation.label && attentionKind === null ? (
+            <span
+              role="status"
+              className="rounded-sm bg-sky-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:text-sky-300"
+            >
+              {executionPresentation.label.toUpperCase()}
+            </span>
+          ) : null}
           {row.thread.priority != null ? (
             <span
               aria-label={`Priority ${formatThreadPriority(row.thread.priority)}`}

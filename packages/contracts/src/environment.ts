@@ -62,6 +62,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   durableThreadBootstrap: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): app/project creation-default settings are supported. */
   threadCreationDefaults: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): accepted turns have durable desired-state and recovery. */
+  durableExecutionRecovery: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

@@ -6,26 +6,31 @@ giving web, HTTP, WebSocket, and MCP callers one defaults and readiness boundary
 
 ## Resolution and persistence
 
-`thread.bootstrap.request` is normalized at the transport boundary and resolved by
-`ThreadCreationDefaultsResolver`. Every defaulted field is merged independently:
+`ThreadCreationDefaultsResolver` resolves every defaulted field independently:
 
 ```text
 explicit request override → project override → target environment app setting
 ```
 
-The resolved request is stored once. New-worktree requests receive a desired branch and expected
-managed worktree path before filesystem work begins. Origin refs are fetched and resolved to a
-commit SHA; exact configured refs fail visibly if unavailable.
+On servers advertising `durableExecutionRecovery`, an initial prompt travels as a
+`thread.turn.start` with an embedded bootstrap request. The client outbox persists that request and
+the exact prompt together. The server resolves defaults and commits thread creation, message,
+resolved request, execution intent, and command receipt in one transaction. New-worktree requests
+receive a desired branch and expected managed worktree path before filesystem work begins. Origin
+refs are fetched and resolved to a commit SHA only after that commit; unavailable refs fail visibly.
 
-The event log records the public lifecycle while `projection_thread_bootstraps` retains the
-resolved request needed for recovery. Public thread snapshots expose only output-free progress.
-Pending prompt content remains in the internal request and terminal bytes remain in capped,
-redacted terminal history.
+The execution intent retains the resolved request needed for recovery. Workspace-only and
+version-skew `thread.bootstrap.request` operations retain their public lifecycle in
+`projection_thread_bootstraps`. Public snapshots expose only output-free progress. Pending prompt
+content remains in the internal request and terminal bytes remain in capped, redacted terminal
+history.
 
 ## Coordinator lifecycle
 
-The coordinator persists the thread and `thread.bootstrap-requested`, returns to the caller, then
-runs three phases in a detached server fiber:
+For a durable execution turn, `DurableExecutionCoordinator` claims the accepted intent and runs
+workspace/setup preparation before provider delivery. The legacy workspace-only bootstrap
+coordinator persists `thread.bootstrap-requested`, returns to the caller, then runs three phases in
+a detached server fiber:
 
 1. Create or adopt the requested workspace.
 2. Run the selected project setup action in a one-shot interactive PTY when this operation created
@@ -58,8 +63,9 @@ the only output-loading path.
 
 ## Compatibility
 
-Servers advertise `durableThreadBootstrap` and `threadCreationDefaults`. New web clients use the
-high-level command only when both sides support it; older servers retain the explicit legacy flow.
-The legacy `thread.turn.start.bootstrap` command is translated by the dispatcher. MCP
-`t3_create_session` returns the thread and bootstrap IDs after durable queueing rather than waiting
-for setup.
+Servers advertise `durableThreadBootstrap`, `threadCreationDefaults`, and, when available,
+`durableExecutionRecovery`. New web clients prefer the shared-outbox turn command when recovery is
+available and retain the high-level bootstrap command for version skew. Legacy
+`thread.turn.start.bootstrap` payloads commit directly as execution intents; they are not routed
+through a pre-acceptance side-effect path. MCP `t3_create_session` uses the atomic turn path when a
+prompt is supplied and returns after durable queueing rather than waiting for setup.

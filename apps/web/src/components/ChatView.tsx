@@ -28,6 +28,11 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  ANONYMOUS_OUTBOX_IDENTITY,
+  shouldRetryThreadOutboxDelivery,
+  threadOutboxRetryDelayMs,
+} from "@t3tools/client-runtime/outbox";
+import {
   parseScopedThreadKey,
   scopedThreadKey,
   scopeProjectRef,
@@ -43,6 +48,8 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { describeThreadExecution } from "@t3tools/shared/threadExecution";
+// T3-CUSTOM(expbkt3): honest Sending/Queued/Recovering state shared with mobile.
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -176,12 +183,14 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+// T3-CUSTOM(expbkt3): exhausted recovery actions reuse restart/stop commands.
+import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
@@ -195,6 +204,7 @@ import { useDraftPromotionNavigationGuard } from "../hooks/useDraftPromotionNavi
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  hydrateImagesFromPersisted,
   markPromotedDraftThreadByRef,
   useComposerDraftStore,
   type DraftId,
@@ -223,7 +233,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment } from "../state/threads";
+import { durableThreadOutbox, threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useCurrentUserId } from "../state/identity";
@@ -1217,9 +1227,18 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const discardDurableOutbox = useAtomCommand(threadEnvironment.discardOutbox, {
+    reportFailure: false,
+  });
   const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, {
     reportFailure: false,
   });
+  // T3-CUSTOM(expbkt3): session.stop dismisses exhausted durable attention.
+  const dismissRecoveryFailure = useAtomCommand(
+    threadEnvironment.stopSession,
+    "dismiss recovery failure",
+  );
+  const retryRecoveryFailure = useReconnectThreadSession();
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1251,6 +1270,12 @@ function ChatViewContent(props: ChatViewProps) {
     sourceControlEnvironment.profiles({ environmentId, input: {} }),
   );
   const currentUserId = useCurrentUserId();
+  // T3-CUSTOM(expbkt3): pending sends are isolated by environment/account.
+  const outboxIdentityKey = currentUserId ?? ANONYMOUS_OUTBOX_IDENTITY;
+  const durableOutboxItems = useAtomValue(
+    durableThreadOutbox.itemsValueAtom(environmentId, outboxIdentityKey),
+  );
+  const outboxEnvironmentConnectionPhase = environmentById.get(environmentId)?.connection.phase;
   const routeServerThreadShell = useThreadShell(routeKind === "server" ? routeThreadRef : null);
   const serverThread = useThread(routeThreadRef, { waitForShell: draftThread !== null });
   const loadingServerThread = useMemo(
@@ -1504,8 +1529,14 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
+  const failedOutboxItem = durableOutboxItems.find(
+    (item) => item.threadId === activeThread?.id && item.deliveryState === "failed",
+  );
   const threadError = isServerThread
-    ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
+    ? (localServerError ??
+      failedOutboxItem?.failureDetail ??
+      activeServerThread?.session?.lastError ??
+      null)
     : localDraftError;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const draftProjectDefaults = fallbackDraftProject?.threadCreationDefaults;
@@ -1574,6 +1605,72 @@ function ChatViewContent(props: ChatViewProps) {
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
     [activeThread],
   );
+  // T3-CUSTOM(expbkt3): Retry creates a fresh fenced generation; Dismiss keeps history.
+  const onRetryRecoveryFailure = useCallback(() => {
+    if (activeThreadRef) void retryRecoveryFailure(activeThreadRef);
+  }, [activeThreadRef, retryRecoveryFailure]);
+  const onDismissRecoveryFailure = useCallback(() => {
+    if (!activeThreadRef) return;
+    void dismissRecoveryFailure({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId },
+    });
+  }, [activeThreadRef, dismissRecoveryFailure]);
+  // T3-CUSTOM(expbkt3): deterministic rejections stay durable and editable;
+  // only an explicit Retry dispatches them again.
+  const onRetryFailedOutboxItem = useCallback(() => {
+    if (!failedOutboxItem) return;
+    void startThreadTurn({
+      environmentId: failedOutboxItem.environmentId,
+      input: {
+        // T3-CUSTOM(expbkt3): explicit retry starts a new command because the
+        // rejected command may already have an idempotent failure receipt.
+        commandId: newCommandId(),
+        threadId: failedOutboxItem.threadId,
+        outboxIdentityKey,
+        message: {
+          messageId: failedOutboxItem.messageId,
+          role: "user",
+          text: failedOutboxItem.text,
+          attachments: failedOutboxItem.attachments.map(
+            ({ id: _id, previewUri: _previewUri, ...attachment }) => attachment,
+          ),
+        },
+        ...(failedOutboxItem.modelSelection === undefined
+          ? {}
+          : { modelSelection: failedOutboxItem.modelSelection }),
+        runtimeMode: failedOutboxItem.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        interactionMode: failedOutboxItem.interactionMode ?? DEFAULT_INTERACTION_MODE,
+        ...(failedOutboxItem.bootstrap === undefined
+          ? {}
+          : { bootstrap: failedOutboxItem.bootstrap }),
+        ...(failedOutboxItem.sourceProposedPlan === undefined
+          ? {}
+          : { sourceProposedPlan: failedOutboxItem.sourceProposedPlan }),
+        ...(failedOutboxItem.titleSeed === undefined
+          ? {}
+          : { titleSeed: failedOutboxItem.titleSeed }),
+        createdAt: failedOutboxItem.createdAt,
+      },
+    });
+  }, [failedOutboxItem, outboxIdentityKey, startThreadTurn]);
+  const onEditFailedOutboxItem = useCallback(() => {
+    if (!failedOutboxItem) return;
+    setComposerDraftPrompt(composerDraftTarget, failedOutboxItem.text);
+    addComposerDraftImages(
+      composerDraftTarget,
+      hydrateImagesFromPersisted(failedOutboxItem.attachments),
+    );
+    void discardDurableOutbox(failedOutboxItem);
+    window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+  }, [
+    addComposerDraftImages,
+    composerDraftTarget,
+    composerRef,
+    discardDurableOutbox,
+    failedOutboxItem,
+    setComposerDraftPrompt,
+  ]);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
@@ -2212,7 +2309,7 @@ function ChatViewContent(props: ChatViewProps) {
     resetLocalDispatch,
     localDispatchStartedAt,
     isPreparingWorktree,
-    isSendBusy,
+    isSendBusy: isLocalSendBusy,
   } = useLocalDispatchState({
     activeThread,
     activeLatestTurn,
@@ -2221,7 +2318,87 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  // T3-CUSTOM(expbkt3): IndexedDB survives reloads; memory state is only the
+  // synchronous pre-persist paint used to meet the sub-100ms feedback target.
+  const hasDurableOutboxItem = durableOutboxItems.some(
+    (item) => item.threadId === activeThread?.id && item.deliveryState !== "failed",
+  );
+  const isSendBusy = isLocalSendBusy || hasDurableOutboxItem;
+  const outboxReplayInFlightRef = useRef(new Set<MessageId>());
+  const outboxReplayAttemptRef = useRef(new Map<MessageId, number>());
+  const outboxReplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [outboxReplayTick, setOutboxReplayTick] = useState(0);
+  useEffect(
+    () => () => {
+      if (outboxReplayTimerRef.current !== null) clearTimeout(outboxReplayTimerRef.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (isLocalSendBusy || outboxEnvironmentConnectionPhase !== "connected") {
+      return;
+    }
+    const queued = durableOutboxItems.find(
+      (item) =>
+        item.deliveryState !== "failed" && !outboxReplayInFlightRef.current.has(item.messageId),
+    );
+    if (queued === undefined) return;
+    outboxReplayInFlightRef.current.add(queued.messageId);
+    void startThreadTurn({
+      environmentId: queued.environmentId,
+      input: {
+        commandId: queued.commandId,
+        threadId: queued.threadId,
+        outboxIdentityKey,
+        message: {
+          messageId: queued.messageId,
+          role: "user",
+          text: queued.text,
+          attachments: queued.attachments.map(
+            ({ id: _id, previewUri: _previewUri, ...attachment }) => attachment,
+          ),
+        },
+        ...(queued.modelSelection === undefined ? {} : { modelSelection: queued.modelSelection }),
+        runtimeMode: queued.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        interactionMode: queued.interactionMode ?? DEFAULT_INTERACTION_MODE,
+        ...(queued.bootstrap === undefined ? {} : { bootstrap: queued.bootstrap }),
+        ...(queued.sourceProposedPlan === undefined
+          ? {}
+          : { sourceProposedPlan: queued.sourceProposedPlan }),
+        ...(queued.titleSeed === undefined ? {} : { titleSeed: queued.titleSeed }),
+        createdAt: queued.createdAt,
+      },
+    }).then((result) => {
+      outboxReplayInFlightRef.current.delete(queued.messageId);
+      if (AsyncResult.isSuccess(result)) {
+        outboxReplayAttemptRef.current.delete(queued.messageId);
+        return;
+      }
+      const error = Cause.squash(result.cause);
+      if (!shouldRetryThreadOutboxDelivery(error)) return;
+      const attempt = (outboxReplayAttemptRef.current.get(queued.messageId) ?? 0) + 1;
+      outboxReplayAttemptRef.current.set(queued.messageId, attempt);
+      if (outboxReplayTimerRef.current !== null) clearTimeout(outboxReplayTimerRef.current);
+      outboxReplayTimerRef.current = setTimeout(() => {
+        outboxReplayTimerRef.current = null;
+        setOutboxReplayTick((tick) => tick + 1);
+      }, threadOutboxRetryDelayMs(attempt));
+    });
+  }, [
+    durableOutboxItems,
+    isLocalSendBusy,
+    outboxEnvironmentConnectionPhase,
+    outboxIdentityKey,
+    outboxReplayTick,
+    startThreadTurn,
+  ]);
+  // T3-CUSTOM(expbkt3): desired work is active before a provider process exists.
+  const executionPresentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem: isSendBusy,
+    intent: activeThread?.execution?.intent ?? null,
+    providerActivity: activeThread?.execution?.activity ?? "idle",
+  });
+  const isWorking = executionPresentation.active || isConnecting || isRevertingCheckpoint;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.execution ?? null,
@@ -2630,7 +2807,8 @@ function ChatViewContent(props: ChatViewProps) {
     ? "Preparing worktree"
     : runtimeWarningStatus
       ? runtimeWarningStatus
-      : (backendExecutionStatus ??
+      : (executionPresentation.label ??
+        backendExecutionStatus ??
         (routeKind === "draft" && isSendBusy
           ? "Creating thread"
           : isRevertingCheckpoint
@@ -2639,11 +2817,13 @@ function ChatViewContent(props: ChatViewProps) {
               ? "Connecting to server"
               : "Agent is working"));
   const backendExecutionError =
-    activeThread?.execution?.activity === "failed"
-      ? (activeThread.execution.turn?.lastError ??
-        activeThread.execution.providerSession.lastError ??
-        "Agent execution failed.")
-      : null;
+    activeThread?.execution?.intent?.phase === "recovery-exhausted"
+      ? (activeThread.execution.intent.recovery.reason ?? "Automatic recovery was exhausted.")
+      : activeThread?.execution?.activity === "failed"
+        ? (activeThread.execution.turn?.lastError ??
+          activeThread.execution.providerSession.lastError ??
+          "Agent execution failed.")
+        : null;
   const providerStatusBannerKey = getProviderStatusBannerKey(activeProviderStatus);
   const [dismissedProviderStatusBannerKey, setDismissedProviderStatusBannerKey] = useState<
     string | null
@@ -4254,6 +4434,10 @@ function ChatViewContent(props: ChatViewProps) {
   // T3-CUSTOM(expbkt3): retain the explicit legacy creation path under version skew.
   const supportsDurableThreadBootstrap =
     serverConfig?.environment.capabilities.durableThreadBootstrap === true;
+  // T3-CUSTOM(expbkt3): v2 accepts bootstrap and message through the shared
+  // durable outbox; version-skew servers retain the public bootstrap command.
+  const supportsDurableExecutionRecovery =
+    serverConfig?.environment.capabilities.durableExecutionRecovery === true;
   const nowMinute = useNowMinute();
   const activeThreadSnoozed =
     activeThreadShell !== null &&
@@ -5155,31 +5339,11 @@ function ChatViewContent(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
     let durableThreadCreated = isServerThread;
-    // Promote a local draft to a durable thread before any worktree or provider
-    // startup. This makes the sidebar row and canonical route available
-    // immediately while the slower execution setup continues independently.
-    if (isLocalDraftThread && !supportsDurableThreadBootstrap) {
+    // T3-CUSTOM(expbkt3): new-thread creation is part of the durable turn
+    // transaction below. The local draft already supplies immediate visuals;
+    // a separate create acknowledgement would break atomic acceptance.
+    if (isLocalDraftThread) {
       beginLocalDispatch({ preparingWorktree: false });
-      const createResult = await createThread({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          projectId: activeProject.id,
-          title,
-          modelSelection: threadCreateModelSelection,
-          runtimeMode,
-          interactionMode,
-          branch: sendWorkspace.branch,
-          worktreePath: sendWorkspace.worktreePath,
-          sourceControlProfileId: activeSourceControlProfileId,
-          createdAt: activeThread.createdAt,
-        },
-      });
-      if (createResult._tag === "Failure") {
-        failure = createResult;
-      } else {
-        durableThreadCreated = true;
-      }
     }
     // Auto-title from first message
     if (failure === null && isFirstMessage && isServerThread) {
@@ -5219,8 +5383,51 @@ function ChatViewContent(props: ChatViewProps) {
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+      const turnBootstrap =
+        supportsDurableExecutionRecovery && (isLocalDraftThread || shouldCreateWorktree)
+          ? {
+              request: {
+                createThread: isLocalDraftThread,
+                bootstrapId: `web:${threadIdForSend}:${messageIdForSend}`,
+                projectId: activeProject.id,
+                title,
+                ...(hasBootstrapOverrides ? { overrides: bootstrapOverrides } : {}),
+                sourceControlProfileId: activeSourceControlProfileId,
+                createdAt: activeThread.createdAt,
+              },
+            }
+          : isLocalDraftThread || baseBranchForWorktree
+            ? {
+                ...(isLocalDraftThread
+                  ? {
+                      createThread: {
+                        projectId: activeProject.id,
+                        title,
+                        modelSelection: threadCreateModelSelection,
+                        runtimeMode,
+                        interactionMode,
+                        branch: activeThreadBranch,
+                        worktreePath: activeThread.worktreePath,
+                        sourceControlProfileId: activeSourceControlProfileId,
+                        createdAt: activeThread.createdAt,
+                      },
+                    }
+                  : {}),
+                ...(baseBranchForWorktree
+                  ? {
+                      prepareWorktree: {
+                        projectCwd: activeProject.workspaceRoot,
+                        baseBranch: baseBranchForWorktree,
+                        branch: buildTemporaryWorktreeBranchName(randomHex),
+                        ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                      },
+                      runSetupScript: true,
+                    }
+                  : {}),
+              }
+            : undefined;
       const startResult =
-        isLocalDraftThread && supportsDurableThreadBootstrap
+        isLocalDraftThread && supportsDurableThreadBootstrap && !supportsDurableExecutionRecovery
           ? await requestThreadBootstrap({
               environmentId,
               input: {
@@ -5243,6 +5450,7 @@ function ChatViewContent(props: ChatViewProps) {
               environmentId,
               input: {
                 threadId: threadIdForSend,
+                outboxIdentityKey,
                 message: {
                   messageId: messageIdForSend,
                   role: "user",
@@ -5253,38 +5461,7 @@ function ChatViewContent(props: ChatViewProps) {
                 titleSeed: title,
                 runtimeMode,
                 interactionMode,
-                ...(isLocalDraftThread || baseBranchForWorktree
-                  ? {
-                      bootstrap: {
-                        ...(isLocalDraftThread
-                          ? {
-                              createThread: {
-                                projectId: activeProject.id,
-                                title,
-                                modelSelection: threadCreateModelSelection,
-                                runtimeMode,
-                                interactionMode,
-                                branch: activeThreadBranch,
-                                worktreePath: activeThread.worktreePath,
-                                sourceControlProfileId: activeSourceControlProfileId,
-                                createdAt: activeThread.createdAt,
-                              },
-                            }
-                          : {}),
-                        ...(baseBranchForWorktree
-                          ? {
-                              prepareWorktree: {
-                                projectCwd: activeProject.workspaceRoot,
-                                baseBranch: baseBranchForWorktree,
-                                branch: buildTemporaryWorktreeBranchName(randomHex),
-                                ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                              },
-                              runSetupScript: true,
-                            }
-                          : {}),
-                      },
-                    }
-                  : {}),
+                ...(turnBootstrap ? { bootstrap: turnBootstrap } : {}),
                 createdAt: messageCreatedAt,
               },
             });
@@ -5292,9 +5469,7 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        if (isLocalDraftThread && supportsDurableThreadBootstrap) {
-          durableThreadCreated = true;
-        }
+        if (isLocalDraftThread) durableThreadCreated = true;
       }
     }
 
@@ -5667,6 +5842,7 @@ function ChatViewContent(props: ChatViewProps) {
           environmentId,
           input: {
             threadId: threadIdForSend,
+            outboxIdentityKey,
             message: {
               messageId: messageIdForSend,
               role: "user",
@@ -5808,6 +5984,7 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId,
         input: {
           threadId: nextThreadId,
+          outboxIdentityKey,
           message: {
             messageId: newMessageId(),
             role: "user",
@@ -6229,7 +6406,20 @@ function ChatViewContent(props: ChatViewProps) {
 
         <ThreadErrorBanner
           error={threadError ?? backendExecutionError}
-          {...(threadError ? { onDismiss: () => setThreadError(activeThread.id, null) } : {})}
+          {...(activeThread.execution?.intent?.phase === "recovery-exhausted"
+            ? {
+                onRetry: onRetryRecoveryFailure,
+                onDismiss: onDismissRecoveryFailure,
+              }
+            : failedOutboxItem
+              ? {
+                  onRetry: onRetryFailedOutboxItem,
+                  onDismiss: onEditFailedOutboxItem,
+                  dismissLabel: "Edit",
+                }
+              : threadError
+                ? { onDismiss: () => setThreadError(activeThread.id, null) }
+                : {})}
         />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">

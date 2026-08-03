@@ -2248,6 +2248,15 @@ export function ConnectionsSettings() {
 
   const handleRemoveSavedBackend = useCallback(
     async (environmentId: EnvironmentId) => {
+      // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
+      if (
+        !window.confirm(
+          "Remove this backend? Any unsent messages saved for it will also be removed.",
+        )
+      ) {
+        return;
+      }
+      // T3-CUSTOM(expbkt3): END
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
       const result = await removeEnvironment(environmentId);

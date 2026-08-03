@@ -66,6 +66,9 @@ export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
+  // T3-CUSTOM(expbkt3): BEGIN — stable durable dispatch/adoption correlation.
+  clientExecutionId: Schema.optional(TrimmedNonEmptyString),
+  // T3-CUSTOM(expbkt3): END
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),

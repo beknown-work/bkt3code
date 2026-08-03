@@ -7437,7 +7437,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect(
     // T3-CUSTOM(expbkt3): delegated HTTP bootstrap ownership must be atomic with first turn.
-    "assigns delegated bootstrap owner before dispatching the first turn",
+    "accepts delegated bootstrap ownership before durable preparation",
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
@@ -7620,65 +7620,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const response = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
 
         assert.equal(httpResponse.status, 200);
-        assert.equal(response.sequence, 2);
+        // T3-CUSTOM(expbkt3): acceptance commits the exact bootstrap before
+        // the durable coordinator performs any fallible worktree/setup work.
+        assert.equal(response.sequence, 1);
         yield* Deferred.await(agentStarted);
-        const createCommand = dispatchedCommands[0];
-        assertTrue(createCommand?.type === "thread.create");
-        if (createCommand?.type === "thread.create") {
-          assert.equal(createCommand.ownerUserId, "user-linear-starter");
+        const acceptedCommand = dispatchedCommands[0];
+        assertTrue(acceptedCommand?.type === "thread.turn.start");
+        if (acceptedCommand?.type === "thread.turn.start") {
+          assert.equal(acceptedCommand.bootstrap?.createThread?.ownerUserId, "user-linear-starter");
         }
-        assert.equal(createWorktree.mock.calls[0]?.[0].cwd, "/tmp/project");
-        assert.equal(createWorktree.mock.calls[0]?.[0].refName, fetchedOriginCommit);
-        assert.equal(createWorktree.mock.calls[0]?.[0].newRefName, "t3code/bootstrap-refName");
-        assert.equal(createWorktree.mock.calls[0]?.[0].baseRefName, "main");
-        assertTrue(typeof createWorktree.mock.calls[0]?.[0].path === "string");
-        assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          remoteName: "origin",
-        });
-        assert.deepEqual(resolveRemoteTrackingCommit.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: "main",
-          fallbackRemoteName: "origin",
-        });
-        assert.deepEqual(bootstrapGitOperations, [
-          "fetch",
-          "resolve-remote-commit",
-          "create-worktree",
-        ]);
-        const { onStarted: _onStarted, ...setupInput } = runForThread.mock.calls[0]![0];
-        assert.deepEqual(setupInput, {
-          threadId: ThreadId.make("thread-bootstrap"),
-          projectId: defaultProjectId,
-          worktreePath: "/tmp/bootstrap-worktree",
-          preferredTerminalId: "setup-legacy:cmd-bootstrap-turn-start-1",
-        });
-        const setupActivities = dispatchedCommands.filter(
-          (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
-            command.type === "thread.activity.append",
-        );
-        assert.deepEqual(
-          setupActivities.map((command) => command.activity.kind),
-          ["setup-script.requested", "setup-script.started", "setup-script.completed"],
-        );
-        const setupSucceededIndex = dispatchedCommands.findIndex(
-          (command) =>
-            command.type === "thread.bootstrap.step.update" &&
-            command.step === "setup" &&
-            command.status === "succeeded",
-        );
-        const finalCommand = dispatchedCommands.find(
-          (command) => command.type === "thread.turn.start",
-        );
-        assertTrue(finalCommand?.type === "thread.turn.start");
-        assertTrue(dispatchedCommands.indexOf(finalCommand!) > setupSucceededIndex);
-        if (finalCommand?.type === "thread.turn.start") {
-          assert.equal(finalCommand.bootstrap, undefined);
-        }
+        assert.equal(createWorktree.mock.calls.length, 0);
+        assert.equal(runForThread.mock.calls.length, 0);
+        assert.deepEqual(bootstrapGitOperations, []);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("keeps a legacy bootstrap turn pending when setup fails", () =>
+  it.effect("accepts setup work before any fallible setup side effect", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       // T3-CUSTOM(expbkt3): setup failure is durable and must gate the first turn.
@@ -7798,19 +7755,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 2);
-      yield* Deferred.await(setupFailed);
-      const setupFailureActivity = dispatchedCommands.find(
-        (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
-          command.type === "thread.activity.append",
+      // T3-CUSTOM(expbkt3): setup runs only after the bootstrap-bearing turn
+      // is accepted; this router seam must perform no setup side effect.
+      assert.equal(response.sequence, 1);
+      assert.equal(runForThread.mock.calls.length, 0);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.start"],
       );
-      assert.equal(setupFailureActivity?.activity.kind, "setup-script.failed");
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.turn.start"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
+  it.effect("does not dispatch setup activities before durable acceptance", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       // T3-CUSTOM(expbkt3): activity compatibility failures never undo a
@@ -7954,24 +7910,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 2);
+      // T3-CUSTOM(expbkt3): activity emission belongs to the post-commit
+      // coordinator, never the command-acceptance path.
+      assert.equal(response.sequence, 1);
       yield* Deferred.await(agentStarted);
-      const setupActivities = dispatchedCommands.filter(
-        (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
-          command.type === "thread.activity.append",
-      );
+      assert.equal(runForThread.mock.calls.length, 0);
+      assert.equal(setupActivityAppendAttempt, 0);
       assert.deepEqual(
-        setupActivities.map((command) => command.activity.kind),
-        ["setup-script.requested", "setup-script.completed"],
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.start"],
       );
-      assertTrue(
-        setupActivities.every((command) => command.activity.kind !== "setup-script.failed"),
-      );
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("preserves a queued legacy thread when worktree creation defects", () =>
+  it.effect("accepts worktree preparation before any fallible worktree side effect", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       // T3-CUSTOM(expbkt3): worktree failures are projected for retry and never
@@ -8070,20 +8022,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(result.sequence, 2);
-      yield* Deferred.await(worktreeFailed);
-      const failedStep = dispatchedCommands.find(
-        (command) =>
-          command.type === "thread.bootstrap.step.update" &&
-          command.step === "worktree" &&
-          command.status === "failed",
+      // T3-CUSTOM(expbkt3): worktree preparation is reconciled from the
+      // accepted durable item, so acceptance cannot run createWorktree.
+      assert.equal(result.sequence, 1);
+      assert.equal(createWorktree.mock.calls.length, 0);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.start"],
       );
-      assertTrue(failedStep?.type === "thread.bootstrap.step.update");
-      if (failedStep?.type === "thread.bootstrap.step.update") {
-        assert.include(failedStep.error ?? "", "worktree exploded");
-      }
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.turn.start"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

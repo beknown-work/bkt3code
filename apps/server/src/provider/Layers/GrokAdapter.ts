@@ -109,7 +109,12 @@ interface GrokSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  // T3-CUSTOM(expbkt3): persisted history carries explicit terminal evidence.
+  turns: Array<{
+    id: TurnId;
+    items: Array<unknown>;
+    state: "completed" | "interrupted";
+  }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
   /** Turns already interrupted; late prompt RPCs must not resurrect them. */
@@ -148,14 +153,15 @@ function appendPromptResultToTurn(
   promptParts: ReadonlyArray<EffectAcpSchema.ContentBlock>,
   result: EffectAcpSchema.PromptResponse,
 ): void {
+  const state = result.stopReason === "cancelled" ? "interrupted" : "completed";
   const existingTurnRecord = ctx.turns.find((turn) => turn.id === turnId);
   ctx.turns = existingTurnRecord
     ? ctx.turns.map((turn) =>
         turn.id === turnId
-          ? { ...turn, items: [...turn.items, { prompt: promptParts, result }] }
+          ? { ...turn, items: [...turn.items, { prompt: promptParts, result }], state }
           : turn,
       )
-    : [...ctx.turns, { id: turnId, items: [{ prompt: promptParts, result }] }];
+    : [...ctx.turns, { id: turnId, items: [{ prompt: promptParts, result }], state }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1494,7 +1500,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     const adapter = {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      // T3-CUSTOM(expbkt3): explicit busy-turn and resume behavior.
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      },
       startSession,
       sendTurn,
       interruptTurn,

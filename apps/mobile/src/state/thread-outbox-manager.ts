@@ -1,4 +1,7 @@
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): BEGIN — record storage failures in the shared metric.
+import { recordThreadOutboxFailureUnsafe } from "@t3tools/client-runtime/outbox";
+// T3-CUSTOM(expbkt3): END
 import * as Schema from "effect/Schema";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
@@ -37,6 +40,7 @@ export interface ThreadOutboxManagerOptions {
   readonly warn?: (message: string, error: unknown) => void;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — durable outbox persistence failure telemetry.
 export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const queuedMessagesByThreadKeyAtom = Atom.make<
     Record<string, ReadonlyArray<QueuedThreadMessage>>
@@ -48,6 +52,12 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     });
   let loadPromise: Promise<void> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
+  const recordPersistenceFailure = (operation: string) =>
+    recordThreadOutboxFailureUnsafe({
+      kind: "persistence",
+      operation,
+      outcome: "failed",
+    });
 
   const serialize = <A>(mutation: () => Promise<A>): Promise<A> => {
     const result = mutationQueue.then(mutation, mutation);
@@ -74,6 +84,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       setMessages([...persistedMessages, ...currentMessages()]);
     }).catch((cause) => {
       loadPromise = null;
+      recordPersistenceFailure("load");
       warn(
         "[thread-outbox] failed to load persisted messages",
         new ThreadOutboxManagerError({
@@ -101,6 +112,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       try {
         await options.storage.write(message);
       } catch (cause) {
+        recordPersistenceFailure("enqueue");
         // Roll back by reference, not messageId: a retry enqueue with the same
         // id may have optimistically replaced this attempt while the write was
         // in flight, and its entry must survive this attempt's failure.
@@ -137,6 +149,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       try {
         await options.storage.write(message);
       } catch (cause) {
+        recordPersistenceFailure("update");
         throw new ThreadOutboxManagerError({
           operation: "update",
           environmentId: message.environmentId,
@@ -157,6 +170,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       try {
         await options.storage.remove(message);
       } catch (cause) {
+        recordPersistenceFailure("remove");
         throw new ThreadOutboxManagerError({
           operation: "remove",
           environmentId: message.environmentId,
@@ -173,6 +187,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const clearEnvironment = (environmentId: EnvironmentId): Promise<void> =>
     serialize(async () => {
       const persisted = await options.storage.load().catch((cause) => {
+        recordPersistenceFailure("clear-environment-load");
         warn(
           "[thread-outbox] failed to load messages while clearing environment",
           new ThreadOutboxManagerError({
@@ -198,6 +213,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
               await options.storage.remove(message);
               removedMessageIds.add(message.messageId);
             } catch (cause) {
+              recordPersistenceFailure("clear-environment-remove");
               warn(
                 "[thread-outbox] failed to clear persisted message",
                 new ThreadOutboxManagerError({
@@ -226,3 +242,4 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     clearEnvironment,
   };
 }
+// T3-CUSTOM(expbkt3): END

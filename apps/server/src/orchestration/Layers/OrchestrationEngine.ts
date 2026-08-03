@@ -24,6 +24,8 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  durableExecutionAcceptedTotal,
+  increment,
   metricAttributes,
   orchestrationCommandAckDuration,
   orchestrationCommandsTotal,
@@ -230,6 +232,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        if (envelope.command.type === "thread.turn.start") {
+          yield* increment(durableExecutionAcceptedTotal, {
+            threadId: envelope.command.threadId,
+          });
+        }
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
           if (index === 0) {

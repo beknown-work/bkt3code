@@ -20,12 +20,14 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   planSidebarOpen: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
+  // T3-CUSTOM(expbkt3): BEGIN — fresh threads can return to inherited defaults.
   showCreationDefaultsReset: boolean;
   traitsMenuContent?: ReactNode;
   onToggleInteractionMode: () => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onResetCreationDefaults: () => void;
+  // T3-CUSTOM(expbkt3): END
 }) {
   return (
     <Menu>
@@ -77,6 +79,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           <MenuRadioItem value="auto">Auto</MenuRadioItem>
           <MenuRadioItem value="full-access">Full access</MenuRadioItem>
         </MenuRadioGroup>
+        {/* T3-CUSTOM(expbkt3): BEGIN — inherited-defaults reverse action. */}
         {props.showCreationDefaultsReset ? (
           <>
             <MenuDivider />
@@ -86,6 +89,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             </MenuItem>
           </>
         ) : null}
+        {/* T3-CUSTOM(expbkt3): END */}
         {props.activePlan ? (
           <>
             <MenuDivider />

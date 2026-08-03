@@ -80,6 +80,40 @@ export const threadExecutionInvariantRepairsTotal = Metric.counter(
   { description: "Execution/provider/projection mismatches repaired by the periodic audit." },
 );
 
+// T3-CUSTOM(expbkt3): durable execution control-plane health.
+export const durableExecutionAcceptedTotal = Metric.counter("t3_durable_execution_accepted_total", {
+  description: "Durable execution work items committed with accepted turn commands.",
+});
+
+export const durableExecutionAckToActiveDuration = Metric.timer(
+  "t3_durable_execution_ack_to_active_duration",
+  { description: "Time from durable acceptance to matching provider-turn evidence." },
+);
+
+export const durableExecutions = Metric.gauge("t3_durable_executions", {
+  description: "Current durable execution work items by lifecycle phase.",
+});
+
+export const durableExecutionRecoveryAttemptsTotal = Metric.counter(
+  "t3_durable_execution_recovery_attempts_total",
+  { description: "Durable recovery attempts by provider, reason, and outcome." },
+);
+
+export const durableExecutionLeaseRecoveriesTotal = Metric.counter(
+  "t3_durable_execution_lease_recoveries_total",
+  { description: "Expired durable execution leases reclaimed by a server authority." },
+);
+
+export const durableExecutionFencingRejectionsTotal = Metric.counter(
+  "t3_durable_execution_fencing_rejections_total",
+  { description: "Durable execution side effects rejected by generation fencing." },
+);
+
+export const durableExecutionGuardedContinuationsTotal = Metric.counter(
+  "t3_durable_execution_guarded_continuations_total",
+  { description: "Synthetic guarded continuation turns issued during recovery." },
+);
+
 export const providerSessionsTotal = Metric.counter("t3_provider_sessions_total", {
   description: "Total provider session lifecycle operations.",
 });

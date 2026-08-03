@@ -168,6 +168,8 @@ export function isSameOpenCodeDirectory(
 interface OpenCodeTurnSnapshot {
   readonly id: TurnId;
   readonly items: Array<unknown>;
+  // T3-CUSTOM(expbkt3): a partial assistant record is not completion evidence.
+  state: "completed" | "interrupted" | "failed" | "in-progress";
 }
 
 type OpenCodeSubscribedEvent =
@@ -353,7 +355,7 @@ function resolveTurnSnapshot(
     return existing;
   }
 
-  const created: OpenCodeTurnSnapshot = { id: turnId, items: [] };
+  const created: OpenCodeTurnSnapshot = { id: turnId, items: [], state: "in-progress" };
   context.turns.push(created);
   return created;
 }
@@ -1076,6 +1078,7 @@ export function makeOpenCodeAdapter(
           }
 
           if (event.properties.status.type === "idle" && turnId) {
+            resolveTurnSnapshot(context, turnId).state = "completed";
             context.activeTurnId = undefined;
             yield* updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
             yield* emit({
@@ -1106,6 +1109,7 @@ export function makeOpenCodeAdapter(
             { clearActiveTurnId: true },
           );
           if (activeTurnId) {
+            resolveTurnSnapshot(context, activeTurnId).state = "failed";
             yield* emit({
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
@@ -1690,6 +1694,12 @@ export function makeOpenCodeAdapter(
             turns.push({
               id: TurnId.make(entry.info.id),
               items: [entry.info, ...entry.parts],
+              state:
+                entry.info.time.completed === undefined
+                  ? "in-progress"
+                  : entry.info.error === undefined
+                    ? "completed"
+                    : "failed",
             });
           }
         }
@@ -1749,6 +1759,9 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        // T3-CUSTOM(expbkt3): coordinator behavior must not infer from provider name.
+        activeTurnInput: "steer",
+        durableResume: "supported",
       },
       startSession,
       sendTurn,

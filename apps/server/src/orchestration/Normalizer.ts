@@ -27,7 +27,8 @@ export const canonicalizeClientCommandTimestamps = (
         }
       : command;
 
-  if (canonicalCommand.type !== "thread.turn.start" || !canonicalCommand.bootstrap?.createThread) {
+  // T3-CUSTOM(expbkt3): BEGIN — canonicalize embedded durable-bootstrap timestamps with the turn.
+  if (canonicalCommand.type !== "thread.turn.start" || !canonicalCommand.bootstrap) {
     return canonicalCommand;
   }
 
@@ -35,12 +36,25 @@ export const canonicalizeClientCommandTimestamps = (
     ...canonicalCommand,
     bootstrap: {
       ...canonicalCommand.bootstrap,
-      createThread: {
-        ...canonicalCommand.bootstrap.createThread,
-        createdAt: receivedAt,
-      },
+      ...(canonicalCommand.bootstrap.createThread
+        ? {
+            createThread: {
+              ...canonicalCommand.bootstrap.createThread,
+              createdAt: receivedAt,
+            },
+          }
+        : {}),
+      ...(canonicalCommand.bootstrap.request
+        ? {
+            request: {
+              ...canonicalCommand.bootstrap.request,
+              createdAt: receivedAt,
+            },
+          }
+        : {}),
     },
   };
+  // T3-CUSTOM(expbkt3): END
 };
 
 export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
@@ -79,7 +93,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           ),
         );
 
-    // T3-CUSTOM(expbkt3): bootstrap initial turns use the same bounded,
+    // T3-CUSTOM(expbkt3): BEGIN — bootstrap initial turns use the same bounded,
     // persisted attachment normalization as ordinary turn starts.
     const normalizeAttachments = (input: {
       readonly threadId: string;
@@ -150,6 +164,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         { concurrency: 1 },
       );
 
+    // T3-CUSTOM(expbkt3): END
     if (canonicalCommand.type === "project.create") {
       return {
         ...canonicalCommand,
@@ -171,6 +186,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies OrchestrationCommand;
     }
 
+    // T3-CUSTOM(expbkt3): BEGIN — normalize both public and embedded bootstrap turns.
     if (canonicalCommand.type === "thread.bootstrap.request") {
       if (!canonicalCommand.initialTurn) return canonicalCommand as OrchestrationCommand;
       return {
@@ -201,4 +217,5 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         attachments: normalizedAttachments,
       },
     } satisfies OrchestrationCommand;
+    // T3-CUSTOM(expbkt3): END
   });

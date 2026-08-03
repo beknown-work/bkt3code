@@ -1768,6 +1768,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // T3-CUSTOM(expbkt3): coordinator behavior must not infer from provider name.
+      activeTurnInput: "steer",
+      durableResume: "supported",
     },
     startSession,
     sendTurn,

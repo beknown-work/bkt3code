@@ -899,39 +899,57 @@ const handlers = {
       input.runtimeMode !== undefined ||
       input.interactionMode !== undefined ||
       workspace !== undefined;
+    const bootstrapRequest = {
+      createThread: true,
+      bootstrapId: `mcp-bootstrap:${bootstrapUuid}`,
+      projectId,
+      title,
+      ...(hasOverrides
+        ? {
+            overrides: {
+              ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+              ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
+              ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+              ...(workspace ? { workspace } : {}),
+            },
+          }
+        : {}),
+      sourceControlProfileId: null,
+      priority: input.priority ?? null,
+      ...(ownerUserId ? { ownerUserId } : {}),
+      createdAt,
+    } as const;
     const result = yield* dispatcher
       .dispatch(
-        {
-          type: "thread.bootstrap.request",
-          commandId,
-          bootstrapId: `mcp-bootstrap:${bootstrapUuid}`,
-          threadId: sessionId,
-          projectId,
-          title,
-          ...(messageId && prompt
-            ? {
-                initialTurn: {
-                  messageId,
-                  text: prompt,
-                  attachments: [],
-                },
-              }
-            : {}),
-          ...(hasOverrides
-            ? {
-                overrides: {
-                  ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
-                  ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
-                  ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
-                  ...(workspace ? { workspace } : {}),
-                },
-              }
-            : {}),
-          sourceControlProfileId: null,
-          priority: input.priority ?? null,
-          ...(ownerUserId ? { ownerUserId } : {}),
-          createdAt,
-        },
+        messageId && prompt
+          ? {
+              type: "thread.turn.start",
+              commandId,
+              threadId: sessionId,
+              message: {
+                messageId,
+                role: "user",
+                text: prompt,
+                attachments: [],
+              },
+              runtimeMode: input.runtimeMode ?? "full-access",
+              interactionMode: input.interactionMode ?? "default",
+              bootstrap: { request: bootstrapRequest },
+              createdAt,
+            }
+          : {
+              type: "thread.bootstrap.request",
+              commandId,
+              bootstrapId: bootstrapRequest.bootstrapId,
+              threadId: sessionId,
+              projectId,
+              title,
+              ...(bootstrapRequest.overrides ? { overrides: bootstrapRequest.overrides } : {}),
+              sourceControlProfileId: null,
+              priority: bootstrapRequest.priority,
+              ...(ownerUserId ? { ownerUserId } : {}),
+              createdAt,
+            },
         { actorUserId: ownerUserId },
       )
       .pipe(mapControlError(operation));

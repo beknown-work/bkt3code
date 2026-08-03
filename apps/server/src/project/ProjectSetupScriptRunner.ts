@@ -13,6 +13,7 @@ export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — durable bootstrap observes setup launch and completion.
 export interface ProjectSetupScriptRunnerResultCompleted {
   readonly status: "completed";
   readonly scriptId: string;
@@ -41,6 +42,7 @@ export interface ProjectSetupScriptRunnerInput {
   readonly preferredTerminalId?: string;
   readonly onStarted?: (started: ProjectSetupScriptRunnerStarted) => Effect.Effect<void>;
 }
+// T3-CUSTOM(expbkt3): END
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
@@ -49,10 +51,11 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
     projectId: Schema.optional(Schema.String),
     projectCwd: Schema.optional(Schema.String),
     worktreePath: Schema.String,
+    // T3-CUSTOM(expbkt3): BEGIN — launch failures identify the retained setup terminal.
     operation: Schema.Literals(["resolveProject", "runCommand"]),
-    // T3-CUSTOM(expbkt3): launch failures still identify the setup terminal
     // whose retained history the caller may expose.
     terminalId: Schema.optional(Schema.String),
+    // T3-CUSTOM(expbkt3): END
     cause: Schema.Defect(),
   },
 ) {
@@ -61,6 +64,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
   }
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — setup completion failures remain typed and inspectable.
 export class ProjectSetupScriptCommandError extends Schema.TaggedErrorClass<ProjectSetupScriptCommandError>()(
   "ProjectSetupScriptCommandError",
   {
@@ -92,11 +96,14 @@ export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorCl
     return `Project was not found for setup script execution for thread '${this.threadId}' in '${this.worktreePath}'.`;
   }
 }
+// T3-CUSTOM(expbkt3): END
 
 export const ProjectSetupScriptRunnerError = Schema.Union([
   ProjectSetupScriptOperationError,
   ProjectSetupScriptProjectNotFoundError,
+  // T3-CUSTOM(expbkt3): BEGIN — completion-aware setup failure.
   ProjectSetupScriptCommandError,
+  // T3-CUSTOM(expbkt3): END
 ]);
 export type ProjectSetupScriptRunnerError = typeof ProjectSetupScriptRunnerError.Type;
 
@@ -109,7 +116,7 @@ export class ProjectSetupScriptRunner extends Context.Service<
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
-// T3-CUSTOM(expbkt3): setup is completion-aware and preserves an interactive
+// T3-CUSTOM(expbkt3): BEGIN — setup is completion-aware and preserves an interactive
 // terminal identity so durable bootstrap can gate, retry, stop, and inspect it.
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
@@ -224,5 +231,6 @@ export const make = Effect.gen(function* () {
 
   return ProjectSetupScriptRunner.of({ runForThread });
 });
+// T3-CUSTOM(expbkt3): END
 
 export const layer = Layer.effect(ProjectSetupScriptRunner, make);

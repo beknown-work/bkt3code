@@ -113,7 +113,13 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    // T3-CUSTOM(expbkt3): explicit durable execution behavior.
+    getCapabilities: () =>
+      Effect.succeed({
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      }),
     getInstanceInfo: (instanceId) =>
       Effect.succeed({
         instanceId,

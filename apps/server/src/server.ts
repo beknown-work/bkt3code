@@ -119,6 +119,8 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import { ThreadExecutionSupervisorLive } from "./execution/ThreadExecutionSupervisorLive.ts";
+// T3-CUSTOM(expbkt3): durable execution state machine repository.
+import { DurableExecutionIntentRepositoryLive } from "./execution/DurableExecutionIntentRepository.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -257,6 +259,11 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
+// T3-CUSTOM(expbkt3): shared repository instance for provider dispatch and recovery.
+const DurableExecutionIntentLayerLive = DurableExecutionIntentRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
 // T3-CUSTOM(expbkt3): Fully compose this custom persistence service once so
 // unrelated route tests and upstream callers never inherit its SqlClient or
 // secret-store implementation requirements.
@@ -357,6 +364,8 @@ const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
 
 const EnvironmentAuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
+  // T3-CUSTOM(expbkt3): enables coordinator ownership in ProviderCommandReactor.
+  Layer.provideMerge(DurableExecutionIntentLayerLive),
   Layer.provide(ServerSecretStore.layer),
 );
 
@@ -387,6 +396,8 @@ const SessionRecoveryStateLayerLive = SessionRecoveryState.layer.pipe(
 );
 
 const ExecutionLayerLive = ThreadExecutionSupervisorLive.pipe(
+  // T3-CUSTOM(expbkt3): explicit Stop must fence the same durable rows the coordinator claims.
+  Layer.provide(DurableExecutionIntentLayerLive),
   Layer.provide(ProviderLayerLive),
   Layer.provide(OrchestrationLayerLive),
   Layer.provide(PersistenceLayerLive),

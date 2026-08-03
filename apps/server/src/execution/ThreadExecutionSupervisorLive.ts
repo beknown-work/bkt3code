@@ -1,4 +1,5 @@
 import {
+  MessageId,
   ThreadId,
   ThreadTurnAdmissionConflictError,
   TurnId,
@@ -37,6 +38,8 @@ import {
   type SessionRecoveryStateRepositoryError,
 } from "../persistence/SessionRecoveryState.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
+// T3-CUSTOM(expbkt3): user Stop fences durable recovery before provider side effects.
+import { DurableExecutionIntentRepository } from "./DurableExecutionIntentRepository.ts";
 import {
   ThreadExecutionSupervisor,
   type ThreadExecutionSupervisorShape,
@@ -62,6 +65,21 @@ interface ExecutionRow {
   readonly stopRequestedAt: string | null;
   readonly turnCompletedAt: string | null;
   readonly turnLastError: string | null;
+}
+
+// T3-CUSTOM(expbkt3): minimal read model joined into public execution snapshots.
+interface ExecutionIntentSnapshotRow {
+  readonly workItemId: string;
+  readonly messageId: string;
+  readonly desiredState: "running" | "stopped";
+  readonly phase: NonNullable<ThreadExecutionSnapshot["intent"]>["phase"];
+  readonly recoveryAttempts: number;
+  readonly maximumRecoveryAttempts: number;
+  readonly nextAttemptAt: string | null;
+  readonly lastFailureType: string | null;
+  readonly lastFailureDetail: string | null;
+  readonly acceptedAt: string;
+  readonly updatedAt: string;
 }
 
 const isActiveActivity = (activity: ThreadExecutionSnapshot["activity"]) =>
@@ -113,6 +131,8 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const orchestration = yield* OrchestrationEngineService;
   // T3-CUSTOM(expbkt3): desired-state journal for automatic session recovery.
   const recoveryState = yield* SessionRecoveryStateRepository;
+  // T3-CUSTOM(expbkt3): optional keeps isolated/upstream supervisor layers compatible.
+  const durableIntentRepository = yield* Effect.serviceOption(DurableExecutionIntentRepository);
   const authorityEpoch = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
   const state = new Map<ThreadId, ThreadExecutionSnapshot>();
   const stopOperations = new Map<string, string>();
@@ -123,6 +143,56 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const observedGaugeKeys = new Set<string>();
   const terminalWaiters = new Map<string, Set<Deferred.Deferred<ThreadExecutionSnapshot>>>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+  // T3-CUSTOM(expbkt3): desired state and provider observation travel together.
+  const withCurrentIntent = (snapshot: ThreadExecutionSnapshot) =>
+    sql<ExecutionIntentSnapshotRow>`
+      SELECT work_item_id AS "workItemId", message_id AS "messageId",
+             desired_state AS "desiredState", phase,
+             recovery_attempts AS "recoveryAttempts",
+             maximum_recovery_attempts AS "maximumRecoveryAttempts",
+             next_attempt_at AS "nextAttemptAt",
+             last_failure_type AS "lastFailureType",
+             last_failure_detail AS "lastFailureDetail",
+             accepted_at AS "acceptedAt", updated_at AS "updatedAt"
+      FROM projection_thread_execution_intents
+      WHERE thread_id = ${snapshot.threadId}
+        AND dismissed_at IS NULL
+        AND (desired_state = 'running' OR phase = 'recovery-exhausted')
+      ORDER BY CASE WHEN desired_state = 'running' THEN 0 ELSE 1 END,
+               request_event_sequence DESC, accepted_at DESC
+      LIMIT 1
+    `.pipe(
+      Effect.map((rows) => {
+        const { intent: _staleIntent, ...withoutIntent } = snapshot;
+        const row = rows[0];
+        if (row === undefined) return withoutIntent;
+        return {
+          ...withoutIntent,
+          intent: {
+            workItemId: row.workItemId,
+            messageId: MessageId.make(row.messageId),
+            desiredState: row.desiredState,
+            phase: row.phase,
+            acceptedAt: row.acceptedAt,
+            updatedAt: row.updatedAt,
+            recovery: {
+              attempt: row.recoveryAttempts,
+              maximumAttempts: row.maximumRecoveryAttempts,
+              nextAttemptAt: row.nextAttemptAt,
+              reason: row.lastFailureDetail ?? row.lastFailureType,
+              userActionRequired: row.phase === "recovery-exhausted",
+            },
+          },
+        } satisfies ThreadExecutionSnapshot;
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("durable execution intent snapshot join failed", {
+          threadId: snapshot.threadId,
+          cause,
+        }).pipe(Effect.as(snapshot)),
+      ),
+    );
 
   const emptySnapshot = (threadId: ThreadId, observedAt: string): ThreadExecutionSnapshot => ({
     threadId,
@@ -299,17 +369,19 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const publish = Effect.fn("ThreadExecutionSupervisor.publish")(function* (
     snapshot: ThreadExecutionSnapshot,
   ) {
-    state.set(snapshot.threadId, snapshot);
+    // T3-CUSTOM(expbkt3): query after the intent transition and before the frame.
+    const publicSnapshot = yield* withCurrentIntent(snapshot);
+    state.set(publicSnapshot.threadId, publicSnapshot);
     // T3-CUSTOM(expbkt3): a freshly admitted turn is explicit intent to run.
-    if (snapshot.turn?.state === "starting" && snapshot.canStop) {
+    if (publicSnapshot.turn?.state === "starting" && publicSnapshot.canStop) {
       yield* recordRecoveryIntent(
         recoveryState.markRunning({
-          threadId: snapshot.threadId,
-          executionId: snapshot.turn.executionId,
+          threadId: publicSnapshot.threadId,
+          executionId: publicSnapshot.turn.executionId,
           reason: "turn-admitted",
-          at: snapshot.observedAt,
+          at: publicSnapshot.observedAt,
         }),
-        { threadId: snapshot.threadId, reason: "turn-admitted" },
+        { threadId: publicSnapshot.threadId, reason: "turn-admitted" },
       );
     }
     const gaugeCounts = new Map<string, number>();
@@ -326,17 +398,18 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
       );
       observedGaugeKeys.add(key);
     }
-    yield* persist(snapshot);
-    yield* appendExecutionEvent("thread.execution-state-changed", snapshot);
-    yield* PubSub.publish(snapshots, snapshot);
-    if (snapshot.turn && isTerminalTurn(snapshot)) {
-      const waiters = terminalWaiters.get(snapshot.turn.executionId);
+    yield* persist(publicSnapshot);
+    yield* appendExecutionEvent("thread.execution-state-changed", publicSnapshot);
+    yield* PubSub.publish(snapshots, publicSnapshot);
+    if (publicSnapshot.turn && isTerminalTurn(publicSnapshot)) {
+      const waiters = terminalWaiters.get(publicSnapshot.turn.executionId);
       if (waiters) {
-        yield* Effect.forEach(waiters, (waiter) => Deferred.succeed(waiter, snapshot), {
+        yield* Effect.forEach(waiters, (waiter) => Deferred.succeed(waiter, publicSnapshot), {
           discard: true,
         });
       }
     }
+    return publicSnapshot;
   });
 
   const transition = (
@@ -358,7 +431,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           revision: current.revision + 1,
           observedAt,
         };
-        yield* publish(revised);
+        const published = yield* publish(revised);
         yield* increment(threadExecutionTransitionsTotal, {
           activity: revised.activity,
           providerInstanceId: revised.providerSession.providerInstanceId ?? "unknown",
@@ -374,7 +447,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           executionId: revised.turn?.executionId,
           turnState: revised.turn?.state,
         });
-        return revised;
+        return published;
       }),
     );
 
@@ -476,6 +549,33 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         },
       };
     });
+
+  // T3-CUSTOM(expbkt3): durable recovery deliberately reuses the original
+  // execution id while opening a new provider turn under a fenced claim.
+  const recoverExecution: ThreadExecutionSupervisorShape["recoverExecution"] = (event) =>
+    transition(event.payload.threadId, (current, observedAt) => ({
+      ...current,
+      activity: "active",
+      canStop: true,
+      providerSession: {
+        ...current.providerSession,
+        providerInstanceId:
+          event.payload.modelSelection?.instanceId ?? current.providerSession.providerInstanceId,
+        state: current.providerSession.state === "ready" ? "ready" : "starting",
+        startedAt: current.providerSession.startedAt ?? observedAt,
+        lastObservedAt: observedAt,
+        lastError: null,
+      },
+      turn: {
+        executionId: String(event.commandId ?? event.eventId),
+        providerTurnId: null,
+        state: "starting",
+        startedAt: observedAt,
+        stopRequestedAt: null,
+        completedAt: null,
+        lastError: null,
+      },
+    }));
 
   const admitIdleTurn: ThreadExecutionSupervisorShape["admitIdleTurn"] = (input) =>
     transitions.withPermit(
@@ -794,13 +894,17 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const getSnapshot: ThreadExecutionSupervisorShape["getSnapshot"] = (threadId) =>
     Effect.gen(function* () {
       const current = state.get(threadId);
-      return current ?? emptySnapshot(threadId, yield* nowIso);
+      return yield* withCurrentIntent(current ?? emptySnapshot(threadId, yield* nowIso));
     });
 
   const getSnapshots: ThreadExecutionSupervisorShape["getSnapshots"] = (threadIds) =>
     Effect.forEach(threadIds, (threadId) => getSnapshot(threadId)).pipe(
       Effect.map((entries) => new Map(entries.map((entry) => [entry.threadId, entry]))),
     );
+
+  // T3-CUSTOM(expbkt3): coordinator changes get a revisioned websocket frame.
+  const refreshIntent: ThreadExecutionSupervisorShape["refreshIntent"] = (threadId) =>
+    transition(threadId, (current) => ({ ...current }));
 
   const canContinueExecution: ThreadExecutionSupervisorShape["canContinueExecution"] = (
     threadId,
@@ -887,15 +991,28 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const stopExecutionUnlocked: ThreadExecutionSupervisorShape["stopExecution"] = Effect.fn(
     "ThreadExecutionSupervisor.stopExecution",
   )(function* (input) {
-    const initial = yield* getSnapshot(input.threadId);
+    let initial = yield* getSnapshot(input.threadId);
     // T3-CUSTOM(expbkt3): the user asked for this stop. Record the intent
     // before anything else — including on the already-stopped path, where the
     // intent is just as real — so recovery can never race a stop request and
     // reconnect a session somebody deliberately ended.
+    const stoppedAt = yield* nowIso;
+    if (Option.isSome(durableIntentRepository)) {
+      yield* durableIntentRepository.value.stopThread({
+        threadId: input.threadId,
+        reason: "user-stop",
+        at: stoppedAt,
+      });
+      // Queued work may not have a provider snapshot to transition below. Publish
+      // the fenced desired state now so every connected client drops active UI.
+      initial = yield* refreshIntent(input.threadId);
+    }
     yield* recordRecoveryIntent(
-      Effect.flatMap(nowIso, (at) =>
-        recoveryState.markStopped({ threadId: input.threadId, reason: "user-stop", at }),
-      ),
+      recoveryState.markStopped({
+        threadId: input.threadId,
+        reason: "user-stop",
+        at: stoppedAt,
+      }),
       { threadId: input.threadId, reason: "user-stop" },
     );
     const executionId = initial.turn?.executionId;
@@ -1236,7 +1353,9 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     authorityEpoch,
     getSnapshot,
     getSnapshots,
+    refreshIntent,
     prepareExecution,
+    recoverExecution,
     admitIdleTurn,
     releaseTurnAdmission,
     canContinueExecution,

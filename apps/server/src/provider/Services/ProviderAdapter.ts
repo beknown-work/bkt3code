@@ -31,6 +31,10 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /** T3-CUSTOM(expbkt3): explicit busy-thread delivery semantics. */
+  readonly activeTurnInput: "steer" | "queue";
+  /** T3-CUSTOM(expbkt3): whether a persisted resume cursor is sufficient for guarded recovery. */
+  readonly durableResume: "supported" | "unsupported";
 }
 
 export interface ProviderSessionExecutionOptions {
@@ -42,6 +46,8 @@ export interface ProviderSessionExecutionOptions {
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
+  /** T3-CUSTOM(expbkt3): recovery must distinguish terminal proof from mere history presence. */
+  readonly state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown";
 }
 
 export interface ProviderThreadSnapshot {

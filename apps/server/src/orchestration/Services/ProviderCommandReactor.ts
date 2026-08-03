@@ -24,6 +24,9 @@ export interface ProviderCommandReactorShape {
    * processing.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  /** T3-CUSTOM(expbkt3): BEGIN — start scanning after stale-session reconciliation. */
+  readonly startDurableRecovery?: () => Effect.Effect<void, never, Scope.Scope>;
+  /** T3-CUSTOM(expbkt3): END */
 
   /**
    * Resolves when the internal processing queue is empty and idle.

@@ -1,3 +1,4 @@
+// T3-CUSTOM(expbkt3): BEGIN — new threads inherit target project and environment defaults.
 import { useAtomValue } from "@effect/atom-react";
 import {
   scopedProjectKey,
@@ -235,6 +236,7 @@ export function useNewThreadHandler() {
     [getCurrentRouteTarget, projectGroupingSettings, projects, router, serverConfigs],
   );
 }
+// T3-CUSTOM(expbkt3): END
 
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);

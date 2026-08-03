@@ -91,6 +91,7 @@ export class ThreadBootstrapCoordinator extends Context.Service<
       options?: {
         readonly actorUserId?: UserId | null;
         readonly createThread?: boolean;
+        readonly turnStart?: Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
       },
     ) => Effect.Effect<{ readonly sequence: number }, ThreadBootstrapCoordinatorError>;
     readonly retry: (
@@ -119,8 +120,8 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
 
-  const dispatch = (command: OrchestrationCommand) =>
-    engine.dispatch(command).pipe(
+  const dispatch = (command: OrchestrationCommand, actorUserId: UserId | null = null) =>
+    engine.dispatch(command, { actorUserId }).pipe(
       Effect.mapError(
         (cause) =>
           new ThreadBootstrapCoordinatorError({
@@ -584,6 +585,63 @@ const make = Effect.gen(function* () {
       }
       if (!resolved.ownerUserId && options?.actorUserId) {
         resolved = { ...resolved, ownerUserId: options.actorUserId };
+      }
+
+      // T3-CUSTOM(expbkt3): initial messages use the durable turn transaction.
+      // Bootstrap projection commands remain available for workspace-only
+      // requests, but no accepted message is split across thread/create/record.
+      if (resolved.initialTurn && options?.turnStart) {
+        const originalTurn = options.turnStart;
+        const createThread = options?.createThread !== false;
+        const titleSeed = originalTurn.titleSeed ?? resolved.initialTurn.titleSeed;
+        const initialPath =
+          resolved.workspace.mode === "new-worktree" ? null : resolved.workspace.path;
+        const initialBranch =
+          resolved.workspace.mode === "existing-worktree"
+            ? (resolved.workspace.branch ?? null)
+            : null;
+        return yield* dispatch(
+          {
+            type: "thread.turn.start",
+            commandId: originalTurn.commandId,
+            threadId: resolved.threadId,
+            message: {
+              messageId: resolved.initialTurn.messageId,
+              role: "user",
+              text: resolved.initialTurn.text,
+              attachments: resolved.initialTurn.attachments,
+            },
+            modelSelection: resolved.modelSelection,
+            ...(titleSeed !== undefined ? { titleSeed } : {}),
+            runtimeMode: resolved.runtimeMode,
+            interactionMode: resolved.interactionMode,
+            bootstrap: {
+              ...(createThread
+                ? {
+                    createThread: {
+                      projectId: resolved.projectId,
+                      title: resolved.title,
+                      modelSelection: resolved.modelSelection,
+                      runtimeMode: resolved.runtimeMode,
+                      interactionMode: resolved.interactionMode,
+                      branch: initialBranch,
+                      worktreePath: initialPath,
+                      sourceControlProfileId: resolved.sourceControlProfileId,
+                      ...(resolved.ownerUserId ? { ownerUserId: resolved.ownerUserId } : {}),
+                      createdAt: resolved.createdAt,
+                      priority: resolved.priority,
+                    },
+                  }
+                : {}),
+              resolvedRequest: resolved,
+            },
+            ...(originalTurn.sourceProposedPlan
+              ? { sourceProposedPlan: originalTurn.sourceProposedPlan }
+              : {}),
+            createdAt: originalTurn.createdAt,
+          },
+          options?.actorUserId ?? null,
+        );
       }
 
       if (options?.createThread !== false) {
