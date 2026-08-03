@@ -67,6 +67,8 @@ import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
 import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.ts";
 // T3-CUSTOM(expbkt3): exact durable work items and guarded recovery audit.
 import Migration1003 from "./Migrations/1003_DurableExecutionIntents.ts";
+// T3-CUSTOM(expbkt3): durable manual Linear issue tags.
+import Migration1004 from "./Migrations/1004_ProjectionThreadsLinearIssue.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -148,6 +150,7 @@ const migrationEntries = [
   [1001, "SessionRecoveryState", Migration1001],
   [1002, "ThreadBootstrapAndCreationDefaults", Migration1002],
   [1003, "DurableExecutionIntents", Migration1003],
+  [1004, "ProjectionThreadsLinearIssue", Migration1004],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

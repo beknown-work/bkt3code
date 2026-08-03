@@ -29,6 +29,7 @@ import {
   phaseSidebarNeedsUserInput,
   phaseSidebarPriorityRank,
   formatThreadPriority,
+  compactPhaseSidebarTimeLabel,
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarCheckoutMetadata,
@@ -439,6 +440,24 @@ describe("phase sidebar metadata and filters", () => {
     });
     expect(resolvePhaseSidebarLinearIssue("feature/tec-145")).toBeNull();
     expect(resolvePhaseSidebarLinearIssue(null)).toBeNull();
+  });
+
+  it("prefers a valid manual Linear URL and rejects non-Linear links", () => {
+    expect(
+      resolvePhaseSidebarLinearIssue(
+        "linear/tec-145-old-issue",
+        "https://linear.app/beknown/issue/TEC-811/new-title?ref=sidebar",
+      ),
+    ).toEqual({
+      identifier: "TEC-811",
+      url: "https://linear.app/beknown/issue/TEC-811",
+    });
+    expect(resolvePhaseSidebarLinearIssue(null, "https://example.com/TEC-811")).toBeNull();
+  });
+
+  it("formats the newest relative time as zero minutes", () => {
+    expect(compactPhaseSidebarTimeLabel("just now")).toBe("0m");
+    expect(compactPhaseSidebarTimeLabel("15m ago")).toBe("15m");
   });
 
   it("maps known provider codes and creates deterministic unknown codes", () => {

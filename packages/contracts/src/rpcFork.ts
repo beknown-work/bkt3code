@@ -24,6 +24,7 @@ import {
   PersonalMcpSettingsError,
   PersonalMcpTokenResult,
 } from "./personalMcp.ts";
+import { LinearIssueStatusInput, LinearIssueStatusResult } from "./linearIssue.ts";
 import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
 import { ServerResourceSample } from "./server.ts";
 import {
@@ -66,6 +67,7 @@ export const WS_FORK_METHODS = {
   usersSourceControlProfileSet: "users.sourceControlProfile.set",
   subscribeServerResources: "subscribeServerResources",
   subscribeProviderRateLimits: "subscribeProviderRateLimits",
+  linearIssuesResolve: "linearIssues.resolve",
 } as const;
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_FORK_METHODS.personalMcpGetProfile, {
@@ -222,6 +224,12 @@ export const WsSubscribeProviderRateLimitsRpc = Rpc.make(
   },
 );
 
+export const WsLinearIssuesResolveRpc = Rpc.make(WS_FORK_METHODS.linearIssuesResolve, {
+  payload: LinearIssueStatusInput,
+  success: LinearIssueStatusResult,
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
   payload: OrchestrationRpcSchemas.stopExecution.input,
   success: OrchestrationRpcSchemas.stopExecution.output,
@@ -253,6 +261,7 @@ export const FORK_WS_RPCS = [
   WsUsersSourceControlProfileSetRpc,
   WsSubscribeServerResourcesRpc,
   WsSubscribeProviderRateLimitsRpc,
+  WsLinearIssuesResolveRpc,
   WsOrchestrationStopExecutionRpc,
   WsOrchestrationReplayEventsRpc,
 ] as const;

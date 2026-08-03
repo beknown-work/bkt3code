@@ -27,6 +27,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import type { HttpClient } from "effect/unstable/http";
 
 import type * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
 import type * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -39,6 +40,7 @@ import type { ProjectionRepositoryError } from "./persistence/Errors.ts";
 import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import type * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
 import type { ThreadExecutionSupervisorShape } from "./execution/ThreadExecutionSupervisor.ts";
+import { resolveLinearIssueStatuses } from "./linear/LinearIssueResolver.ts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 type WsRpcs = RpcGroup.Rpcs<typeof WsRpcGroup>;
@@ -53,6 +55,7 @@ export interface ForkWsHandlerDeps {
   /** Deterministic profile id for local/single-user transports. */
   readonly personalMcpUserId: UserId;
   readonly personalMcpProfiles: UserMcpProfileStore.UserMcpProfileStore["Service"];
+  readonly httpClient: HttpClient.HttpClient;
   readonly sourceControlProfiles: SourceControlProfileService.SourceControlProfileService["Service"];
   readonly environmentUsers: EnvironmentUserService.EnvironmentUserService["Service"];
   readonly systemResourceMonitor: SystemResourceMonitor.SystemResourceMonitor["Service"];
@@ -97,6 +100,7 @@ export const makeForkWsHandlers = ({
   actorUserId,
   personalMcpUserId,
   personalMcpProfiles,
+  httpClient,
   sourceControlProfiles,
   environmentUsers,
   systemResourceMonitor,
@@ -136,6 +140,17 @@ export const makeForkWsHandlers = ({
         WS_METHODS.personalMcpRevokeToken,
         personalMcpProfiles.revokeExternalToken(personalMcpUserId),
         { "rpc.aggregate": "personal-mcp" },
+      ),
+    [WS_METHODS.linearIssuesResolve]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.linearIssuesResolve,
+        resolveLinearIssueStatuses({
+          userId: personalMcpUserId,
+          identifiers: input.identifiers,
+          profiles: personalMcpProfiles,
+          httpClient,
+        }),
+        { "rpc.aggregate": "linear-issues" },
       ),
     [WS_METHODS.sourceControlProfilesList]: (_input) =>
       observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {

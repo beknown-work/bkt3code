@@ -670,6 +670,8 @@ export const OrchestrationThread = Schema.Struct({
   ),
   // T3-CUSTOM(expbkt3): optional so payloads from pre-priority servers decode.
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+  // T3-CUSTOM(expbkt3): optional so payloads from pre-manual-tag servers decode.
+  linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
@@ -745,6 +747,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   // T3-CUSTOM(expbkt3): session priority (see ThreadPriority).
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+  // T3-CUSTOM(expbkt3): durable manual Linear issue URL.
+  linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   session: Schema.NullOr(OrchestrationSession),
   execution: Schema.optionalKey(Schema.NullOr(ThreadExecutionSnapshot)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -1107,6 +1111,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session priority. undefined = unchanged, null = clear.
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+  // T3-CUSTOM(expbkt3): manual Linear tag. undefined = unchanged, null = clear.
+  linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1746,6 +1752,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session priority. undefined = unchanged, null = clear.
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+  // T3-CUSTOM(expbkt3): manual Linear tag. undefined = unchanged, null = clear.
+  linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: IsoDateTime,
 });
 

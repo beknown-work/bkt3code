@@ -55,6 +55,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** T3-CUSTOM(expbkt3): server understands priority on thread.create and
       thread.meta.update. Same version-skew contract as threadSnooze. */
   threadPriority: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): durable manual Linear tags on thread metadata. */
+  threadLinearIssue: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): server understands externalSession on thread.create
       (attach a new thread to an existing provider session). */
   threadExternalSessionAttach: Schema.optionalKey(Schema.Boolean),

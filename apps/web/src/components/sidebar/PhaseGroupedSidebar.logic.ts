@@ -74,6 +74,8 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
 
 const PHASE_ID_SET = new Set<string>(PHASE_SIDEBAR_PHASE_IDS);
 const LINEAR_BRANCH_PATTERN = /^linear\/([a-z][a-z0-9]*-\d+)(?:-|$)/i;
+const LINEAR_ISSUE_URL_PATTERN =
+  /^https:\/\/linear\.app\/([^/]+)\/issue\/([a-z][a-z0-9]*-\d+)(?:\/[^?#]*)?(?:[?#].*)?$/i;
 
 export interface PhaseSidebarLinearIssue {
   readonly identifier: string;
@@ -82,7 +84,20 @@ export interface PhaseSidebarLinearIssue {
 
 export function resolvePhaseSidebarLinearIssue(
   branch: string | null,
+  manualUrl?: string | null,
 ): PhaseSidebarLinearIssue | null {
+  const trimmedManualUrl = manualUrl?.trim();
+  if (trimmedManualUrl) {
+    const match = LINEAR_ISSUE_URL_PATTERN.exec(trimmedManualUrl);
+    const workspace = match?.[1];
+    const identifier = match?.[2]?.toUpperCase();
+    if (workspace && identifier) {
+      return {
+        identifier,
+        url: `https://linear.app/${workspace}/issue/${identifier}`,
+      };
+    }
+  }
   if (branch === null) return null;
   const identifier = LINEAR_BRANCH_PATTERN.exec(branch)?.[1]?.toUpperCase();
   if (!identifier) return null;
@@ -90,6 +105,11 @@ export function resolvePhaseSidebarLinearIssue(
     identifier,
     url: `https://linear.app/beknown/issue/${identifier}`,
   };
+}
+
+/** T3-CUSTOM(expbkt3): compact sidebar timestamps, including zero minutes. */
+export function compactPhaseSidebarTimeLabel(label: string): string {
+  return label === "just now" ? "0m" : label.replace(" ago", "");
 }
 
 export interface PhaseSidebarFilters {
@@ -135,6 +155,8 @@ export interface PhaseSidebarRow {
   readonly snoozeSupported: boolean;
   /** Same version-skew contract for priority on thread.meta.update. */
   readonly prioritySupported: boolean;
+  /** Same version-skew contract for manual Linear tags on thread.meta.update. */
+  readonly linearIssueSupported?: boolean;
   /** The row's pull-request state, when its VCS probe has reported one: a
       merged or closed change request auto-settles an idle thread. */
   readonly changeRequestState: ChangeRequestStateLike | null;
@@ -249,7 +271,7 @@ export function phaseSidebarRowClassName(
   priority: number | null = null,
 ): string {
   return cn(
-    "group/phase-row relative flex min-h-11 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/phase-row relative flex min-h-14 w-full cursor-pointer select-none items-start gap-2 rounded-md px-2 py-2 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
     isActive && isSelected
       ? "bg-primary/18 text-foreground font-semibold ring-1 ring-inset ring-primary/40 hover:bg-primary/22 dark:bg-primary/24"
       : isSelected

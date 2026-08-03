@@ -710,6 +710,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             snoozedAt: null,
             // T3-CUSTOM(expbkt3): session priority.
             priority: event.payload.priority ?? null,
+            // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
+            linearIssueUrl: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -888,6 +890,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             // T3-CUSTOM(expbkt3): session priority.
             ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
+            // T3-CUSTOM(expbkt3): durable manual Linear tag.
+            ...(event.payload.linearIssueUrl !== undefined
+              ? { linearIssueUrl: event.payload.linearIssueUrl }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;

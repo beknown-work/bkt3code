@@ -146,6 +146,8 @@ export const make = Effect.gen(function* () {
       providerRateLimits: true,
       // T3-CUSTOM(expbkt3)
       threadPriority: true,
+      // T3-CUSTOM(expbkt3): durable manual Linear tags.
+      threadLinearIssue: true,
       threadExternalSessionAttach: true,
       // T3-CUSTOM(expbkt3): high-level durable bootstrap and defaults hierarchy.
       durableThreadBootstrap: true,

@@ -323,6 +323,8 @@ export function projectEvent(
             bootstrap: null,
             // T3-CUSTOM(expbkt3): session priority.
             priority: payload.priority ?? null,
+            // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
+            linearIssueUrl: null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -440,6 +442,10 @@ export function projectEvent(
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
             // T3-CUSTOM(expbkt3): session priority.
             ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
+            // T3-CUSTOM(expbkt3): durable manual Linear tag.
+            ...(payload.linearIssueUrl !== undefined
+              ? { linearIssueUrl: payload.linearIssueUrl }
+              : {}),
             updatedAt: payload.updatedAt,
           }),
         })),

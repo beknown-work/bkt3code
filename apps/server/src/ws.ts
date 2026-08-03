@@ -64,7 +64,13 @@ import {
 import { withExecutionSnapshot } from "@t3tools/shared/threadExecution";
 import { clamp } from "effect/Number";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
+// T3-CUSTOM(expbkt3): HttpClient is passed to fork-only Linear status handlers.
+import {
+  HttpClient,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerRespondable,
+} from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -349,6 +355,8 @@ const makeWsRpcLayer = (
       // personal profile; team-mode connections use the authenticated Clerk id.
       const personalMcpUserId = actorUserId ?? UserId.make("local-user");
       const personalMcpProfiles = yield* UserMcpProfileStore.UserMcpProfileStore;
+      // T3-CUSTOM(expbkt3): Bifrost-backed Linear status lookup.
+      const httpClient = yield* HttpClient.HttpClient;
       // Whether that operator is a Clerk org admin (may manage project access).
       // Stable for the connection's identity, so resolve once.
       const actorIsAdmin =
@@ -1097,6 +1105,7 @@ const makeWsRpcLayer = (
         actorUserId,
         personalMcpUserId,
         personalMcpProfiles,
+        httpClient,
         sourceControlProfiles,
         environmentUsers,
         systemResourceMonitor,

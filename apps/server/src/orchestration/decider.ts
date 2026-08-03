@@ -709,6 +709,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           // T3-CUSTOM(expbkt3): undefined leaves priority unchanged; null clears it.
           ...(command.priority !== undefined ? { priority: command.priority } : {}),
+          // T3-CUSTOM(expbkt3): undefined leaves the manual Linear tag unchanged.
+          ...(command.linearIssueUrl !== undefined
+            ? { linearIssueUrl: command.linearIssueUrl }
+            : {}),
           updatedAt: occurredAt,
         },
       };

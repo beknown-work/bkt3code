@@ -34,4 +34,5 @@ export const FORK_RPC_REQUIRED_SCOPES = {
   [WS_FORK_METHODS.usersUpdate]: AuthOrchestrationOperateScope,
   [WS_FORK_METHODS.usersRevokeSessions]: AuthOrchestrationOperateScope,
   [WS_FORK_METHODS.usersSourceControlProfileSet]: AuthOrchestrationOperateScope,
+  [WS_FORK_METHODS.linearIssuesResolve]: AuthOrchestrationReadScope,
 } as const;
