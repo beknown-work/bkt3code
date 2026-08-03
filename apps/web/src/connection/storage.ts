@@ -691,10 +691,12 @@ export const connectionStorageLayer = Layer.effectContext(
             `${outboxPrefix(environmentId, identityKey)}\uffff`,
           ),
         ).pipe(
-          Effect.tryMap({
-            try: (values) => values.map(decodeQueuedThreadMessage),
-            catch: (cause) => persistenceError("load-outbox", cause),
-          }),
+          Effect.flatMap((values) =>
+            Effect.try({
+              try: () => values.map(decodeQueuedThreadMessage),
+              catch: (cause) => persistenceError("load-outbox", cause),
+            }),
+          ),
           Effect.mapError((cause) =>
             cause._tag === "ConnectionPersistenceError"
               ? cause
@@ -734,7 +736,8 @@ export const connectionStorageLayer = Layer.effectContext(
               VCS_REFS_STORE_NAME,
               IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
             ),
-            // T3-CUSTOM(expbkt3): BEGIN — environment removal clears pending sends.
+            // T3-CUSTOM(expbkt3): BEGIN
+            // Environment removal clears pending sends.
             removeDatabaseValuesInRange(
               database,
               OUTBOX_STORE_NAME,

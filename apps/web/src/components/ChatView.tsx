@@ -204,6 +204,7 @@ import { useDraftPromotionNavigationGuard } from "../hooks/useDraftPromotionNavi
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  hydrateImagesFromPersisted,
   markPromotedDraftThreadByRef,
   useComposerDraftStore,
   type DraftId,
@@ -1638,12 +1639,8 @@ function ChatViewContent(props: ChatViewProps) {
         ...(failedOutboxItem.modelSelection === undefined
           ? {}
           : { modelSelection: failedOutboxItem.modelSelection }),
-        ...(failedOutboxItem.runtimeMode === undefined
-          ? {}
-          : { runtimeMode: failedOutboxItem.runtimeMode }),
-        ...(failedOutboxItem.interactionMode === undefined
-          ? {}
-          : { interactionMode: failedOutboxItem.interactionMode }),
+        runtimeMode: failedOutboxItem.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        interactionMode: failedOutboxItem.interactionMode ?? DEFAULT_INTERACTION_MODE,
         ...(failedOutboxItem.bootstrap === undefined
           ? {}
           : { bootstrap: failedOutboxItem.bootstrap }),
@@ -1660,7 +1657,10 @@ function ChatViewContent(props: ChatViewProps) {
   const onEditFailedOutboxItem = useCallback(() => {
     if (!failedOutboxItem) return;
     setComposerDraftPrompt(composerDraftTarget, failedOutboxItem.text);
-    addComposerDraftImages(composerDraftTarget, failedOutboxItem.attachments);
+    addComposerDraftImages(
+      composerDraftTarget,
+      hydrateImagesFromPersisted(failedOutboxItem.attachments),
+    );
     void discardDurableOutbox(failedOutboxItem);
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
   }, [
@@ -2359,10 +2359,8 @@ function ChatViewContent(props: ChatViewProps) {
           ),
         },
         ...(queued.modelSelection === undefined ? {} : { modelSelection: queued.modelSelection }),
-        ...(queued.runtimeMode === undefined ? {} : { runtimeMode: queued.runtimeMode }),
-        ...(queued.interactionMode === undefined
-          ? {}
-          : { interactionMode: queued.interactionMode }),
+        runtimeMode: queued.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        interactionMode: queued.interactionMode ?? DEFAULT_INTERACTION_MODE,
         ...(queued.bootstrap === undefined ? {} : { bootstrap: queued.bootstrap }),
         ...(queued.sourceProposedPlan === undefined
           ? {}
