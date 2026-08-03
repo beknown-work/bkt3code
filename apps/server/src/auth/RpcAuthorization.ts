@@ -13,6 +13,9 @@ import {
 } from "@t3tools/contracts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
+// T3-CUSTOM(expbkt3): fork RPC authorization scopes
+import { FORK_RPC_REQUIRED_SCOPES } from "./rpcForkScopes.ts";
+
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
 /**
@@ -25,16 +28,6 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.searchThreads]: AuthOrchestrationReadScope,
-  // T3-CUSTOM(expbkt3): fork-only RPC methods. Upstream owns this table now, so
-  // fork methods must be declared here or requiredScopeForRpcMethod throws.
-  [ORCHESTRATION_WS_METHODS.stopExecution]: AuthOrchestrationOperateScope,
-  [ORCHESTRATION_WS_METHODS.replayEvents]: AuthOrchestrationReadScope,
-  [WS_METHODS.personalMcpGetProfile]: AuthOrchestrationReadScope,
-  [WS_METHODS.personalMcpUpdateProfile]: AuthOrchestrationOperateScope,
-  [WS_METHODS.personalMcpRotateToken]: AuthOrchestrationOperateScope,
-  [WS_METHODS.personalMcpRevokeToken]: AuthOrchestrationOperateScope,
-  [WS_METHODS.subscribeServerResources]: AuthOrchestrationReadScope,
-  [WS_METHODS.subscribeProviderRateLimits]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.subscribeShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: AuthOrchestrationReadScope,
   [ORCHESTRATION_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
@@ -63,18 +56,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlCloneRepository]: AuthOrchestrationOperateScope,
   [WS_METHODS.sourceControlPublishRepository]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlProfilesList]: AuthOrchestrationReadScope,
-  [WS_METHODS.sourceControlProfilesUpsert]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlProfilesTest]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlProfilesReplaceCredential]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlProfilesDisconnect]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlProfilesArchive]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlThreadOwnerSet]: AuthOrchestrationOperateScope,
-  [WS_METHODS.sourceControlConvertRemote]: AuthOrchestrationOperateScope,
-  [WS_METHODS.usersList]: AuthOrchestrationReadScope,
-  [WS_METHODS.usersUpdate]: AuthOrchestrationOperateScope,
-  [WS_METHODS.usersRevokeSessions]: AuthOrchestrationOperateScope,
-  [WS_METHODS.usersSourceControlProfileSet]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectsListEntries]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsReadFile]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsSearchContents]: AuthOrchestrationReadScope,
@@ -122,6 +103,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.subscribeBackgroundPolicy]: AuthOrchestrationReadScope,
+  // T3-CUSTOM(expbkt3): fork RPC scopes live in rpcForkScopes.ts
+  ...FORK_RPC_REQUIRED_SCOPES,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

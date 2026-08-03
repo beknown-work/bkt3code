@@ -7,23 +7,15 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 
 import { deriveLogicalProjectKey } from "../../logicalProject";
-import { isLatestTurnSettled } from "../../session-logic";
 import type { Project, ThreadShell } from "../../types";
 import { getThreadSortTimestamp } from "../../lib/threadSort";
 import { cn } from "../../lib/utils";
 import { resolveSettledTimestamp } from "../Sidebar.logic";
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
-  // T3-CUSTOM(expbkt3): Pending structured questions are an urgent, top-level phase.
   "needs_input",
   "plan_ready",
   "ready",
-  "ready_for_review",
-  "in_review",
-  "ready_to_merge",
-  "merging",
-  "merged",
-  "checking",
   "planning",
   "implementing",
 ] as const;
@@ -74,14 +66,8 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
     label: "Needs Input",
     helperText: "Agent is waiting for your answer",
   },
-  { id: "plan_ready", label: "Plan Ready", helperText: "Plan awaits approval" },
+  { id: "plan_ready", label: "Plan Ready", helperText: "Planning session is stopped" },
   { id: "ready", label: "Ready", helperText: "No active agent work" },
-  { id: "ready_for_review", label: "Ready for Review", helperText: "Changes await review" },
-  { id: "in_review", label: "In Review", helperText: "Pull request needs review or checks" },
-  { id: "ready_to_merge", label: "Ready to Merge", helperText: "Approved and checks passing" },
-  { id: "merging", label: "Merging", helperText: "Merge is queued or automatic" },
-  { id: "merged", label: "Merged", helperText: "Changes landed" },
-  { id: "checking", label: "Checking", helperText: "Checking agent status" },
   { id: "planning", label: "Planning", helperText: "Agent is preparing a plan" },
   { id: "implementing", label: "Implementing", helperText: "Agent is changing code" },
 ];
@@ -140,7 +126,7 @@ export interface PhaseSidebarRow {
   readonly providerName: string;
   readonly isAssignedToMe: boolean;
   readonly attentionPriority: number;
-  readonly unreadPriority: number;
+  readonly isUnreadCompletion: boolean;
   /** False on environments whose server predates thread.settle/unsettle:
       the row can never be classified settled (the user could not undo it)
       and its lifecycle affordances stay hidden. */
@@ -260,7 +246,7 @@ export function phaseSidebarRowClassName(
   isActive: boolean,
   isSelected: boolean,
   needsUserInput: boolean,
-  isP0 = false,
+  priority: number | null = null,
 ): string {
   return cn(
     "group/phase-row relative flex min-h-11 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
@@ -271,16 +257,50 @@ export function phaseSidebarRowClassName(
         : isActive
           ? "bg-primary/10 text-foreground font-semibold ring-1 ring-inset ring-primary/30 hover:bg-primary/15 dark:bg-primary/16"
           : "text-muted-foreground hover:bg-accent hover:text-foreground",
-    // T3-CUSTOM(expbkt3): P0 rows carry a steady amber emphasis so the most
-    // urgent work is findable at a glance. Deliberately calmer than the red
-    // needs-input flash below, which still wins when both apply.
-    isP0 &&
-      !needsUserInput &&
-      "bg-amber-500/10 text-foreground ring-1 ring-inset ring-amber-500/50 shadow-[inset_3px_0_0_0_var(--color-amber-500)] hover:bg-amber-500/20",
+    // T3-CUSTOM(expbkt3): Priority uses the Linear-attention orange; reserve
+    // bright red for the user-input branch below.
+    !needsUserInput &&
+      priority === 0 &&
+      cn(
+        "bg-orange-500/40 text-foreground ring-1 ring-inset hover:bg-orange-500/50 dark:bg-orange-500/35",
+        isActive
+          ? cn(
+              isSelected ? "ring-primary/80" : "ring-primary/70",
+              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+            )
+          : "ring-orange-500/80 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
+      ),
+    !needsUserInput &&
+      priority === 1 &&
+      cn(
+        "bg-orange-500/20 text-foreground ring-1 ring-inset hover:bg-orange-500/25 dark:bg-orange-500/18",
+        isActive
+          ? cn(
+              isSelected ? "ring-primary/80" : "ring-primary/70",
+              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+            )
+          : "ring-orange-500/40 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
+      ),
+    !needsUserInput &&
+      priority === 2 &&
+      cn(
+        "bg-orange-500/10 text-foreground ring-1 ring-inset hover:bg-orange-500/15 dark:bg-orange-500/9",
+        isActive
+          ? cn(
+              isSelected ? "ring-primary/80" : "ring-primary/70",
+              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+            )
+          : "ring-orange-500/20 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
+      ),
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
   );
+}
+
+/** A stopped projection can still hide a live provider, so any recorded session remains stoppable. */
+export function phaseSidebarCanForceStopAgent(session: ThreadShell["session"]): boolean {
+  return session !== null;
 }
 
 export interface PhaseSidebarRepositoryOption {
@@ -309,17 +329,6 @@ export function isStrictlyMergeReady(status: VcsStatusResult | null | undefined)
     return false;
   }
   return pr.checksStatus === "pass";
-}
-
-function hasReviewableChanges(thread: ThreadShell, status: VcsStatusResult | null | undefined) {
-  return (
-    thread.execution?.activity !== "failed" &&
-    thread.latestTurn?.state === "completed" &&
-    thread.latestTurn.completedAt !== null &&
-    status !== null &&
-    status !== undefined &&
-    (status.hasWorkingTreeChanges || status.aheadCount > 0 || (status.aheadOfDefaultCount ?? 0) > 0)
-  );
 }
 
 export function resolvePhaseSidebarAttentionPriority(
@@ -352,39 +361,36 @@ export function phaseSidebarNeedsUserInput(
   return thread.hasPendingUserInput || thread.execution?.turn?.state === "waiting-for-input";
 }
 
+export type PhaseSidebarAttentionKind = "input" | "approval" | "error";
+
+export function resolvePhaseSidebarAttentionKind(
+  thread: Pick<ThreadShell, "execution" | "hasPendingApprovals" | "hasPendingUserInput">,
+): PhaseSidebarAttentionKind | null {
+  if (phaseSidebarNeedsUserInput(thread)) return "input";
+  if (thread.hasPendingApprovals || thread.execution?.turn?.state === "waiting-for-approval") {
+    return "approval";
+  }
+  if (thread.execution?.activity === "failed") return "error";
+  return null;
+}
+
 export function resolvePhaseSidebarPhase(
   thread: ThreadShell,
-  status?: VcsStatusResult | null,
+  _status?: VcsStatusResult | null,
 ): PhaseSidebarPhaseId {
-  // T3-CUSTOM(expbkt3): Structured questions always render above lifecycle work.
   if (phaseSidebarNeedsUserInput(thread)) return "needs_input";
-  if (thread.execution === null || thread.execution === undefined) return "checking";
 
   const isActive =
     thread.execution?.activity === "active" ||
     thread.execution?.activity === "blocked" ||
-    thread.execution?.activity === "stopping";
+    thread.execution?.activity === "stopping" ||
+    thread.session?.status === "starting" ||
+    thread.session?.status === "running";
   if (isActive) {
     return thread.interactionMode === "plan" ? "planning" : "implementing";
   }
 
-  if (
-    thread.interactionMode === "plan" &&
-    thread.execution.activity !== "failed" &&
-    thread.hasActionableProposedPlan &&
-    isLatestTurnSettled(thread.latestTurn, thread.execution ?? null)
-  ) {
-    return "plan_ready";
-  }
-
-  if (status?.pr?.state === "merged") return "merged";
-  if (status?.pr?.state === "open") {
-    if (status.pr.autoMergeEnabled === true) return "merging";
-    return isStrictlyMergeReady(status) ? "ready_to_merge" : "in_review";
-  }
-  if (hasReviewableChanges(thread, status)) return "ready_for_review";
-
-  return "ready";
+  return thread.interactionMode === "plan" ? "plan_ready" : "ready";
 }
 
 /**
@@ -395,11 +401,9 @@ export function resolvePhaseSidebarPhase(
  */
 export function resolvePhaseSidebarDisplayPhase(
   currentPhase: PhaseSidebarPhaseId,
-  previousPhase: PhaseSidebarPhaseId | null,
+  _previousPhase: PhaseSidebarPhaseId | null,
 ): PhaseSidebarPhaseId {
-  return currentPhase === "checking" && previousPhase !== null && previousPhase !== "checking"
-    ? previousPhase
-    : currentPhase;
+  return currentPhase;
 }
 
 export function derivePhaseSidebarRepositoryKey(project: Project): string {
@@ -519,6 +523,13 @@ export function formatThreadPriority(priority: number): string {
   return `P${priority}`;
 }
 
+/** T3-CUSTOM(expbkt3): Keep the priority pill aligned with the row's orange tone. */
+export function phaseSidebarPriorityBadgeClassName(priority: number): string {
+  return priority <= 2
+    ? "bg-orange-500 text-black shadow-sm"
+    : "bg-muted-foreground/15 text-muted-foreground";
+}
+
 /** T3-CUSTOM(expbkt3): the priority values offered in the row context menu. */
 export const PHASE_SIDEBAR_PRIORITY_CHOICES = [
   { value: 0, label: "P0 — Urgent" },
@@ -546,7 +557,7 @@ export function buildPhaseSidebarGroups(
           // still surface — they just no longer outrank an explicit P0.
           phaseSidebarPriorityRank(left.thread) - phaseSidebarPriorityRank(right.thread) ||
           left.attentionPriority - right.attentionPriority ||
-          left.unreadPriority - right.unreadPriority ||
+          Number(right.isUnreadCompletion) - Number(left.isUnreadCompletion) ||
           getThreadSortTimestamp(right.thread, sortOrder) -
             getThreadSortTimestamp(left.thread, sortOrder) ||
           left.thread.title.localeCompare(right.thread.title) ||

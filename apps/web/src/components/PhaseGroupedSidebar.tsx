@@ -81,9 +81,9 @@ import { LinearIcon } from "./Icons";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import {
   canReconnectThreadSession,
+  hasUnseenCompletion,
   isTrailingDoubleClick,
   resolveSettledTimestamp,
-  resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
 import {
@@ -92,7 +92,6 @@ import {
   snoozeWakeLabel,
   type SnoozePreset,
 } from "./Sidebar.snooze";
-import { ThreadStatusLabel } from "./ThreadStatusIndicators";
 import {
   PHASE_SIDEBAR_PHASES,
   buildPhaseSidebarFilterChips,
@@ -103,6 +102,10 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   partitionPhaseSidebarRows,
+  // T3-CUSTOM(expbkt3): Session priority badge tone.
+  phaseSidebarPriorityBadgeClassName,
+  phaseSidebarCanForceStopAgent,
+  resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
@@ -129,6 +132,12 @@ import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
 import { T3ConductorCard } from "./sidebar/T3ConductorCard";
 import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
+import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
+import { RunningSessionDivider } from "./sidebar/RunningSessionDivider";
+import {
+  runningSessionDividerPhase,
+  shouldShowRunningSessionGlint,
+} from "./sidebar/RunningSessionGlint.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -154,21 +163,7 @@ import {
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-
-const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
-  // T3-CUSTOM(expbkt3): Urgent question phase is visually distinct from lifecycle work.
-  needs_input: "animate-pulse bg-red-500",
-  plan_ready: "bg-primary",
-  ready_for_review: "bg-emerald-500",
-  ready_to_merge: "bg-violet-500",
-  planning: "bg-info",
-  implementing: "bg-success",
-  in_review: "bg-amber-500",
-  merging: "bg-violet-500",
-  merged: "bg-purple-500",
-  checking: "bg-muted-foreground/45",
-  ready: "bg-muted-foreground/45",
-};
+import { PhaseSidebarUnreadIndicator } from "./sidebar/PhaseSidebarUnreadIndicator";
 
 // T3-CUSTOM(expbkt3): Settled-tail paging — recent history is the common
 // lookup; the deep tail stays behind an explicit Show more.
@@ -326,9 +321,6 @@ function PhaseFilterPopover({
                 checked={phaseIds.includes(phase.id)}
                 label={phase.label}
                 onCheckedChange={() => togglePhase(phase.id)}
-                leading={
-                  <span className={cn("size-1.5 rounded-full", PHASE_ACCENT_CLASS[phase.id])} />
-                }
               />
             ))}
           </FacetSection>
@@ -625,6 +617,7 @@ interface PhaseThreadRowProps {
   readonly onCancelRename: () => void;
   readonly onNavigate: (threadRef: ScopedThreadRef) => void;
   readonly onReconnect: (threadRef: ScopedThreadRef) => Promise<void>;
+  readonly onForceStop: (row: PhaseSidebarRow) => void;
   readonly onArchive: (row: PhaseSidebarRow) => void;
   readonly onDelete: (row: PhaseSidebarRow) => void;
   readonly onSettle: (row: PhaseSidebarRow) => void;
@@ -652,6 +645,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onCancelRename,
     onNavigate,
     onReconnect,
+    onForceStop,
     onArchive,
     onDelete,
     onSettle,
@@ -669,11 +663,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const setAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
-  const status = resolveThreadStatusPill({ thread: { ...row.thread, lastVisitedAt } });
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch);
   const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
+  const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
   // While the preset popover is open the pointer sits over the popup, not
   // the row, so the hover cluster has to stay pinned.
@@ -694,6 +688,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     section === "active" &&
     wokeAt !== null &&
     (lastVisitedAt === undefined || Date.parse(wokeAt) > Date.parse(lastVisitedAt));
+  const shouldEmphasizeTitle =
+    row.isUnreadCompletion ||
+    active ||
+    selected ||
+    attentionKind !== null ||
+    showWokePill ||
+    (row.thread.priority != null && row.thread.priority <= 2);
   // Snoozed rows read "when does this come BACK"; settled rows read "when
   // did this wrap up" — the same timestamp they sort by.
   const timeLabel =
@@ -798,6 +799,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         ...settlementItems,
         ...snoozeItems,
         {
+          id: "force-stop-agent",
+          label: "Force stop agent",
+          disabled: !phaseSidebarCanForceStopAgent(row.thread.session),
+          destructive: true,
+        },
+        {
           id: "reconnect-session",
           label: "Reconnect session",
           disabled: !canReconnectThreadSession(row.thread),
@@ -832,6 +839,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       if (choice) onSetPriority(row, choice.value);
     }
     // T3-CUSTOM(expbkt3): END
+    if (action === "force-stop-agent") onForceStop(row);
     if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
       await navigator.clipboard.writeText(workspacePath);
@@ -848,12 +856,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseSidebarRowClassName(
-          active,
-          selected,
-          needsUserInput,
-          row.thread.priority === 0,
-        )}
+        className={phaseSidebarRowClassName(active, selected, needsUserInput, row.thread.priority)}
         aria-current={active ? "page" : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
@@ -861,6 +864,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         onDoubleClick={() => onStartRename(row)}
         onContextMenu={(event) => void handleContextMenu(event)}
       >
+        {shouldShowRunningSessionGlint(row.phaseId, section) ? <RunningSessionGlint /> : null}
         {active ? (
           <span
             aria-hidden
@@ -868,11 +872,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             className="pointer-events-none absolute inset-y-1 right-0 w-0.5 rounded-full bg-primary shadow-[0_0_6px_var(--color-primary)]"
           />
         ) : null}
-        {status ? (
-          <ThreadStatusLabel status={status} compact />
-        ) : (
-          <span className="size-3.5 shrink-0" />
-        )}
+        <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
         <span className="min-w-0 flex-1">
           {renaming ? (
             <input
@@ -890,7 +890,16 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               }}
             />
           ) : (
-            <span className="block truncate text-xs font-medium text-foreground">
+            <span
+              className={cn(
+                "block truncate text-xs transition-colors",
+                row.isUnreadCompletion
+                  ? "font-semibold text-foreground"
+                  : shouldEmphasizeTitle
+                    ? "font-medium text-foreground"
+                    : "font-normal text-muted-foreground/75 group-hover/phase-row:text-foreground",
+              )}
+            >
               {row.thread.title}
             </span>
           )}
@@ -970,26 +979,39 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </span>
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1">
-          {/* T3-CUSTOM(expbkt3): P0 is loud because it is the one level that
-              claims attention across every lifecycle group; P1-P4 stay quiet
-              markers so they read as metadata, not alarms. */}
           {row.thread.priority != null ? (
             <span
               aria-label={`Priority ${formatThreadPriority(row.thread.priority)}`}
               data-testid={`phase-thread-priority-${row.thread.id}`}
               className={cn(
                 "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide",
-                row.thread.priority === 0
-                  ? "bg-amber-500 text-white shadow-sm"
-                  : "bg-muted-foreground/15 text-muted-foreground",
+                // T3-CUSTOM(expbkt3): Match the Linear-attention orange.
+                phaseSidebarPriorityBadgeClassName(row.thread.priority),
               )}
             >
               {formatThreadPriority(row.thread.priority)}
             </span>
           ) : null}
-          {needsUserInput ? (
-            <span className="rounded-sm bg-red-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm">
+          {attentionKind === "input" ? (
+            <span
+              aria-label="Awaiting input"
+              className="rounded-sm bg-red-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm"
+            >
               INPUT
+            </span>
+          ) : attentionKind === "approval" ? (
+            <span
+              aria-label="Pending approval"
+              className="rounded-sm bg-amber-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-amber-700 shadow-sm dark:text-amber-300"
+            >
+              APPROVAL
+            </span>
+          ) : attentionKind === "error" ? (
+            <span
+              aria-label="Session error"
+              className="rounded-sm bg-red-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-red-700 shadow-sm dark:text-red-300"
+            >
+              ERROR
             </span>
           ) : null}
           {/* T3-CUSTOM(expbkt3): A woken thread returns to its original sort
@@ -1165,6 +1187,7 @@ export function PhaseGroupedSidebar() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
@@ -1291,11 +1314,10 @@ export function PhaseGroupedSidebar() {
           const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
           const vcsStatus = vcsStatusByThreadKey.get(threadKey);
           const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
-          const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
-          const lastVisitedAt = Date.parse(lastVisitedAtByThreadKey[threadKey] ?? "");
-          const isUnreadCompletion =
-            Number.isFinite(completedAt) &&
-            (!Number.isFinite(lastVisitedAt) || completedAt > lastVisitedAt);
+          const isUnreadCompletion = hasUnseenCompletion({
+            ...thread,
+            lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
+          });
           return {
             thread,
             phaseId: resolvePhaseSidebarDisplayPhase(
@@ -1312,7 +1334,7 @@ export function PhaseGroupedSidebar() {
               provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
             isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
             attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
-            unreadPriority: isUnreadCompletion ? 0 : 1,
+            isUnreadCompletion,
             // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
             settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
             snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
@@ -1364,6 +1386,8 @@ export function PhaseGroupedSidebar() {
     () => buildPhaseSidebarGroups(activeRows, filters, sortOrder),
     [activeRows, filters, sortOrder],
   );
+  // T3-CUSTOM(expbkt3): Separate idle lifecycle groups from live agent work.
+  const runningDividerPhaseId = runningSessionDividerPhase(groups.map((group) => group.id));
   const activeVisibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
 
   // The settled tail renders in pages: history must not dominate the list.
@@ -1427,7 +1451,7 @@ export function PhaseGroupedSidebar() {
   useEffect(() => {
     const next = new Map(lastKnownPhaseByThreadKeyRef.current);
     for (const row of allRows) {
-      if (allEnvironmentShellsLive || row.phaseId !== "checking") {
+      if (allEnvironmentShellsLive) {
         next.set(
           scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
           row.phaseId,
@@ -1665,6 +1689,15 @@ export function PhaseGroupedSidebar() {
     },
     [updateThreadMetadata],
   );
+  const forceStopAgent = useCallback(
+    (row: PhaseSidebarRow) => {
+      void forceStopThreadSession({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id },
+      });
+    },
+    [forceStopThreadSession],
+  );
   // T3-CUSTOM(expbkt3): END
   const requestArchive = useCallback(
     async (row: PhaseSidebarRow) => {
@@ -1877,6 +1910,7 @@ export function PhaseGroupedSidebar() {
         onCancelRename={cancelRename}
         onNavigate={navigateToRow}
         onReconnect={reconnectThreadSession}
+        onForceStop={forceStopAgent}
         onArchive={handleArchive}
         onDelete={requestDelete}
         onSettle={attemptSettle}
@@ -1964,11 +1998,15 @@ export function PhaseGroupedSidebar() {
         >
           {groups.map((group) => (
             <section key={group.id} className="mb-3" data-phase-id={group.id}>
+              {/* T3-CUSTOM(expbkt3): A quiet boundary before live agent work. */}
+              {group.id === runningDividerPhaseId ? <RunningSessionDivider /> : null}
               <header className="mb-1 flex items-center gap-2 px-2">
                 <span
-                  className={cn("size-1.5 shrink-0 rounded-full", PHASE_ACCENT_CLASS[group.id])}
-                />
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground/80">
+                  className={cn(
+                    "text-[10px] font-semibold uppercase tracking-wider text-foreground/80",
+                    group.id === "needs_input" && "text-red-600 dark:text-red-400",
+                  )}
+                >
                   {group.label}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[9px] text-muted-foreground/50">

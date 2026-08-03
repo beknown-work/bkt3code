@@ -3,7 +3,6 @@ import { Atom } from "effect/unstable/reactivity";
 
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 import {
-  type AddThreadMemberInput,
   type ArchiveThreadInput,
   type CreateThreadInput,
   // T3-CUSTOM(expbkt3): durable bootstrap command atoms.
@@ -13,25 +12,19 @@ import {
   type ContinueThreadBootstrapInput,
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
-  type RemoveThreadMemberInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
-  type RequestThreadCatchupSummaryInput,
   type RevertThreadCheckpointInput,
-  type RestartThreadSessionInput,
   type SetThreadInteractionModeInput,
   type SetThreadRuntimeModeInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
   type StopThreadSessionInput,
-  type StopThreadExecutionInput,
-  type TransferThreadOwnershipInput,
   type UnarchiveThreadInput,
   type UnsettleThreadInput,
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
-  addThreadMember,
   archiveThread,
   createThread,
   requestThreadBootstrap,
@@ -40,31 +33,42 @@ import {
   continueThreadBootstrap,
   deleteThread,
   interruptThreadTurn,
-  removeThreadMember,
   respondToThreadApproval,
   respondToThreadUserInput,
-  requestThreadCatchupSummary,
   revertThreadCheckpoint,
-  restartThreadSession,
   setThreadInteractionMode,
   setThreadRuntimeMode,
   settleThread,
   snoozeThread,
   startThreadTurn,
   stopThreadSession,
-  stopThreadExecution,
-  transferThreadOwnership,
   unarchiveThread,
   unsettleThread,
   unsnoozeThread,
   updateThreadMetadata,
 } from "../operations/commands.ts";
+// T3-CUSTOM(expbkt3): BEGIN fork command creators
+import {
+  type AddThreadMemberInput,
+  type RemoveThreadMemberInput,
+  type RequestThreadCatchupSummaryInput,
+  type RestartThreadSessionInput,
+  type StopThreadExecutionInput,
+  type TransferThreadOwnershipInput,
+  addThreadMember,
+  removeThreadMember,
+  requestThreadCatchupSummary,
+  restartThreadSession,
+  stopThreadExecution,
+  transferThreadOwnership,
+} from "../operations/commandsFork.ts";
+// T3-CUSTOM(expbkt3): END
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
-export { OrchestrationCommandAcknowledgementTimeoutError } from "../operations/commands.ts";
+// T3-CUSTOM(expbkt3): acknowledgement timeout error
+export { OrchestrationCommandAcknowledgementTimeoutError } from "../operations/commandAck.ts";
 
 export type {
-  AddThreadMemberInput,
   ArchiveThreadInput,
   CreateThreadInput,
   RequestThreadBootstrapInput,
@@ -73,25 +77,30 @@ export type {
   ContinueThreadBootstrapInput,
   DeleteThreadInput,
   InterruptThreadTurnInput,
-  RemoveThreadMemberInput,
   RespondToThreadApprovalInput,
-  RequestThreadCatchupSummaryInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
-  RestartThreadSessionInput,
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,
   SettleThreadInput,
   SnoozeThreadInput,
   StartThreadTurnInput,
   StopThreadSessionInput,
-  StopThreadExecutionInput,
-  TransferThreadOwnershipInput,
   UnarchiveThreadInput,
   UnsettleThreadInput,
   UnsnoozeThreadInput,
   UpdateThreadMetadataInput,
 } from "../operations/commands.ts";
+// T3-CUSTOM(expbkt3): BEGIN fork command input types
+export type {
+  AddThreadMemberInput,
+  RemoveThreadMemberInput,
+  RequestThreadCatchupSummaryInput,
+  RestartThreadSessionInput,
+  StopThreadExecutionInput,
+  TransferThreadOwnershipInput,
+} from "../operations/commandsFork.ts";
+// T3-CUSTOM(expbkt3): END
 
 export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,

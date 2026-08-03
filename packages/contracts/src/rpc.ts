@@ -62,19 +62,9 @@ import {
   OrchestrationSearchThreadsInput,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
-  OrchestrationReplayEventsError,
-  OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
-  OrchestrationStopExecutionError,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
-import {
-  PersonalMcpProfile,
-  PersonalMcpProfileUpdate,
-  PersonalMcpSettingsError,
-  PersonalMcpTokenResult,
-} from "./personalMcp.ts";
 import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
@@ -141,7 +131,6 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
-  ServerResourceSample,
   ServerSelfUpdateError,
   ServerSelfUpdateInput,
   ServerSelfUpdateProgressEvent,
@@ -171,26 +160,14 @@ import {
   SourceControlRepositoryError,
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
-  GitHubSourceControlProfile,
-  SourceControlProfilesListResult,
-  SourceControlProfileUpsertInput,
-  SourceControlProfileIdInput,
-  SourceControlProfileReplaceCredentialInput,
-  SourceControlProfileArchiveInput,
-  SourceControlThreadOwnerSetInput,
-  SourceControlConvertRemoteInput,
-  SourceControlConvertRemoteResult,
-  SourceControlProfileError,
 } from "./sourceControl.ts";
+// T3-CUSTOM(expbkt3): BEGIN fork source-control identity schemas
+import { SourceControlProfileError } from "./sourceControlProfiles.ts";
+// T3-CUSTOM(expbkt3): END
+// T3-CUSTOM(expbkt3): fork RPC method names + definitions
+import { FORK_WS_RPCS, WS_FORK_METHODS } from "./rpcFork.ts";
 import { VcsError } from "./vcs.ts";
-import {
-  EnvironmentUser,
-  EnvironmentUserDirectoryResult,
-  EnvironmentUserIdInput,
-  EnvironmentUserManagementError,
-  EnvironmentUserSourceControlProfileSetInput,
-  EnvironmentUserUpdateInput,
-} from "./users.ts";
+import { EnvironmentUserManagementError } from "./users.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -260,11 +237,6 @@ export const WS_METHODS = {
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
-  // T3-CUSTOM(expbkt3): Per-user automation and MCP credential management.
-  personalMcpGetProfile: "personalMcp.getProfile",
-  personalMcpUpdateProfile: "personalMcp.updateProfile",
-  personalMcpRotateToken: "personalMcp.rotateToken",
-  personalMcpRevokeToken: "personalMcp.revokeToken",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -284,20 +256,8 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
-  sourceControlProfilesList: "sourceControl.profiles.list",
-  sourceControlProfilesUpsert: "sourceControl.profiles.upsert",
-  sourceControlProfilesTest: "sourceControl.profiles.test",
-  sourceControlProfilesReplaceCredential: "sourceControl.profiles.replaceCredential",
-  sourceControlProfilesDisconnect: "sourceControl.profiles.disconnect",
-  sourceControlProfilesArchive: "sourceControl.profiles.archive",
-  sourceControlThreadOwnerSet: "sourceControl.threadOwner.set",
-  sourceControlConvertRemote: "sourceControl.remote.convertToHttps",
 
   // Environment user management methods
-  usersList: "users.list",
-  usersUpdate: "users.update",
-  usersRevokeSessions: "users.revokeSessions",
-  usersSourceControlProfileSet: "users.sourceControlProfile.set",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -307,11 +267,12 @@ export const WS_METHODS = {
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
-  subscribeServerResources: "subscribeServerResources",
-  subscribeProviderRateLimits: "subscribeProviderRateLimits",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+
+  // T3-CUSTOM(expbkt3): fork RPC method names live in rpcFork.ts
+  ...WS_FORK_METHODS,
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -388,30 +349,6 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
     EnvironmentUserManagementError,
     EnvironmentAuthorizationError,
   ]),
-});
-
-export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_METHODS.personalMcpGetProfile, {
-  payload: Schema.Struct({}),
-  success: PersonalMcpProfile,
-  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
-});
-
-export const WsPersonalMcpUpdateProfileRpc = Rpc.make(WS_METHODS.personalMcpUpdateProfile, {
-  payload: PersonalMcpProfileUpdate,
-  success: PersonalMcpProfile,
-  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
-});
-
-export const WsPersonalMcpRotateTokenRpc = Rpc.make(WS_METHODS.personalMcpRotateToken, {
-  payload: Schema.Struct({}),
-  success: PersonalMcpTokenResult,
-  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
-});
-
-export const WsPersonalMcpRevokeTokenRpc = Rpc.make(WS_METHODS.personalMcpRevokeToken, {
-  payload: Schema.Struct({}),
-  success: PersonalMcpProfile,
-  error: Schema.Union([PersonalMcpSettingsError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -526,104 +463,6 @@ export const WsSourceControlPublishRepositoryRpc = Rpc.make(
     ]),
   },
 );
-
-export const WsSourceControlProfilesListRpc = Rpc.make(WS_METHODS.sourceControlProfilesList, {
-  payload: Schema.Struct({}),
-  success: SourceControlProfilesListResult,
-  error: Schema.Union([SourceControlProfileError, EnvironmentAuthorizationError]),
-});
-
-export const WsSourceControlProfilesUpsertRpc = Rpc.make(WS_METHODS.sourceControlProfilesUpsert, {
-  payload: SourceControlProfileUpsertInput,
-  success: GitHubSourceControlProfile,
-  error: Schema.Union([
-    SourceControlProfileError,
-    EnvironmentUserManagementError,
-    EnvironmentAuthorizationError,
-  ]),
-});
-
-export const WsSourceControlProfilesTestRpc = Rpc.make(WS_METHODS.sourceControlProfilesTest, {
-  payload: SourceControlProfileIdInput,
-  success: GitHubSourceControlProfile,
-  error: Schema.Union([
-    SourceControlProfileError,
-    EnvironmentUserManagementError,
-    EnvironmentAuthorizationError,
-  ]),
-});
-
-export const WsSourceControlProfilesReplaceCredentialRpc = Rpc.make(
-  WS_METHODS.sourceControlProfilesReplaceCredential,
-  {
-    payload: SourceControlProfileReplaceCredentialInput,
-    success: GitHubSourceControlProfile,
-    error: Schema.Union([
-      SourceControlProfileError,
-      EnvironmentUserManagementError,
-      EnvironmentAuthorizationError,
-    ]),
-  },
-);
-
-export const WsSourceControlProfilesDisconnectRpc = Rpc.make(
-  WS_METHODS.sourceControlProfilesDisconnect,
-  {
-    payload: SourceControlProfileIdInput,
-    success: GitHubSourceControlProfile,
-    error: Schema.Union([
-      SourceControlProfileError,
-      EnvironmentUserManagementError,
-      EnvironmentAuthorizationError,
-    ]),
-  },
-);
-
-export const WsSourceControlProfilesArchiveRpc = Rpc.make(WS_METHODS.sourceControlProfilesArchive, {
-  payload: SourceControlProfileArchiveInput,
-  success: GitHubSourceControlProfile,
-  error: Schema.Union([
-    SourceControlProfileError,
-    EnvironmentUserManagementError,
-    EnvironmentAuthorizationError,
-  ]),
-});
-
-export const WsSourceControlThreadOwnerSetRpc = Rpc.make(WS_METHODS.sourceControlThreadOwnerSet, {
-  payload: SourceControlThreadOwnerSetInput,
-  success: GitHubSourceControlProfile,
-  error: Schema.Union([SourceControlProfileError, EnvironmentAuthorizationError]),
-});
-
-export const WsSourceControlConvertRemoteRpc = Rpc.make(WS_METHODS.sourceControlConvertRemote, {
-  payload: SourceControlConvertRemoteInput,
-  success: SourceControlConvertRemoteResult,
-  error: Schema.Union([SourceControlProfileError, EnvironmentAuthorizationError]),
-});
-
-export const WsUsersListRpc = Rpc.make(WS_METHODS.usersList, {
-  payload: Schema.Struct({}),
-  success: EnvironmentUserDirectoryResult,
-  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
-});
-
-export const WsUsersUpdateRpc = Rpc.make(WS_METHODS.usersUpdate, {
-  payload: EnvironmentUserUpdateInput,
-  success: EnvironmentUser,
-  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
-});
-
-export const WsUsersRevokeSessionsRpc = Rpc.make(WS_METHODS.usersRevokeSessions, {
-  payload: EnvironmentUserIdInput,
-  success: EnvironmentUser,
-  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
-});
-
-export const WsUsersSourceControlProfileSetRpc = Rpc.make(WS_METHODS.usersSourceControlProfileSet, {
-  payload: EnvironmentUserSourceControlProfileSetInput,
-  success: EnvironmentUser,
-  error: Schema.Union([EnvironmentUserManagementError, EnvironmentAuthorizationError]),
-});
 
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
@@ -900,12 +739,6 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   },
 );
 
-export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
-  payload: OrchestrationRpcSchemas.stopExecution.input,
-  success: OrchestrationRpcSchemas.stopExecution.output,
-  error: Schema.Union([OrchestrationStopExecutionError, EnvironmentAuthorizationError]),
-});
-
 export const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getTurnDiff, {
   payload: OrchestrationGetTurnDiffInput,
   success: OrchestrationRpcSchemas.getTurnDiff.output,
@@ -928,11 +761,6 @@ export const WsOrchestrationSearchThreadsRpc = Rpc.make(ORCHESTRATION_WS_METHODS
 });
 
 // T3-CUSTOM(expbkt3)
-export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.replayEvents, {
-  payload: OrchestrationReplayEventsInput,
-  success: OrchestrationRpcSchemas.replayEvents.output,
-  error: Schema.Union([OrchestrationReplayEventsError, EnvironmentAuthorizationError]),
-});
 
 export const WsOrchestrationGetArchivedShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
@@ -988,20 +816,6 @@ export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServer
   stream: true,
 });
 
-export const WsSubscribeServerResourcesRpc = Rpc.make(WS_METHODS.subscribeServerResources, {
-  payload: Schema.Struct({}),
-  success: ServerResourceSample,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-export const WsSubscribeProviderRateLimitsRpc = Rpc.make(WS_METHODS.subscribeProviderRateLimits, {
-  payload: Schema.Struct({}),
-  success: ProviderRateLimitsStreamSnapshot,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
 export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1034,10 +848,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
-  WsPersonalMcpGetProfileRpc,
-  WsPersonalMcpUpdateProfileRpc,
-  WsPersonalMcpRotateTokenRpc,
-  WsPersonalMcpRevokeTokenRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
@@ -1053,18 +863,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
-  WsSourceControlProfilesListRpc,
-  WsSourceControlProfilesUpsertRpc,
-  WsSourceControlProfilesTestRpc,
-  WsSourceControlProfilesReplaceCredentialRpc,
-  WsSourceControlProfilesDisconnectRpc,
-  WsSourceControlProfilesArchiveRpc,
-  WsSourceControlThreadOwnerSetRpc,
-  WsSourceControlConvertRemoteRpc,
-  WsUsersListRpc,
-  WsUsersUpdateRpc,
-  WsUsersRevokeSessionsRpc,
-  WsUsersSourceControlProfileSetRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
@@ -1109,18 +907,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
-  WsSubscribeServerResourcesRpc,
-  WsSubscribeProviderRateLimitsRpc,
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationDispatchCommandRpc,
-  WsOrchestrationStopExecutionRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
-  WsOrchestrationReplayEventsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+  // T3-CUSTOM(expbkt3): fork RPCs live in rpcFork.ts
+  ...FORK_WS_RPCS,
 );

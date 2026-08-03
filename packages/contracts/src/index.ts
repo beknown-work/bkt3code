@@ -21,6 +21,10 @@ export * from "./personalMcp.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
+// T3-CUSTOM(expbkt3): fork source-control identity schemas
+export * from "./sourceControlProfiles.ts";
+// T3-CUSTOM(expbkt3): fork websocket RPC definitions
+export * from "./rpcFork.ts";
 export * from "./orchestration.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";

@@ -1345,7 +1345,10 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
+    // T3-CUSTOM(expbkt3): The projection can say stopped while a provider
+    // process remains alive. Treat session.stop as idempotent against the
+    // provider registry so the sidebar's force-stop escape hatch is real.
+    if (thread.session) {
       yield* providerService.stopSession({ threadId: thread.id });
     }
     threadCredentialActors.delete(thread.id);

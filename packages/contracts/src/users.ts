@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { EnvironmentUserId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { SourceControlProfileId } from "./sourceControl.ts";
+import { SourceControlProfileId } from "./sourceControlProfiles.ts";
 
 export const EnvironmentUserIdentityMode = Schema.Literals(["optional", "required"]);
 export type EnvironmentUserIdentityMode = typeof EnvironmentUserIdentityMode.Type;

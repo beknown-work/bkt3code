@@ -23,11 +23,14 @@ import {
   filterVisiblePhaseSidebarRows,
   matchesPhaseSidebarFilters,
   partitionPhaseSidebarRows,
+  phaseSidebarPriorityBadgeClassName,
+  phaseSidebarCanForceStopAgent,
   phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
   phaseSidebarPriorityRank,
   formatThreadPriority,
   reconcilePhaseSidebarFilters,
+  resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarLinearIssue,
@@ -68,6 +71,37 @@ describe("phaseSidebarRowClassName", () => {
     expect(className).toContain("bg-red-500/20");
     expect(className).toContain("ring-red-500/60");
     expect(className).toContain("motion-reduce:animate-none");
+  });
+
+  it("keeps the active border blue while preserving the P0 orange surface", () => {
+    const className = phaseSidebarRowClassName(true, false, false, 0);
+
+    expect(className).toContain("bg-orange-500/40");
+    expect(className).toContain("ring-primary/70");
+    expect(className).toContain(
+      "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
+    );
+    expect(className).not.toContain("ring-orange-500/80");
+    expect(className).not.toContain("inset_3px_0_0_0_var(--color-orange-500)");
+  });
+});
+
+describe("phase sidebar running controls", () => {
+  it("keeps force stop available for a recorded session even when it looks stopped", () => {
+    const stoppedSession = {
+      threadId,
+      status: "stopped" as const,
+      providerName: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerThreadId: null,
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: now,
+    };
+
+    expect(phaseSidebarCanForceStopAgent(stoppedSession)).toBe(true);
+    expect(phaseSidebarCanForceStopAgent(null)).toBe(false);
   });
 });
 
@@ -200,7 +234,7 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     providerName: "Codex",
     isAssignedToMe: false,
     attentionPriority: 5,
-    unreadPriority: 1,
+    isUnreadCompletion: false,
     // Settlement and snooze default ON: most cases exercise the partition,
     // and the capability-gating cases opt out explicitly.
     settlementSupported: true,
@@ -257,7 +291,7 @@ describe("phase sidebar lifecycle", () => {
         }),
       ),
     ).toBe("plan_ready");
-    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("plan_ready");
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
@@ -300,64 +334,17 @@ describe("phase sidebar lifecycle", () => {
     ]);
   });
 
-  it("advances review and merge states only from repository evidence", () => {
-    const settledThread = makeThread({
-      latestTurn: {
-        turnId: TurnId.make("turn-1"),
-        state: "completed",
-        requestedAt: now,
-        startedAt: now,
-        completedAt: now,
-        assistantMessageId: null,
-        durationMs: null,
-      },
-    });
-    const status = {
-      isRepo: true,
-      sourceControlProvider: { kind: "github", name: "GitHub", baseUrl: "https://github.com" },
-      hasPrimaryRemote: true,
-      isDefaultRef: false,
-      refName: "feature/work",
-      hasWorkingTreeChanges: true,
-      workingTree: { files: [], insertions: 1, deletions: 0 },
-      hasUpstream: true,
-      aheadCount: 1,
-      behindCount: 0,
-      aheadOfDefaultCount: 1,
-      pr: null,
-    } as const;
-    expect(resolvePhaseSidebarPhase(settledThread, status)).toBe("ready_for_review");
+  it("uses only plan mode and working state for lifecycle classification", () => {
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("plan_ready");
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "default" }))).toBe("ready");
     expect(
-      resolvePhaseSidebarPhase(settledThread, {
-        ...status,
-        pr: {
-          number: 1,
-          title: "Review",
-          url: "https://github.com/acme/repo/pull/1",
-          baseRef: "main",
-          headRef: "feature/work",
-          state: "open",
-          isDraft: false,
-          mergeability: "mergeable",
-          mergeStateStatus: "CLEAN",
-          reviewDecision: "approved",
-          checksStatus: "pass",
-        },
-      }),
-    ).toBe("ready_to_merge");
-    expect(
-      resolvePhaseSidebarPhase(settledThread, {
-        ...status,
-        pr: {
-          number: 1,
-          title: "Review",
-          url: "https://github.com/acme/repo/pull/1",
-          baseRef: "main",
-          headRef: "feature/work",
-          state: "merged",
-        },
-      }),
-    ).toBe("merged");
+      resolvePhaseSidebarPhase(
+        makeThread({ interactionMode: "plan", execution: makeActiveExecution() }),
+      ),
+    ).toBe("planning");
+    expect(resolvePhaseSidebarPhase(makeThread({ execution: makeActiveExecution() }))).toBe(
+      "implementing",
+    );
   });
 
   it("puts non-running lifecycle groups before agent work and sorts by thread id on ties", () => {
@@ -372,37 +359,16 @@ describe("phase sidebar lifecycle", () => {
         thread: makeThread({ id: ThreadId.make("thread-c") }),
         phaseId: "implementing",
       }),
-      makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-d") }),
-        phaseId: "ready_for_review",
-      }),
-      makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-e") }),
-        phaseId: "ready_to_merge",
-      }),
-      makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-f") }),
-        phaseId: "merged",
-      }),
     ];
 
     const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
-    expect(groups.map((group) => group.id)).toEqual([
-      "ready",
-      "ready_for_review",
-      "ready_to_merge",
-      "merged",
-      "implementing",
-    ]);
+    expect(groups.map((group) => group.id)).toEqual(["ready", "implementing"]);
     expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
       ThreadId.make("thread-a"),
       ThreadId.make("thread-b"),
-      ThreadId.make("thread-d"),
-      ThreadId.make("thread-e"),
-      ThreadId.make("thread-f"),
       ThreadId.make("thread-c"),
     ]);
-    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(11);
+    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(5);
   });
 
   it("uses ready only as the non-running fallback", () => {
@@ -410,20 +376,54 @@ describe("phase sidebar lifecycle", () => {
     expect(resolvePhaseSidebarPhase(makeThread({ execution: makeActiveExecution() }))).not.toBe(
       "ready",
     );
-    expect(resolvePhaseSidebarPhase(makeThread({ execution: null }))).not.toBe("ready");
+    expect(resolvePhaseSidebarPhase(makeThread({ execution: null }))).toBe("ready");
   });
 
-  it("uses checking until an authoritative execution snapshot arrives", () => {
-    expect(resolvePhaseSidebarPhase(makeThread({ execution: null }))).toBe("checking");
-  });
-
-  it("keeps the last known lifecycle phase while execution is resynchronizing", () => {
-    expect(resolvePhaseSidebarDisplayPhase("checking", "implementing")).toBe("implementing");
-    expect(resolvePhaseSidebarDisplayPhase("checking", "ready_for_review")).toBe(
-      "ready_for_review",
-    );
-    expect(resolvePhaseSidebarDisplayPhase("checking", null)).toBe("checking");
+  it("does not invent a reconnect-only lifecycle group", () => {
     expect(resolvePhaseSidebarDisplayPhase("ready", "implementing")).toBe("ready");
+  });
+});
+
+describe("phase sidebar attention badges", () => {
+  it("prioritizes structured input over approval and error", () => {
+    const thread = makeThread({
+      hasPendingApprovals: true,
+      hasPendingUserInput: true,
+      execution: makeExecution({ activity: "failed" }),
+    });
+
+    expect(resolvePhaseSidebarAttentionKind(thread)).toBe("input");
+  });
+
+  it("recognizes durable and live approval requests", () => {
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ hasPendingApprovals: true }))).toBe(
+      "approval",
+    );
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ execution: makeActiveExecution("waiting-for-approval") }),
+      ),
+    ).toBe("approval");
+  });
+
+  it("recognizes failed execution after user-blocking states", () => {
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ execution: makeExecution({ activity: "failed" }) }),
+      ),
+    ).toBe("error");
+  });
+
+  it("does not add attention badges to ordinary lifecycle states", () => {
+    expect(resolvePhaseSidebarAttentionKind(makeThread())).toBeNull();
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ execution: makeActiveExecution() }))).toBe(
+      null,
+    );
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ interactionMode: "plan", execution: makeActiveExecution() }),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -546,7 +546,7 @@ describe("phase sidebar metadata and filters", () => {
     expect(
       matchesPhaseSidebarFilters(row, {
         repositoryKeys: ["repo-2", "repo-1"],
-        phaseIds: ["ready", "ready_for_review"],
+        phaseIds: ["ready", "planning"],
         providerKinds: ["codex"],
         assignedToMe: false,
       }),
@@ -911,9 +911,59 @@ describe("phase sidebar priority", () => {
     ]);
   });
 
-  it("highlights P0 rows unless they are already flashing for input", () => {
-    expect(phaseSidebarRowClassName(false, false, false, true)).toContain("amber");
-    expect(phaseSidebarRowClassName(false, false, true, true)).not.toContain("amber");
-    expect(phaseSidebarRowClassName(false, false, false, false)).not.toContain("amber");
+  it("sorts unread sessions before equivalent read sessions", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-read"), title: "Same title" }),
+        phaseId: "ready",
+      }),
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-unread"), title: "Same title" }),
+        phaseId: "ready",
+        isUnreadCompletion: true,
+      }),
+    ];
+
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
+      ThreadId.make("thread-unread"),
+      ThreadId.make("thread-read"),
+    ]);
+  });
+
+  it("keeps explicit priority ahead of unread status", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-unread"), title: "Same title" }),
+        phaseId: "ready",
+        isUnreadCompletion: true,
+      }),
+      makeRow({
+        thread: makeThread({
+          id: ThreadId.make("thread-priority"),
+          priority: 4,
+          title: "Same title",
+        }),
+        phaseId: "ready",
+      }),
+    ];
+
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
+      ThreadId.make("thread-priority"),
+      ThreadId.make("thread-unread"),
+    ]);
+  });
+
+  it("colors priority rows orange while reserving red for input-needed alerts", () => {
+    expect(phaseSidebarRowClassName(false, false, false, 0)).toContain("bg-orange-500/40");
+    expect(phaseSidebarRowClassName(false, false, false, 1)).toContain("bg-orange-500/20");
+    expect(phaseSidebarRowClassName(false, false, false, 2)).toContain("bg-orange-500/10");
+    expect(phaseSidebarRowClassName(false, false, false, 0)).not.toContain("bg-red-500/");
+    expect(phaseSidebarRowClassName(false, false, true, 0)).toContain("bg-red-500/20");
+    expect(phaseSidebarRowClassName(false, false, false, 3)).not.toContain("bg-orange-500/");
+    expect(phaseSidebarPriorityBadgeClassName(0)).toContain("bg-orange-500");
+    expect(phaseSidebarPriorityBadgeClassName(0)).not.toContain("bg-red-500");
+    expect(phaseSidebarPriorityBadgeClassName(3)).toContain("bg-muted-foreground/15");
   });
 });

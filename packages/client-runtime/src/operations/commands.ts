@@ -2,13 +2,13 @@ import {
   CommandId,
   ORCHESTRATION_WS_METHODS,
   type ClientOrchestrationCommand,
-  type OrchestrationStopExecutionInput,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 
+// T3-CUSTOM(expbkt3): fork dispatch retries through the supervisor, so the
+// supervisor tag is imported as a value rather than a type.
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import {
   type EnvironmentRpcFailure,
@@ -16,6 +16,11 @@ import {
   type EnvironmentRpcUnavailableError,
   request,
 } from "../rpc/client.ts";
+// T3-CUSTOM(expbkt3): command acknowledgement timeout lives in commandAck.ts
+import {
+  ORCHESTRATION_COMMAND_ACK_TIMEOUT,
+  OrchestrationCommandAcknowledgementTimeoutError,
+} from "./commandAck.ts";
 
 type CommandType = ClientOrchestrationCommand["type"];
 type CommandOf<T extends CommandType> = Extract<ClientOrchestrationCommand, { readonly type: T }>;
@@ -54,41 +59,15 @@ export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
-export type RequestThreadCatchupSummaryInput = CommandInput<"thread.catchup-summary.request">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
-export type RestartThreadSessionInput = CommandInput<"thread.session.restart">;
-export type StopThreadExecutionInput = OrchestrationStopExecutionInput;
-export type AddThreadMemberInput = CommandInput<"thread.member.add">;
-export type RemoveThreadMemberInput = CommandInput<"thread.member.remove">;
-export type TransferThreadOwnershipInput = CommandInput<"thread.owner.transfer">;
-export type AddProjectMemberInput = CommandInput<"project.member.add">;
-export type RemoveProjectMemberInput = CommandInput<"project.member.remove">;
-export type TransferProjectOwnershipInput = CommandInput<"project.owner.transfer">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
-const ORCHESTRATION_COMMAND_ACK_TIMEOUT = "10 seconds";
-
-export class OrchestrationCommandAcknowledgementTimeoutError extends Schema.TaggedErrorClass<OrchestrationCommandAcknowledgementTimeoutError>()(
-  "OrchestrationCommandAcknowledgementTimeoutError",
-  {
-    commandType: Schema.String,
-  },
-) {
-  override get message(): string {
-    const operation =
-      this.commandType === "thread.create"
-        ? "Thread creation"
-        : this.commandType === "thread.turn.start"
-          ? "Starting the agent"
-          : `The ${this.commandType} request`;
-    return `${operation} was not acknowledged by the server within 10 seconds. Check the connection and retry.`;
-  }
-}
 
 type CommandEffect = Effect.Effect<
   EnvironmentRpcSuccess<DispatchTag>,
   | EnvironmentRpcFailure<DispatchTag>
   | EnvironmentRpcUnavailableError
+  // T3-CUSTOM(expbkt3): fork dispatch can fail on acknowledgement timeout
   | OrchestrationCommandAcknowledgementTimeoutError,
   Crypto.Crypto | EnvironmentSupervisor
 >;
@@ -249,64 +228,6 @@ export const unsnoozeThread: (input: UnsnoozeThreadInput) => CommandEffect = Eff
   });
 });
 
-export const addThreadMember: (input: AddThreadMemberInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.addThreadMember",
-)(function* (input) {
-  return yield* dispatch({
-    ...input,
-    type: "thread.member.add",
-    commandId: yield* commandId(input),
-  });
-});
-
-export const removeThreadMember: (input: RemoveThreadMemberInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.removeThreadMember",
-)(function* (input) {
-  return yield* dispatch({
-    ...input,
-    type: "thread.member.remove",
-    commandId: yield* commandId(input),
-  });
-});
-
-export const transferThreadOwnership: (input: TransferThreadOwnershipInput) => CommandEffect =
-  Effect.fn("EnvironmentCommands.transferThreadOwnership")(function* (input) {
-    return yield* dispatch({
-      ...input,
-      type: "thread.owner.transfer",
-      commandId: yield* commandId(input),
-    });
-  });
-
-export const addProjectMember: (input: AddProjectMemberInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.addProjectMember",
-)(function* (input) {
-  return yield* dispatch({
-    ...input,
-    type: "project.member.add",
-    commandId: yield* commandId(input),
-  });
-});
-
-export const removeProjectMember: (input: RemoveProjectMemberInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.removeProjectMember",
-)(function* (input) {
-  return yield* dispatch({
-    ...input,
-    type: "project.member.remove",
-    commandId: yield* commandId(input),
-  });
-});
-
-export const transferProjectOwnership: (input: TransferProjectOwnershipInput) => CommandEffect =
-  Effect.fn("EnvironmentCommands.transferProjectOwnership")(function* (input) {
-    return yield* dispatch({
-      ...input,
-      type: "project.owner.transfer",
-      commandId: yield* commandId(input),
-    });
-  });
-
 export const updateThreadMetadata: (input: UpdateThreadMetadataInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.updateThreadMetadata",
 )(function* (input) {
@@ -397,20 +318,6 @@ export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => Com
     });
   });
 
-export const requestThreadCatchupSummary: (
-  input: RequestThreadCatchupSummaryInput,
-) => CommandEffect = Effect.fn("EnvironmentCommands.requestThreadCatchupSummary")(
-  function* (input) {
-    const metadata = yield* timestampedCommandMetadata(input);
-    return yield* dispatch({
-      ...input,
-      type: "thread.catchup-summary.request",
-      commandId: metadata.commandId,
-      createdAt: metadata.createdAt,
-    });
-  },
-);
-
 // T3-CUSTOM(expbkt3): dispatch durable bootstrap lifecycle commands through the
 // same environment command transport used by existing thread operations.
 export const requestThreadBootstrap: (input: RequestThreadBootstrapInput) => CommandEffect =
@@ -458,7 +365,6 @@ export const continueThreadBootstrap: (input: ContinueThreadBootstrapInput) => C
       createdAt: metadata.createdAt,
     });
   });
-
 export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.stopThreadSession",
 )(function* (input) {
@@ -471,25 +377,9 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
   });
 });
 
-export const restartThreadSession: (input: RestartThreadSessionInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.restartThreadSession",
-)(function* (input) {
-  const metadata = yield* timestampedCommandMetadata(input);
-  return yield* dispatch({
-    ...input,
-    type: "thread.session.restart",
-    commandId: metadata.commandId,
-    createdAt: metadata.createdAt,
-  });
-});
-
-type StopExecutionTag = typeof ORCHESTRATION_WS_METHODS.stopExecution;
-export const stopThreadExecution: (
-  input: StopThreadExecutionInput,
-) => Effect.Effect<
-  EnvironmentRpcSuccess<StopExecutionTag>,
-  EnvironmentRpcFailure<StopExecutionTag> | EnvironmentRpcUnavailableError,
-  EnvironmentSupervisor
-> = Effect.fn("EnvironmentCommands.stopThreadExecution")(function* (input) {
-  return yield* request(ORCHESTRATION_WS_METHODS.stopExecution, input);
-});
+// T3-CUSTOM(expbkt3): BEGIN internals shared with commandsFork.ts
+export type ForkCommandInput<T extends CommandType> = CommandInput<T>;
+export type ForkCommandEffect = CommandEffect;
+export { commandId as commandIdInternal, dispatch as dispatchCommandInternal };
+export { timestampedCommandMetadata as timestampedCommandMetadataInternal };
+// T3-CUSTOM(expbkt3): END
