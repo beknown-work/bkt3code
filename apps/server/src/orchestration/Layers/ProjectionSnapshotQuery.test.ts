@@ -327,6 +327,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedUntil: null,
           snoozedAt: null,
           priority: null,
+          // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
+          linearIssueUrl: null,
           titleRegeneration: null,
           deletedAt: null,
           messages: [
@@ -460,6 +462,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedUntil: null,
           snoozedAt: null,
           priority: null,
+          // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
+          linearIssueUrl: null,
           titleRegeneration: null,
           session: {
             threadId: ThreadId.make("thread-1"),

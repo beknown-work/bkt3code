@@ -101,6 +101,8 @@ describe("orchestration projector", () => {
         snoozedUntil: null,
         snoozedAt: null,
         priority: null,
+        // T3-CUSTOM(expbkt3): no manual Linear tag on a new thread.
+        linearIssueUrl: null,
         deletedAt: null,
         messages: [],
         proposedPlans: [],
