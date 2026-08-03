@@ -95,13 +95,13 @@ const encodeStoredQueuedThreadMessage = Schema.encodeUnknownSync(QueuedThreadMes
 
 export interface QueuedThreadCreation {
   readonly projectId: ProjectIdType;
-  readonly projectTitle?: string;
-  readonly projectCwd?: string;
+  readonly projectTitle?: string | undefined;
+  readonly projectCwd?: string | undefined;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
-  readonly startFromOrigin?: boolean;
-  readonly sourceControlProfileId?: SourceControlProfileIdType;
+  readonly startFromOrigin?: boolean | undefined;
+  readonly sourceControlProfileId?: SourceControlProfileIdType | undefined;
 }
 
 export interface QueuedThreadImageAttachment extends UploadChatImageAttachment {
@@ -112,21 +112,21 @@ export interface QueuedThreadImageAttachment extends UploadChatImageAttachment {
 export interface QueuedThreadMessage {
   readonly environmentId: EnvironmentIdType;
   /** Authenticated account id. Legacy/local-only entries omit it and use an isolated fallback. */
-  readonly identityKey?: string;
+  readonly identityKey?: string | undefined;
   readonly threadId: ThreadIdType;
   readonly messageId: MessageIdType;
-  readonly commandId: typeof CommandId.Type;
+  readonly commandId: CommandId;
   readonly text: string;
   readonly attachments: ReadonlyArray<QueuedThreadImageAttachment>;
-  readonly modelSelection?: ModelSelectionType;
-  readonly runtimeMode?: RuntimeModeType;
-  readonly interactionMode?: ProviderInteractionModeType;
-  readonly bootstrap?: ClientTurnStartCommand["bootstrap"];
-  readonly sourceProposedPlan?: ClientTurnStartCommand["sourceProposedPlan"];
-  readonly titleSeed?: string;
-  readonly creation?: QueuedThreadCreation;
-  readonly deliveryState?: "pending" | "failed";
-  readonly failureDetail?: string;
+  readonly modelSelection?: ModelSelectionType | undefined;
+  readonly runtimeMode?: RuntimeModeType | undefined;
+  readonly interactionMode?: ProviderInteractionModeType | undefined;
+  readonly bootstrap?: ClientTurnStartCommand["bootstrap"] | undefined;
+  readonly sourceProposedPlan?: ClientTurnStartCommand["sourceProposedPlan"] | undefined;
+  readonly titleSeed?: string | undefined;
+  readonly creation?: QueuedThreadCreation | undefined;
+  readonly deliveryState?: "pending" | "failed" | undefined;
+  readonly failureDetail?: string | undefined;
   readonly createdAt: string;
 }
 
@@ -176,7 +176,7 @@ export function outboxIdentityNamespace(
 /** A user-requested retry is distinct from transport replay of the same command. */
 export function retryQueuedThreadMessage(
   message: QueuedThreadMessage,
-  commandId: typeof CommandId.Type,
+  commandId: CommandId,
 ): QueuedThreadMessage {
   const { failureDetail: _failureDetail, ...pending } = message;
   return { ...pending, commandId, deliveryState: "pending" };

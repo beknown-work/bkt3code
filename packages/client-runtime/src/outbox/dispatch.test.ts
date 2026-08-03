@@ -1,13 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { dispatchPersistedOutboxItem } from "./dispatch.ts";
+
+class TestOutboxError extends Schema.TaggedErrorClass<TestOutboxError>()("TestOutboxError", {
+  message: Schema.String,
+}) {}
 
 describe("durable outbox dispatch", () => {
   it.effect("does not touch the network when local persistence fails", () =>
     Effect.gen(function* () {
       let dispatched = false;
-      const failure = new Error("disk full");
+      const failure = new TestOutboxError({ message: "disk full" });
 
       const result = yield* dispatchPersistedOutboxItem({
         persist: Effect.fail(failure),
@@ -43,7 +48,7 @@ describe("durable outbox dispatch", () => {
   it.effect("retains the same item when dispatch is uncertain or rejected", () =>
     Effect.gen(function* () {
       let removed = false;
-      const failure = new Error("acknowledgement timeout");
+      const failure = new TestOutboxError({ message: "acknowledgement timeout" });
 
       expect(
         yield* dispatchPersistedOutboxItem({
@@ -63,7 +68,7 @@ describe("durable outbox dispatch", () => {
       const result = yield* dispatchPersistedOutboxItem({
         persist: Effect.void,
         dispatch: Effect.succeed("accepted"),
-        remove: Effect.fail(new Error("IndexedDB cleanup failed")),
+        remove: Effect.fail(new TestOutboxError({ message: "IndexedDB cleanup failed" })),
       });
 
       expect(result).toBe("accepted");
