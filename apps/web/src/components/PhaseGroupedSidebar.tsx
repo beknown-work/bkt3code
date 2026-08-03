@@ -133,7 +133,11 @@ import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDial
 import { T3ConductorCard } from "./sidebar/T3ConductorCard";
 import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
 import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
-import { shouldShowRunningSessionGlint } from "./sidebar/RunningSessionGlint.logic";
+import { RunningSessionDivider } from "./sidebar/RunningSessionDivider";
+import {
+  runningSessionDividerPhase,
+  shouldShowRunningSessionGlint,
+} from "./sidebar/RunningSessionGlint.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -1382,6 +1386,8 @@ export function PhaseGroupedSidebar() {
     () => buildPhaseSidebarGroups(activeRows, filters, sortOrder),
     [activeRows, filters, sortOrder],
   );
+  // T3-CUSTOM(expbkt3): Separate idle lifecycle groups from live agent work.
+  const runningDividerPhaseId = runningSessionDividerPhase(groups.map((group) => group.id));
   const activeVisibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
 
   // The settled tail renders in pages: history must not dominate the list.
@@ -1992,6 +1998,8 @@ export function PhaseGroupedSidebar() {
         >
           {groups.map((group) => (
             <section key={group.id} className="mb-3" data-phase-id={group.id}>
+              {/* T3-CUSTOM(expbkt3): A quiet boundary before live agent work. */}
+              {group.id === runningDividerPhaseId ? <RunningSessionDivider /> : null}
               <header className="mb-1 flex items-center gap-2 px-2">
                 <span
                   className={cn(
