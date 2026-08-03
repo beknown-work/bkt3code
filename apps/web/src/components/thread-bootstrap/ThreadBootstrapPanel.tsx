@@ -21,6 +21,7 @@ const DEFAULT_REPLACEMENT_BASE_REF: WorktreeBaseRef = {
 
 export interface ThreadBootstrapPanelProps {
   readonly bootstrap: ThreadBootstrapProgress;
+  readonly agentHasStarted: boolean;
   readonly onShowOutput: (terminalId: string) => void;
   readonly onRetry: (step: "worktree" | "setup", baseRef?: WorktreeBaseRef) => void;
   readonly onStop: () => void;
@@ -79,6 +80,7 @@ function statusLabel(
 
 export function ThreadBootstrapPanel({
   bootstrap,
+  agentHasStarted,
   onShowOutput,
   onRetry,
   onStop,
@@ -98,6 +100,10 @@ export function ThreadBootstrapPanel({
     setReplacementBaseRef(baseRefTarget?.initialValue ?? DEFAULT_REPLACEMENT_BASE_REF);
   }, [baseRefTarget?.initialValue, bootstrap.id]);
 
+  if (bootstrap.status === "ready" || bootstrap.agent.status === "succeeded" || agentHasStarted) {
+    return null;
+  }
+
   const terminalId = bootstrap.setup.terminalId;
   return (
     <section
@@ -116,7 +122,7 @@ export function ThreadBootstrapPanel({
           ) : (
             <ChevronRightIcon className="size-4" />
           )}
-          {bootstrap.status === "ready" ? "Workspace ready" : "Preparing workspace"}
+          Preparing workspace
         </button>
 
         {expanded ? (

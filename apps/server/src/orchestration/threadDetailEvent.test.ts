@@ -4,6 +4,17 @@ import { describe, expect, it } from "vite-plus/test";
 import { isThreadDetailEvent } from "./threadDetailEvent.ts";
 
 describe("isThreadDetailEvent", () => {
+  // T3-CUSTOM(expbkt3): live workspace preparation must advance beyond the HTTP snapshot.
+  it.each([
+    "thread.bootstrap-requested",
+    "thread.bootstrap-step-updated",
+    "thread.bootstrap-completed",
+  ] as const)("routes %s to already-open thread subscriptions", (type) => {
+    const event = { type } as OrchestrationEvent;
+
+    expect(isThreadDetailEvent(event)).toBe(true);
+  });
+
   it("routes catch-up progress to already-open thread subscriptions", () => {
     const event = {
       type: "thread.catchup-summary-updated",

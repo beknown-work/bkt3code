@@ -6245,8 +6245,10 @@ function ChatViewContent(props: ChatViewProps) {
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
               {activeThread.bootstrap ? (
+                // T3-CUSTOM(expbkt3): a projected turn is authoritative if bootstrap events were missed.
                 <ThreadBootstrapPanel
                   bootstrap={activeThread.bootstrap}
+                  agentHasStarted={activeLatestTurn !== null}
                   onShowOutput={showBootstrapOutput}
                   onRetry={retryBootstrapStep}
                   onStop={stopBootstrapSetup}

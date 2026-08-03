@@ -28,6 +28,7 @@ function progress(overrides: Partial<ThreadBootstrapProgress> = {}): ThreadBoots
 }
 
 const callbacks = {
+  agentHasStarted: false,
   onShowOutput: vi.fn(),
   onRetry: vi.fn(),
   onStop: vi.fn(),
@@ -128,7 +129,7 @@ describe("ThreadBootstrapPanel", () => {
     expect(markup).not.toContain("Continue anyway");
   });
 
-  it("collapses completed preparation and keeps output hidden by default", () => {
+  it("disappears after the agent starts", () => {
     const succeeded = {
       status: "succeeded" as const,
       attempt: 1,
@@ -149,8 +150,14 @@ describe("ThreadBootstrapPanel", () => {
       />,
     );
 
-    expect(markup).toContain("Workspace ready");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).not.toContain("Show output");
+    expect(markup).toBe("");
+  });
+
+  it("disappears when the turn proves startup even if progress events were missed", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadBootstrapPanel bootstrap={progress()} {...callbacks} agentHasStarted />,
+    );
+
+    expect(markup).toBe("");
   });
 });
