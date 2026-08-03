@@ -30,7 +30,7 @@ export interface ThreadExecutionSupervisorShape {
     threadIds: ReadonlyArray<ThreadId>,
   ) => Effect.Effect<ReadonlyMap<ThreadId, ThreadExecutionSnapshot>>;
   /** T3-CUSTOM(expbkt3): publish the latest durable desired state after coordinator changes. */
-  readonly refreshIntent: (threadId: ThreadId) => Effect.Effect<ThreadExecutionSnapshot>;
+  readonly refreshIntent: (threadId: ThreadId) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
   readonly prepareExecution: (
     event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
   ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;

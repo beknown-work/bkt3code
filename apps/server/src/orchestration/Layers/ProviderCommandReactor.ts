@@ -11,7 +11,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
-  type TurnId,
+  TurnId,
   type UserId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
@@ -63,7 +63,13 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadExecutionSupervisor } from "../../execution/ThreadExecutionSupervisor.ts";
 import { SourceControlProfileService } from "../../sourceControl/SourceControlProfileService.ts";
 import { ServerConfig } from "../../config.ts";
-import { ProjectSetupScriptRunner } from "../../project/ProjectSetupScriptRunner.ts";
+// T3-CUSTOM(expbkt3): schema guards preserve setup launch certainty across the durable boundary.
+import {
+  ProjectSetupScriptCommandError,
+  ProjectSetupScriptOperationError,
+  ProjectSetupScriptProjectNotFoundError,
+  ProjectSetupScriptRunner,
+} from "../../project/ProjectSetupScriptRunner.ts";
 // T3-CUSTOM(expbkt3): durable turns reuse the bootstrap defaults resolver at
 // the post-commit worktree boundary.
 import { resolveExactBranch } from "../../thread-bootstrap/DefaultsResolver.ts";
@@ -75,6 +81,9 @@ import {
 import { DurableExecutionIntentRepository } from "../../execution/DurableExecutionIntentRepository.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const isProjectSetupScriptCommandError = Schema.is(ProjectSetupScriptCommandError);
+const isProjectSetupScriptOperationError = Schema.is(ProjectSetupScriptOperationError);
+const isProjectSetupScriptProjectNotFoundError = Schema.is(ProjectSetupScriptProjectNotFoundError);
 
 // T3-CUSTOM(expbkt3): mere provider-history presence is not terminal evidence.
 export function providerHistoryProvesCompletion(
@@ -114,6 +123,11 @@ export function durableRecoveryFailure(
     cause,
   });
 }
+
+const normalizeDurableDispatchError = (cause: unknown, fallbackFailureType: string) =>
+  Schema.is(DurableExecutionDispatchError)(cause)
+    ? cause
+    : durableRecoveryFailure(cause, fallbackFailureType);
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -1873,30 +1887,24 @@ const make = Effect.gen(function* () {
           false,
         );
       }
+      const projectId = bootstrap.createThread?.projectId ?? resolvedBootstrapRequest?.projectId;
+      const projectCwd = bootstrap.prepareWorktree?.projectCwd ?? resolvedBootstrapCwd;
       const resultExit = yield* Effect.exit(
         projectSetupScriptRunner.value.runForThread({
           threadId: input.intent.threadId,
-          projectId: bootstrap.createThread?.projectId ?? resolvedBootstrapRequest?.projectId,
-          projectCwd: bootstrap.prepareWorktree?.projectCwd ?? resolvedBootstrapCwd,
+          ...(projectId === undefined ? {} : { projectId }),
+          ...(projectCwd === undefined ? {} : { projectCwd }),
           worktreePath: setupPath,
           preferredTerminalId: terminalId,
         }),
       );
       if (Exit.isFailure(resultExit)) {
         const setupFailure = Cause.squash(resultExit.cause);
-        const setupFailureTag =
-          typeof setupFailure === "object" &&
-          setupFailure !== null &&
-          "_tag" in setupFailure &&
-          typeof setupFailure._tag === "string"
-            ? setupFailure._tag
-            : null;
         const failedBeforeLaunch =
-          setupFailureTag === "ProjectSetupScriptProjectNotFoundError" ||
-          (setupFailureTag === "ProjectSetupScriptOperationError" &&
-            "operation" in setupFailure &&
+          isProjectSetupScriptProjectNotFoundError(setupFailure) ||
+          (isProjectSetupScriptOperationError(setupFailure) &&
             setupFailure.operation === "resolveProject");
-        const knownCompletedFailure = setupFailureTag === "ProjectSetupScriptCommandError";
+        const knownCompletedFailure = isProjectSetupScriptCommandError(setupFailure);
         const safeToRetry = failedBeforeLaunch || knownCompletedFailure;
         const detail = knownCompletedFailure
           ? "The setup script completed with a failure."
@@ -2184,7 +2192,13 @@ const make = Effect.gen(function* () {
         ]) {
           yield* setMetric(durableExecutions, { phase }, counts[phase] ?? 0);
         }
-      })
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to refresh durable execution phase metrics", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      )
     : Effect.void;
   const durableCoordinator = Option.isSome(durableIntentRepository)
     ? yield* makeDurableExecutionCoordinator({
@@ -2194,10 +2208,36 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* executionSupervisor.refreshIntent(threadId);
             yield* refreshDurablePhaseMetrics;
-          }),
-        onRecoveryActivity: appendDurableRecoveryActivity,
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to publish durable execution transition", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        onRecoveryActivity: (input) =>
+          appendDurableRecoveryActivity(input).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to publish durable recovery activity", {
+                threadId: input.intent.threadId,
+                workItemId: input.intent.workItemId,
+                kind: input.kind,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
         terminateObserved: (intent) =>
-          providerService.terminateSession({ threadId: intent.threadId }).pipe(Effect.asVoid),
+          providerService.terminateSession({ threadId: intent.threadId }).pipe(
+            Effect.asVoid,
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to terminate durable execution provider session", {
+                threadId: intent.threadId,
+                workItemId: intent.workItemId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
         loadEvent: (intent) =>
           Stream.runHead(
             orchestrationEngine.readEvents((intent.requestEventSequence ?? 1) - 1, 1),
@@ -2224,8 +2264,18 @@ const make = Effect.gen(function* () {
                   );
             }),
           ),
-        prepare: prepareDurableBootstrap,
-        dispatchOriginal: dispatchDurableOriginal,
+        prepare: (input) =>
+          prepareDurableBootstrap(input).pipe(
+            Effect.mapError((cause) =>
+              normalizeDurableDispatchError(cause, "bootstrap-preparation-failed"),
+            ),
+          ),
+        dispatchOriginal: (input) =>
+          dispatchDurableOriginal(input).pipe(
+            Effect.mapError((cause) =>
+              normalizeDurableDispatchError(cause, "provider-turn-dispatch-failed"),
+            ),
+          ),
         recover: ({ intent, event, mode }) =>
           Effect.gen(function* () {
             const inspection = yield* providerService.inspectSession(intent.threadId).pipe(
@@ -2327,7 +2377,7 @@ const make = Effect.gen(function* () {
               );
               if (
                 intent.providerTurnId !== null &&
-                providerHistoryProvesCompletion(providerHistory, intent.providerTurnId)
+                providerHistoryProvesCompletion(providerHistory, TurnId.make(intent.providerTurnId))
               ) {
                 return {
                   providerTurnId: intent.providerTurnId,
@@ -2378,7 +2428,11 @@ const make = Effect.gen(function* () {
               providerInstanceId,
               adoptedExecutionId: intent.workItemId,
             };
-          }),
+          }).pipe(
+            Effect.mapError((cause) =>
+              normalizeDurableDispatchError(cause, "provider-recovery-failed"),
+            ),
+          ),
       }).pipe(
         Effect.provideService(DurableExecutionIntentRepository, durableIntentRepository.value),
       )

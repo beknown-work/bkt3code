@@ -370,6 +370,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         const nextTurn: ProviderThreadTurnSnapshot = {
           id: turnId,
           items: nextItems,
+          state: "completed",
         };
 
         state.snapshot = {

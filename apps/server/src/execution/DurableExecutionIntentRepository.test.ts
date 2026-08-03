@@ -151,6 +151,11 @@ layer("DurableExecutionIntentRepository", (it) => {
           at: acceptedAt,
         }),
       );
+      yield* repository.stopThread({
+        threadId: event.payload.threadId,
+        reason: "test-completed",
+        at: acceptedAt,
+      });
     }),
   );
 
@@ -418,6 +423,30 @@ layer("DurableExecutionIntentRepository", (it) => {
         assert.strictEqual(retried.value.recoveryAttempts, 0);
         assert.strictEqual(retried.value.desiredState, "running");
         assert.strictEqual(retried.value.phase, "recovering");
+
+        yield* repository.observeBlockingActivity({
+          threadId,
+          kind: "approval.requested",
+          at: "2026-01-01T00:12:30.000Z",
+        });
+        const awaitingApproval = yield* repository.getByWorkItemId({
+          workItemId: "command-recovery",
+        });
+        assert.isTrue(awaitingApproval._tag === "Some");
+        if (awaitingApproval._tag === "None") return;
+        assert.strictEqual(awaitingApproval.value.phase, "waiting-for-approval");
+        assert.isFalse(awaitingApproval.value.runnable);
+
+        yield* repository.observeBlockingActivity({
+          threadId,
+          kind: "approval.resolved",
+          at: "2026-01-01T00:12:31.000Z",
+        });
+        const resumed = yield* repository.getByWorkItemId({ workItemId: "command-recovery" });
+        assert.isTrue(resumed._tag === "Some");
+        if (resumed._tag === "None") return;
+        assert.strictEqual(resumed.value.phase, "running");
+        assert.isTrue(resumed.value.runnable);
 
         yield* repository.stopThread({
           threadId,

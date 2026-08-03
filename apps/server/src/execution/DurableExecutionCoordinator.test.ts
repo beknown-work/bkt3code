@@ -20,9 +20,9 @@ const layer = it.layer(
   DurableExecutionIntentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
 );
 
-function makeAcceptedEvent() {
+function makeAcceptedEvent(threadSuffix = "coordinator") {
   const acceptedAt = "2026-01-01T00:00:00.000Z";
-  const threadId = ThreadId.make("thread-coordinator");
+  const threadId = ThreadId.make(`thread-${threadSuffix}`);
   return {
     type: "thread.turn-start-requested" as const,
     sequence: 10,
@@ -44,8 +44,8 @@ function makeAcceptedEvent() {
   };
 }
 
-function makeSequentialAcceptedEvent(suffix: string, sequence: number) {
-  const base = makeAcceptedEvent();
+function makeSequentialAcceptedEvent(suffix: string, sequence: number, threadSuffix = suffix) {
+  const base = makeAcceptedEvent(threadSuffix);
   return {
     ...base,
     sequence,
@@ -146,7 +146,7 @@ layer("DurableExecutionCoordinator", (it) => {
   it.effect("moves permanent failures directly to stopped attention", () =>
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
-      const baseEvent = makeAcceptedEvent();
+      const baseEvent = makeAcceptedEvent("permanent");
       const event = {
         ...baseEvent,
         sequence: 11,
@@ -202,7 +202,7 @@ layer("DurableExecutionCoordinator", (it) => {
   it.effect("reconciles a provider-history completion without dispatching another turn", () =>
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
-      const baseEvent = makeAcceptedEvent();
+      const baseEvent = makeAcceptedEvent("history-complete");
       const event = {
         ...baseEvent,
         sequence: 12,
@@ -267,9 +267,9 @@ layer("DurableExecutionCoordinator", (it) => {
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
       const events = [
-        makeSequentialAcceptedEvent("queue-1", 21),
-        makeSequentialAcceptedEvent("queue-2", 22),
-        makeSequentialAcceptedEvent("queue-3", 23),
+        makeSequentialAcceptedEvent("queue-1", 21, "queue"),
+        makeSequentialAcceptedEvent("queue-2", 22, "queue"),
+        makeSequentialAcceptedEvent("queue-3", 23, "queue"),
       ] as const;
       for (const event of events) yield* acceptEvent(repository, event);
 
@@ -328,9 +328,9 @@ layer("DurableExecutionCoordinator", (it) => {
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
       const events = [
-        makeSequentialAcceptedEvent("steer-1", 31),
-        makeSequentialAcceptedEvent("steer-2", 32),
-        makeSequentialAcceptedEvent("steer-3", 33),
+        makeSequentialAcceptedEvent("steer-1", 31, "steer"),
+        makeSequentialAcceptedEvent("steer-2", 32, "steer"),
+        makeSequentialAcceptedEvent("steer-3", 33, "steer"),
       ] as const;
       for (const event of events) yield* acceptEvent(repository, event);
       const dispatchOrder = yield* Ref.make<Array<string>>([]);

@@ -102,12 +102,12 @@ export interface DurableExecutionCoordinatorOptions {
   readonly dispatchOriginal: (input: {
     readonly intent: DurableExecutionIntent;
     readonly event: TurnStartEvent;
-  }) => Effect.Effect<DurableExecutionDispatchResult, DurableExecutionDispatchError>;
+  }) => Effect.Effect<DurableExecutionDispatchResult, DurableExecutionDispatchError, Scope.Scope>;
   readonly recover: (input: {
     readonly intent: DurableExecutionIntent;
     readonly event: TurnStartEvent;
     readonly mode: "exact-undelivered" | "inspect-or-continue";
-  }) => Effect.Effect<DurableExecutionDispatchResult, DurableExecutionDispatchError>;
+  }) => Effect.Effect<DurableExecutionDispatchResult, DurableExecutionDispatchError, Scope.Scope>;
   /** T3-CUSTOM(expbkt3): publish desired-state transitions to connected clients. */
   readonly onTransition?: (input: {
     readonly workItemId: string;
@@ -366,15 +366,14 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
         const exit = yield* Effect.exit(Effect.scoped(dispatch));
         if (Exit.isSuccess(exit)) return;
         const error = Cause.squash(exit.cause);
-        const dispatchError =
-          error instanceof DurableExecutionDispatchError
-            ? error
-            : new DurableExecutionDispatchError({
-                failureType: "unexpected-dispatch-failure",
-                detail: Cause.pretty(exit.cause),
-                retryable: true,
-                cause: error,
-              });
+        const dispatchError = Schema.is(DurableExecutionDispatchError)(error)
+          ? error
+          : new DurableExecutionDispatchError({
+              failureType: "unexpected-dispatch-failure",
+              detail: Cause.pretty(exit.cause),
+              retryable: true,
+              cause: error,
+            });
         const failedAt = yield* now();
         if (!dispatchError.retryable) {
           const paused = yield* repository.markFailedAttention({

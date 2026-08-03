@@ -409,6 +409,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         });
       }
     }
+    return publicSnapshot;
   });
 
   const transition = (
@@ -430,7 +431,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           revision: current.revision + 1,
           observedAt,
         };
-        yield* publish(revised);
+        const published = yield* publish(revised);
         yield* increment(threadExecutionTransitionsTotal, {
           activity: revised.activity,
           providerInstanceId: revised.providerSession.providerInstanceId ?? "unknown",
@@ -446,7 +447,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           executionId: revised.turn?.executionId,
           turnState: revised.turn?.state,
         });
-        return revised;
+        return published;
       }),
     );
 
@@ -560,10 +561,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         ...current.providerSession,
         providerInstanceId:
           event.payload.modelSelection?.instanceId ?? current.providerSession.providerInstanceId,
-        state:
-          current.providerSession.state === "ready" || current.providerSession.state === "running"
-            ? current.providerSession.state
-            : "starting",
+        state: current.providerSession.state === "ready" ? "ready" : "starting",
         startedAt: current.providerSession.startedAt ?? observedAt,
         lastObservedAt: observedAt,
         lastError: null,

@@ -1154,7 +1154,7 @@ const make = Effect.gen(function* () {
         UPDATE projection_thread_execution_intents
         SET phase = 'recovering',
             delivery_certainty = CASE
-              WHEN ${deliveryUncertain} THEN 'uncertain' ELSE delivery_certainty
+              WHEN ${deliveryUncertain ? 1 : 0} THEN 'uncertain' ELSE delivery_certainty
             END,
             next_attempt_at = ${at},
             claim_owner = NULL, claim_expires_at = NULL,
@@ -1479,15 +1479,16 @@ const make = Effect.gen(function* () {
   const observeBlockingActivity: DurableExecutionIntentRepositoryShape["observeBlockingActivity"] =
     ({ threadId, kind, at }) => {
       const requested = kind === "approval.requested" || kind === "user-input.requested";
+      const requestedValue = requested ? 1 : 0;
       const phase = kind.startsWith("approval") ? "waiting-for-approval" : "waiting-for-input";
       return sql`
         UPDATE projection_thread_execution_intents
         SET phase = ${requested ? phase : "running"},
             runnable = ${requested ? 0 : 1},
             next_attempt_at = NULL,
-            claim_owner = CASE WHEN ${requested} THEN NULL ELSE claim_owner END,
-            claim_generation = claim_generation + CASE WHEN ${requested} THEN 1 ELSE 0 END,
-            claim_expires_at = CASE WHEN ${requested} THEN NULL ELSE claim_expires_at END,
+            claim_owner = CASE WHEN ${requestedValue} THEN NULL ELSE claim_owner END,
+            claim_generation = claim_generation + CASE WHEN ${requestedValue} THEN 1 ELSE 0 END,
+            claim_expires_at = CASE WHEN ${requestedValue} THEN NULL ELSE claim_expires_at END,
             updated_at = ${at}
         WHERE work_item_id = (
           SELECT work_item_id FROM projection_thread_execution_intents
