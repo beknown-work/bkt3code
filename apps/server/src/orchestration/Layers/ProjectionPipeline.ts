@@ -60,6 +60,8 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+// T3-CUSTOM(expbkt3): keep routine activity and streaming deltas off the full-history summary path.
+import { shouldRefreshThreadShellSummary } from "../threadShellSummaryRefresh.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -958,7 +960,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          // T3-CUSTOM(expbkt3): only summary-relevant events hydrate historical bodies.
+          if (shouldRefreshThreadShellSummary(event)) {
+            yield* refreshThreadShellSummary(event.payload.threadId);
+          }
           return;
         }
 
@@ -1065,40 +1070,54 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     )(function* (event, attachmentSideEffects) {
       switch (event.type) {
         case "thread.message-sent": {
+          // T3-CUSTOM(expbkt3): BEGIN atomic streaming-delta hot path.
+          const nextAttachments =
+            event.payload.attachments !== undefined
+              ? yield* materializeAttachmentsForProjection({
+                  attachments: event.payload.attachments,
+                })
+              : undefined;
+          if (event.payload.streaming) {
+            yield* projectionThreadMessageRepository.appendTextDelta({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+              role: event.payload.role,
+              delta: event.payload.text,
+              ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+              isStreaming: true,
+              sentByUserId: event.payload.sentByUserId ?? null,
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+
           const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId: event.payload.messageId,
           });
           const previousMessage = Option.getOrUndefined(existingMessage);
           const nextText = Option.match(existingMessage, {
             onNone: () => event.payload.text,
-            onSome: (message) => {
-              if (event.payload.streaming) {
-                return `${message.text}${event.payload.text}`;
-              }
-              if (event.payload.text.length === 0) {
-                return message.text;
-              }
-              return event.payload.text;
-            },
+            onSome: (message) =>
+              event.payload.text.length === 0 ? message.text : event.payload.text,
           });
-          const nextAttachments =
-            event.payload.attachments !== undefined
-              ? yield* materializeAttachmentsForProjection({
-                  attachments: event.payload.attachments,
-                })
-              : previousMessage?.attachments;
+          const persistedAttachments = nextAttachments ?? previousMessage?.attachments;
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
             role: event.payload.role,
             text: nextText,
-            ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(persistedAttachments !== undefined
+              ? { attachments: [...persistedAttachments] }
+              : {}),
             isStreaming: event.payload.streaming,
             sentByUserId: event.payload.sentByUserId ?? previousMessage?.sentByUserId ?? null,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          // T3-CUSTOM(expbkt3): END atomic streaming-delta hot path.
           return;
         }
 

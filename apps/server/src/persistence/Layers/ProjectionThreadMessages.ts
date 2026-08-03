@@ -9,6 +9,8 @@ import { ChatAttachment } from "@t3tools/contracts";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
+  // T3-CUSTOM(expbkt3): atomic streaming-delta hot path.
+  AppendProjectionThreadMessageDeltaInput,
   GetProjectionThreadMessageInput,
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
@@ -124,6 +126,57 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  // T3-CUSTOM(expbkt3): let SQLite append deltas without copying the growing body into Node.
+  const appendProjectionThreadMessageDeltaRow = SqlSchema.void({
+    Request: AppendProjectionThreadMessageDeltaInput,
+    execute: (row) => {
+      const nextAttachmentsJson =
+        row.attachments !== undefined ? JSON.stringify(row.attachments) : null;
+      return sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          attachments_json,
+          is_streaming,
+          sent_by_user_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${row.messageId},
+          ${row.threadId},
+          ${row.turnId},
+          ${row.role},
+          ${row.delta},
+          ${nextAttachmentsJson},
+          ${row.isStreaming ? 1 : 0},
+          ${row.sentByUserId},
+          ${row.createdAt},
+          ${row.updatedAt}
+        )
+        ON CONFLICT (message_id)
+        DO UPDATE SET
+          thread_id = excluded.thread_id,
+          turn_id = COALESCE(excluded.turn_id, projection_thread_messages.turn_id),
+          role = excluded.role,
+          text = projection_thread_messages.text || excluded.text,
+          attachments_json = COALESCE(
+            excluded.attachments_json,
+            projection_thread_messages.attachments_json
+          ),
+          is_streaming = excluded.is_streaming,
+          sent_by_user_id = COALESCE(
+            excluded.sent_by_user_id,
+            projection_thread_messages.sent_by_user_id
+          ),
+          updated_at = excluded.updated_at
+      `;
+    },
+  });
+
   const listProjectionThreadMessageRows = SqlSchema.findAll({
     Request: ListProjectionThreadMessagesInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -168,6 +221,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.map(Option.map(toProjectionThreadMessage)),
     );
 
+  // T3-CUSTOM(expbkt3): atomic streaming-delta hot path.
+  const appendTextDelta: ProjectionThreadMessageRepositoryShape["appendTextDelta"] = (input) =>
+    appendProjectionThreadMessageDeltaRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.appendTextDelta:query"),
+      ),
+    );
+
   const listByThreadId: ProjectionThreadMessageRepositoryShape["listByThreadId"] = (input) =>
     listProjectionThreadMessageRows(input).pipe(
       Effect.mapError(
@@ -186,6 +247,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   return {
     upsert,
     getByMessageId,
+    // T3-CUSTOM(expbkt3): atomic streaming-delta hot path.
+    appendTextDelta,
     listByThreadId,
     deleteByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
