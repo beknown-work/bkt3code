@@ -88,6 +88,8 @@ describe("orchestration projector", () => {
         branch: null,
         worktreePath: null,
         sourceControlProfileId: null,
+        // T3-CUSTOM(expbkt3): thread projections expose durable bootstrap readiness.
+        bootstrap: null,
         latestTurn: null,
         ownerUserId: null,
         memberUserIds: [],
