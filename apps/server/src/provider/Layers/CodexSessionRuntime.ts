@@ -124,6 +124,8 @@ export interface CodexSessionRuntimeSendTurnInput {
 export interface CodexThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<CodexThreadItem>;
+  // T3-CUSTOM(expbkt3): preserve Codex's durable terminal evidence for recovery.
+  readonly state: "completed" | "interrupted" | "failed" | "in-progress";
 }
 
 export interface CodexThreadSnapshot {
@@ -704,6 +706,7 @@ function parseThreadSnapshot(
     turns: response.thread.turns.map((turn) => ({
       id: TurnId.make(turn.id),
       items: turn.items,
+      state: turn.status === "inProgress" ? "in-progress" : turn.status,
     })),
   };
 }

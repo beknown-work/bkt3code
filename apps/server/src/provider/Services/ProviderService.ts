@@ -34,6 +34,7 @@ import type {
   ProviderAdapterCapabilities,
   ProviderSessionInspection,
   ProviderSessionExecutionOptions,
+  ProviderThreadSnapshot,
   VerifiedTermination,
 } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
@@ -70,6 +71,12 @@ export interface ProviderServiceShape {
   readonly inspectSession: (
     threadId: ThreadId,
   ) => Effect.Effect<ProviderSessionInspection | null, ProviderServiceError>;
+
+  /** T3-CUSTOM(expbkt3): durable recovery proves terminal provider turns before continuing. */
+  readonly readThread?: (
+    threadId: ThreadId,
+    options?: ProviderSessionExecutionOptions,
+  ) => Effect.Effect<ProviderThreadSnapshot, ProviderServiceError>;
 
   readonly requestTurnInterrupt: (
     input: ProviderInterruptTurnInput,

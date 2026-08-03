@@ -11,6 +11,14 @@ import {
   removeConnectionFromCatalog,
   replaceCatalogValue,
 } from "@t3tools/client-runtime/platform";
+// T3-CUSTOM(expbkt3): BEGIN — web/desktop durable send payload.
+import {
+  ANONYMOUS_OUTBOX_IDENTITY,
+  decodeQueuedThreadMessage,
+  encodeQueuedThreadMessage,
+  type QueuedThreadMessage,
+} from "@t3tools/client-runtime/outbox";
+// T3-CUSTOM(expbkt3): END
 import { TokenStore } from "@t3tools/client-runtime/authorization";
 import {
   ConnectionTransientError,
@@ -34,12 +42,16 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 const DATABASE_NAME = "t3code:connection-runtime";
-const DATABASE_VERSION = 4;
+// T3-CUSTOM(expbkt3): BEGIN — durable outbox object store.
+const DATABASE_VERSION = 5;
 const CATALOG_STORE_NAME = "catalog";
 const SHELL_STORE_NAME = "shell";
 const THREAD_STORE_NAME = "thread";
 const SERVER_CONFIG_STORE_NAME = "server-config";
 const VCS_REFS_STORE_NAME = "vcs-refs";
+// T3-CUSTOM(expbkt3): persisted before dispatch, keyed by environment/account/message.
+const OUTBOX_STORE_NAME = "outbox";
+// T3-CUSTOM(expbkt3): END
 const CATALOG_KEY = "document";
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
 
@@ -107,6 +119,11 @@ function persistenceError(
     | "save-vcs-refs"
     | "remove-vcs-refs"
     | "clear-vcs-refs"
+    // T3-CUSTOM(expbkt3): BEGIN — durable outbox persistence failures.
+    | "load-outbox"
+    | "save-outbox"
+    | "remove-outbox"
+    // T3-CUSTOM(expbkt3): END
     | "clear-environment",
   cause: unknown,
 ) {
@@ -141,6 +158,11 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
       if (!request.result.objectStoreNames.contains(VCS_REFS_STORE_NAME)) {
         request.result.createObjectStore(VCS_REFS_STORE_NAME);
       }
+      // T3-CUSTOM(expbkt3): BEGIN — durable sends survive reloads and restarts.
+      if (!request.result.objectStoreNames.contains(OUTBOX_STORE_NAME)) {
+        request.result.createObjectStore(OUTBOX_STORE_NAME);
+      }
+      // T3-CUSTOM(expbkt3): END
     });
     request.addEventListener("error", () => {
       resume(Effect.fail(catalogError("open", request.error ?? "Unknown IndexedDB error")));
@@ -226,6 +248,32 @@ function removeDatabaseValuesInRange(database: IDBDatabase, storeName: string, r
   }).pipe(Effect.withSpan("web.connectionStorage.removeDatabaseValuesInRange"));
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — namespaced IndexedDB outbox helpers.
+function readDatabaseValuesInRange(database: IDBDatabase, storeName: string, range: IDBKeyRange) {
+  return Effect.callback<ReadonlyArray<unknown>, ConnectionTransientError>((resume) => {
+    const request = database
+      .transaction(storeName, "readonly")
+      .objectStore(storeName)
+      .getAll(range);
+    request.addEventListener("error", () => {
+      resume(Effect.fail(catalogError("read", request.error ?? "Unknown IndexedDB read error")));
+    });
+    request.addEventListener("success", () => {
+      resume(Effect.succeed(request.result));
+    });
+  }).pipe(Effect.withSpan("web.connectionStorage.readDatabaseValuesInRange"));
+}
+
+// T3-CUSTOM(expbkt3): account identity is part of the durable outbox key.
+const outboxIdentityKey = (identityKey: string | undefined) =>
+  encodeURIComponent(identityKey ?? ANONYMOUS_OUTBOX_IDENTITY);
+const outboxPrefix = (environmentId: EnvironmentId, identityKey?: string) =>
+  `${environmentId}:${identityKey === undefined ? "" : `${outboxIdentityKey(identityKey)}:`}`;
+const outboxKey = (
+  message: Pick<QueuedThreadMessage, "environmentId" | "identityKey" | "messageId">,
+) => `${outboxPrefix(message.environmentId, message.identityKey)}${message.messageId}`;
+
+// T3-CUSTOM(expbkt3): END
 function threadCacheKey(environmentId: EnvironmentId, threadId: ThreadId) {
   return `${environmentId}:${threadId}`;
 }
@@ -633,6 +681,38 @@ export const connectionStorageLayer = Layer.effectContext(
           VCS_REFS_STORE_NAME,
           IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
         ).pipe(Effect.mapError((cause) => persistenceError("clear-vcs-refs", cause))),
+      // T3-CUSTOM(expbkt3): BEGIN durable client outbox persistence.
+      loadOutbox: (environmentId, identityKey) =>
+        readDatabaseValuesInRange(
+          database,
+          OUTBOX_STORE_NAME,
+          IDBKeyRange.bound(
+            outboxPrefix(environmentId, identityKey),
+            `${outboxPrefix(environmentId, identityKey)}\uffff`,
+          ),
+        ).pipe(
+          Effect.tryMap({
+            try: (values) => values.map(decodeQueuedThreadMessage),
+            catch: (cause) => persistenceError("load-outbox", cause),
+          }),
+          Effect.mapError((cause) =>
+            cause._tag === "ConnectionPersistenceError"
+              ? cause
+              : persistenceError("load-outbox", cause),
+          ),
+        ),
+      saveOutbox: (message) =>
+        writeDatabaseValue(
+          database,
+          OUTBOX_STORE_NAME,
+          outboxKey(message),
+          encodeQueuedThreadMessage(message),
+        ).pipe(Effect.mapError((cause) => persistenceError("save-outbox", cause))),
+      removeOutbox: (message) =>
+        removeDatabaseValue(database, OUTBOX_STORE_NAME, outboxKey(message)).pipe(
+          Effect.mapError((cause) => persistenceError("remove-outbox", cause)),
+        ),
+      // T3-CUSTOM(expbkt3): END
       removeThread: (environmentId, threadId) =>
         removeDatabaseValue(
           database,
@@ -654,6 +734,16 @@ export const connectionStorageLayer = Layer.effectContext(
               VCS_REFS_STORE_NAME,
               IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
             ),
+            // T3-CUSTOM(expbkt3): BEGIN — environment removal clears pending sends.
+            removeDatabaseValuesInRange(
+              database,
+              OUTBOX_STORE_NAME,
+              IDBKeyRange.bound(
+                outboxPrefix(environmentId),
+                `${outboxPrefix(environmentId)}\uffff`,
+              ),
+            ),
+            // T3-CUSTOM(expbkt3): END
           ],
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.mapError((cause) => persistenceError("clear-environment", cause))),

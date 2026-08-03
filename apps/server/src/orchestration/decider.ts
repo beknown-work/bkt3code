@@ -786,11 +786,40 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
-      const targetThread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
+      // T3-CUSTOM(expbkt3): A bootstrap turn is one durable command. Create the
+      // thread in the same event batch as its first message and execution
+      // intent so an acknowledgement can never expose a half-created thread.
+      const existingTargetThread = readModel.threads.find(
+        (thread) => thread.id === command.threadId,
+      );
+      const bootstrapCreate = command.bootstrap?.createThread;
+      if (existingTargetThread && bootstrapCreate) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `bootstrap thread ${command.threadId} already exists`,
+        });
+      }
+      if (!existingTargetThread && !bootstrapCreate) {
+        yield* requireThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+        });
+      }
+      if (!existingTargetThread && bootstrapCreate) {
+        yield* requireProject({
+          readModel,
+          command,
+          projectId: bootstrapCreate.projectId,
+        });
+      }
+      const targetProjectId = existingTargetThread?.projectId ?? bootstrapCreate?.projectId;
+      if (targetProjectId === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} does not exist`,
+        });
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -809,7 +838,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan.planId}' does not exist on thread '${sourceProposedPlan.threadId}'.`,
         });
       }
-      if (sourceThread && sourceThread.projectId !== targetThread.projectId) {
+      if (sourceThread && sourceThread.projectId !== targetProjectId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
@@ -852,19 +881,54 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
+          runtimeMode:
+            existingTargetThread?.runtimeMode ??
+            bootstrapCreate?.runtimeMode ??
+            command.runtimeMode,
+          interactionMode:
+            existingTargetThread?.interactionMode ??
+            bootstrapCreate?.interactionMode ??
+            command.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          // T3-CUSTOM(expbkt3): bootstrap is part of the accepted durable intent.
+          ...(command.bootstrap !== undefined ? { bootstrap: command.bootstrap } : {}),
           createdAt: command.createdAt,
         },
       };
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> | null =
+        !existingTargetThread && bootstrapCreate
+          ? {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: bootstrapCreate.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.created",
+              payload: {
+                threadId: command.threadId,
+                projectId: bootstrapCreate.projectId,
+                title: bootstrapCreate.title,
+                modelSelection: bootstrapCreate.modelSelection,
+                runtimeMode: bootstrapCreate.runtimeMode,
+                interactionMode: bootstrapCreate.interactionMode,
+                branch: bootstrapCreate.branch,
+                worktreePath: bootstrapCreate.worktreePath,
+                createdByUserId: bootstrapCreate.ownerUserId ?? actor,
+                sourceControlProfileId: bootstrapCreate.sourceControlProfileId,
+                createdAt: bootstrapCreate.createdAt,
+                updatedAt: bootstrapCreate.createdAt,
+                priority: bootstrapCreate.priority ?? null,
+              },
+            }
+          : null;
       // Real activity resets ANY override: it wakes an explicitly settled
       // thread, and it clears a keep-active pin back to neutral so the
       // thread can auto-settle again after this burst of work goes stale.
       // A snooze clears the same way — sending a message to a snoozed
       // thread is the user re-engaging, so the return ticket is spent.
       const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
-      if (targetThread.settledOverride !== null) {
+      if (existingTargetThread?.settledOverride !== null && existingTargetThread !== undefined) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",
@@ -880,7 +944,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      if (targetThread.snoozedUntil != null) {
+      if (existingTargetThread?.snoozedUntil != null) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",
@@ -896,7 +960,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+      return [
+        ...(threadCreatedEvent === null ? [] : [threadCreatedEvent]),
+        ...lifecycleResetEvents,
+        userMessageEvent,
+        turnStartRequestedEvent,
+      ];
     }
 
     case "thread.turn.interrupt": {

@@ -170,7 +170,13 @@ describe("ProviderSessionReaper", () => {
       respondToUserInput: () => unsupported(),
       stopSession,
       listSessions: () => Effect.succeed([]),
-      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      // T3-CUSTOM(expbkt3): explicit durable execution behavior.
+      getCapabilities: () =>
+        Effect.succeed({
+          sessionModelSwitch: "in-session",
+          activeTurnInput: "steer",
+          durableResume: "supported",
+        }),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
         return Effect.succeed({

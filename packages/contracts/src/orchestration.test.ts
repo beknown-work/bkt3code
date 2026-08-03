@@ -22,6 +22,7 @@ import {
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
+  ThreadExecutionSnapshot,
   ThreadTurnStartRequestedPayload,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -36,6 +37,7 @@ const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartC
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
+const decodeThreadExecutionSnapshot = Schema.decodeUnknownEffect(ThreadExecutionSnapshot);
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
@@ -900,6 +902,111 @@ it.effect("decodes thread.turn-start-requested title seed when present", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.titleSeed, "Investigate reconnect failures");
+  }),
+);
+
+it.effect("preserves optional bootstrap data on thread.turn-start-requested", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartRequestedPayload({
+      threadId: "thread-2",
+      messageId: "msg-2",
+      bootstrap: {
+        prepareWorktree: {
+          projectCwd: "/workspace/project",
+          baseBranch: "main",
+          branch: "task/durable-recovery",
+        },
+        runSetupScript: true,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.bootstrap, {
+      prepareWorktree: {
+        projectCwd: "/workspace/project",
+        baseBranch: "main",
+        branch: "task/durable-recovery",
+      },
+      runSetupScript: true,
+    });
+  }),
+);
+
+it.effect("preserves a durable bootstrap request in a turn command", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "command-bootstrap-turn",
+      threadId: "thread-2",
+      message: {
+        messageId: "msg-2",
+        role: "user",
+        text: "Start durably",
+        attachments: [],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      bootstrap: {
+        request: {
+          createThread: true,
+          bootstrapId: "bootstrap-2",
+          projectId: "project-1",
+          title: "Durable thread",
+          overrides: {
+            workspace: {
+              mode: "new-worktree",
+              baseRef: { kind: "repository-default", source: "origin" },
+            },
+          },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.bootstrap?.request?.createThread, true);
+    assert.strictEqual(parsed.bootstrap?.request?.bootstrapId, "bootstrap-2");
+  }),
+);
+
+it.effect("decodes optional durable intent state on execution snapshots", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadExecutionSnapshot({
+      threadId: "thread-1",
+      authorityEpoch: "epoch-1",
+      revision: 1,
+      observedAt: "2026-01-01T00:00:01.000Z",
+      activity: "active",
+      canStop: true,
+      providerSession: {
+        state: "starting",
+        generation: 1,
+        providerInstanceId: null,
+        startedAt: null,
+        lastObservedAt: null,
+        lastError: null,
+      },
+      turn: null,
+      intent: {
+        workItemId: "work-item-1",
+        messageId: "msg-1",
+        desiredState: "running",
+        phase: "retry-wait",
+        acceptedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+        recovery: {
+          attempt: 2,
+          maximumAttempts: 10,
+          nextAttemptAt: "2026-01-01T00:00:03.000Z",
+          reason: "provider-process-exited",
+          userActionRequired: false,
+        },
+      },
+    });
+
+    assert.strictEqual(parsed.intent?.workItemId, "work-item-1");
+    assert.strictEqual(parsed.intent?.phase, "retry-wait");
+    assert.strictEqual(parsed.intent?.recovery.attempt, 2);
   }),
 );
 

@@ -123,6 +123,18 @@ it("requires a settlement to match the live Grok turn", () => {
 });
 
 it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
+  it.effect("declares active-turn and durable-resume behavior", () =>
+    Effect.gen(function* () {
+      const wrapperPath = yield* Effect.promise(() => makeMockGrokWrapper());
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      assert.deepEqual(adapter.capabilities, {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      });
+    }),
+  );
+
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-mock-thread");

@@ -11,6 +11,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+// T3-CUSTOM(expbkt3): durable stop fencing can fail before provider shutdown.
+import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 import type { ProviderServiceError } from "../provider/Errors.ts";
 
 export interface ThreadTurnAdmissionInput {
@@ -27,7 +29,13 @@ export interface ThreadExecutionSupervisorShape {
   readonly getSnapshots: (
     threadIds: ReadonlyArray<ThreadId>,
   ) => Effect.Effect<ReadonlyMap<ThreadId, ThreadExecutionSnapshot>>;
+  /** T3-CUSTOM(expbkt3): publish the latest durable desired state after coordinator changes. */
+  readonly refreshIntent: (threadId: ThreadId) => Effect.Effect<ThreadExecutionSnapshot>;
   readonly prepareExecution: (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
+  ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
+  /** T3-CUSTOM(expbkt3): re-admit the same durable execution after authority loss. */
+  readonly recoverExecution: (
     event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
   ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
   readonly admitIdleTurn: (
@@ -48,7 +56,10 @@ export interface ThreadExecutionSupervisorShape {
   ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
   readonly stopExecution: (
     input: OrchestrationStopExecutionInput,
-  ) => Effect.Effect<OrchestrationStopExecutionResult, ProviderServiceError | SqlError>;
+  ) => Effect.Effect<
+    OrchestrationStopExecutionResult,
+    ProviderServiceError | ProjectionRepositoryError | SqlError
+  >;
   readonly streamSnapshots: Stream.Stream<ThreadExecutionSnapshot>;
 }
 
@@ -80,6 +91,8 @@ export class ThreadExecutionSupervisor extends Context.Reference<ThreadExecution
         Effect.succeed(
           new Map(threadIds.map((threadId) => [threadId, unavailableSnapshot(threadId)])),
         ),
+      // T3-CUSTOM(expbkt3): unavailable fallback has no durable repository.
+      refreshIntent: (threadId) => Effect.succeed(unavailableSnapshot(threadId)),
       prepareExecution: (event) => {
         const snapshot = unavailableSnapshot(event.payload.threadId);
         return Effect.succeed({
@@ -91,6 +104,25 @@ export class ThreadExecutionSupervisor extends Context.Reference<ThreadExecution
             state: "starting",
             generation: 0,
           },
+          turn: {
+            executionId: String(event.commandId ?? event.eventId),
+            providerTurnId: null,
+            state: "starting",
+            startedAt: event.payload.createdAt,
+            stopRequestedAt: null,
+            completedAt: null,
+            lastError: null,
+          },
+        });
+      },
+      // T3-CUSTOM(expbkt3): unavailable supervisor still models a recovery admission.
+      recoverExecution: (event) => {
+        const snapshot = unavailableSnapshot(event.payload.threadId);
+        return Effect.succeed({
+          ...snapshot,
+          activity: "active",
+          canStop: true,
+          providerSession: { ...snapshot.providerSession, state: "starting" },
           turn: {
             executionId: String(event.commandId ?? event.eventId),
             providerTurnId: null,

@@ -10,6 +10,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Execution reliability](#execution-reliability)
 - [Environment users](#environment-users)
 - [Source-control identity](#source-control-identity)
 - [Checkpointing](#checkpointing)
@@ -95,6 +96,29 @@ A typed signal emitted when an async milestone completes, such as `checkpoint.ba
 #### Quiesced
 
 "Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
+
+### Execution reliability
+
+#### Execution intent
+
+The durable statement that an accepted message should run. It contains the exact delivery payload,
+desired state, lifecycle phase, delivery certainty, and recovery state. It is distinct from the live
+provider session. See [execution-reliability.md][27].
+
+#### Desired state
+
+Whether the control plane intends a work item to be `running` or `stopped`. Desired state survives a
+server restart; observed provider state may not.
+
+#### Observed state
+
+Provider evidence such as session status and provider turn ID. Recovery reconciles desired state
+with observed state and requires provider-turn evidence before declaring success.
+
+#### Generation fence
+
+A monotonically increasing claim generation checked before side effects. Stop and other cancelling
+actions advance the generation so work claimed by an older generation cannot continue.
 
 ### Provider runtime
 
@@ -218,3 +242,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [24]: ./overview.md
 [25]: ./source-control-identity.md
 [26]: ./thread-bootstrap.md
+[27]: ./execution-reliability.md

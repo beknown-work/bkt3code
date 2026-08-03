@@ -6,6 +6,10 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+// T3-CUSTOM(expbkt3): BEGIN — sidebar rows consume shared durable execution state.
+import { ANONYMOUS_OUTBOX_IDENTITY } from "@t3tools/client-runtime/outbox";
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
+// T3-CUSTOM(expbkt3): END
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   scopeProjectRef,
@@ -91,10 +95,13 @@ import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+// T3-CUSTOM(expbkt3): current identity selects only this account's durable sends.
+import { useCurrentUserId } from "../state/identity";
 import { useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
-import { threadEnvironment } from "../state/threads";
+// T3-CUSTOM(expbkt3): pending IndexedDB sends drive sidebar state before acknowledgement.
+import { durableThreadOutbox, threadEnvironment } from "../state/threads";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -445,6 +452,23 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
+  // T3-CUSTOM(expbkt3): BEGIN — show Sending/Queued/Recovering on the next row render.
+  const currentUserId = useCurrentUserId();
+  const outboxItems = useAtomValue(
+    durableThreadOutbox.itemsValueAtom(
+      thread.environmentId,
+      currentUserId ?? ANONYMOUS_OUTBOX_IDENTITY,
+    ),
+  );
+  const hasPendingOutboxItem = outboxItems.some(
+    (item) => item.threadId === thread.id && item.deliveryState !== "failed",
+  );
+  const executionPresentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem,
+    intent: thread.execution?.intent ?? null,
+    providerActivity: thread.execution?.activity ?? "idle",
+  });
+  // T3-CUSTOM(expbkt3): END
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
@@ -459,7 +483,15 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   // Same semantics as v1 (never-visited counts as read): flipping the beta
   // flag must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarV2Status(thread);
+  const status = executionPresentation.needsAttention
+    ? "failed"
+    : thread.execution?.intent?.phase === "waiting-for-approval"
+      ? "approval"
+      : thread.execution?.intent?.phase === "waiting-for-input"
+        ? "input"
+        : executionPresentation.active
+          ? "working"
+          : resolveSidebarV2Status(thread);
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
   // an explicit act, so unlike Done, a never-visited woke thread still
@@ -485,20 +517,21 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const topStatus =
     status === "working"
       ? {
-          label: "Working",
+          // T3-CUSTOM(expbkt3): Sending is distinct from provider-observed Running.
+          label: executionPresentation.label ?? "Working",
           icon: "working" as const,
           className:
             "animate-sidebar-working-text text-sky-600 motion-reduce:animate-none dark:text-sky-400",
         }
       : status === "approval"
         ? {
-            label: "Approval",
+            label: executionPresentation.label ?? "Approval",
             icon: null,
             className: "text-amber-700 dark:text-amber-300",
           }
         : status === "input"
           ? {
-              label: "Input",
+              label: executionPresentation.label ?? "Input",
               icon: null,
               className: "text-indigo-600 dark:text-indigo-300",
             }
@@ -1182,6 +1215,12 @@ export default function SidebarV2() {
   const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, deleteThread } =
     useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const retryThreadRecovery = useAtomCommand(threadEnvironment.restartSession, {
+    reportFailure: false,
+  });
+  const dismissThreadRecovery = useAtomCommand(threadEnvironment.stopSession, {
     reportFailure: false,
   });
   const deleteProject = useAtomCommand(projectEnvironment.delete, {
@@ -2297,6 +2336,7 @@ export default function SidebarV2() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
+        const recoveryExhausted = thread.execution?.intent?.phase === "recovery-exhausted";
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         // Presets resolve at menu-open time (same as the popover).
@@ -2345,6 +2385,12 @@ export default function SidebarV2() {
                   ]
                 : []),
               { id: "mark-unread", label: "Mark unread" },
+              ...(recoveryExhausted
+                ? [
+                    { id: "retry-recovery", label: "Retry recovery" },
+                    { id: "dismiss-recovery", label: "Dismiss recovery failure" },
+                  ]
+                : []),
               { id: "copy-path", label: "Copy path", icon: "copy" },
               ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
@@ -2417,6 +2463,18 @@ export default function SidebarV2() {
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
+          case "retry-recovery":
+            await retryThreadRecovery({
+              environmentId: thread.environmentId,
+              input: { threadId: thread.id },
+            });
+            return;
+          case "dismiss-recovery":
+            await dismissThreadRecovery({
+              environmentId: thread.environmentId,
+              input: { threadId: thread.id },
+            });
+            return;
           case "copy-path":
             if (!threadWorkspacePath) {
               toastManager.add(
@@ -2475,9 +2533,11 @@ export default function SidebarV2() {
       copyBranchToClipboard,
       copyPathToClipboard,
       deleteThread,
+      dismissThreadRecovery,
       handleMultiSelectContextMenu,
       markThreadUnread,
       projectCwdByKey,
+      retryThreadRecovery,
       serverConfigs,
       startThreadRename,
       updateThreadMetadata,

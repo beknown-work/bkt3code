@@ -320,7 +320,8 @@ export const OrchestrationProposedPlan = Schema.Struct({
 });
 export type OrchestrationProposedPlan = typeof OrchestrationProposedPlan.Type;
 
-const SourceProposedPlanReference = Schema.Struct({
+// T3-CUSTOM(expbkt3): durable client outboxes validate this exact reference.
+export const SourceProposedPlanReference = Schema.Struct({
   threadId: ThreadId,
   planId: OrchestrationProposedPlanId,
 });
@@ -389,6 +390,39 @@ export const ThreadExecutionActivity = Schema.Literals([
 ]);
 export type ThreadExecutionActivity = typeof ThreadExecutionActivity.Type;
 
+// T3-CUSTOM(expbkt3): durable desired-state is optional so older execution
+// snapshots remain decodable during rolling upgrades.
+export const ThreadExecutionIntentPhase = Schema.Literals([
+  "queued",
+  "preparing",
+  "starting",
+  "running",
+  "waiting-for-approval",
+  "waiting-for-input",
+  "recovering",
+  "retry-wait",
+  "stopping",
+  "recovery-exhausted",
+]);
+export type ThreadExecutionIntentPhase = typeof ThreadExecutionIntentPhase.Type;
+
+export const ThreadExecutionIntent = Schema.Struct({
+  workItemId: TrimmedNonEmptyString,
+  messageId: MessageId,
+  desiredState: Schema.Literals(["running", "stopped"]),
+  phase: ThreadExecutionIntentPhase,
+  acceptedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  recovery: Schema.Struct({
+    attempt: NonNegativeInt,
+    maximumAttempts: NonNegativeInt,
+    nextAttemptAt: Schema.NullOr(IsoDateTime),
+    reason: Schema.NullOr(Schema.String),
+    userActionRequired: Schema.Boolean,
+  }),
+});
+export type ThreadExecutionIntent = typeof ThreadExecutionIntent.Type;
+
 export const ThreadExecutionSnapshot = Schema.Struct({
   threadId: ThreadId,
   authorityEpoch: TrimmedNonEmptyString,
@@ -415,6 +449,8 @@ export const ThreadExecutionSnapshot = Schema.Struct({
       lastError: Schema.NullOr(Schema.String),
     }),
   ),
+  // T3-CUSTOM(expbkt3): absent on servers without durable execution recovery.
+  intent: Schema.optionalKey(ThreadExecutionIntent),
 });
 export type ThreadExecutionSnapshot = typeof ThreadExecutionSnapshot.Type;
 
@@ -1171,10 +1207,28 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
-const ThreadTurnStartBootstrap = Schema.Struct({
+// T3-CUSTOM(expbkt3): durable client outboxes validate bootstrap before replay.
+export const ThreadTurnStartBootstrap = Schema.Struct({
   createThread: Schema.optional(ThreadTurnStartBootstrapCreateThread),
   prepareWorktree: Schema.optional(ThreadTurnStartBootstrapPrepareWorktree),
   runSetupScript: Schema.optional(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): a client can persist the unresolved bootstrap request
+  // in the same outbox item as its message. The server resolves defaults before
+  // atomically accepting the turn, then stores resolvedRequest for recovery.
+  request: Schema.optional(
+    Schema.Struct({
+      createThread: Schema.Boolean,
+      bootstrapId: TrimmedNonEmptyString,
+      projectId: ProjectId,
+      title: TrimmedNonEmptyString,
+      overrides: Schema.optional(ThreadBootstrapOverrides),
+      sourceControlProfileId: Schema.optional(Schema.NullOr(SourceControlProfileId)),
+      priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+      ownerUserId: Schema.optional(UserId),
+      createdAt: IsoDateTime,
+    }),
+  ),
+  resolvedRequest: Schema.optional(ResolvedThreadBootstrapRequest),
 });
 
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
@@ -1739,6 +1793,8 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  // T3-CUSTOM(expbkt3): persist new-thread preparation with accepted work.
+  bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   createdAt: IsoDateTime,
 });
 

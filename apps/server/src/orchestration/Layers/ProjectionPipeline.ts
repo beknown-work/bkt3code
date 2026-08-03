@@ -60,6 +60,11 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+// T3-CUSTOM(expbkt3): additive durable intent projector/repository seam.
+import {
+  DurableExecutionIntentRepository,
+  DurableExecutionIntentRepositoryLive,
+} from "../../execution/DurableExecutionIntentRepository.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -73,6 +78,8 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  // T3-CUSTOM(expbkt3): accepted work is projected in the command transaction.
+  durableExecutionIntents: "projection.durable-execution-intents",
 } as const;
 
 type ProjectorName =
@@ -495,6 +502,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
     const projectionMembershipRepository = yield* ProjectionMembershipRepository;
+    // T3-CUSTOM(expbkt3): durable intent is a peer projection in the same SQL transaction.
+    const durableExecutionIntentRepository = yield* DurableExecutionIntentRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1860,6 +1869,88 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    // T3-CUSTOM(expbkt3): BEGIN — one marked delegation keeps fork recovery
+    // behavior out of the upstream-owned projection machinery.
+    const applyDurableExecutionIntentsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyDurableExecutionIntentsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.turn-start-requested": {
+          const message = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          yield* durableExecutionIntentRepository.acceptFromEvent({
+            event,
+            message: Option.getOrNull(message),
+          });
+          return;
+        }
+        case "thread.turn-interrupt-requested":
+        case "thread.archived":
+        case "thread.deleted":
+          yield* durableExecutionIntentRepository.stopThread({
+            threadId: event.payload.threadId,
+            reason: event.type,
+            at: event.occurredAt,
+          });
+          return;
+        case "thread.session-stop-requested": {
+          // T3-CUSTOM(expbkt3): Stop doubles as Dismiss for exhausted attention.
+          const items = yield* durableExecutionIntentRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const exhausted = items.findLast(
+            (item) => item.phase === "recovery-exhausted" && item.dismissedAt === null,
+          );
+          if (exhausted !== undefined) {
+            yield* durableExecutionIntentRepository.dismissExhausted({
+              threadId: event.payload.threadId,
+              at: event.occurredAt,
+            });
+          } else {
+            yield* durableExecutionIntentRepository.stopThread({
+              threadId: event.payload.threadId,
+              reason: event.type,
+              at: event.occurredAt,
+            });
+          }
+          return;
+        }
+        case "thread.session-restart-requested":
+          yield* durableExecutionIntentRepository.retryExhausted({
+            threadId: event.payload.threadId,
+            at: event.occurredAt,
+          });
+          return;
+        case "thread.session-set":
+          yield* durableExecutionIntentRepository.observeSession({
+            threadId: event.payload.threadId,
+            status: event.payload.session.status,
+            providerTurnId: event.payload.session.activeTurnId,
+            error: event.payload.session.lastError,
+            at: event.payload.session.updatedAt,
+          });
+          return;
+        case "thread.activity-appended":
+          if (
+            event.payload.activity.kind === "approval.requested" ||
+            event.payload.activity.kind === "approval.resolved" ||
+            event.payload.activity.kind === "user-input.requested" ||
+            event.payload.activity.kind === "user-input.resolved"
+          ) {
+            yield* durableExecutionIntentRepository.observeBlockingActivity({
+              threadId: event.payload.threadId,
+              kind: event.payload.activity.kind,
+              at: event.payload.activity.createdAt,
+            });
+          }
+          return;
+        default:
+          return;
+      }
+    });
+    // T3-CUSTOM(expbkt3): END
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
@@ -1888,6 +1979,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
         apply: applyThreadTurnsProjection,
+      },
+      {
+        // T3-CUSTOM(expbkt3): atomic accepted-work projection.
+        name: ORCHESTRATION_PROJECTOR_NAMES.durableExecutionIntents,
+        apply: applyDurableExecutionIntentsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
@@ -2007,4 +2103,6 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionMembershipRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  // T3-CUSTOM(expbkt3): fork-owned durable execution repository.
+  Layer.provideMerge(DurableExecutionIntentRepositoryLive),
 );

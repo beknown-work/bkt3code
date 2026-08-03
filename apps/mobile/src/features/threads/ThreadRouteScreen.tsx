@@ -197,6 +197,8 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, "thread stop");
+  const retryThreadRecovery = useAtomCommand(threadEnvironment.restartSession, "retry recovery");
+  const dismissThreadRecovery = useAtomCommand(threadEnvironment.stopSession, "dismiss recovery");
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -487,6 +489,20 @@ function ThreadRouteContent(
       },
     });
   }, [stopThreadExecution, selectedThread]);
+  const handleRetryRecovery = useCallback(() => {
+    if (!selectedThread) return;
+    return retryThreadRecovery({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+  }, [retryThreadRecovery, selectedThread]);
+  const handleDismissRecovery = useCallback(() => {
+    if (!selectedThread) return;
+    return dismissThreadRecovery({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+  }, [dismissThreadRecovery, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -789,6 +805,7 @@ function ThreadRouteContent(
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
+          failedOutboxDetail={composer.failedOutboxDetail}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}
@@ -798,6 +815,10 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
+          onRetryRecovery={handleRetryRecovery}
+          onDismissRecovery={handleDismissRecovery}
+          onRetryFailedOutbox={composer.onRetryFailedOutboxMessage}
+          onEditFailedOutbox={composer.onEditFailedOutboxMessage}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}

@@ -35,9 +35,11 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  RotateCcwIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
+  XIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -64,6 +66,7 @@ import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
+import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -563,6 +566,12 @@ function OpenCommandPaletteDialog(props: {
     reportDefect: false,
   });
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
+    reportFailure: false,
+  });
+  const retryThreadRecovery = useAtomCommand(threadEnvironment.restartSession, {
+    reportFailure: false,
+  });
+  const dismissThreadRecovery = useAtomCommand(threadEnvironment.stopSession, {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
@@ -1361,6 +1370,37 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (activeThread?.execution?.intent?.phase === "recovery-exhausted") {
+    actionItems.push(
+      {
+        kind: "action",
+        value: "action:retry-recovery",
+        searchTerms: ["retry", "recover", "agent", "thread"],
+        title: "Retry interrupted work",
+        icon: <RotateCcwIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await retryThreadRecovery({
+            environmentId: activeThread.environmentId,
+            input: { threadId: activeThread.id },
+          });
+        },
+      },
+      {
+        kind: "action",
+        value: "action:dismiss-recovery",
+        searchTerms: ["dismiss", "recover", "failure", "thread"],
+        title: "Dismiss recovery failure",
+        icon: <XIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await dismissThreadRecovery({
+            environmentId: activeThread.environmentId,
+            input: { threadId: activeThread.id },
+          });
+        },
+      },
+    );
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

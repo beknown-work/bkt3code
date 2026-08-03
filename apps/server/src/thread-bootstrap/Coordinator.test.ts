@@ -230,6 +230,51 @@ function testLayer(input: {
 }
 
 describe("ThreadBootstrapCoordinator", () => {
+  it.effect("atomically accepts a durable turn without launching bootstrap side effects", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        setup: () => Effect.die("setup must be owned by the durable execution coordinator"),
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        const originalTurn: Extract<OrchestrationCommand, { type: "thread.turn.start" }> = {
+          type: "thread.turn.start",
+          commandId: CommandId.make("original-turn-command"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-1"),
+            role: "user",
+            text: "Build it",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: NOW,
+        };
+        yield* coordinator.request(requestCommand(), {
+          createThread: true,
+          turnStart: originalTurn,
+        });
+        yield* Deferred.await(turnStarted);
+
+        const emitted = yield* Ref.get(commands);
+        expect(emitted).toHaveLength(1);
+        expect(emitted[0]?.type).toBe("thread.turn.start");
+        if (emitted[0]?.type !== "thread.turn.start") return;
+        expect(emitted[0].commandId).toBe(originalTurn.commandId);
+        expect(emitted[0].bootstrap?.resolvedRequest?.bootstrapId).toBe("bootstrap-1");
+        expect(emitted[0].bootstrap?.createThread?.projectId).toBe(ProjectId.make("project-1"));
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
   it.effect("returns after queueing and gates the first turn on setup success", () =>
     Effect.gen(function* () {
       const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);

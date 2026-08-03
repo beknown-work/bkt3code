@@ -429,6 +429,9 @@ export const make = Effect.gen(function* () {
         }),
       );
     });
+    // T3-CUSTOM(expbkt3): retained for the compatibility release, but v2 must
+    // never invoke the pre-commit bootstrap path.
+    void dispatchBootstrapTurnStart;
 
     // T3-CUSTOM(expbkt3): BEGIN — attach a new thread to an existing external
     // provider session.
@@ -581,121 +584,74 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-    // T3-CUSTOM(expbkt3): route every legacy bootstrap through the durable
-    // coordinator. Empty pre-created threads are adopted instead of recreated.
-    const dispatchLegacyThreadCreation = (
+    // T3-CUSTOM(expbkt3): resolve creation defaults without performing provider
+    // or workspace side effects, then let the coordinator dispatch one atomic
+    // turn command carrying both the exact message and resolved bootstrap spec.
+    const dispatchDurableBootstrapTurn = (
       turnStart: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
-    ) =>
-      Effect.gen(function* () {
-        const bootstrap = turnStart.bootstrap;
-        if (!bootstrap) {
-          return yield* dispatchBootstrapTurnStart(turnStart);
-        }
-        const createThread = bootstrap.createThread;
-        const existingThread = createThread
-          ? null
-          : yield* snapshotQuery.getThreadShellById(turnStart.threadId).pipe(
-              Effect.mapError((cause) =>
-                toDispatchCommandError(cause, "Failed to load the legacy bootstrap thread."),
-              ),
-              Effect.flatMap(
-                Option.match({
-                  onNone: () =>
-                    Effect.fail(
-                      new OrchestrationDispatchCommandError({
-                        message: `Thread ${turnStart.threadId} was not found.`,
-                      }),
-                    ),
-                  onSome: Effect.succeed,
-                }),
-              ),
-            );
-        const threadSeed = createThread ?? existingThread;
-        if (!threadSeed) {
-          return yield* new OrchestrationDispatchCommandError({
-            message: `Thread ${turnStart.threadId} could not be resolved for bootstrap.`,
-          });
-        }
-        const existingWorktreePath = threadSeed.worktreePath;
-        const existingBranch = threadSeed.branch;
-        const workspace = bootstrap.prepareWorktree
-          ? {
-              mode: "new-worktree" as const,
-              baseRef: {
-                kind: "branch" as const,
-                source: bootstrap.prepareWorktree.startFromOrigin
-                  ? ("origin" as const)
-                  : ("local" as const),
-                branch: bootstrap.prepareWorktree.baseBranch.replace(
-                  /^(?:refs\/remotes\/)?origin\//,
-                  "",
-                ),
-              },
-              ...(bootstrap.prepareWorktree.branch
-                ? { newBranch: bootstrap.prepareWorktree.branch }
-                : {}),
-            }
-          : existingWorktreePath
-            ? {
-                mode: "existing-worktree" as const,
-                path: existingWorktreePath,
-                ...(existingBranch ? { branch: existingBranch } : {}),
-              }
-            : { mode: "local" as const };
-
-        return yield* normalizeBootstrapDispatch(
-          threadBootstrapCoordinator.request(
-            {
-              type: "thread.bootstrap.request",
-              commandId: turnStart.commandId,
-              bootstrapId: `legacy:${turnStart.commandId}`,
-              threadId: turnStart.threadId,
-              projectId: threadSeed.projectId,
-              title: threadSeed.title,
-              initialTurn: {
-                messageId: turnStart.message.messageId,
-                text: turnStart.message.text,
-                attachments: turnStart.message.attachments,
-                ...(turnStart.titleSeed ? { titleSeed: turnStart.titleSeed } : {}),
-              },
-              overrides: {
-                modelSelection: turnStart.modelSelection ?? threadSeed.modelSelection,
-                runtimeMode: turnStart.runtimeMode,
-                interactionMode: turnStart.interactionMode,
-                workspace,
-              },
-              sourceControlProfileId: createThread?.sourceControlProfileId ?? null,
-              priority: createThread?.priority ?? null,
-              ...(createThread?.ownerUserId ? { ownerUserId: createThread.ownerUserId } : {}),
-              createdAt: createThread?.createdAt ?? turnStart.createdAt,
+    ) => {
+      const request = turnStart.bootstrap?.request;
+      if (request === undefined) {
+        return orchestrationEngine
+          .dispatch(turnStart, dispatchOptions)
+          .pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+            ),
+          );
+      }
+      return normalizeBootstrapDispatch(
+        threadBootstrapCoordinator.request(
+          {
+            type: "thread.bootstrap.request",
+            commandId: turnStart.commandId,
+            bootstrapId: request.bootstrapId,
+            threadId: turnStart.threadId,
+            projectId: request.projectId,
+            title: request.title,
+            initialTurn: {
+              messageId: turnStart.message.messageId,
+              text: turnStart.message.text,
+              attachments: turnStart.message.attachments,
+              ...(turnStart.titleSeed ? { titleSeed: turnStart.titleSeed } : {}),
             },
-            {
-              actorUserId: options?.actorUserId ?? null,
-              createThread: createThread !== undefined,
-            },
-          ),
-        );
-      });
+            ...(request.overrides ? { overrides: request.overrides } : {}),
+            ...(request.sourceControlProfileId !== undefined
+              ? { sourceControlProfileId: request.sourceControlProfileId }
+              : {}),
+            ...(request.priority !== undefined ? { priority: request.priority } : {}),
+            ...(request.ownerUserId ? { ownerUserId: request.ownerUserId } : {}),
+            createdAt: request.createdAt,
+          },
+          {
+            actorUserId: options?.actorUserId ?? null,
+            createThread: request.createThread,
+            turnStart,
+          },
+        ),
+      );
+    };
 
     const baseDispatchEffect =
       // T3-CUSTOM(expbkt3): public bootstrap controls never reach the strict decider.
-      command.type === "thread.bootstrap.request"
-        ? normalizeBootstrapDispatch(
-            threadBootstrapCoordinator.request(command, {
-              actorUserId: options?.actorUserId ?? null,
-            }),
-          )
-        : command.type === "thread.bootstrap.retry"
-          ? normalizeBootstrapDispatch(threadBootstrapCoordinator.retry(command))
-          : command.type === "thread.bootstrap.stop"
-            ? normalizeBootstrapDispatch(threadBootstrapCoordinator.stop(command))
-            : command.type === "thread.bootstrap.continue"
-              ? normalizeBootstrapDispatch(threadBootstrapCoordinator.continue(command))
-              : command.type === "thread.turn.start" && command.bootstrap
-                ? dispatchLegacyThreadCreation(command)
-                : // T3-CUSTOM(expbkt3): attach-to-external-session. Validate first, so
-                  // a bad session id fails before a thread exists, then seed the
-                  // provider binding so the first turn resumes instead of starting new.
+      command.type === "thread.turn.start" && command.bootstrap?.request !== undefined
+        ? dispatchDurableBootstrapTurn(command)
+        : command.type === "thread.bootstrap.request"
+          ? normalizeBootstrapDispatch(
+              threadBootstrapCoordinator.request(command, {
+                actorUserId: options?.actorUserId ?? null,
+              }),
+            )
+          : command.type === "thread.bootstrap.retry"
+            ? normalizeBootstrapDispatch(threadBootstrapCoordinator.retry(command))
+            : command.type === "thread.bootstrap.stop"
+              ? normalizeBootstrapDispatch(threadBootstrapCoordinator.stop(command))
+              : command.type === "thread.bootstrap.continue"
+                ? normalizeBootstrapDispatch(threadBootstrapCoordinator.continue(command))
+                : // T3-CUSTOM(expbkt3): bootstrap-bearing turn starts reach the
+                  // engine unchanged so thread, message, intent, and receipt share
+                  // one transaction. The durable execution coordinator owns every
+                  // post-commit worktree, setup, and provider side effect.
                   command.type === "thread.create" && command.externalSession
                   ? dispatchAttachedThreadCreate(command, command.externalSession)
                   : orchestrationEngine

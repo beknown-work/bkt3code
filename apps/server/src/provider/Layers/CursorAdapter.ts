@@ -132,7 +132,12 @@ interface CursorSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  // T3-CUSTOM(expbkt3): persisted history carries explicit terminal evidence.
+  readonly turns: Array<{
+    id: TurnId;
+    items: Array<unknown>;
+    state: "completed" | "interrupted";
+  }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
   /** Number of sendTurn prompts currently in flight or being prepared.
@@ -1065,10 +1070,16 @@ export function makeCursorAdapter(
             );
 
           const turnRecord = ctx.turns.find((turn) => turn.id === turnId);
+          const turnState = result.stopReason === "cancelled" ? "interrupted" : "completed";
           if (turnRecord) {
             turnRecord.items.push({ prompt: promptParts, result });
+            turnRecord.state = turnState;
           } else {
-            ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+            ctx.turns.push({
+              id: turnId,
+              items: [{ prompt: promptParts, result }],
+              state: turnState,
+            });
           }
           ctx.session = {
             ...ctx.session,
@@ -1214,7 +1225,12 @@ export function makeCursorAdapter(
 
     const adapter = {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      // T3-CUSTOM(expbkt3): explicit busy-turn and resume behavior.
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      },
       startSession,
       sendTurn,
       interruptTurn,

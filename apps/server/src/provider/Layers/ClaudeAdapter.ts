@@ -209,6 +209,8 @@ interface ClaudeSessionContext {
   readonly turns: Array<{
     id: TurnId;
     items: Array<unknown>;
+    // T3-CUSTOM(expbkt3): only explicit completion may suppress guarded recovery.
+    state: "completed" | "interrupted" | "failed";
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly claudeTasks: Map<string, ClaudeTaskState>;
@@ -1500,6 +1502,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       turns: context.turns.map((turn) => ({
         id: turn.id,
         items: [...turn.items],
+        state: turn.state,
       })),
     };
   });
@@ -2086,6 +2089,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context.turns.push({
       id: turnState.turnId,
       items: [...turnState.items],
+      state:
+        status === "completed" ? "completed" : status === "cancelled" ? "interrupted" : "failed",
     });
 
     yield* emitThreadTokenUsage(context, usageSnapshot, {
@@ -4022,6 +4027,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // T3-CUSTOM(expbkt3): coordinator behavior must not infer from provider name.
+      activeTurnInput: "steer",
+      durableResume: "supported",
     },
     startSession,
     sendTurn,
