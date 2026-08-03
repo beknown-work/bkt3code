@@ -11,7 +11,7 @@ import {
   type LinearIssueStatusSummary,
   type UserId,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -20,6 +20,10 @@ import type * as UserMcpProfileStore from "../mcp/UserMcpProfileStore.ts";
 
 const LINEAR_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/u;
 const MAX_ISSUES_PER_REQUEST = 25;
+
+class LinearIssueResolverError extends Data.TaggedError("LinearIssueResolverError")<{
+  readonly message: string;
+}> {}
 
 const ToolCallResponse = Schema.Struct({
   result: Schema.Struct({
@@ -55,12 +59,16 @@ export const parseLinearToolResult = Effect.fn("LinearIssueResolver.parseToolRes
 ) {
   const marker = "Return value: ";
   const markerIndex = content.lastIndexOf(marker);
-  if (markerIndex < 0) return yield* Effect.fail(new Error("Bifrost returned no Linear result."));
+  if (markerIndex < 0) {
+    return yield* new LinearIssueResolverError({ message: "Bifrost returned no Linear result." });
+  }
   const start = markerIndex + marker.length;
   const environmentIndex = content.indexOf("\n\nEnvironment:", start);
   const json = content.slice(start, environmentIndex < 0 ? undefined : environmentIndex).trim();
   return yield* Schema.decodeUnknownEffect(ToolIssueJson)(json).pipe(
-    Effect.mapError(() => new Error("Bifrost returned an invalid Linear result.")),
+    Effect.mapError(
+      () => new LinearIssueResolverError({ message: "Bifrost returned an invalid Linear result." }),
+    ),
   );
 });
 
@@ -70,7 +78,7 @@ const resolveOne = Effect.fn("LinearIssueResolver.resolveOne")(function* (
   identifier: string,
 ) {
   const code = [
-    `issue = LinearForUsers.get_issue(id=${JSON.stringify(identifier)})`,
+    `issue = LinearForUsers.get_issue(id="${identifier}")`,
     'result = {"id": issue.get("id"), "status": issue.get("status"), "statusType": issue.get("statusType"), "url": issue.get("url"), "updatedAt": issue.get("updatedAt")}',
   ].join("\n");
   const request = HttpClientRequest.post(BIFROST_MCP_URL).pipe(
@@ -85,15 +93,18 @@ const resolveOne = Effect.fn("LinearIssueResolver.resolveOne")(function* (
   );
   const response = yield* httpClient.execute(request);
   if (response.status < 200 || response.status >= 300) {
-    return yield* Effect.fail(new Error(`Bifrost returned HTTP ${response.status}.`));
+    return yield* new LinearIssueResolverError({
+      message: `Bifrost returned HTTP ${response.status}.`,
+    });
   }
   const body = yield* HttpClientResponse.schemaBodyJson(ToolCallResponse)(response);
   const content = body.result.content.find(
     (entry): entry is typeof entry & { readonly text: string } =>
       entry.type === "text" && entry.text !== undefined,
   )?.text;
-  if (content === undefined)
-    return yield* Effect.fail(new Error("Bifrost returned no text result."));
+  if (content === undefined) {
+    return yield* new LinearIssueResolverError({ message: "Bifrost returned no text result." });
+  }
   const issue = yield* parseLinearToolResult(content);
   return {
     identifier: issue.id.toUpperCase(),
@@ -130,7 +141,7 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
             item.id === BIFROST_MCP_INTEGRATION_ID && item.enabled && item.credentialConfigured,
         ),
       ),
-      Effect.catch(() => Effect.succeed(false)),
+      Effect.orElseSucceed(() => false),
     );
     const credential = configured
       ? yield* input.profiles
@@ -138,7 +149,7 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
             input.userId,
             PersonalMcpIntegrationId.make(BIFROST_MCP_INTEGRATION_ID),
           )
-          .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          .pipe(Effect.orElseSucceed(() => undefined))
       : undefined;
     if (!credential) {
       return {
@@ -156,15 +167,8 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
       (identifier) =>
         resolveOne(input.httpClient, credential, identifier).pipe(
           Effect.timeout("12 seconds"),
-          Effect.catchAllCause((cause) =>
-            Effect.succeed(
-              unavailable(
-                identifier,
-                Cause.isInterruptedOnly(cause)
-                  ? "Linear status request timed out."
-                  : "Linear status is temporarily unavailable.",
-              ),
-            ),
+          Effect.catchCause(() =>
+            Effect.succeed(unavailable(identifier, "Linear status is temporarily unavailable.")),
           ),
         ),
       { concurrency: 2 },
