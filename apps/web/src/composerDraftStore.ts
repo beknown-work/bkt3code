@@ -2615,7 +2615,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               return state;
             }
             const base = existing ?? createEmptyThreadDraft();
-            // T3-CUSTOM(expbkt3): null is the reverse action for a fresh
+            // T3-CUSTOM(expbkt3): BEGIN — null is the reverse action for a fresh
             // thread's explicit model override; clear both model and options.
             const nextMap = normalized ? { ...base.modelSelectionByProvider } : {};
             if (normalized) {
@@ -2635,6 +2635,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               }
             }
             const nextActiveProvider = normalized?.instanceId ?? null;
+            // T3-CUSTOM(expbkt3): END
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
               base.activeProvider === nextActiveProvider
