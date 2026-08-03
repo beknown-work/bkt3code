@@ -3784,7 +3784,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("does not fail PR worktree prep when setup terminal startup fails", () =>
+  it.effect("keeps the PR worktree and returns its setup terminal when setup fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -3816,23 +3816,29 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
                 threadId: input.threadId,
                 worktreePath: input.worktreePath,
-                operation: "openTerminal",
+                operation: "runCommand",
+                terminalId: "setup-pr-184",
                 cause: new Error("terminal start failed"),
               }),
             ),
         },
       });
 
-      const result = yield* preparePullRequestThread(manager, {
+      const error = yield* preparePullRequestThread(manager, {
         cwd: repoDir,
         reference: "184",
         mode: "worktree",
         threadId: asThreadId("thread-pr-setup-failure"),
-      });
+      }).pipe(Effect.flip);
 
-      expect(result.branch).toBe("feature/pr-setup-failure");
-      expect(result.worktreePath).not.toBeNull();
-      expect(NodeFS.existsSync(result.worktreePath as string)).toBe(true);
+      expect(error._tag).toBe("GitManagerError");
+      if (error._tag !== "GitManagerError") {
+        throw new Error(`Expected GitManagerError, received ${error._tag}`);
+      }
+      expect(error.terminalId).toBe("setup-pr-184");
+      expect(error.message).toContain("Project setup script operation");
+      const worktrees = yield* runGit(repoDir, ["worktree", "list", "--porcelain"]);
+      expect(worktrees.stdout).toContain("branch refs/heads/feature/pr-setup-failure");
     }),
   );
 

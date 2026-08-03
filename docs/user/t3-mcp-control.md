@@ -123,6 +123,7 @@ custom-header authentication are also supported.
 | `t3_respond_approval`         | Resolve a pending provider approval using the request's allowed decision.                                             |
 | `t3_respond_user_input`       | Answer a pending structured user-input request.                                                                       |
 | `t3_create_project`           | Register or safely create a workspace project on a fresh T3 server. External operators only.                          |
+| `t3_update_project`           | Update project creation defaults, model/options, and project actions. External operators only.                        |
 | `t3_create_session`           | Create a user-owned session. User-bound provider sessions, external users, and legacy external operators.             |
 | `t3_submit_plan`              | Publish Markdown or HTML and start an attached Plannotator review gate.                                               |
 | `t3_list_plannotator_reviews` | Inspect review state, decision, feedback, proxy path, and diagnostics.                                                |
@@ -132,6 +133,13 @@ custom-header authentication are also supported.
 The MCP JSON schemas describe every field. Agents should call
 `t3_get_configuration` before changing models and `t3_get_session` before
 answering approvals or structured input.
+
+`t3_create_session` resolves omitted workspace, model/options, access, and Build/Plan fields from
+the target project's defaults and then that environment's app defaults. Its structured `workspace`
+override can request Local, an existing worktree, or a new worktree with a Local or Origin base ref.
+It returns `threadId`, `bootstrapId`, and `bootstrapStatus: "queued"` after durable queueing. When a
+prompt is supplied, the first turn remains pending until new-worktree setup succeeds or a user
+bypasses a failed setup.
 
 ## Recommended triage loop
 

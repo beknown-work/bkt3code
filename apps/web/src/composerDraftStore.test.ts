@@ -1511,6 +1511,19 @@ describe("composerDraftStore setModelSelection", () => {
       draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_INSTANCE],
     ).toEqual(modelSelection(CODEX_DRIVER, "gpt-5.3-codex"));
   });
+
+  // T3-CUSTOM(expbkt3): new drafts can return to inherited creation defaults.
+  it("clears the active model and options when returning to creation defaults", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(
+      threadRef,
+      modelSelection(CODEX_DRIVER, "gpt-5.3-codex", { reasoningEffort: "high" }),
+    );
+
+    store.setModelSelection(threadRef, null, { replaceOptions: true });
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore sticky composer settings", () => {

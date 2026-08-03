@@ -64,6 +64,7 @@ import Migration0045 from "./Migrations/045_EnvironmentUsers.ts";
 // T3-CUSTOM(expbkt3): fork migrations, numbered 1000+.
 import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
 import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
+import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -143,6 +144,7 @@ const migrationEntries = [
   // T3-CUSTOM(expbkt3): fork migrations live at 1000+ (see the rule above).
   [1000, "ProjectionThreadsPriority", Migration1000],
   [1001, "SessionRecoveryState", Migration1001],
+  [1002, "ThreadBootstrapAndCreationDefaults", Migration1002],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

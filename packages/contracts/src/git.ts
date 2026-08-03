@@ -369,6 +369,9 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
   operation: Schema.String,
   cwd: Schema.String,
   detail: Schema.String,
+  // T3-CUSTOM(expbkt3): setup failures keep the created PR worktree and expose
+  // the interactive terminal containing the failure output.
+  terminalId: Schema.optional(TrimmedNonEmptyStringSchema),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {

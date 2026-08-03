@@ -173,6 +173,71 @@ it.effect("decodes historical project.created payloads with a default provider",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.instanceId, "codex");
+    assert.deepStrictEqual(parsed.threadCreationDefaults, {
+      environmentMode: null,
+      worktreeBaseRef: null,
+      runtimeMode: null,
+      interactionMode: null,
+    });
+  }),
+);
+
+it.effect("decodes project creation defaults with an exact origin branch", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      threadCreationDefaults: {
+        environmentMode: "worktree",
+        worktreeBaseRef: {
+          kind: "branch",
+          source: "origin",
+          branch: "develop",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      },
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.threadCreationDefaults, {
+      environmentMode: "worktree",
+      worktreeBaseRef: {
+        kind: "branch",
+        source: "origin",
+        branch: "develop",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+  }),
+);
+
+it.effect("accepts a bootstrap request whose creation settings are omitted", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.bootstrap.request",
+      commandId: "cmd-bootstrap-request",
+      bootstrapId: "bootstrap-1",
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Prepared thread",
+      initialTurn: {
+        messageId: "message-1",
+        text: "Start after setup",
+        attachments: [],
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.bootstrap.request");
+    if (parsed.type !== "thread.bootstrap.request") return;
+    assert.strictEqual(parsed.overrides, undefined);
+    assert.strictEqual(parsed.initialTurn?.text, "Start after setup");
   }),
 );
 

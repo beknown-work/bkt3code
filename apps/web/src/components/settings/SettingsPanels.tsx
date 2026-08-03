@@ -607,6 +607,19 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
         ? ["New worktrees start from origin"]
         : []),
+      ...(!Equal.equals(
+        settings.defaultThreadModelSelection,
+        DEFAULT_UNIFIED_SETTINGS.defaultThreadModelSelection,
+      )
+        ? ["Default agent model"]
+        : []),
+      ...(settings.defaultThreadRuntimeMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadRuntimeMode
+        ? ["Default access mode"]
+        : []),
+      ...(settings.defaultThreadInteractionMode !==
+      DEFAULT_UNIFIED_SETTINGS.defaultThreadInteractionMode
+        ? ["Default starting mode"]
+        : []),
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Add project base directory"]
         : []),
@@ -626,6 +639,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
+      settings.defaultThreadInteractionMode,
+      settings.defaultThreadModelSelection,
+      settings.defaultThreadRuntimeMode,
       settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
       settings.environmentIdentificationMode,
@@ -668,6 +684,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
+      defaultThreadModelSelection: DEFAULT_UNIFIED_SETTINGS.defaultThreadModelSelection,
+      defaultThreadRuntimeMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadRuntimeMode,
+      defaultThreadInteractionMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadInteractionMode,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
@@ -1149,6 +1168,20 @@ export function GeneralSettingsPanel() {
     textGenInstanceId,
     textGenModel,
   );
+  // T3-CUSTOM(expbkt3): app-level agent defaults are distinct from the small
+  // text-generation model used for titles and summaries.
+  const defaultThreadModelSelection = settings.defaultThreadModelSelection;
+  const defaultThreadInstanceEntry = textGenerationModelInstanceEntries.find(
+    (entry) => entry.instanceId === defaultThreadModelSelection.instanceId,
+  );
+  const defaultThreadProvider: ProviderDriverKind =
+    defaultThreadInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
+  const defaultThreadModelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    serverProviders,
+    defaultThreadModelSelection.instanceId,
+    defaultThreadModelSelection.model,
+  );
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
@@ -1440,16 +1473,12 @@ export function GeneralSettingsPanel() {
           {...searchableSetting("new-threads")}
           description="Pick the default workspace mode for newly created draft threads."
           resetAction={
-            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ||
-            settings.newWorktreesStartFromOrigin !==
-              DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin ? (
+            settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
               <SettingResetButton
-                label="new threads"
+                label="default thread location"
                 onClick={() =>
                   updateSettings({
                     defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
-                    newWorktreesStartFromOrigin:
-                      DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
                   })
                 }
               />
@@ -1511,6 +1540,145 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          title="Default agent model"
+          description="Provider, model, and model options used when a new thread does not override them."
+          resetAction={
+            !Equal.equals(
+              settings.defaultThreadModelSelection,
+              DEFAULT_UNIFIED_SETTINGS.defaultThreadModelSelection,
+            ) ? (
+              <SettingResetButton
+                label="default agent model"
+                onClick={() =>
+                  updateSettings({
+                    defaultThreadModelSelection:
+                      DEFAULT_UNIFIED_SETTINGS.defaultThreadModelSelection,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <ProviderModelPicker
+                activeInstanceId={defaultThreadModelSelection.instanceId}
+                model={defaultThreadModelSelection.model}
+                lockedProvider={null}
+                instanceEntries={textGenerationModelInstanceEntries}
+                modelOptionsByInstance={defaultThreadModelOptionsByInstance}
+                triggerVariant="outline"
+                onInstanceModelChange={(instanceId, model) =>
+                  updateSettings({
+                    defaultThreadModelSelection: createModelSelection(instanceId, model),
+                  })
+                }
+              />
+              <TraitsPicker
+                provider={defaultThreadProvider}
+                models={defaultThreadInstanceEntry?.models ?? []}
+                model={defaultThreadModelSelection.model}
+                prompt=""
+                onPromptChange={() => {}}
+                modelOptions={defaultThreadModelSelection.options}
+                allowPromptInjectedEffort={false}
+                triggerVariant="outline"
+                onModelOptionsChange={(options) =>
+                  updateSettings({
+                    defaultThreadModelSelection: createModelSelection(
+                      defaultThreadModelSelection.instanceId,
+                      defaultThreadModelSelection.model,
+                      options,
+                    ),
+                  })
+                }
+              />
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="Default access mode"
+          description="Execution access used when a new thread does not provide an override."
+          resetAction={
+            settings.defaultThreadRuntimeMode !==
+            DEFAULT_UNIFIED_SETTINGS.defaultThreadRuntimeMode ? (
+              <SettingResetButton
+                label="default access mode"
+                onClick={() =>
+                  updateSettings({
+                    defaultThreadRuntimeMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadRuntimeMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.defaultThreadRuntimeMode}
+              onValueChange={(value) => {
+                if (
+                  value === "approval-required" ||
+                  value === "auto-accept-edits" ||
+                  value === "auto" ||
+                  value === "full-access"
+                ) {
+                  updateSettings({ defaultThreadRuntimeMode: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-48" aria-label="Default access mode">
+                <SelectValue>{settings.defaultThreadRuntimeMode}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="approval-required">Ask for approval</SelectItem>
+                <SelectItem value="auto-accept-edits">Auto-accept edits</SelectItem>
+                <SelectItem value="auto">Provider default</SelectItem>
+                <SelectItem value="full-access">Full access</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Default starting mode"
+          description="Start new threads in Build or Plan mode unless explicitly overridden."
+          resetAction={
+            settings.defaultThreadInteractionMode !==
+            DEFAULT_UNIFIED_SETTINGS.defaultThreadInteractionMode ? (
+              <SettingResetButton
+                label="default starting mode"
+                onClick={() =>
+                  updateSettings({
+                    defaultThreadInteractionMode:
+                      DEFAULT_UNIFIED_SETTINGS.defaultThreadInteractionMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.defaultThreadInteractionMode}
+              onValueChange={(value) => {
+                if (value === "default" || value === "plan") {
+                  updateSettings({ defaultThreadInteractionMode: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Default starting mode">
+                <SelectValue>
+                  {settings.defaultThreadInteractionMode === "plan" ? "Plan" : "Build"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="default">Build</SelectItem>
+                <SelectItem value="plan">Plan</SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("add-project-starts-in")}

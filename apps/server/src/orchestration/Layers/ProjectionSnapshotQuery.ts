@@ -12,6 +12,9 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
+  ProjectThreadCreationDefaults,
+  ResolvedThreadBootstrapRequest,
+  ThreadBootstrapProgress,
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -49,6 +52,8 @@ import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheck
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
+// T3-CUSTOM(expbkt3): hydrate durable bootstrap progress into thread detail snapshots.
+import { ProjectionThreadBootstrap } from "../../persistence/Services/ProjectionThreadBootstraps.ts";
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
@@ -70,6 +75,7 @@ const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    threadCreationDefaults: Schema.fromJsonString(ProjectThreadCreationDefaults),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -89,6 +95,12 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
     sequence: Schema.NullOr(NonNegativeInt),
+  }),
+);
+const ProjectionThreadBootstrapDbRowSchema = ProjectionThreadBootstrap.mapFields(
+  Struct.assign({
+    progress: Schema.fromJsonString(ThreadBootstrapProgress),
+    request: Schema.fromJsonString(ResolvedThreadBootstrapRequest),
   }),
 );
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
@@ -175,6 +187,8 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
+  // T3-CUSTOM(expbkt3): snapshots must not outrun durable bootstrap progress.
+  ORCHESTRATION_PROJECTOR_NAMES.threadBootstraps,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
   ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
 ] as const;
@@ -300,6 +314,7 @@ function mapProjectShellRow(
     workspaceRoot: row.workspaceRoot,
     repositoryIdentity,
     defaultModelSelection: row.defaultModelSelection,
+    threadCreationDefaults: row.threadCreationDefaults,
     scripts: row.scripts,
     ownerUserId: row.ownerUserId,
     memberUserIds,
@@ -450,6 +465,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          thread_creation_defaults_json AS "threadCreationDefaults",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -495,6 +511,45 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  // T3-CUSTOM(expbkt3): bootstrap output stays in terminal history; snapshots
+  // load only the sanitized progress object plus the internal request for recovery.
+  const listThreadBootstrapRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadBootstrapDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          bootstrap_id AS "bootstrapId",
+          status,
+          public_state_json AS "progress",
+          request_json AS "request",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_bootstraps
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
+  const getThreadBootstrapRowByThread = SqlSchema.findOneOption({
+    Request: Schema.Struct({ threadId: ThreadId }),
+    Result: ProjectionThreadBootstrapDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          bootstrap_id AS "bootstrapId",
+          status,
+          public_state_json AS "progress",
+          request_json AS "request",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_bootstraps
+        WHERE thread_id = ${threadId}
+        LIMIT 1
       `,
   });
 
@@ -911,6 +966,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          thread_creation_defaults_json AS "threadCreationDefaults",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -934,6 +990,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          thread_creation_defaults_json AS "threadCreationDefaults",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -1308,6 +1365,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listThreadBootstrapRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listThreadBootstraps:query",
+                "ProjectionSnapshotQuery.getSnapshot:listThreadBootstraps:decodeRows",
+              ),
+            ),
+          ),
           listThreadMessageRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1395,6 +1460,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ([
             projectRows,
             threadRows,
+            bootstrapRows,
             messageRows,
             proposedPlanRows,
             activityRows,
@@ -1416,6 +1482,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 Array<OrchestrationTurnCatchupSummary>
               >();
               const sessionsByThread = new Map<string, OrchestrationSession>();
+              const bootstrapByThread = new Map(
+                bootstrapRows.map((row) => [row.threadId, row.progress] as const),
+              );
               const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
               const memberUserIdsByThread = groupThreadMemberIds(threadMemberRows);
               const memberUserIdsByProject = groupProjectMemberIds(projectMemberRows);
@@ -1573,6 +1642,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 workspaceRoot: row.workspaceRoot,
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
                 defaultModelSelection: row.defaultModelSelection,
+                threadCreationDefaults: row.threadCreationDefaults,
                 scripts: row.scripts,
                 ownerUserId: row.ownerUserId,
                 memberUserIds: memberUserIdsByProject.get(row.projectId) ?? [],
@@ -1591,6 +1661,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 sourceControlProfileId: row.sourceControlProfileId,
+                bootstrap: bootstrapByThread.get(row.threadId) ?? null,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 ownerUserId: row.ownerUserId,
                 memberUserIds: memberUserIdsByThread.get(row.threadId) ?? [],
@@ -1655,6 +1726,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listThreadBootstrapRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listThreadBootstraps:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listThreadBootstraps:decodeRows",
+              ),
+            ),
+          ),
           listThreadProposedPlanRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1710,6 +1789,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ([
             projectRows,
             threadRows,
+            bootstrapRows,
             proposedPlanRows,
             sessionRows,
             latestTurnRows,
@@ -1723,6 +1803,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const threads: OrchestrationThread[] = [];
               const memberUserIdsByThread = groupThreadMemberIds(threadMemberRows);
               const memberUserIdsByProject = groupProjectMemberIds(projectMemberRows);
+              const bootstrapByThread = new Map(
+                bootstrapRows.map((row) => [row.threadId, row.progress] as const),
+              );
 
               for (let index = 0; index < projectRows.length; index += 1) {
                 const row = projectRows[index];
@@ -1735,6 +1818,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   title: row.title,
                   workspaceRoot: row.workspaceRoot,
                   defaultModelSelection: row.defaultModelSelection,
+                  threadCreationDefaults: row.threadCreationDefaults,
                   scripts: row.scripts,
                   ownerUserId: row.ownerUserId,
                   memberUserIds: memberUserIdsByProject.get(row.projectId) ?? [],
@@ -1829,6 +1913,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   sourceControlProfileId: row.sourceControlProfileId,
+                  bootstrap: bootstrapByThread.get(row.threadId) ?? null,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   ownerUserId: row.ownerUserId,
                   memberUserIds: memberUserIdsByThread.get(row.threadId) ?? [],
@@ -2303,6 +2388,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     workspaceRoot: option.value.workspaceRoot,
                     repositoryIdentity,
                     defaultModelSelection: option.value.defaultModelSelection,
+                    threadCreationDefaults: option.value.threadCreationDefaults,
                     scripts: option.value.scripts,
                     ownerUserId: option.value.ownerUserId,
                     memberUserIds: memberRows.map((row) => row.userId),
@@ -2571,6 +2657,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         latestTurnRow,
         sessionRow,
         memberRows,
+        bootstrapRow,
       ] = yield* Effect.all([
         getActiveThreadRowById({ threadId }).pipe(
           Effect.mapError(
@@ -2644,6 +2731,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
+        getThreadBootstrapRowByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadDetailById:getBootstrap:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:getBootstrap:decodeRow",
+            ),
+          ),
+        ),
       ]);
 
       if (Option.isNone(threadRow)) {
@@ -2660,6 +2755,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         sourceControlProfileId: threadRow.value.sourceControlProfileId,
+        bootstrap: Option.isSome(bootstrapRow) ? bootstrapRow.value.progress : null,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         ownerUserId: threadRow.value.ownerUserId,
         memberUserIds: memberRows.map((row) => row.userId),

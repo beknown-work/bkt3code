@@ -131,6 +131,43 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
+
+// T3-CUSTOM(expbkt3): portable new-thread defaults shared by web, HTTP, and MCP.
+// This lives in orchestration rather than settings so project events and server
+// settings can both depend on the shape without creating a package cycle.
+export const ThreadCreationEnvironmentMode = Schema.Literals(["local", "worktree"]);
+export type ThreadCreationEnvironmentMode = typeof ThreadCreationEnvironmentMode.Type;
+
+export const WorktreeBaseRefSource = Schema.Literals(["local", "origin"]);
+export type WorktreeBaseRefSource = typeof WorktreeBaseRefSource.Type;
+
+export const WorktreeBaseRef = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("repository-default"),
+    source: WorktreeBaseRefSource,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("branch"),
+    source: WorktreeBaseRefSource,
+    branch: TrimmedNonEmptyString,
+  }),
+]);
+export type WorktreeBaseRef = typeof WorktreeBaseRef.Type;
+
+const EMPTY_PROJECT_THREAD_CREATION_DEFAULTS = {
+  environmentMode: null,
+  worktreeBaseRef: null,
+  runtimeMode: null,
+  interactionMode: null,
+} as const;
+
+export const ProjectThreadCreationDefaults = Schema.Struct({
+  environmentMode: Schema.NullOr(ThreadCreationEnvironmentMode),
+  worktreeBaseRef: Schema.NullOr(WorktreeBaseRef),
+  runtimeMode: Schema.NullOr(RuntimeMode),
+  interactionMode: Schema.NullOr(ProviderInteractionMode),
+}).pipe(Schema.withDecodingDefault(Effect.succeed(EMPTY_PROJECT_THREAD_CREATION_DEFAULTS)));
+export type ProjectThreadCreationDefaults = typeof ProjectThreadCreationDefaults.Type;
 export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
@@ -235,6 +272,10 @@ export const OrchestrationProject = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  // T3-CUSTOM(expbkt3): null fields inherit the owning environment's settings.
+  threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults).pipe(
+    Schema.withDecodingDefault(Effect.succeed(EMPTY_PROJECT_THREAD_CREATION_DEFAULTS)),
+  ),
   scripts: Schema.Array(ProjectScript),
   ownerUserId: OwnerUserIdField,
   memberUserIds: MemberUserIdsField,
@@ -444,6 +485,45 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+// T3-CUSTOM(expbkt3): public, output-free progress for durable thread bootstrap.
+export const ThreadBootstrapStepStatus = Schema.Literals([
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "skipped",
+  "bypassed",
+]);
+export type ThreadBootstrapStepStatus = typeof ThreadBootstrapStepStatus.Type;
+
+export const ThreadBootstrapStep = Schema.Struct({
+  status: ThreadBootstrapStepStatus,
+  attempt: NonNegativeInt,
+  terminalId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  exitCode: Schema.NullOr(Schema.Int).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  error: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+export type ThreadBootstrapStep = typeof ThreadBootstrapStep.Type;
+
+export const ThreadBootstrapStatus = Schema.Literals(["queued", "running", "failed", "ready"]);
+export type ThreadBootstrapStatus = typeof ThreadBootstrapStatus.Type;
+
+export const ThreadBootstrapProgress = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  status: ThreadBootstrapStatus,
+  worktree: ThreadBootstrapStep,
+  setup: ThreadBootstrapStep,
+  agent: ThreadBootstrapStep,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ThreadBootstrapProgress = typeof ThreadBootstrapProgress.Type;
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",
@@ -548,6 +628,10 @@ export const OrchestrationThread = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // T3-CUSTOM(expbkt3): absent on historical and pre-capability servers.
+  bootstrap: Schema.optional(Schema.NullOr(ThreadBootstrapProgress)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // T3-CUSTOM(expbkt3): optional so payloads from pre-priority servers decode.
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -585,6 +669,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults).pipe(
+    Schema.withDecodingDefault(Effect.succeed(EMPTY_PROJECT_THREAD_CREATION_DEFAULTS)),
+  ),
   scripts: Schema.Array(ProjectScript),
   ownerUserId: OwnerUserIdField,
   memberUserIds: MemberUserIdsField,
@@ -729,6 +816,8 @@ export const ProjectCreateCommand = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  // T3-CUSTOM(expbkt3): per-field project overrides; omitted means inherit all.
+  threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults),
   createdAt: IsoDateTime,
 });
 
@@ -739,6 +828,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -775,6 +865,144 @@ const ThreadCreateCommand = Schema.Struct({
   // into the thread.created event, so the event log stays upstream-shaped.
   externalSession: Schema.optional(ThreadExternalSessionAttachment),
 });
+
+// T3-CUSTOM(expbkt3): high-level, server-resolved creation entrypoint. Unlike
+// thread.create, omitted values deliberately flow through project/app defaults.
+const ThreadBootstrapWorkspaceOverride = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("local"),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("existing-worktree"),
+    path: TrimmedNonEmptyString,
+    branch: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("new-worktree"),
+    baseRef: Schema.optional(WorktreeBaseRef),
+    newBranch: Schema.optional(TrimmedNonEmptyString),
+  }),
+]);
+export type ThreadBootstrapWorkspaceOverride = typeof ThreadBootstrapWorkspaceOverride.Type;
+
+const ThreadBootstrapOverrides = Schema.Struct({
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  workspace: Schema.optional(ThreadBootstrapWorkspaceOverride),
+});
+export type ThreadBootstrapOverrides = typeof ThreadBootstrapOverrides.Type;
+
+export const ThreadBootstrapRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.request"),
+  commandId: CommandId,
+  bootstrapId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  initialTurn: Schema.optional(
+    Schema.Struct({
+      messageId: MessageId,
+      text: Schema.String,
+      attachments: Schema.Array(ChatAttachment),
+      titleSeed: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  overrides: Schema.optional(ThreadBootstrapOverrides),
+  sourceControlProfileId: Schema.optional(Schema.NullOr(SourceControlProfileId)),
+  priority: Schema.optional(Schema.NullOr(ThreadPriority)),
+  ownerUserId: Schema.optional(UserId),
+  createdAt: IsoDateTime,
+});
+export type ThreadBootstrapRequestCommand = typeof ThreadBootstrapRequestCommand.Type;
+
+const ClientThreadBootstrapRequestCommand = ThreadBootstrapRequestCommand.mapFields(
+  Struct.assign({
+    initialTurn: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        attachments: Schema.Array(UploadChatAttachment),
+        titleSeed: Schema.optional(TrimmedNonEmptyString),
+      }),
+    ),
+  }),
+);
+
+export const ThreadBootstrapRetryCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.retry"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  step: Schema.Literals(["worktree", "setup"]),
+  baseRef: Schema.optional(WorktreeBaseRef),
+  createdAt: IsoDateTime,
+});
+export type ThreadBootstrapRetryCommand = typeof ThreadBootstrapRetryCommand.Type;
+
+export const ThreadBootstrapStopCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.stop"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+export type ThreadBootstrapStopCommand = typeof ThreadBootstrapStopCommand.Type;
+
+export const ThreadBootstrapContinueCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.continue"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+export type ThreadBootstrapContinueCommand = typeof ThreadBootstrapContinueCommand.Type;
+
+export const ResolvedThreadBootstrapWorkspace = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("local"),
+    path: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("existing-worktree"),
+    path: TrimmedNonEmptyString,
+    branch: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("new-worktree"),
+    projectCwd: TrimmedNonEmptyString,
+    baseRef: WorktreeBaseRef,
+    newBranch: Schema.optional(TrimmedNonEmptyString),
+    // T3-CUSTOM(expbkt3): deterministic crash-recovery identity. Older
+    // persisted requests may omit it and are recovered as a visible failure.
+    intendedPath: Schema.optional(TrimmedNonEmptyString),
+  }),
+]);
+export type ResolvedThreadBootstrapWorkspace = typeof ResolvedThreadBootstrapWorkspace.Type;
+
+export const ResolvedThreadBootstrapRequest = Schema.Struct({
+  bootstrapId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  workspace: ResolvedThreadBootstrapWorkspace,
+  initialTurn: Schema.optional(
+    Schema.Struct({
+      messageId: MessageId,
+      text: Schema.String,
+      attachments: Schema.Array(ChatAttachment),
+      titleSeed: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId),
+  priority: Schema.NullOr(ThreadPriority),
+  ownerUserId: Schema.optional(UserId),
+  createdAt: IsoDateTime,
+});
+export type ResolvedThreadBootstrapRequest = typeof ResolvedThreadBootstrapRequest.Type;
 
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
@@ -1064,6 +1292,10 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMemberRemoveCommand,
   ProjectOwnerTransferCommand,
   ThreadCreateCommand,
+  ThreadBootstrapRequestCommand,
+  ThreadBootstrapRetryCommand,
+  ThreadBootstrapStopCommand,
+  ThreadBootstrapContinueCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1097,6 +1329,10 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMemberRemoveCommand,
   ProjectOwnerTransferCommand,
   ThreadCreateCommand,
+  ClientThreadBootstrapRequestCommand,
+  ThreadBootstrapRetryCommand,
+  ThreadBootstrapStopCommand,
+  ThreadBootstrapContinueCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -1224,6 +1460,51 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+// T3-CUSTOM(expbkt3): internal durable-bootstrap event commands. Public
+// callers use the request/retry/stop/continue commands above.
+const ThreadBootstrapRequestRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.request.record"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  request: ResolvedThreadBootstrapRequest,
+  progress: ThreadBootstrapProgress,
+  createdAt: IsoDateTime,
+});
+
+const ThreadBootstrapStepUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.step.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  step: Schema.Literals(["worktree", "setup", "agent"]),
+  status: ThreadBootstrapStepStatus,
+  attempt: NonNegativeInt,
+  terminalId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  exitCode: Schema.optional(Schema.NullOr(Schema.Int)),
+  error: Schema.optional(Schema.NullOr(Schema.String)),
+  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  updatedAt: IsoDateTime,
+});
+
+const ThreadBootstrapControlRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.control.record"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  action: Schema.Literals(["stop", "retry", "continue"]),
+  step: Schema.optional(Schema.Literals(["worktree", "setup"])),
+  baseRef: Schema.optional(WorktreeBaseRef),
+  createdAt: IsoDateTime,
+});
+
+const ThreadBootstrapCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.bootstrap.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  completedAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSourceControlProfileSetCommand,
   ThreadSessionSetCommand,
@@ -1235,6 +1516,10 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadBootstrapRequestRecordCommand,
+  ThreadBootstrapStepUpdateCommand,
+  ThreadBootstrapControlRecordCommand,
+  ThreadBootstrapCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1281,6 +1566,13 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.catchup-summary-requested",
   "thread.catchup-summary-updated",
   "thread.activity-appended",
+  // T3-CUSTOM(expbkt3): durable workspace preparation lifecycle.
+  "thread.bootstrap-requested",
+  "thread.bootstrap-step-updated",
+  "thread.bootstrap-stop-requested",
+  "thread.bootstrap-retry-requested",
+  "thread.bootstrap-continue-requested",
+  "thread.bootstrap-completed",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1294,6 +1586,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults).pipe(
+    Schema.withDecodingDefault(Effect.succeed(EMPTY_PROJECT_THREAD_CREATION_DEFAULTS)),
+  ),
   scripts: Schema.Array(ProjectScript),
   createdByUserId: Schema.optional(Schema.NullOr(UserId)),
   createdAt: IsoDateTime,
@@ -1306,6 +1601,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });
@@ -1531,6 +1827,40 @@ export const ThreadCatchupSummaryUpdatedPayload = Schema.Struct({
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
+});
+
+export const ThreadBootstrapRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  request: ResolvedThreadBootstrapRequest,
+  progress: ThreadBootstrapProgress,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadBootstrapStepUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  step: Schema.Literals(["worktree", "setup", "agent"]),
+  status: ThreadBootstrapStepStatus,
+  attempt: NonNegativeInt,
+  terminalId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  exitCode: Schema.optional(Schema.NullOr(Schema.Int)),
+  error: Schema.optional(Schema.NullOr(Schema.String)),
+  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadBootstrapControlRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  step: Schema.optional(Schema.Literals(["worktree", "setup"])),
+  baseRef: Schema.optional(WorktreeBaseRef),
+  requestedAt: IsoDateTime,
+});
+
+export const ThreadBootstrapCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  bootstrapId: TrimmedNonEmptyString,
+  completedAt: IsoDateTime,
 });
 
 export const ThreadMemberAddedPayload = Schema.Struct({
@@ -1780,6 +2110,36 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.bootstrap-requested"),
+    payload: ThreadBootstrapRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.bootstrap-step-updated"),
+    payload: ThreadBootstrapStepUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.bootstrap-stop-requested"),
+    payload: ThreadBootstrapControlRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.bootstrap-retry-requested"),
+    payload: ThreadBootstrapControlRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.bootstrap-continue-requested"),
+    payload: ThreadBootstrapControlRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.bootstrap-completed"),
+    payload: ThreadBootstrapCompletedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

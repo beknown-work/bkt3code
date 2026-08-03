@@ -23,9 +23,14 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import { ProjectionThreadBootstrapRepositoryLive } from "../persistence/Layers/ProjectionThreadBootstraps.ts";
+import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
+// T3-CUSTOM(expbkt3): high-level creation is resolved and queued by one durable coordinator.
+import * as ThreadBootstrapCoordinator from "../thread-bootstrap/Coordinator.ts";
+import * as ThreadCreationDefaultsResolver from "../thread-bootstrap/DefaultsResolver.ts";
 // T3-CUSTOM(expbkt3): attach-to-external-session.
 import {
   buildExternalResumeCursor,
@@ -60,6 +65,11 @@ function setupFailureDetail(error: ProjectSetupScriptRunner.ProjectSetupScriptRu
       return setupFailureDescription(error.cause);
     case "ProjectSetupScriptProjectNotFoundError":
       return "Project was not found for setup script execution.";
+    case "ProjectSetupScriptCommandError":
+      return (
+        error.detail ??
+        `Setup terminal exited with code ${String(error.exitCode)} and signal ${String(error.exitSignal)}.`
+      );
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -109,6 +119,8 @@ export const make = Effect.gen(function* () {
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
+  // T3-CUSTOM(expbkt3): shared web/HTTP/WebSocket/MCP bootstrap path.
+  const threadBootstrapCoordinator = yield* ThreadBootstrapCoordinator.ThreadBootstrapCoordinator;
   // T3-CUSTOM(expbkt3): attach-to-external-session seeds the provider binding
   // before the first turn, which is all the existing resume path needs.
   const providerService = yield* ProviderService;
@@ -321,7 +333,7 @@ export const make = Effect.gen(function* () {
               onFailure: (error) =>
                 recordSetupScriptLaunchFailure({ error, requestedAt, worktreePath }),
               onSuccess: (setupResult) =>
-                setupResult.status === "started"
+                setupResult.status === "completed"
                   ? recordSetupScriptStarted({
                       requestedAt,
                       worktreePath,
@@ -560,21 +572,139 @@ export const make = Effect.gen(function* () {
     });
     // T3-CUSTOM(expbkt3): END
 
-    const baseDispatchEffect =
-      command.type === "thread.turn.start" && command.bootstrap
-        ? dispatchBootstrapTurnStart(command)
-        : // T3-CUSTOM(expbkt3): attach-to-external-session. Validate first, so
-          // a bad session id fails before a thread exists, then seed the
-          // provider binding so the first turn resumes instead of starting new.
-          command.type === "thread.create" && command.externalSession
-          ? dispatchAttachedThreadCreate(command, command.externalSession)
-          : orchestrationEngine
-              .dispatch(command, dispatchOptions)
-              .pipe(
-                Effect.mapError((cause) =>
-                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+    const normalizeBootstrapDispatch = <A>(
+      effect: Effect.Effect<A, ThreadBootstrapCoordinator.ThreadBootstrapCoordinatorError>,
+    ): Effect.Effect<A, OrchestrationDispatchCommandError> =>
+      effect.pipe(
+        Effect.mapError((cause) =>
+          toDispatchCommandError(cause, "Failed to dispatch thread bootstrap command"),
+        ),
+      );
+
+    // T3-CUSTOM(expbkt3): route every legacy bootstrap through the durable
+    // coordinator. Empty pre-created threads are adopted instead of recreated.
+    const dispatchLegacyThreadCreation = (
+      turnStart: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+    ) =>
+      Effect.gen(function* () {
+        const bootstrap = turnStart.bootstrap;
+        if (!bootstrap) {
+          return yield* dispatchBootstrapTurnStart(turnStart);
+        }
+        const createThread = bootstrap.createThread;
+        const existingThread = createThread
+          ? null
+          : yield* snapshotQuery.getThreadShellById(turnStart.threadId).pipe(
+              Effect.mapError((cause) =>
+                toDispatchCommandError(cause, "Failed to load the legacy bootstrap thread."),
+              ),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () =>
+                    Effect.fail(
+                      new OrchestrationDispatchCommandError({
+                        message: `Thread ${turnStart.threadId} was not found.`,
+                      }),
+                    ),
+                  onSome: Effect.succeed,
+                }),
+              ),
+            );
+        const threadSeed = createThread ?? existingThread;
+        if (!threadSeed) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: `Thread ${turnStart.threadId} could not be resolved for bootstrap.`,
+          });
+        }
+        const existingWorktreePath = threadSeed.worktreePath;
+        const existingBranch = threadSeed.branch;
+        const workspace = bootstrap.prepareWorktree
+          ? {
+              mode: "new-worktree" as const,
+              baseRef: {
+                kind: "branch" as const,
+                source: bootstrap.prepareWorktree.startFromOrigin
+                  ? ("origin" as const)
+                  : ("local" as const),
+                branch: bootstrap.prepareWorktree.baseBranch.replace(
+                  /^(?:refs\/remotes\/)?origin\//,
+                  "",
                 ),
-              );
+              },
+              ...(bootstrap.prepareWorktree.branch
+                ? { newBranch: bootstrap.prepareWorktree.branch }
+                : {}),
+            }
+          : existingWorktreePath
+            ? {
+                mode: "existing-worktree" as const,
+                path: existingWorktreePath,
+                ...(existingBranch ? { branch: existingBranch } : {}),
+              }
+            : { mode: "local" as const };
+
+        return yield* normalizeBootstrapDispatch(
+          threadBootstrapCoordinator.request(
+            {
+              type: "thread.bootstrap.request",
+              commandId: turnStart.commandId,
+              bootstrapId: `legacy:${turnStart.commandId}`,
+              threadId: turnStart.threadId,
+              projectId: threadSeed.projectId,
+              title: threadSeed.title,
+              initialTurn: {
+                messageId: turnStart.message.messageId,
+                text: turnStart.message.text,
+                attachments: turnStart.message.attachments,
+                ...(turnStart.titleSeed ? { titleSeed: turnStart.titleSeed } : {}),
+              },
+              overrides: {
+                modelSelection: turnStart.modelSelection ?? threadSeed.modelSelection,
+                runtimeMode: turnStart.runtimeMode,
+                interactionMode: turnStart.interactionMode,
+                workspace,
+              },
+              sourceControlProfileId: createThread?.sourceControlProfileId ?? null,
+              priority: createThread?.priority ?? null,
+              ...(createThread?.ownerUserId ? { ownerUserId: createThread.ownerUserId } : {}),
+              createdAt: createThread?.createdAt ?? turnStart.createdAt,
+            },
+            {
+              actorUserId: options?.actorUserId ?? null,
+              createThread: createThread !== undefined,
+            },
+          ),
+        );
+      });
+
+    const baseDispatchEffect =
+      // T3-CUSTOM(expbkt3): public bootstrap controls never reach the strict decider.
+      command.type === "thread.bootstrap.request"
+        ? normalizeBootstrapDispatch(
+            threadBootstrapCoordinator.request(command, {
+              actorUserId: options?.actorUserId ?? null,
+            }),
+          )
+        : command.type === "thread.bootstrap.retry"
+          ? normalizeBootstrapDispatch(threadBootstrapCoordinator.retry(command))
+          : command.type === "thread.bootstrap.stop"
+            ? normalizeBootstrapDispatch(threadBootstrapCoordinator.stop(command))
+            : command.type === "thread.bootstrap.continue"
+              ? normalizeBootstrapDispatch(threadBootstrapCoordinator.continue(command))
+              : command.type === "thread.turn.start" && command.bootstrap
+                ? dispatchLegacyThreadCreation(command)
+                : // T3-CUSTOM(expbkt3): attach-to-external-session. Validate first, so
+                  // a bad session id fails before a thread exists, then seed the
+                  // provider binding so the first turn resumes instead of starting new.
+                  command.type === "thread.create" && command.externalSession
+                  ? dispatchAttachedThreadCreate(command, command.externalSession)
+                  : orchestrationEngine
+                      .dispatch(command, dispatchOptions)
+                      .pipe(
+                        Effect.mapError((cause) =>
+                          toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                        ),
+                      );
 
     const dispatchEffect =
       command.type === "thread.turn.start" && command.precondition
@@ -610,7 +740,20 @@ export const make = Effect.gen(function* () {
   return OrchestrationCommandDispatcher.of({ dispatch });
 });
 
-export const layer = Layer.effect(OrchestrationCommandDispatcher, make);
+// T3-CUSTOM(expbkt3): test and alternate runtimes may provide their own durable
+// bootstrap repository while production composes the SQLite implementation.
+export const layerWithBootstrapRepository = Layer.effect(OrchestrationCommandDispatcher, make).pipe(
+  // T3-CUSTOM(expbkt3): additive bootstrap modules keep the upstream dispatcher seam small.
+  Layer.provideMerge(
+    ThreadBootstrapCoordinator.layer.pipe(Layer.provide(ThreadCreationDefaultsResolver.layer)),
+  ),
+);
+
+export const layer = layerWithBootstrapRepository.pipe(
+  Layer.provide(
+    ProjectionThreadBootstrapRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+  ),
+);
 
 export const passthroughLayer = Layer.effect(
   OrchestrationCommandDispatcher,

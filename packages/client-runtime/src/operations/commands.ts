@@ -34,6 +34,11 @@ export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
 export type CreateThreadInput = CommandInput<"thread.create">;
+// T3-CUSTOM(expbkt3): public durable bootstrap controls.
+export type RequestThreadBootstrapInput = CommandInput<"thread.bootstrap.request">;
+export type RetryThreadBootstrapInput = CommandInput<"thread.bootstrap.retry">;
+export type StopThreadBootstrapInput = CommandInput<"thread.bootstrap.stop">;
+export type ContinueThreadBootstrapInput = CommandInput<"thread.bootstrap.continue">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
 export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
@@ -405,6 +410,54 @@ export const requestThreadCatchupSummary: (
     });
   },
 );
+
+// T3-CUSTOM(expbkt3): dispatch durable bootstrap lifecycle commands through the
+// same environment command transport used by existing thread operations.
+export const requestThreadBootstrap: (input: RequestThreadBootstrapInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.requestThreadBootstrap")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.bootstrap.request",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const retryThreadBootstrap: (input: RetryThreadBootstrapInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.retryThreadBootstrap",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.bootstrap.retry",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const stopThreadBootstrap: (input: StopThreadBootstrapInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.stopThreadBootstrap",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.bootstrap.stop",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const continueThreadBootstrap: (input: ContinueThreadBootstrapInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.continueThreadBootstrap")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.bootstrap.continue",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.stopThreadSession",

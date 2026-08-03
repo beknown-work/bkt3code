@@ -1801,13 +1801,21 @@ export const make = Effect.gen(function* () {
           worktreePath,
         })
         .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("GitManager.preparePullRequestThread setup script failed", {
-              threadId: input.threadId,
-              worktreePath,
-              cause: error,
-            }).pipe(Effect.asVoid),
+          // T3-CUSTOM(expbkt3): PR worktree preparation is readiness-gated too.
+          // Keep the worktree on failure and return the terminal identity.
+          Effect.mapError(
+            (error) =>
+              new GitManagerError({
+                operation: "preparePullRequestThread",
+                cwd: input.cwd,
+                detail: error.message,
+                ...("terminalId" in error && typeof error.terminalId === "string"
+                  ? { terminalId: error.terminalId }
+                  : {}),
+                cause: error,
+              }),
           ),
+          Effect.asVoid,
         );
     };
     return yield* Effect.gen(function* () {

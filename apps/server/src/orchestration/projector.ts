@@ -40,6 +40,9 @@ import {
   ProjectMemberRemovedPayload,
   ProjectOwnerTransferredPayload,
   ThreadCatchupSummaryUpdatedPayload,
+  ThreadBootstrapRequestedPayload,
+  ThreadBootstrapStepUpdatedPayload,
+  ThreadBootstrapCompletedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -222,6 +225,7 @@ export function projectEvent(
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
+            threadCreationDefaults: payload.threadCreationDefaults,
             scripts: payload.scripts,
             // Owner is the creator (team mode). Preserve a prior owner on
             // idempotent re-creation; otherwise seed from the created payload.
@@ -257,6 +261,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultModelSelection !== undefined
                     ? { defaultModelSelection: payload.defaultModelSelection }
+                    : {}),
+                  ...(payload.threadCreationDefaults !== undefined
+                    ? { threadCreationDefaults: payload.threadCreationDefaults }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,
@@ -315,6 +322,7 @@ export function projectEvent(
             settledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            bootstrap: null,
             // T3-CUSTOM(expbkt3): session priority.
             priority: payload.priority ?? null,
             deletedAt: null,
@@ -1005,6 +1013,92 @@ export function projectEvent(
           };
         }),
       );
+
+    case "thread.bootstrap-requested":
+      return decodeForEvent(
+        ThreadBootstrapRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            bootstrap: payload.progress,
+            updatedAt: payload.createdAt,
+          }),
+        })),
+      );
+
+    case "thread.bootstrap-step-updated":
+      return decodeForEvent(
+        ThreadBootstrapStepUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread?.bootstrap || thread.bootstrap.id !== payload.bootstrapId) return nextBase;
+          const currentStep = thread.bootstrap[payload.step];
+          const nextStep = {
+            ...currentStep,
+            status: payload.status,
+            attempt: payload.attempt,
+            ...(payload.terminalId !== undefined ? { terminalId: payload.terminalId } : {}),
+            ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+            ...(payload.error !== undefined ? { error: payload.error } : {}),
+            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+          };
+          const status =
+            payload.status === "failed"
+              ? ("failed" as const)
+              : payload.status === "running" || payload.status === "pending"
+                ? ("running" as const)
+                : thread.bootstrap.status;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              bootstrap: {
+                ...thread.bootstrap,
+                status,
+                [payload.step]: nextStep,
+                updatedAt: payload.updatedAt,
+              },
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.bootstrap-completed":
+      return decodeForEvent(
+        ThreadBootstrapCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread?.bootstrap || thread.bootstrap.id !== payload.bootstrapId) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              bootstrap: {
+                ...thread.bootstrap,
+                status: "ready",
+                updatedAt: payload.completedAt,
+              },
+              updatedAt: payload.completedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.bootstrap-stop-requested":
+    case "thread.bootstrap-retry-requested":
+    case "thread.bootstrap-continue-requested":
+      return Effect.succeed(nextBase);
 
     default:
       return Effect.succeed(nextBase);

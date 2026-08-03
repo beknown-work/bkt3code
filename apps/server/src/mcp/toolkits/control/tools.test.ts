@@ -16,6 +16,8 @@ it("exports self-documenting, provider-compatible T3 control tools", () => {
   const tools = Object.values(T3ControlToolkit.tools);
   expect(tools.length).toBeGreaterThanOrEqual(15);
   expect(T3ControlToolkit.tools.t3_create_project).toBeDefined();
+  // T3-CUSTOM(expbkt3): project creation defaults are writable through MCP.
+  expect(T3ControlToolkit.tools.t3_update_project).toBeDefined();
 
   for (const tool of tools) {
     const schema = Tool.getJsonSchema(tool) as {

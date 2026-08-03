@@ -30,6 +30,12 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
 
+#### Thread bootstrap
+
+The durable preparation lifecycle that resolves new-thread defaults, creates or adopts a workspace,
+runs a new-worktree setup action, and only then dispatches an optional first agent turn. Its public
+projection is output-free and survives reconnects. See [thread-bootstrap.md][26].
+
 ### Thread timeline
 
 #### Thread
@@ -211,3 +217,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
 [25]: ./source-control-identity.md
+[26]: ./thread-bootstrap.md

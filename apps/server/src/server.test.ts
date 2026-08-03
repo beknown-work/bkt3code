@@ -17,6 +17,7 @@ import {
   MessageId,
   ExternalLauncherCommandNotFoundError,
   type OrchestrationThreadShell,
+  type OrchestrationProjectShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -88,6 +89,8 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+// T3-CUSTOM(expbkt3): router seams use an in-memory durable-bootstrap boundary.
+import { ProjectionThreadBootstrapRepository } from "./persistence/Services/ProjectionThreadBootstraps.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -172,6 +175,12 @@ const makeDefaultOrchestrationReadModel = () => {
         title: "Default Project",
         workspaceRoot: "/tmp/default-project",
         defaultModelSelection,
+        threadCreationDefaults: {
+          environmentMode: null,
+          worktreeBaseRef: null,
+          runtimeMode: null,
+          interactionMode: null,
+        },
         scripts: [],
         createdAt: now,
         updatedAt: now,
@@ -211,6 +220,26 @@ const makeDefaultOrchestrationReadModel = () => {
     ],
   };
 };
+
+// T3-CUSTOM(expbkt3): durable creation resolves project/app defaults before it
+// queues filesystem work, so router tests expose a realistic project shell.
+const makeDefaultProjectShell = (workspaceRoot = "/tmp/project"): OrchestrationProjectShell => ({
+  id: defaultProjectId,
+  title: "Default Project",
+  workspaceRoot,
+  defaultModelSelection,
+  threadCreationDefaults: {
+    environmentMode: null,
+    worktreeBaseRef: null,
+    runtimeMode: null,
+    interactionMode: null,
+  },
+  scripts: [],
+  ownerUserId: null,
+  memberUserIds: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
 
 const makeDefaultOrchestrationThreadShell = (
   overrides: Partial<OrchestrationThreadShell> = {},
@@ -590,7 +619,16 @@ const buildAppUnderTest = (options?: {
       disableLogger: true,
     }).pipe(
       Layer.provide(PlannotatorManager.layer),
-      Layer.provide(OrchestrationCommandDispatcher.layer),
+      Layer.provide(
+        OrchestrationCommandDispatcher.layerWithBootstrapRepository.pipe(
+          Layer.provide(
+            Layer.mock(ProjectionThreadBootstrapRepository)({
+              getByThreadId: () => Effect.succeed(Option.none()),
+              listIncomplete: () => Effect.succeed([]),
+            }),
+          ),
+        ),
+      ),
       Layer.provide(
         options?.layers?.threadExecutionSupervisor
           ? Layer.mock(ThreadExecutionSupervisor)({
@@ -7403,8 +7441,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const dispatchedActorUserIds: Array<UserId | null> = [];
         const bootstrapGitOperations: string[] = [];
+        // T3-CUSTOM(expbkt3): legacy creation returns after durable queueing;
+        // wait on the dispatched first turn instead of timing the detached worker.
+        const agentStarted = yield* Deferred.make<void>();
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
             isRepo: true,
@@ -7440,6 +7480,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               };
             }),
         );
+        const listRefs = vi.fn(() =>
+          Effect.succeed({
+            refs: [
+              {
+                name: "origin/main",
+                current: false,
+                isDefault: true,
+                isRemote: true,
+                remoteName: "origin",
+                worktreePath: null,
+                sourceControlProfileId: null,
+              },
+            ],
+            isRepo: true,
+            hasPrimaryRemote: true,
+            nextCursor: null,
+            totalCount: 1,
+          }),
+        );
         const createWorktree = vi.fn(
           (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
             Effect.sync(() => {
@@ -7454,23 +7513,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         const runForThread = vi.fn(
           (
-            _: Parameters<
+            input: Parameters<
               ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
             >[0],
           ) =>
-            Effect.succeed({
-              status: "started" as const,
-              scriptId: "setup",
-              scriptName: "Setup",
-              terminalId: "setup-setup",
-              cwd: "/tmp/bootstrap-worktree",
-            }),
+            (
+              input.onStarted?.({
+                scriptId: "setup",
+                scriptName: "Setup",
+                terminalId: "setup-setup",
+                cwd: "/tmp/bootstrap-worktree",
+              }) ?? Effect.void
+            ).pipe(
+              Effect.as({
+                status: "completed" as const,
+                scriptId: "setup",
+                scriptName: "Setup",
+                terminalId: "setup-setup",
+                cwd: "/tmp/bootstrap-worktree",
+                exitCode: 0 as const,
+              }),
+            ),
         );
 
         yield* buildAppUnderTest({
           layers: {
+            vcsDriver: {
+              isInsideWorkTree: () => Effect.succeed(true),
+            },
             gitVcsDriver: {
               fetchRemote,
+              listRefs,
               resolveRemoteTrackingCommit,
               createWorktree,
             },
@@ -7479,15 +7552,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             orchestrationEngine: {
               dispatch: (command, options) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
                   dispatchedCommands.push(command);
-                  dispatchedActorUserIds.push(options?.actorUserId ?? null);
-                  return { sequence: dispatchedCommands.length };
+                  if (command.type === "thread.turn.start") {
+                    yield* Deferred.succeed(agentStarted, undefined);
+                  }
+                  return { sequence: dispatchedCommands.length, actorUserId: options?.actorUserId };
                 }),
               readEvents: () => Stream.empty,
             },
             projectSetupScriptRunner: {
               runForThread,
+            },
+            projectionSnapshotQuery: {
+              getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
             },
           },
         });
@@ -7542,26 +7620,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const response = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
 
         assert.equal(httpResponse.status, 200);
-        assert.equal(response.sequence, 5);
-        assert.deepEqual(
-          dispatchedCommands.map((command) => command.type),
-          [
-            "thread.create",
-            "thread.meta.update",
-            "thread.activity.append",
-            "thread.activity.append",
-            "thread.turn.start",
-          ],
-        );
-        assert.equal(dispatchedActorUserIds[0], "user-linear-starter");
-        assert.equal(dispatchedActorUserIds[4], "user-linear-starter");
-        assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: fetchedOriginCommit,
-          newRefName: "t3code/bootstrap-refName",
-          baseRefName: "main",
-          path: null,
-        });
+        assert.equal(response.sequence, 2);
+        yield* Deferred.await(agentStarted);
+        const createCommand = dispatchedCommands[0];
+        assertTrue(createCommand?.type === "thread.create");
+        if (createCommand?.type === "thread.create") {
+          assert.equal(createCommand.ownerUserId, "user-linear-starter");
+        }
+        assert.equal(createWorktree.mock.calls[0]?.[0].cwd, "/tmp/project");
+        assert.equal(createWorktree.mock.calls[0]?.[0].refName, fetchedOriginCommit);
+        assert.equal(createWorktree.mock.calls[0]?.[0].newRefName, "t3code/bootstrap-refName");
+        assert.equal(createWorktree.mock.calls[0]?.[0].baseRefName, "main");
+        assertTrue(typeof createWorktree.mock.calls[0]?.[0].path === "string");
         assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           remoteName: "origin",
@@ -7576,33 +7646,60 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           "resolve-remote-commit",
           "create-worktree",
         ]);
-        assert.deepEqual(runForThread.mock.calls[0]?.[0], {
+        const { onStarted: _onStarted, ...setupInput } = runForThread.mock.calls[0]![0];
+        assert.deepEqual(setupInput, {
           threadId: ThreadId.make("thread-bootstrap"),
           projectId: defaultProjectId,
-          projectCwd: "/tmp/project",
           worktreePath: "/tmp/bootstrap-worktree",
+          preferredTerminalId: "setup-legacy:cmd-bootstrap-turn-start-1",
         });
-        assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
-
         const setupActivities = dispatchedCommands.filter(
           (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
             command.type === "thread.activity.append",
         );
         assert.deepEqual(
           setupActivities.map((command) => command.activity.kind),
-          ["setup-script.requested", "setup-script.started"],
+          ["setup-script.requested", "setup-script.started", "setup-script.completed"],
         );
-        const finalCommand = dispatchedCommands[4];
+        const setupSucceededIndex = dispatchedCommands.findIndex(
+          (command) =>
+            command.type === "thread.bootstrap.step.update" &&
+            command.step === "setup" &&
+            command.status === "succeeded",
+        );
+        const finalCommand = dispatchedCommands.find(
+          (command) => command.type === "thread.turn.start",
+        );
         assertTrue(finalCommand?.type === "thread.turn.start");
+        assertTrue(dispatchedCommands.indexOf(finalCommand!) > setupSucceededIndex);
         if (finalCommand?.type === "thread.turn.start") {
           assert.equal(finalCommand.bootstrap, undefined);
         }
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("records setup-script failures without aborting bootstrap turn start", () =>
+  it.effect("keeps a legacy bootstrap turn pending when setup fails", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
+      // T3-CUSTOM(expbkt3): setup failure is durable and must gate the first turn.
+      const setupFailed = yield* Deferred.make<void>();
+      const listRefs = vi.fn(() =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "main",
+              current: true,
+              isDefault: true,
+              worktreePath: null,
+              sourceControlProfileId: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.succeed({
@@ -7622,7 +7719,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
               threadId: input.threadId,
               worktreePath: input.worktreePath,
-              operation: "openTerminal",
+              operation: "runCommand",
               cause: { message: "pty unavailable" },
             }),
           ),
@@ -7630,19 +7727,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
+            listRefs,
             createWorktree,
           },
           orchestrationEngine: {
             dispatch: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 dispatchedCommands.push(command);
+                if (
+                  command.type === "thread.activity.append" &&
+                  command.activity.kind === "setup-script.failed"
+                ) {
+                  yield* Deferred.succeed(setupFailed, undefined);
+                }
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
           },
           projectSetupScriptRunner: {
             runForThread,
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
           },
         },
       });
@@ -7688,27 +7798,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 4);
-      assert.deepEqual(
-        dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.turn.start"],
-      );
+      assert.equal(response.sequence, 2);
+      yield* Deferred.await(setupFailed);
       const setupFailureActivity = dispatchedCommands.find(
         (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
           command.type === "thread.activity.append",
       );
       assert.equal(setupFailureActivity?.activity.kind, "setup-script.failed");
-      assert.deepEqual(setupFailureActivity?.activity.payload, {
-        detail: "pty unavailable",
-        worktreePath: "/tmp/bootstrap-worktree",
-      });
       assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
+      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.turn.start"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
+      // T3-CUSTOM(expbkt3): activity compatibility failures never undo a
+      // successful durable setup result or duplicate the agent turn.
+      const agentStarted = yield* Deferred.make<void>();
+      const listRefs = vi.fn(() =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "main",
+              current: true,
+              isDefault: true,
+              worktreePath: null,
+              sourceControlProfileId: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.succeed({
@@ -7720,23 +7844,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       const runForThread = vi.fn(
         (
-          _: Parameters<
+          input: Parameters<
             ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
           >[0],
         ) =>
-          Effect.succeed({
-            status: "started" as const,
-            scriptId: "setup",
-            scriptName: "Setup",
-            terminalId: "setup-setup",
-            cwd: "/tmp/bootstrap-worktree",
-          }),
+          (
+            input.onStarted?.({
+              scriptId: "setup",
+              scriptName: "Setup",
+              terminalId: "setup-setup",
+              cwd: "/tmp/bootstrap-worktree",
+            }) ?? Effect.void
+          ).pipe(
+            Effect.as({
+              status: "completed" as const,
+              scriptId: "setup",
+              scriptName: "Setup",
+              terminalId: "setup-setup",
+              cwd: "/tmp/bootstrap-worktree",
+              exitCode: 0 as const,
+            }),
+          ),
       );
       let setupActivityAppendAttempt = 0;
 
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
+            listRefs,
             createWorktree,
           },
           orchestrationEngine: {
@@ -7756,8 +7894,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }
               }
 
-              return Effect.sync(() => {
+              return Effect.gen(function* () {
                 dispatchedCommands.push(command);
+                if (command.type === "thread.turn.start") {
+                  yield* Deferred.succeed(agentStarted, undefined);
+                }
                 return { sequence: dispatchedCommands.length };
               });
             },
@@ -7765,6 +7906,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           projectSetupScriptRunner: {
             runForThread,
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
           },
         },
       });
@@ -7810,18 +7954,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 4);
-      assert.deepEqual(
-        dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.turn.start"],
-      );
+      assert.equal(response.sequence, 2);
+      yield* Deferred.await(agentStarted);
       const setupActivities = dispatchedCommands.filter(
         (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
           command.type === "thread.activity.append",
       );
       assert.deepEqual(
         setupActivities.map((command) => command.activity.kind),
-        ["setup-script.requested"],
+        ["setup-script.requested", "setup-script.completed"],
       );
       assertTrue(
         setupActivities.every((command) => command.activity.kind !== "setup-script.failed"),
@@ -7830,9 +7971,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
+  it.effect("preserves a queued legacy thread when worktree creation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
+      // T3-CUSTOM(expbkt3): worktree failures are projected for retry and never
+      // delete the durable thread that owns the failure state.
+      const worktreeFailed = yield* Deferred.make<void>();
+      const listRefs = vi.fn(() =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "main",
+              current: true,
+              isDefault: true,
+              worktreePath: null,
+              sourceControlProfileId: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.die(new Error("worktree exploded")),
@@ -7840,16 +8001,30 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
+            listRefs,
             createWorktree,
           },
           orchestrationEngine: {
             dispatch: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 dispatchedCommands.push(command);
+                if (
+                  command.type === "thread.bootstrap.step.update" &&
+                  command.step === "worktree" &&
+                  command.status === "failed"
+                ) {
+                  yield* Deferred.succeed(worktreeFailed, undefined);
+                }
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
           },
         },
       });
@@ -7892,16 +8067,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             createdAt,
           }),
-        ).pipe(Effect.result),
+        ),
       );
 
-      assertTrue(result._tag === "Failure");
-      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
-      assert.include(result.failure.message, "worktree exploded");
-      assert.deepEqual(
-        dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.delete"],
+      assert.equal(result.sequence, 2);
+      yield* Deferred.await(worktreeFailed);
+      const failedStep = dispatchedCommands.find(
+        (command) =>
+          command.type === "thread.bootstrap.step.update" &&
+          command.step === "worktree" &&
+          command.status === "failed",
       );
+      assertTrue(failedStep?.type === "thread.bootstrap.step.update");
+      if (failedStep?.type === "thread.bootstrap.step.update") {
+        assert.include(failedStep.error ?? "", "worktree exploded");
+      }
+      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
+      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.turn.start"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

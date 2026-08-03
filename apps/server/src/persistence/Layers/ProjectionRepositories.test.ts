@@ -33,6 +33,13 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
+        // T3-CUSTOM(expbkt3): project projections include inherited creation defaults.
+        threadCreationDefaults: {
+          environmentMode: null,
+          worktreeBaseRef: null,
+          runtimeMode: null,
+          interactionMode: null,
+        },
         scripts: [],
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",

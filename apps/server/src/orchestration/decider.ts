@@ -263,6 +263,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
+          // T3-CUSTOM(expbkt3): absent overrides inherit app creation defaults.
+          threadCreationDefaults: command.threadCreationDefaults ?? {
+            environmentMode: null,
+            worktreeBaseRef: null,
+            runtimeMode: null,
+            interactionMode: null,
+          },
           scripts: [],
           createdByUserId: actor,
           createdAt: command.createdAt,
@@ -300,6 +307,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.workspaceRoot !== undefined ? { workspaceRoot: command.workspaceRoot } : {}),
           ...(command.defaultModelSelection !== undefined
             ? { defaultModelSelection: command.defaultModelSelection }
+            : {}),
+          ...(command.threadCreationDefaults !== undefined
+            ? { threadCreationDefaults: command.threadCreationDefaults }
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           updatedAt: occurredAt,
@@ -1515,6 +1525,106 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
       return [unsettledEvent, activityAppendedEvent];
     }
+
+    // T3-CUSTOM(expbkt3): durable workspace-bootstrap events. The public
+    // request/control commands are intercepted by ThreadBootstrapCoordinator;
+    // only these record commands reach the event-sourced engine.
+    case "thread.bootstrap.request.record": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.bootstrap-requested",
+        payload: {
+          threadId: command.threadId,
+          request: command.request,
+          progress: command.progress,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.step.update": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.bootstrap-step-updated",
+        payload: {
+          threadId: command.threadId,
+          bootstrapId: command.bootstrapId,
+          step: command.step,
+          status: command.status,
+          attempt: command.attempt,
+          ...(command.terminalId !== undefined ? { terminalId: command.terminalId } : {}),
+          ...(command.exitCode !== undefined ? { exitCode: command.exitCode } : {}),
+          ...(command.error !== undefined ? { error: command.error } : {}),
+          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.control.record": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const eventType =
+        command.action === "stop"
+          ? "thread.bootstrap-stop-requested"
+          : command.action === "retry"
+            ? "thread.bootstrap-retry-requested"
+            : "thread.bootstrap-continue-requested";
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: eventType,
+        payload: {
+          threadId: command.threadId,
+          bootstrapId: command.bootstrapId,
+          ...(command.step !== undefined ? { step: command.step } : {}),
+          ...(command.baseRef !== undefined ? { baseRef: command.baseRef } : {}),
+          requestedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.complete": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.bootstrap-completed",
+        payload: {
+          threadId: command.threadId,
+          bootstrapId: command.bootstrapId,
+          completedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.request":
+    case "thread.bootstrap.retry":
+    case "thread.bootstrap.stop":
+    case "thread.bootstrap.continue":
+      return yield* new OrchestrationCommandInvariantError({
+        commandType: command.type,
+        detail: `${command.type} must be handled by ThreadBootstrapCoordinator.`,
+      });
 
     default: {
       command satisfies never;

@@ -20,6 +20,7 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
+  type WorktreeBaseRef,
 } from "@t3tools/contracts";
 import {
   connectionStatusTitle,
@@ -140,6 +141,8 @@ import {
 import { addBrowserSurface } from "./preview/addBrowserSurface";
 import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
+// T3-CUSTOM(expbkt3): durable workspace-readiness checklist.
+import { ThreadBootstrapPanel } from "./thread-bootstrap/ThreadBootstrapPanel";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import {
@@ -213,7 +216,6 @@ import { useEnvironmentQuery } from "../state/query";
 import {
   primaryServerAvailableEditorsAtom,
   primaryServerKeybindingsAtom,
-  primaryServerSettingsAtom,
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
@@ -1184,6 +1186,19 @@ function ChatViewContent(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const requestThreadBootstrap = useAtomCommand(threadEnvironment.requestBootstrap, {
+    reportFailure: false,
+  });
+  // T3-CUSTOM(expbkt3): durable bootstrap controls.
+  const retryThreadBootstrap = useAtomCommand(threadEnvironment.retryBootstrap, {
+    reportFailure: false,
+  });
+  const stopThreadBootstrap = useAtomCommand(threadEnvironment.stopBootstrap, {
+    reportFailure: false,
+  });
+  const continueThreadBootstrap = useAtomCommand(threadEnvironment.continueBootstrap, {
+    reportFailure: false,
+  });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -1245,10 +1260,6 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.threadLastVisitedAtById[routeThreadKey],
   );
   const settings = useEnvironmentSettings(environmentId);
-  // New-thread defaults live in the primary environment's settings.json (the
-  // settings UI never writes to remote environments), so read them from the
-  // primary server rather than the thread's environment.
-  const primaryServerSettings = useAtomValue(primaryServerSettingsAtom);
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1266,6 +1277,12 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerExplicitModelSelection = useComposerDraftStore((store) => {
+    const draft = store.getComposerDraft(composerDraftTarget);
+    return draft?.activeProvider
+      ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
+      : null;
+  });
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
@@ -1464,10 +1481,17 @@ function ChatViewContent(props: ChatViewProps) {
         ? buildLocalDraftThread(
             threadId,
             draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? NO_PROVIDER_MODEL_SELECTION,
+            fallbackDraftProject?.defaultModelSelection ??
+              settings.defaultThreadModelSelection ??
+              NO_PROVIDER_MODEL_SELECTION,
           )
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, threadId],
+    [
+      draftThread,
+      fallbackDraftProject?.defaultModelSelection,
+      settings.defaultThreadModelSelection,
+      threadId,
+    ],
   );
   // Promotion is data-driven: the draft route keeps rendering while the
   // server thread (same pre-allocated ref) starts, so live state must not
@@ -1477,10 +1501,18 @@ function ChatViewContent(props: ChatViewProps) {
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
     : localDraftError;
-  const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-  const interactionMode =
-    composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
+  const draftProjectDefaults = fallbackDraftProject?.threadCreationDefaults;
+  const runtimeMode =
+    composerRuntimeMode ??
+    (isLocalDraftThread
+      ? (draftProjectDefaults?.runtimeMode ?? settings.defaultThreadRuntimeMode)
+      : (activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE));
+  const interactionMode =
+    composerInteractionMode ??
+    (isLocalDraftThread
+      ? (draftProjectDefaults?.interactionMode ?? settings.defaultThreadInteractionMode)
+      : (activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE));
   const sourceControlProfiles = sourceControlProfilesQuery.data?.profiles ?? [];
   const sourceControlIdentityMode = sourceControlProfilesQuery.data?.identityMode ?? "machine";
   // T3-CUSTOM(expbkt3): draft identity follows its creator; persisted thread
@@ -3212,6 +3244,46 @@ function ChatViewContent(props: ChatViewProps) {
       setDraftThreadContext,
     ],
   );
+  // T3-CUSTOM(expbkt3): a fresh draft can return every creation control to
+  // the target project's inherited app defaults without sending overrides.
+  const resetNewThreadCreationDefaults = useCallback(() => {
+    if (!isLocalDraftThread || !activeProject) return;
+    const projectDefaults = activeProject.threadCreationDefaults;
+    const inheritedEnvMode = projectDefaults?.environmentMode ?? settings.defaultThreadEnvMode;
+    const inheritedBaseRef = projectDefaults?.worktreeBaseRef ?? {
+      kind: "repository-default" as const,
+      source: settings.newWorktreesStartFromOrigin ? ("origin" as const) : ("local" as const),
+    };
+    const inheritedRuntimeMode = projectDefaults?.runtimeMode ?? settings.defaultThreadRuntimeMode;
+    const inheritedInteractionMode =
+      projectDefaults?.interactionMode ?? settings.defaultThreadInteractionMode;
+
+    setComposerDraftModelSelection(composerDraftTarget, null, { replaceOptions: true });
+    setComposerDraftRuntimeMode(composerDraftTarget, null);
+    setComposerDraftInteractionMode(composerDraftTarget, null);
+    setDraftThreadContext(composerDraftTarget, {
+      envMode: inheritedEnvMode,
+      worktreePath: null,
+      branch: inheritedBaseRef.kind === "branch" ? inheritedBaseRef.branch : null,
+      startFromOrigin: inheritedBaseRef.source === "origin",
+      runtimeMode: inheritedRuntimeMode,
+      interactionMode: inheritedInteractionMode,
+    });
+    scheduleComposerFocus();
+  }, [
+    activeProject,
+    composerDraftTarget,
+    isLocalDraftThread,
+    scheduleComposerFocus,
+    setComposerDraftInteractionMode,
+    setComposerDraftModelSelection,
+    setComposerDraftRuntimeMode,
+    setDraftThreadContext,
+    settings.defaultThreadEnvMode,
+    settings.defaultThreadInteractionMode,
+    settings.defaultThreadRuntimeMode,
+    settings.newWorktreesStartFromOrigin,
+  ]);
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
@@ -3320,6 +3392,68 @@ function ChatViewContent(props: ChatViewProps) {
     gitCwd,
     openTerminal,
   ]);
+  // T3-CUSTOM(expbkt3): checklist actions target the exact persisted bootstrap
+  // and terminal attempt, so retries and output remain stable across reloads.
+  const showBootstrapOutput = useCallback(
+    (terminalId: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
+      setTerminalFocusRequestId((value) => value + 1);
+    },
+    [activeThreadRef],
+  );
+  const activeBootstrap = activeThread?.bootstrap ?? null;
+  const bootstrapBaseRefTarget = useMemo(
+    () =>
+      activeProject
+        ? {
+            environmentId: activeProject.environmentId,
+            workspaceRoot: activeProject.workspaceRoot,
+            initialValue:
+              activeProject.threadCreationDefaults?.worktreeBaseRef ??
+              ({
+                kind: "repository-default",
+                source: settings.newWorktreesStartFromOrigin ? "origin" : "local",
+              } satisfies WorktreeBaseRef),
+          }
+        : undefined,
+    [activeProject, settings.newWorktreesStartFromOrigin],
+  );
+  const retryBootstrapStep = useCallback(
+    (step: "worktree" | "setup", baseRef?: WorktreeBaseRef) => {
+      if (!activeThreadRef || !activeBootstrap) return;
+      void retryThreadBootstrap({
+        environmentId: activeThreadRef.environmentId,
+        input: {
+          threadId: activeThreadRef.threadId,
+          bootstrapId: activeBootstrap.id,
+          step,
+          ...(baseRef ? { baseRef } : {}),
+        },
+      });
+    },
+    [activeBootstrap, activeThreadRef, retryThreadBootstrap],
+  );
+  const stopBootstrapSetup = useCallback(() => {
+    if (!activeThreadRef || !activeBootstrap) return;
+    void stopThreadBootstrap({
+      environmentId: activeThreadRef.environmentId,
+      input: {
+        threadId: activeThreadRef.threadId,
+        bootstrapId: activeBootstrap.id,
+      },
+    });
+  }, [activeBootstrap, activeThreadRef, stopThreadBootstrap]);
+  const continueBootstrapSetup = useCallback(() => {
+    if (!activeThreadRef || !activeBootstrap) return;
+    void continueThreadBootstrap({
+      environmentId: activeThreadRef.environmentId,
+      input: {
+        threadId: activeThreadRef.threadId,
+        bootstrapId: activeBootstrap.id,
+      },
+    });
+  }, [activeBootstrap, activeThreadRef, continueThreadBootstrap]);
   const splitPanelTerminal = useCallback(
     (direction: "horizontal" | "vertical" = "horizontal") => {
       if (
@@ -4080,7 +4214,7 @@ function ChatViewContent(props: ChatViewProps) {
     ? (draftThread?.startFromOrigin ?? false)
     : canOverrideServerThreadEnvMode
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
-        primaryServerSettings.newWorktreesStartFromOrigin)
+        settings.newWorktreesStartFromOrigin)
       : false;
   const localCheckoutBranchMismatch = useMemo(
     () =>
@@ -4105,6 +4239,9 @@ function ChatViewContent(props: ChatViewProps) {
   });
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
+  // T3-CUSTOM(expbkt3): retain the explicit legacy creation path under version skew.
+  const supportsDurableThreadBootstrap =
+    serverConfig?.environment.capabilities.durableThreadBootstrap === true;
   const nowMinute = useNowMinute();
   const activeThreadSnoozed =
     activeThreadShell !== null &&
@@ -4815,7 +4952,7 @@ function ChatViewContent(props: ChatViewProps) {
       envMode: sendWorkspace.envMode,
       worktreePath: sendWorkspace.worktreePath,
     });
-    if (shouldCreateWorktree && !sendWorkspace.branch) {
+    if (shouldCreateWorktree && !sendWorkspace.branch && !supportsDurableThreadBootstrap) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
@@ -4953,13 +5090,63 @@ function ChatViewContent(props: ChatViewProps) {
       ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
       ctxSelectedModelSelection.options,
     );
+    // T3-CUSTOM(expbkt3): durable creation sends only genuine draft overrides.
+    // Effective values are still shown in the composer, while the server owns
+    // the explicit → project → target-environment inheritance decision.
+    const projectCreationDefaults = activeProject.threadCreationDefaults;
+    const inheritedEnvMode =
+      projectCreationDefaults?.environmentMode ?? settings.defaultThreadEnvMode;
+    const inheritedBaseRef = projectCreationDefaults?.worktreeBaseRef ?? {
+      kind: "repository-default" as const,
+      source: settings.newWorktreesStartFromOrigin ? ("origin" as const) : ("local" as const),
+    };
+    const normalizedDraftBranch = sendWorkspace.branch?.replace(/^origin\//, "") ?? null;
+    const workspaceMatchesInheritedDefault =
+      sendWorkspace.worktreePath === null &&
+      sendWorkspace.envMode === inheritedEnvMode &&
+      (sendWorkspace.envMode === "local" ||
+        (inheritedBaseRef.kind === "repository-default"
+          ? normalizedDraftBranch === null &&
+            startFromOrigin === (inheritedBaseRef.source === "origin")
+          : normalizedDraftBranch === inheritedBaseRef.branch &&
+            startFromOrigin === (inheritedBaseRef.source === "origin")));
+    const workspaceOverride = workspaceMatchesInheritedDefault
+      ? null
+      : sendWorkspace.worktreePath !== null
+        ? {
+            mode: "existing-worktree" as const,
+            path: sendWorkspace.worktreePath,
+            ...(sendWorkspace.branch ? { branch: sendWorkspace.branch } : {}),
+          }
+        : sendWorkspace.envMode === "worktree"
+          ? {
+              mode: "new-worktree" as const,
+              baseRef: sendWorkspace.branch
+                ? {
+                    kind: "branch" as const,
+                    source: startFromOrigin ? ("origin" as const) : ("local" as const),
+                    branch: sendWorkspace.branch.replace(/^origin\//, ""),
+                  }
+                : {
+                    kind: "repository-default" as const,
+                    source: startFromOrigin ? ("origin" as const) : ("local" as const),
+                  },
+            }
+          : { mode: "local" as const };
+    const bootstrapOverrides = {
+      ...(composerExplicitModelSelection ? { modelSelection: composerExplicitModelSelection } : {}),
+      ...(composerRuntimeMode ? { runtimeMode: composerRuntimeMode } : {}),
+      ...(composerInteractionMode ? { interactionMode: composerInteractionMode } : {}),
+      ...(workspaceOverride ? { workspace: workspaceOverride } : {}),
+    };
+    const hasBootstrapOverrides = Object.keys(bootstrapOverrides).length > 0;
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
     let durableThreadCreated = isServerThread;
     // Promote a local draft to a durable thread before any worktree or provider
     // startup. This makes the sidebar row and canonical route available
     // immediately while the slower execution setup continues independently.
-    if (isLocalDraftThread) {
+    if (isLocalDraftThread && !supportsDurableThreadBootstrap) {
       beginLocalDispatch({ preparingWorktree: false });
       const createResult = await createThread({
         environmentId,
@@ -5019,60 +5206,83 @@ function ChatViewContent(props: ChatViewProps) {
 
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
-      const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
-          ? {
-              ...(isLocalDraftThread
-                ? {
-                    createThread: {
-                      projectId: activeProject.id,
-                      title,
-                      modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
-                      sourceControlProfileId: activeSourceControlProfileId,
-                      createdAt: activeThread.createdAt,
-                    },
-                  }
-                : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
-            }
-          : undefined;
       beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
-      const startResult = await startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
-          },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode,
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+      const startResult =
+        isLocalDraftThread && supportsDurableThreadBootstrap
+          ? await requestThreadBootstrap({
+              environmentId,
+              input: {
+                bootstrapId: `web:${threadIdForSend}:${messageIdForSend}`,
+                threadId: threadIdForSend,
+                projectId: activeProject.id,
+                title,
+                initialTurn: {
+                  messageId: messageIdForSend,
+                  text: outgoingMessageText,
+                  attachments: turnAttachmentsResult.value,
+                  titleSeed: title,
+                },
+                ...(hasBootstrapOverrides ? { overrides: bootstrapOverrides } : {}),
+                sourceControlProfileId: activeSourceControlProfileId,
+                createdAt: activeThread.createdAt,
+              },
+            })
+          : await startThreadTurn({
+              environmentId,
+              input: {
+                threadId: threadIdForSend,
+                message: {
+                  messageId: messageIdForSend,
+                  role: "user",
+                  text: outgoingMessageText,
+                  attachments: turnAttachmentsResult.value,
+                },
+                modelSelection: ctxSelectedModelSelection,
+                titleSeed: title,
+                runtimeMode,
+                interactionMode,
+                ...(isLocalDraftThread || baseBranchForWorktree
+                  ? {
+                      bootstrap: {
+                        ...(isLocalDraftThread
+                          ? {
+                              createThread: {
+                                projectId: activeProject.id,
+                                title,
+                                modelSelection: threadCreateModelSelection,
+                                runtimeMode,
+                                interactionMode,
+                                branch: activeThreadBranch,
+                                worktreePath: activeThread.worktreePath,
+                                sourceControlProfileId: activeSourceControlProfileId,
+                                createdAt: activeThread.createdAt,
+                              },
+                            }
+                          : {}),
+                        ...(baseBranchForWorktree
+                          ? {
+                              prepareWorktree: {
+                                projectCwd: activeProject.workspaceRoot,
+                                baseBranch: baseBranchForWorktree,
+                                branch: buildTemporaryWorktreeBranchName(randomHex),
+                                ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                              },
+                              runSetupScript: true,
+                            }
+                          : {}),
+                      },
+                    }
+                  : {}),
+                createdAt: messageCreatedAt,
+              },
+            });
       if (startResult._tag === "Failure") {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (isLocalDraftThread && supportsDurableThreadBootstrap) {
+          durableThreadCreated = true;
+        }
       }
     }
 
@@ -5773,11 +5983,15 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       if (isLocalDraftThread) {
+        const inheritedStartFromOrigin =
+          activeProject?.threadCreationDefaults?.worktreeBaseRef?.source === "origin" ||
+          (activeProject?.threadCreationDefaults?.worktreeBaseRef == null &&
+            settings.newWorktreesStartFromOrigin);
         setDraftThreadContext(composerDraftTarget, {
           envMode: mode,
           startFromOrigin: resolveNewDraftStartFromOrigin({
             envMode: mode,
-            newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
+            newWorktreesStartFromOrigin: inheritedStartFromOrigin,
           }),
           ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
         });
@@ -5786,10 +6000,11 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       canOverrideServerThreadEnvMode,
+      activeProject?.threadCreationDefaults?.worktreeBaseRef,
       composerDraftTarget,
       draftThread?.worktreePath,
       isLocalDraftThread,
-      primaryServerSettings.newWorktreesStartFromOrigin,
+      settings.newWorktreesStartFromOrigin,
       setPendingServerThreadEnvMode,
       scheduleComposerFocus,
       setDraftThreadContext,
@@ -6012,6 +6227,16 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
+              {activeThread.bootstrap ? (
+                <ThreadBootstrapPanel
+                  bootstrap={activeThread.bootstrap}
+                  onShowOutput={showBootstrapOutput}
+                  onRetry={retryBootstrapStep}
+                  onStop={stopBootstrapSetup}
+                  onContinue={continueBootstrapSetup}
+                  {...(bootstrapBaseRefTarget ? { baseRefTarget: bootstrapBaseRefTarget } : {})}
+                />
+              ) : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 key={activeThread.id}
@@ -6162,6 +6387,7 @@ function ChatViewContent(props: ChatViewProps) {
                             planSidebarOpen={planSidebarOpen}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
+                            showCreationDefaultsReset={isLocalDraftThread}
                             lockedProvider={lockedProvider}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             activeProjectDefaultModelSelection={
@@ -6197,6 +6423,7 @@ function ChatViewContent(props: ChatViewProps) {
                             toggleInteractionMode={toggleInteractionMode}
                             handleRuntimeModeChange={handleRuntimeModeChange}
                             handleInteractionModeChange={handleInteractionModeChange}
+                            onResetCreationDefaults={resetNewThreadCreationDefaults}
                             togglePlanSidebar={togglePlanSidebar}
                             focusComposer={focusComposer}
                             scheduleComposerFocus={scheduleComposerFocus}

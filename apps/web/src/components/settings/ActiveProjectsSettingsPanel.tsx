@@ -34,6 +34,7 @@ import { openCommandPalette } from "../../commandPaletteBus";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
+import { nextProjectScriptId } from "../../projectScripts";
 import { useEnvironments } from "../../state/environments";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
@@ -59,6 +60,7 @@ import {
   type ActiveProjectSettingsRow,
 } from "./ActiveProjectsSettingsPanel.logic";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import { ProjectCreationDefaultsCard } from "./ProjectCreationDefaultsCard";
 
 type ProjectRow = ActiveProjectSettingsRow<EnvironmentProject, EnvironmentThreadShell>;
 
@@ -212,6 +214,33 @@ export function ActiveProjectsSettingsPanel() {
       }
     },
     [saveNickname],
+  );
+
+  const saveCreationDefaults = useCallback(
+    async (
+      project: EnvironmentProject,
+      patch: Partial<
+        Pick<EnvironmentProject, "threadCreationDefaults" | "defaultModelSelection" | "scripts">
+      >,
+    ) => {
+      const key = activeProjectKey(project);
+      setBusyProjectKey(key);
+      const result = await updateProject({
+        environmentId: project.environmentId,
+        input: { projectId: project.id, ...patch },
+      });
+      setBusyProjectKey(null);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not update project defaults",
+            description: commandFailureDescription(result),
+          }),
+        );
+      }
+    },
+    [updateProject],
   );
 
   const confirmRemoveProject = useCallback(async () => {
@@ -425,6 +454,73 @@ export function ActiveProjectsSettingsPanel() {
                             }`
                           : ""}
                       </p>
+
+                      <ProjectCreationDefaultsCard
+                        environmentId={row.project.environmentId}
+                        workspaceRoot={row.project.workspaceRoot}
+                        defaults={
+                          row.project.threadCreationDefaults ?? {
+                            environmentMode: null,
+                            worktreeBaseRef: null,
+                            runtimeMode: null,
+                            interactionMode: null,
+                          }
+                        }
+                        defaultModelSelection={row.project.defaultModelSelection}
+                        scripts={row.project.scripts}
+                        disabled={isBusy}
+                        onDefaultsChange={(threadCreationDefaults) =>
+                          void saveCreationDefaults(row.project, { threadCreationDefaults })
+                        }
+                        onModelChange={(defaultModelSelection) =>
+                          void saveCreationDefaults(row.project, { defaultModelSelection })
+                        }
+                        onSetupActionChange={(scriptId) => {
+                          // T3-CUSTOM(expbkt3): selecting an automatic setup
+                          // action also normalizes legacy multi-flag data.
+                          const scripts = row.project.scripts.map((script) => ({
+                            ...script,
+                            runOnWorktreeCreate: script.id === scriptId,
+                          }));
+                          void saveCreationDefaults(row.project, { scripts });
+                        }}
+                        onSetupCommandChange={(command) => {
+                          const currentSetup = row.project.scripts.find(
+                            (script) => script.runOnWorktreeCreate,
+                          );
+                          const scripts = command
+                            ? currentSetup
+                              ? row.project.scripts.map((script) =>
+                                  script.id === currentSetup.id
+                                    ? { ...script, command, runOnWorktreeCreate: true }
+                                    : script.runOnWorktreeCreate
+                                      ? { ...script, runOnWorktreeCreate: false }
+                                      : script,
+                                )
+                              : [
+                                  ...row.project.scripts.map((script) => ({
+                                    ...script,
+                                    runOnWorktreeCreate: false,
+                                  })),
+                                  {
+                                    id: nextProjectScriptId(
+                                      "Setup",
+                                      row.project.scripts.map((script) => script.id),
+                                    ),
+                                    name: "Setup",
+                                    command,
+                                    icon: "configure" as const,
+                                    runOnWorktreeCreate: true,
+                                  },
+                                ]
+                            : row.project.scripts.map((script) =>
+                                script.runOnWorktreeCreate
+                                  ? { ...script, runOnWorktreeCreate: false }
+                                  : script,
+                              );
+                          void saveCreationDefaults(row.project, { scripts });
+                        }}
+                      />
                     </div>
 
                     <div className="flex flex-wrap gap-1.5 lg:max-w-64 lg:justify-end">

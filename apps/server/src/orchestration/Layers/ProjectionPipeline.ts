@@ -20,6 +20,8 @@ import { ProjectionProjectRepository } from "../../persistence/Services/Projecti
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
+// T3-CUSTOM(expbkt3): persist durable bootstrap progress independently from thread shells.
+import { ProjectionThreadBootstrapRepository } from "../../persistence/Services/ProjectionThreadBootstraps.ts";
 import {
   type ProjectionThreadMessage,
   ProjectionThreadMessageRepository,
@@ -40,6 +42,8 @@ import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layer
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
+// T3-CUSTOM(expbkt3): persist durable bootstrap progress independently from thread shells.
+import { ProjectionThreadBootstrapRepositoryLive } from "../../persistence/Layers/ProjectionThreadBootstraps.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
@@ -63,6 +67,8 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
+  // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress.
+  threadBootstraps: "projection.thread-bootstraps",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
@@ -483,6 +489,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
+    // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress.
+    const projectionThreadBootstrapRepository = yield* ProjectionThreadBootstrapRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
@@ -502,6 +510,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             title: event.payload.title,
             workspaceRoot: event.payload.workspaceRoot,
             defaultModelSelection: event.payload.defaultModelSelection,
+            threadCreationDefaults: event.payload.threadCreationDefaults ?? {
+              environmentMode: null,
+              worktreeBaseRef: null,
+              runtimeMode: null,
+              interactionMode: null,
+            },
             scripts: event.payload.scripts,
             ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
@@ -571,6 +585,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: event.payload.defaultModelSelection }
+              : {}),
+            ...(event.payload.threadCreationDefaults !== undefined
+              ? { threadCreationDefaults: event.payload.threadCreationDefaults }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,
@@ -1726,6 +1743,123 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    // T3-CUSTOM(expbkt3): the coordinator stores its resolved request and public
+    // progress here so setup state survives client reconnects and server restarts.
+    const applyThreadBootstrapsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadBootstrapsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.bootstrap-requested":
+          yield* projectionThreadBootstrapRepository.upsert({
+            threadId: event.payload.threadId,
+            bootstrapId: event.payload.request.bootstrapId,
+            status: event.payload.progress.status,
+            progress: event.payload.progress,
+            request: event.payload.request,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.createdAt,
+          });
+          return;
+
+        case "thread.bootstrap-step-updated": {
+          const existing = yield* projectionThreadBootstrapRepository.getByThreadId(
+            event.payload.threadId,
+          );
+          if (Option.isNone(existing) || existing.value.bootstrapId !== event.payload.bootstrapId) {
+            return;
+          }
+
+          const currentStep = existing.value.progress[event.payload.step];
+          const nextStep = {
+            ...currentStep,
+            status: event.payload.status,
+            attempt: event.payload.attempt,
+            ...(event.payload.terminalId !== undefined
+              ? { terminalId: event.payload.terminalId }
+              : {}),
+            ...(event.payload.exitCode !== undefined ? { exitCode: event.payload.exitCode } : {}),
+            ...(event.payload.error !== undefined ? { error: event.payload.error } : {}),
+            ...(event.payload.worktreePath !== undefined
+              ? { worktreePath: event.payload.worktreePath }
+              : {}),
+          };
+          const progress = {
+            ...existing.value.progress,
+            status:
+              event.payload.status === "failed"
+                ? ("failed" as const)
+                : event.payload.status === "running" || event.payload.status === "pending"
+                  ? ("running" as const)
+                  : existing.value.progress.status === "failed"
+                    ? ("running" as const)
+                    : existing.value.progress.status,
+            [event.payload.step]: nextStep,
+            updatedAt: event.payload.updatedAt,
+          };
+          yield* projectionThreadBootstrapRepository.upsert({
+            ...existing.value,
+            status: progress.status,
+            progress,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.bootstrap-completed": {
+          const existing = yield* projectionThreadBootstrapRepository.getByThreadId(
+            event.payload.threadId,
+          );
+          if (Option.isNone(existing) || existing.value.bootstrapId !== event.payload.bootstrapId) {
+            return;
+          }
+          yield* projectionThreadBootstrapRepository.upsert({
+            ...existing.value,
+            status: "ready",
+            progress: {
+              ...existing.value.progress,
+              status: "ready",
+              updatedAt: event.payload.completedAt,
+            },
+            updatedAt: event.payload.completedAt,
+          });
+          return;
+        }
+
+        case "thread.bootstrap-retry-requested": {
+          if (!event.payload.baseRef) return;
+          const existing = yield* projectionThreadBootstrapRepository.getByThreadId(
+            event.payload.threadId,
+          );
+          if (
+            Option.isNone(existing) ||
+            existing.value.bootstrapId !== event.payload.bootstrapId ||
+            existing.value.request.workspace.mode !== "new-worktree"
+          ) {
+            return;
+          }
+          yield* projectionThreadBootstrapRepository.upsert({
+            ...existing.value,
+            request: {
+              ...existing.value.request,
+              workspace: {
+                ...existing.value.request.workspace,
+                baseRef: event.payload.baseRef,
+              },
+            },
+            updatedAt: event.payload.requestedAt,
+          });
+          return;
+        }
+
+        case "thread.deleted":
+          yield* projectionThreadBootstrapRepository.deleteByThreadId(event.payload.threadId);
+          return;
+
+        default:
+          return;
+      }
+    });
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
@@ -1742,6 +1876,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
         apply: applyThreadActivitiesProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadBootstraps,
+        apply: applyThreadBootstrapsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
@@ -1862,6 +2000,8 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
+  // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress.
+  Layer.provideMerge(ProjectionThreadBootstrapRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),

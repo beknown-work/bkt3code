@@ -1,6 +1,7 @@
+// T3-CUSTOM(expbkt3): fresh-thread controls include an inherited-defaults reverse action.
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon, ListTodoIcon } from "lucide-react";
+import { EllipsisIcon, ListTodoIcon, RotateCcwIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -19,10 +20,12 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   planSidebarOpen: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
+  showCreationDefaultsReset: boolean;
   traitsMenuContent?: ReactNode;
   onToggleInteractionMode: () => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onResetCreationDefaults: () => void;
 }) {
   return (
     <Menu>
@@ -74,6 +77,15 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           <MenuRadioItem value="auto">Auto</MenuRadioItem>
           <MenuRadioItem value="full-access">Full access</MenuRadioItem>
         </MenuRadioGroup>
+        {props.showCreationDefaultsReset ? (
+          <>
+            <MenuDivider />
+            <MenuItem onClick={props.onResetCreationDefaults}>
+              <RotateCcwIcon className="size-4 shrink-0" />
+              Use project/app defaults
+            </MenuItem>
+          </>
+        ) : null}
         {props.activePlan ? (
           <>
             <MenuDivider />

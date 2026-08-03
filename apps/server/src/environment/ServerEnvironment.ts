@@ -147,6 +147,9 @@ export const make = Effect.gen(function* () {
       // T3-CUSTOM(expbkt3)
       threadPriority: true,
       threadExternalSessionAttach: true,
+      // T3-CUSTOM(expbkt3): high-level durable bootstrap and defaults hierarchy.
+      durableThreadBootstrap: true,
+      threadCreationDefaults: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" || serverSelfUpdate === "respawn"
         ? { serverSelfUpdateProgress: true }

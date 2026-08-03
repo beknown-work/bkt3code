@@ -223,6 +223,8 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
+  // T3-CUSTOM(expbkt3): model selections are atomic option envelopes.
+  "defaultThreadModelSelection",
   // Nested under experimental.sessionSummary; stripped as a unit so a
   // non-default model selection is never partially persisted.
   "modelSelection",
