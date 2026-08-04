@@ -267,6 +267,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
+          // T3-CUSTOM(expbkt3): project snapshots expose inherited creation defaults.
+          threadCreationDefaults: {
+            environmentMode: null,
+            worktreeBaseRef: null,
+            runtimeMode: null,
+            interactionMode: null,
+          },
           scripts: [
             {
               id: "script-1",
@@ -297,6 +304,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           branch: null,
           worktreePath: null,
           sourceControlProfileId: null,
+          // T3-CUSTOM(expbkt3): thread detail snapshots expose bootstrap readiness.
+          bootstrap: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -318,6 +327,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedUntil: null,
           snoozedAt: null,
           priority: null,
+          // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
+          linearIssueUrl: null,
           titleRegeneration: null,
           deletedAt: null,
           messages: [
@@ -394,6 +405,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
+          // T3-CUSTOM(expbkt3): shell projects retain creation-default inheritance.
+          threadCreationDefaults: {
+            environmentMode: null,
+            worktreeBaseRef: null,
+            runtimeMode: null,
+            interactionMode: null,
+          },
           scripts: [
             {
               id: "script-1",
@@ -444,6 +462,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           snoozedUntil: null,
           snoozedAt: null,
           priority: null,
+          // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
+          linearIssueUrl: null,
           titleRegeneration: null,
           session: {
             threadId: ThreadId.make("thread-1"),

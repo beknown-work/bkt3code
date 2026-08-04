@@ -59,6 +59,35 @@ Metrics are not written to a local file.
 
 If OTLP is not configured, metrics still exist in-process, but you will not have a local artifact to inspect.
 
+### Durable Execution Diagnostics
+
+For an accepted turn, correlate logs and spans with `threadId`, `workItemId`, `authorityEpoch`,
+`generation`, `providerInstanceId`, `attempt`, `phase`, and `outcome`. The durable database remains
+the source of truth when a process is absent:
+
+```sql
+SELECT work_item_id, thread_id, desired_state, phase, delivery_certainty,
+       recovery_attempts, next_attempt_at, claim_owner, claim_generation,
+       claim_expires_at, last_failure_type, last_failure_detail
+FROM projection_thread_execution_intents
+WHERE desired_state = 'running' OR phase = 'recovery-exhausted'
+ORDER BY request_event_sequence;
+```
+
+Inspect the recovery audit without turning ten attempts into transcript noise:
+
+```sql
+SELECT work_item_id, attempt, claim_generation, started_at, completed_at,
+       outcome, failure_type, failure_detail, provider_turn_id
+FROM thread_execution_recovery_attempts
+WHERE work_item_id = '<work-item-id>'
+ORDER BY attempt;
+```
+
+An expired claim is recoverable. A live claim with a generation different from a worker's log proves
+that the worker was fenced. `recovery-exhausted` must always have desired state `stopped`; a running
+desired state at exhaustion is an invariant violation.
+
 ### Related Artifacts
 
 Provider event NDJSON files still exist for provider runtime streams. Those are separate from the main server trace file.

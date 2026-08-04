@@ -5,26 +5,33 @@
 import { XIcon } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
+import { randomUUID } from "../lib/utils";
 import { Button } from "./ui/button";
+import {
+  createPlannotatorPollingController,
+  type PlannotatorDecision,
+  type PlannotatorPollingController,
+  type PlannotatorTerminalStatus,
+  releasePlannotatorClientLease,
+} from "./PlannotatorFocusSurface.polling";
 
-type PlannotatorDecision = "approved" | "feedback" | "denied";
+export {
+  plannotatorStatusUrl,
+  readPlannotatorDecision,
+  readPlannotatorTerminalStatus,
+} from "./PlannotatorFocusSurface.polling";
 
 interface PlannotatorFocusSurfaceProps {
   url: `/plannotator/${string}/`;
   visible?: boolean;
   onClose: () => void;
   onDecision: (decision: PlannotatorDecision) => void;
+  onTerminal: (status: PlannotatorTerminalStatus) => void;
 }
 
-const PLANNOTATOR_STATUS_POLL_MS = 500;
-const PLANNOTATOR_REOPEN_GRACE_MS = 750;
 const PLANNOTATOR_PREFERENCE_MESSAGE = "t3:plannotator-preference-cookie";
 const PLANNOTATOR_PREFERENCE_COOKIE = /^plannotator-[A-Za-z0-9_-]{1,96}$/;
 const MAX_PLANNOTATOR_PREFERENCE_COOKIE_BYTES = 8192;
-
-export function plannotatorStatusUrl(url: `/plannotator/${string}/`): string {
-  return `${url}__t3/status`;
-}
 
 /**
  * T3-CUSTOM(expbkt3): Normalize the only cookie namespace that the opaque
@@ -75,21 +82,21 @@ export function plannotatorPreferenceFragment(cookieHeader: string): string {
   return count === 0 ? "" : `#t3-preferences=${encodeURIComponent(JSON.stringify(preferences))}`;
 }
 
-export function readPlannotatorDecision(value: unknown): PlannotatorDecision | null {
-  if (!value || typeof value !== "object" || !("decision" in value)) return null;
-  const decision = value.decision;
-  return decision === "approved" || decision === "feedback" || decision === "denied"
-    ? decision
-    : null;
-}
-
 export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
   url,
   visible = true,
   onClose,
   onDecision,
+  onTerminal,
 }: PlannotatorFocusSurfaceProps) {
-  const handledDecisionRef = useRef<PlannotatorDecision | null>(null);
+  const clientIdRef = useRef<string | null>(null);
+  if (clientIdRef.current === null) clientIdRef.current = randomUUID();
+  const clientId = clientIdRef.current;
+  const controllerRef = useRef<PlannotatorPollingController | null>(null);
+  const onDecisionRef = useRef(onDecision);
+  const onTerminalRef = useRef(onTerminal);
+  onDecisionRef.current = onDecision;
+  onTerminalRef.current = onTerminal;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const preferenceFragmentRef = useRef<{ readonly url: string; readonly value: string } | null>(
     null,
@@ -103,42 +110,25 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
   const preferenceFragment = preferenceFragmentRef.current.value;
 
   useEffect(() => {
-    let cancelled = false;
-    let timeoutId: number | null = null;
-
-    const poll = async () => {
-      try {
-        const response = await fetch(plannotatorStatusUrl(url), {
-          cache: "no-store",
-          credentials: "same-origin",
-        });
-        if (response.ok) {
-          const decision = readPlannotatorDecision(await response.json());
-          if (decision !== null) {
-            if (!cancelled && handledDecisionRef.current !== decision) {
-              handledDecisionRef.current = decision;
-              onDecision(decision);
-            }
-            return;
-          }
-        }
-      } catch {
-        // A review process can briefly restart while its proxy remains mounted.
-      }
-      if (!cancelled) {
-        timeoutId = window.setTimeout(() => void poll(), PLANNOTATOR_STATUS_POLL_MS);
-      }
-    };
-
-    handledDecisionRef.current = null;
-    // Let the iframe's explicit reopen navigation reset a completed durable
-    // review to "starting" before reading its previous terminal decision.
-    timeoutId = window.setTimeout(() => void poll(), PLANNOTATOR_REOPEN_GRACE_MS);
+    const controller = createPlannotatorPollingController({
+      url,
+      clientId,
+      visible,
+      onDecision: (decision) => onDecisionRef.current(decision),
+      onTerminal: (status) => onTerminalRef.current(status),
+    });
+    controllerRef.current = controller;
+    controller.start();
     return () => {
-      cancelled = true;
-      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (controllerRef.current === controller) controllerRef.current = null;
+      controller.stop();
+      releasePlannotatorClientLease({ url, clientId });
     };
-  }, [onDecision, url]);
+  }, [clientId, url]);
+
+  useEffect(() => {
+    controllerRef.current?.setVisible(visible);
+  }, [visible]);
 
   useEffect(() => {
     const persistPreference = (event: MessageEvent) => {

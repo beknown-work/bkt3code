@@ -299,8 +299,9 @@ export const make = Effect.gen(function* () {
   const keybindings = yield* Keybindings.Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
-  // T3-CUSTOM(expbkt3): automatic session recovery.
-  const sessionRecovery = yield* SessionRecovery;
+  // T3-CUSTOM(expbkt3): v1 remains wired for rollback compatibility but its
+  // sweep is disabled while the durable coordinator owns recovery.
+  yield* SessionRecovery;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -361,15 +362,14 @@ export const make = Effect.gen(function* () {
     yield* Effect.logDebug("startup phase: stale session reconciliation");
     yield* runStartupPhase("sessions.reconcile", runStaleSessionReconciliation);
 
-    // T3-CUSTOM(expbkt3): the reconciliation above settles what the restart
-    // killed; this starts the sweep that reconnects the subset a user actually
-    // meant to be running. Ordered after it so the sweep's first pass reads
-    // fully settled state, and started here rather than with the reactors so
-    // it can never observe a half-reconciled projection.
-    yield* Effect.logDebug("startup phase: session recovery");
+    // T3-CUSTOM(expbkt3): durable startup scan runs after stale projections
+    // settle. The v1 two-minute sweep must not run concurrently with v2.
+    yield* Effect.logDebug("startup phase: durable execution recovery");
     yield* runStartupPhase(
       "sessions.recover",
-      sessionRecovery.start().pipe(Scope.provide(reactorScope)),
+      (orchestrationReactor.startDurableRecovery?.() ?? Effect.void).pipe(
+        Scope.provide(reactorScope),
+      ),
     );
 
     // Team mode only: assign legacy (pre-ownership) threads/projects to the

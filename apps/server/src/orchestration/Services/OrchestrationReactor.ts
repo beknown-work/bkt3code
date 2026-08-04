@@ -21,6 +21,9 @@ export interface OrchestrationReactorShape {
    * finalized on shutdown.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  /** T3-CUSTOM(expbkt3): BEGIN — second phase after stale provider state settles. */
+  readonly startDurableRecovery?: () => Effect.Effect<void, never, Scope.Scope>;
+  /** T3-CUSTOM(expbkt3): END */
 }
 
 /**

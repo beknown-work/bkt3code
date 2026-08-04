@@ -439,6 +439,21 @@ it.effect("refreshes Claude usage after initialization and coalesces for sixty s
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("declares active-turn and durable-resume behavior", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      assert.deepEqual(adapter.capabilities, {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

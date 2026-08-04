@@ -303,6 +303,91 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
     }),
   );
 
+  it.effect("atomically creates a bootstrap thread with its first message and intent event", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const projectId = asProjectId("project-bootstrap");
+      const threadId = ThreadId.make("thread-bootstrap");
+      const withProject = yield* projectEvent(createEmptyReadModel(now), {
+        sequence: 1,
+        eventId: asEventId("evt-project-bootstrap"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-bootstrap"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-bootstrap"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Bootstrap project",
+          workspaceRoot: "/tmp/bootstrap",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      const modelSelection = createModelSelection(
+        ProviderInstanceId.make("codex"),
+        "gpt-5.3-codex",
+        [],
+      );
+      const bootstrap = {
+        createThread: {
+          projectId,
+          title: "New thread",
+          modelSelection,
+          runtimeMode: "full-access" as const,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: "t3code/bootstrap",
+          worktreePath: null,
+          sourceControlProfileId: null,
+          createdAt: now,
+        },
+        prepareWorktree: {
+          projectCwd: "/tmp/bootstrap",
+          baseBranch: "main",
+          branch: "t3code/bootstrap",
+        },
+        runSetupScript: true,
+      };
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-bootstrap-turn"),
+          threadId,
+          message: {
+            messageId: asMessageId("message-bootstrap"),
+            role: "user",
+            text: "Start durably",
+            attachments: [],
+          },
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          bootstrap,
+          createdAt: now,
+        },
+        readModel: withProject,
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.created",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      const request = events[2];
+      expect(request?.type).toBe("thread.turn-start-requested");
+      if (request?.type === "thread.turn-start-requested") {
+        expect(request.payload.bootstrap).toEqual(bootstrap);
+      }
+    }),
+  );
+
   it.effect("emits thread.runtime-mode-set from thread.runtime-mode.set", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";

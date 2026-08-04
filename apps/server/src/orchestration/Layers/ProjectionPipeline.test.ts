@@ -280,6 +280,14 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           updatedAt: "2026-07-23T00:00:00.000Z",
         },
       });
+      // T3-CUSTOM(expbkt3): A creator is tagged in the same SQL projection as
+      // ownership, before any follow-up membership command can run.
+      const creatorMemberRows = yield* sql<{ readonly userId: string }>`
+        SELECT user_id AS "userId"
+        FROM projection_thread_members
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(creatorMemberRows, [{ userId: previousOwner }]);
       yield* appendAndProject({
         type: "thread.member-added",
         eventId: EventId.make("evt-owner-transfer-2"),
@@ -2702,6 +2710,30 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
         for (const [index, status] of (["error", "interrupted", "stopped"] as const).entries()) {
           const threadId = ThreadId.make(`thread-terminal-${status}`);
           const requestedAt = `2026-02-26T14:00:0${index}.000Z`;
+          // T3-CUSTOM(expbkt3): accepted turn intent projection requires the
+          // exact user message to have been projected first, as production does.
+          yield* eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.make(`evt-terminal-message-${status}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: requestedAt,
+            commandId: CommandId.make(`cmd-terminal-message-${status}`),
+            causationEventId: null,
+            correlationId: CorrelationId.make(`cmd-terminal-message-${status}`),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make(`message-terminal-${status}`),
+              role: "user",
+              text: "start the terminal-state test",
+              attachments: [],
+              turnId: null,
+              streaming: false,
+              createdAt: requestedAt,
+              updatedAt: requestedAt,
+            },
+          });
           yield* eventStore.append({
             type: "thread.turn-start-requested",
             eventId: EventId.make(`evt-terminal-pending-${status}`),
@@ -2783,6 +2815,30 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       const eventStore = yield* OrchestrationEventStore;
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
 
+      // T3-CUSTOM(expbkt3): restart replay retains the same message-before-intent
+      // ordering produced by the atomic turn-start transaction.
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-restart-message"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: turnStartedAt,
+        commandId: CommandId.make("cmd-restart-message"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-restart-message"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "restart projection",
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: turnStartedAt,
+          updatedAt: turnStartedAt,
+        },
+      });
       yield* eventStore.append({
         type: "thread.turn-start-requested",
         eventId: EventId.make("evt-restart-1"),

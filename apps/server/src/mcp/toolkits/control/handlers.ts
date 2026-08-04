@@ -5,8 +5,6 @@
 import {
   ApprovalRequestId,
   CommandId,
-  DEFAULT_RUNTIME_MODE,
-  DEFAULT_SERVER_SETTINGS,
   MessageId,
   OrchestrationProposedPlanId,
   OrchestrationCommand as OrchestrationCommandSchema,
@@ -756,6 +754,9 @@ const handlers = {
           workspaceRoot,
           createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing === true,
           defaultModelSelection: input.defaultModelSelection ?? null,
+          ...(input.threadCreationDefaults
+            ? { threadCreationDefaults: input.threadCreationDefaults }
+            : {}),
           createdAt,
         },
         { actorUserId: ownerUserId },
@@ -768,9 +769,71 @@ const handlers = {
         title,
         workspaceRoot,
         defaultModelSelection: input.defaultModelSelection ?? null,
+        threadCreationDefaults: input.threadCreationDefaults ?? {
+          environmentMode: null,
+          worktreeBaseRef: null,
+          runtimeMode: null,
+          interactionMode: null,
+        },
       },
       sequence: result.sequence,
       guidance: "Use this project id with t3_create_session.",
+    };
+  }),
+
+  t3_update_project: Effect.fn("T3ControlToolkit.updateProject")(function* (input) {
+    const operation = "update-project";
+    yield* requireExternalOperator(operation);
+    const query = yield* ProjectionSnapshotQuery;
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const projectId = ProjectId.make(input.projectId);
+    const shell = yield* query.getShellSnapshot().pipe(mapControlError(operation));
+    const project = shell.projects.find((candidate) => candidate.id === projectId);
+    if (!project) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: `T3 project ${projectId} was not found.`,
+      });
+    }
+    if (
+      input.title === undefined &&
+      input.defaultModelSelection === undefined &&
+      input.threadCreationDefaults === undefined &&
+      input.scripts === undefined
+    ) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: "Provide at least one project field to update.",
+      });
+    }
+    const commandId = yield* makeCommandId(crypto, operation);
+    const result = yield* dispatcher
+      .dispatch({
+        type: "project.meta.update",
+        commandId,
+        projectId,
+        ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+        ...(input.defaultModelSelection !== undefined
+          ? { defaultModelSelection: input.defaultModelSelection }
+          : {}),
+        ...(input.threadCreationDefaults !== undefined
+          ? { threadCreationDefaults: input.threadCreationDefaults }
+          : {}),
+        ...(input.scripts !== undefined ? { scripts: input.scripts } : {}),
+      })
+      .pipe(mapControlError(operation));
+    return {
+      updated: true,
+      projectId,
+      sequence: result.sequence,
+      defaults: {
+        defaultModelSelection:
+          input.defaultModelSelection === undefined
+            ? project.defaultModelSelection
+            : input.defaultModelSelection,
+        threadCreationDefaults: input.threadCreationDefaults ?? project.threadCreationDefaults,
+      },
     };
   }),
 
@@ -803,12 +866,6 @@ const handlers = {
     }
     const uuid = yield* crypto.randomUUIDv4.pipe(mapControlError(operation));
     const sessionId = ThreadId.make(`mcp:${uuid}`);
-    const modelSelection =
-      input.modelSelection ??
-      project.defaultModelSelection ??
-      DEFAULT_SERVER_SETTINGS.textGenerationModelSelection;
-    const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-    const interactionMode = input.interactionMode ?? "default";
     const ownerUserId =
       scope.actorUserId ?? project.ownerUserId ?? (yield* resolveConfiguredOwnerUserId(operation));
     const title =
@@ -816,76 +873,98 @@ const handlers = {
       input.prompt?.trim().split(/\s+/).slice(0, 10).join(" ").slice(0, 80) ||
       "New MCP session";
     const createdAt = yield* nowIso;
-    const commandId = yield* makeCommandId(crypto, operation);
-
-    if (input.prompt !== undefined && input.prompt.trim().length > 0) {
-      const messageId = yield* makeMessageId(crypto, operation);
-      const result = yield* dispatcher
-        .dispatch(
-          {
-            type: "thread.turn.start",
-            commandId,
-            threadId: sessionId,
-            message: {
-              messageId,
-              role: "user",
-              text: input.prompt,
-              attachments: [],
+    const [commandId, bootstrapUuid] = yield* Effect.all([
+      makeCommandId(crypto, operation),
+      crypto.randomUUIDv4.pipe(mapControlError(operation)),
+    ]);
+    const prompt = input.prompt?.trim();
+    const messageId = prompt ? yield* makeMessageId(crypto, operation) : null;
+    const workspace =
+      input.workspace ??
+      (input.worktreePath
+        ? {
+            mode: "existing-worktree" as const,
+            path: input.worktreePath,
+            ...(input.branch ? { branch: input.branch } : {}),
+          }
+        : input.branch
+          ? {
+              mode: "existing-worktree" as const,
+              path: project.workspaceRoot,
+              branch: input.branch,
+            }
+          : undefined);
+    const hasOverrides =
+      input.modelSelection !== undefined ||
+      input.runtimeMode !== undefined ||
+      input.interactionMode !== undefined ||
+      workspace !== undefined;
+    const bootstrapRequest = {
+      createThread: true,
+      bootstrapId: `mcp-bootstrap:${bootstrapUuid}`,
+      projectId,
+      title,
+      ...(hasOverrides
+        ? {
+            overrides: {
+              ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+              ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
+              ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+              ...(workspace ? { workspace } : {}),
             },
-            modelSelection,
-            runtimeMode,
-            interactionMode,
-            createdAt,
-            bootstrap: {
-              createThread: {
-                projectId,
-                title,
-                modelSelection,
-                runtimeMode,
-                interactionMode,
-                branch: input.branch ?? null,
-                worktreePath: input.worktreePath ?? null,
-                sourceControlProfileId: null,
-                createdAt,
-                // T3-CUSTOM(expbkt3): session priority.
-                priority: input.priority ?? null,
-              },
-            },
-          },
-          { actorUserId: ownerUserId },
-        )
-        .pipe(mapControlError(operation));
-      return {
-        created: true,
-        started: true,
-        sessionId,
-        messageId,
-        sequence: result.sequence,
-      };
-    }
-
+          }
+        : {}),
+      sourceControlProfileId: null,
+      priority: input.priority ?? null,
+      ...(ownerUserId ? { ownerUserId } : {}),
+      createdAt,
+    } as const;
     const result = yield* dispatcher
       .dispatch(
-        {
-          type: "thread.create",
-          commandId,
-          threadId: sessionId,
-          projectId,
-          title,
-          modelSelection,
-          runtimeMode,
-          interactionMode,
-          branch: input.branch ?? null,
-          worktreePath: input.worktreePath ?? null,
-          sourceControlProfileId: null,
-          createdAt,
-          // T3-CUSTOM(expbkt3): session priority.
-          priority: input.priority ?? null,
-        },
+        messageId && prompt
+          ? {
+              type: "thread.turn.start",
+              commandId,
+              threadId: sessionId,
+              message: {
+                messageId,
+                role: "user",
+                text: prompt,
+                attachments: [],
+              },
+              runtimeMode: input.runtimeMode ?? "full-access",
+              interactionMode: input.interactionMode ?? "default",
+              bootstrap: { request: bootstrapRequest },
+              createdAt,
+            }
+          : {
+              type: "thread.bootstrap.request",
+              commandId,
+              bootstrapId: bootstrapRequest.bootstrapId,
+              threadId: sessionId,
+              projectId,
+              title,
+              ...(bootstrapRequest.overrides ? { overrides: bootstrapRequest.overrides } : {}),
+              sourceControlProfileId: null,
+              priority: bootstrapRequest.priority,
+              ...(ownerUserId ? { ownerUserId } : {}),
+              createdAt,
+            },
         { actorUserId: ownerUserId },
       )
       .pipe(mapControlError(operation));
-    return { created: true, started: false, sessionId, sequence: result.sequence };
+    return {
+      created: true,
+      // T3-CUSTOM(expbkt3): the prompt is durable but remains gated by setup.
+      started: false,
+      initialTurnQueued: messageId !== null,
+      sessionId,
+      threadId: sessionId,
+      bootstrapId: `mcp-bootstrap:${bootstrapUuid}`,
+      bootstrapStatus: "queued",
+      ...(messageId ? { messageId } : {}),
+      sequence: result.sequence,
+    };
   }),
 
   t3_submit_plan: Effect.fn("T3ControlToolkit.submitPlan")(function* (input) {

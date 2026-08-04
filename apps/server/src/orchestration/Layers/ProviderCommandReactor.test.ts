@@ -50,6 +50,9 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  durableRecoveryFailure,
+  providerHistoryReadProvesUndelivered,
+  providerHistoryProvesCompletion,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -67,6 +70,54 @@ const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+
+// T3-CUSTOM(expbkt3): guarded recovery only trusts explicit terminal provider evidence.
+it("does not mistake interrupted or partial provider history for completion", () => {
+  const providerTurnId = asTurnId("durable-provider-turn");
+  const history = (state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown") => ({
+    threadId: ThreadId.make("durable-provider-history"),
+    turns: [{ id: providerTurnId, items: [], state }],
+  });
+
+  expect(providerHistoryProvesCompletion(history("completed"), providerTurnId)).toBe(true);
+  for (const state of ["interrupted", "failed", "in-progress", "unknown"] as const) {
+    expect(providerHistoryProvesCompletion(history(state), providerTurnId)).toBe(false);
+  }
+});
+
+it("fails missing durable resume state without spending ten identical retries", () => {
+  const missing = durableRecoveryFailure(
+    { _tag: "ProviderSessionNotFoundError", message: "resume state missing" },
+    "provider-history-read-failed",
+  );
+  const transient = durableRecoveryFailure(
+    { _tag: "ProviderAdapterRequestError", message: "transport disconnected" },
+    "provider-history-read-failed",
+  );
+
+  expect(missing.failureType).toBe("durable-resume-unavailable");
+  expect(missing.retryable).toBe(false);
+  expect(transient.failureType).toBe("provider-history-read-failed");
+  expect(transient.retryable).toBe(true);
+});
+
+// T3-CUSTOM(expbkt3): An unmaterialized Codex thread has never received its first prompt.
+it("treats unmaterialized Codex history as proof the original prompt was not delivered", () => {
+  const unmaterialized = new ProviderAdapterRequestError({
+    provider: "codex",
+    method: "thread/read",
+    detail:
+      "thread provider-thread-1 is not materialized yet; includeTurns is unavailable before first user message",
+  });
+  const unrelated = new ProviderAdapterRequestError({
+    provider: "codex",
+    method: "thread/read",
+    detail: "transport disconnected",
+  });
+
+  expect(providerHistoryReadProvesUndelivered(unmaterialized)).toBe(true);
+  expect(providerHistoryReadProvesUndelivered(unrelated)).toBe(false);
+});
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
@@ -321,6 +372,9 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          // T3-CUSTOM(expbkt3): explicit durable execution behavior.
+          activeTurnInput: "steer",
+          durableResume: "supported",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -2870,6 +2924,42 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("still stops the provider when the projected session already looks stopped", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stale-stopped"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-force-stop-stale-projection"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
   });
 
   effectIt.effect("reconnects a stopped provider session and preserves its conversation id", () =>

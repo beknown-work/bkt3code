@@ -917,6 +917,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  // T3-CUSTOM(expbkt3): expose persisted provider history to the durable
+  // coordinator so a missed terminal event never causes duplicate work.
+  const readThread: NonNullable<ProviderServiceMethod<"readThread">> = Effect.fn("readThread")(
+    function* (threadId, executionOptions) {
+      const routed = yield* resolveRoutableSession({
+        threadId,
+        operation: "ProviderService.readThread",
+        allowRecovery: true,
+        ...(executionOptions ? { executionOptions } : {}),
+      });
+      return yield* routed.adapter.readThread(routed.threadId);
+    },
+  );
+
   const requestTurnInterrupt: ProviderServiceMethod<"requestTurnInterrupt"> = Effect.fn(
     "requestTurnInterrupt",
   )(function* (input) {
@@ -1289,6 +1303,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     sendTurn,
     interruptTurn,
     inspectSession,
+    readThread,
     requestTurnInterrupt,
     terminateSession,
     respondToRequest,

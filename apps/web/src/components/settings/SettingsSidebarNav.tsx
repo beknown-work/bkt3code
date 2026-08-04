@@ -37,6 +37,8 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
+// T3-CUSTOM(expbkt3): Keep account logout available while the settings sidebar replaces chrome.
+import { WebLogoutControl } from "../clerk/WebLogoutControl";
 import { useIsTeamAdmin } from "../../state/orgMembers";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
@@ -314,6 +316,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
         <T3ConnectSidebarSignIn />
+        {/* T3-CUSTOM(expbkt3): Keep logout in Settings instead of the main thread sidebar. */}
+        <WebLogoutControl />
         <div className="flex items-center gap-1">
           <SidebarMenu className="min-w-0 flex-1">
             <SidebarMenuItem>

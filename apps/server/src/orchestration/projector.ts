@@ -5,12 +5,13 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
-  OrchestrationTurnCatchupSummary,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+// T3-CUSTOM(expbkt3): fork event projections
+import { isForkOrchestrationEvent, projectForkEvent } from "./projectorForkCases.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -21,7 +22,6 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
-  ThreadSourceControlProfileSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -33,19 +33,14 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
-  ThreadMemberAddedPayload,
-  ThreadMemberRemovedPayload,
-  ThreadOwnerTransferredPayload,
-  ProjectMemberAddedPayload,
-  ProjectMemberRemovedPayload,
-  ProjectOwnerTransferredPayload,
-  ThreadCatchupSummaryUpdatedPayload,
+  ThreadBootstrapRequestedPayload,
+  ThreadBootstrapStepUpdatedPayload,
+  ThreadBootstrapCompletedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
-const MAX_THREAD_TURN_SUMMARIES = 200;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
@@ -212,6 +207,12 @@ export function projectEvent(
     updatedAt: event.occurredAt,
   };
 
+  // T3-CUSTOM(expbkt3): BEGIN fork events are projected in projectorForkCases.ts
+  if (isForkOrchestrationEvent(event)) {
+    return projectForkEvent(nextBase, event, { decodeForEvent, updateThread });
+  }
+  // T3-CUSTOM(expbkt3): END
+
   switch (event.type) {
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
@@ -222,6 +223,7 @@ export function projectEvent(
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
+            threadCreationDefaults: payload.threadCreationDefaults,
             scripts: payload.scripts,
             // Owner is the creator (team mode). Preserve a prior owner on
             // idempotent re-creation; otherwise seed from the created payload.
@@ -257,6 +259,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultModelSelection !== undefined
                     ? { defaultModelSelection: payload.defaultModelSelection }
+                    : {}),
+                  ...(payload.threadCreationDefaults !== undefined
+                    ? { threadCreationDefaults: payload.threadCreationDefaults }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,
@@ -307,7 +312,15 @@ export function projectEvent(
             // Owner is the creator (team mode). Preserve a prior owner on
             // idempotent re-creation (bootstrap retry after compensation).
             ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
-            memberUserIds: existing?.memberUserIds ?? [],
+            // T3-CUSTOM(expbkt3): BEGIN — creator ownership and explicit tagging.
+            // The creator is both the durable owner and an
+            // explicit tagged member from the first projection.
+            memberUserIds:
+              existing?.memberUserIds ??
+              (payload.createdByUserId === null || payload.createdByUserId === undefined
+                ? []
+                : [payload.createdByUserId]),
+            // T3-CUSTOM(expbkt3): END
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
@@ -315,8 +328,11 @@ export function projectEvent(
             settledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            bootstrap: null,
             // T3-CUSTOM(expbkt3): session priority.
             priority: payload.priority ?? null,
+            // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
+            linearIssueUrl: null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -434,154 +450,13 @@ export function projectEvent(
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
             // T3-CUSTOM(expbkt3): session priority.
             ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
+            // T3-CUSTOM(expbkt3): durable manual Linear tag.
+            ...(payload.linearIssueUrl !== undefined
+              ? { linearIssueUrl: payload.linearIssueUrl }
+              : {}),
             updatedAt: payload.updatedAt,
           }),
         })),
-      );
-
-    case "thread.member-added":
-      return decodeForEvent(ThreadMemberAddedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread || thread.memberUserIds.includes(payload.userId)) {
-            return nextBase;
-          }
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              memberUserIds: [...thread.memberUserIds, payload.userId],
-              updatedAt: payload.addedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.member-removed":
-      return decodeForEvent(ThreadMemberRemovedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread) {
-            return nextBase;
-          }
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              memberUserIds: thread.memberUserIds.filter((id) => id !== payload.userId),
-              updatedAt: payload.removedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.owner-transferred":
-      return decodeForEvent(
-        ThreadOwnerTransferredPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread) {
-            return nextBase;
-          }
-          const memberUserIds = thread.memberUserIds.filter((id) => id !== payload.ownerUserId);
-          if (
-            payload.previousOwnerUserId !== null &&
-            payload.previousOwnerUserId !== payload.ownerUserId &&
-            !memberUserIds.includes(payload.previousOwnerUserId)
-          ) {
-            memberUserIds.push(payload.previousOwnerUserId);
-          }
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              ownerUserId: payload.ownerUserId,
-              memberUserIds,
-              updatedAt: payload.transferredAt,
-            }),
-          };
-        }),
-      );
-
-    case "project.member-added":
-      return decodeForEvent(ProjectMemberAddedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
-          if (!project || project.memberUserIds.includes(payload.userId)) {
-            return nextBase;
-          }
-          return {
-            ...nextBase,
-            projects: nextBase.projects.map((entry) =>
-              entry.id === payload.projectId
-                ? {
-                    ...entry,
-                    memberUserIds: [...entry.memberUserIds, payload.userId],
-                    updatedAt: payload.addedAt,
-                  }
-                : entry,
-            ),
-          };
-        }),
-      );
-
-    case "project.member-removed":
-      return decodeForEvent(ProjectMemberRemovedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
-          if (!project) {
-            return nextBase;
-          }
-          return {
-            ...nextBase,
-            projects: nextBase.projects.map((entry) =>
-              entry.id === payload.projectId
-                ? {
-                    ...entry,
-                    memberUserIds: entry.memberUserIds.filter((id) => id !== payload.userId),
-                    updatedAt: payload.removedAt,
-                  }
-                : entry,
-            ),
-          };
-        }),
-      );
-
-    case "project.owner-transferred":
-      return decodeForEvent(
-        ProjectOwnerTransferredPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => {
-          const project = nextBase.projects.find((entry) => entry.id === payload.projectId);
-          if (!project) {
-            return nextBase;
-          }
-          const memberUserIds = project.memberUserIds.filter((id) => id !== payload.ownerUserId);
-          if (
-            payload.previousOwnerUserId !== null &&
-            payload.previousOwnerUserId !== payload.ownerUserId &&
-            !memberUserIds.includes(payload.previousOwnerUserId)
-          ) {
-            memberUserIds.push(payload.previousOwnerUserId);
-          }
-          return {
-            ...nextBase,
-            projects: nextBase.projects.map((entry) =>
-              entry.id === payload.projectId
-                ? {
-                    ...entry,
-                    ownerUserId: payload.ownerUserId,
-                    memberUserIds,
-                    updatedAt: payload.transferredAt,
-                  }
-                : entry,
-            ),
-          };
-        }),
       );
 
     case "thread.runtime-mode-set":
@@ -607,22 +482,6 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             interactionMode: payload.interactionMode,
             updatedAt: payload.updatedAt,
-          }),
-        })),
-      );
-
-    case "thread.source-control-profile-set":
-      return decodeForEvent(
-        ThreadSourceControlProfileSetPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            sourceControlProfileId: payload.sourceControlProfileId,
-            updatedAt: payload.changedAt,
           }),
         })),
       );
@@ -870,54 +729,6 @@ export function projectEvent(
         };
       });
 
-    case "thread.catchup-summary-updated":
-      return Effect.gen(function* () {
-        const payload = yield* decodeForEvent(
-          ThreadCatchupSummaryUpdatedPayload,
-          event.payload,
-          event.type,
-          "payload",
-        );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-        if (!thread) {
-          return nextBase;
-        }
-
-        const withoutTurn = thread.turnSummaries.filter((entry) => entry.turnId !== payload.turnId);
-
-        // "cleared" removes a below-cutoff card. Generation failures use the
-        // durable "error" state so clients can explain and retry them.
-        const turnSummaries =
-          payload.progress === "cleared"
-            ? withoutTurn
-            : [
-                ...withoutTurn,
-                yield* decodeForEvent(
-                  OrchestrationTurnCatchupSummary,
-                  {
-                    turnId: payload.turnId,
-                    assistantMessageId: payload.assistantMessageId,
-                    summary: payload.displaySummary,
-                    status: payload.progress,
-                    createdAt: payload.createdAt,
-                  },
-                  event.type,
-                  "turnSummary",
-                ),
-              ]
-                .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
-                .slice(-MAX_THREAD_TURN_SUMMARIES);
-
-        return {
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            // A null rolling summary means "unchanged" (e.g. the pending marker).
-            ...(payload.rollingSummary === null ? {} : { rollingSummary: payload.rollingSummary }),
-            turnSummaries,
-          }),
-        };
-      });
-
     case "thread.reverted":
       return decodeForEvent(ThreadRevertedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -1005,6 +816,92 @@ export function projectEvent(
           };
         }),
       );
+
+    case "thread.bootstrap-requested":
+      return decodeForEvent(
+        ThreadBootstrapRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            bootstrap: payload.progress,
+            updatedAt: payload.createdAt,
+          }),
+        })),
+      );
+
+    case "thread.bootstrap-step-updated":
+      return decodeForEvent(
+        ThreadBootstrapStepUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread?.bootstrap || thread.bootstrap.id !== payload.bootstrapId) return nextBase;
+          const currentStep = thread.bootstrap[payload.step];
+          const nextStep = {
+            ...currentStep,
+            status: payload.status,
+            attempt: payload.attempt,
+            ...(payload.terminalId !== undefined ? { terminalId: payload.terminalId } : {}),
+            ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+            ...(payload.error !== undefined ? { error: payload.error } : {}),
+            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+          };
+          const status =
+            payload.status === "failed"
+              ? ("failed" as const)
+              : payload.status === "running" || payload.status === "pending"
+                ? ("running" as const)
+                : thread.bootstrap.status;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              bootstrap: {
+                ...thread.bootstrap,
+                status,
+                [payload.step]: nextStep,
+                updatedAt: payload.updatedAt,
+              },
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.bootstrap-completed":
+      return decodeForEvent(
+        ThreadBootstrapCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread?.bootstrap || thread.bootstrap.id !== payload.bootstrapId) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              bootstrap: {
+                ...thread.bootstrap,
+                status: "ready",
+                updatedAt: payload.completedAt,
+              },
+              updatedAt: payload.completedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.bootstrap-stop-requested":
+    case "thread.bootstrap-retry-requested":
+    case "thread.bootstrap-continue-requested":
+      return Effect.succeed(nextBase);
 
     default:
       return Effect.succeed(nextBase);

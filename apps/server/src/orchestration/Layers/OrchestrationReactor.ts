@@ -31,6 +31,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
 
   return {
     start,
+    // T3-CUSTOM(expbkt3): recovery scan must follow stale-session reconciliation.
+    startDurableRecovery: () => providerCommandReactor.startDurableRecovery?.() ?? Effect.void,
   } satisfies OrchestrationReactorShape;
 });
 

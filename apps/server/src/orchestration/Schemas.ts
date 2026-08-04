@@ -34,6 +34,11 @@ import {
   ProjectMemberAddedPayload as ContractsProjectMemberAddedPayloadSchema,
   ProjectMemberRemovedPayload as ContractsProjectMemberRemovedPayloadSchema,
   ProjectOwnerTransferredPayload as ContractsProjectOwnerTransferredPayloadSchema,
+  // T3-CUSTOM(expbkt3): additive durable bootstrap event schemas.
+  ThreadBootstrapRequestedPayload as ContractsThreadBootstrapRequestedPayloadSchema,
+  ThreadBootstrapStepUpdatedPayload as ContractsThreadBootstrapStepUpdatedPayloadSchema,
+  ThreadBootstrapControlRequestedPayload as ContractsThreadBootstrapControlRequestedPayloadSchema,
+  ThreadBootstrapCompletedPayload as ContractsThreadBootstrapCompletedPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -64,6 +69,11 @@ export const ThreadCatchupSummaryRequestedPayload =
   ContractsThreadCatchupSummaryRequestedPayloadSchema;
 export const ThreadRevertedPayload = ContractsThreadRevertedPayloadSchema;
 export const ThreadActivityAppendedPayload = ContractsThreadActivityAppendedPayloadSchema;
+export const ThreadBootstrapRequestedPayload = ContractsThreadBootstrapRequestedPayloadSchema;
+export const ThreadBootstrapStepUpdatedPayload = ContractsThreadBootstrapStepUpdatedPayloadSchema;
+export const ThreadBootstrapControlRequestedPayload =
+  ContractsThreadBootstrapControlRequestedPayloadSchema;
+export const ThreadBootstrapCompletedPayload = ContractsThreadBootstrapCompletedPayloadSchema;
 
 export const ThreadTurnStartRequestedPayload = ContractsThreadTurnStartRequestedPayloadSchema;
 export const ThreadTurnInterruptRequestedPayload =

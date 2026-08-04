@@ -292,11 +292,27 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
     [onDeletePendingTask, pendingTask],
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — deterministic outbox failures remain visible.
   const statusPill = (
-    <View className="rounded-full bg-zinc-500/12 px-1.5 py-0.5 dark:bg-zinc-500/16">
-      <Text className="text-3xs font-t3-bold text-zinc-600 dark:text-zinc-300">Pending</Text>
+    <View
+      className={
+        pendingTask.message.deliveryState === "failed"
+          ? "rounded-full bg-red-500/12 px-1.5 py-0.5 dark:bg-red-500/16"
+          : "rounded-full bg-zinc-500/12 px-1.5 py-0.5 dark:bg-zinc-500/16"
+      }
+    >
+      <Text
+        className={
+          pendingTask.message.deliveryState === "failed"
+            ? "text-3xs font-t3-bold text-red-700 dark:text-red-300"
+            : "text-3xs font-t3-bold text-zinc-600 dark:text-zinc-300"
+        }
+      >
+        {pendingTask.message.deliveryState === "failed" ? "Failed" : "Pending"}
+      </Text>
     </View>
   );
+  // T3-CUSTOM(expbkt3): END
 
   const subtitleRow =
     subtitleParts.length > 0 ? (

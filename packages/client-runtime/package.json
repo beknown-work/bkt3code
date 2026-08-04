@@ -31,6 +31,10 @@
       "types": "./src/operations/projects.ts",
       "default": "./src/operations/projects.ts"
     },
+    "./outbox": {
+      "types": "./src/outbox/index.ts",
+      "default": "./src/outbox/index.ts"
+    },
     "./platform": {
       "types": "./src/platform/index.ts",
       "default": "./src/platform/index.ts"
@@ -70,6 +74,10 @@
     "./state/orchestration": {
       "types": "./src/state/orchestration.ts",
       "default": "./src/state/orchestration.ts"
+    },
+    "./state/outbox": {
+      "types": "./src/state/outbox.ts",
+      "default": "./src/state/outbox.ts"
     },
     "./state/presentation": {
       "types": "./src/state/presentation.ts",
@@ -134,6 +142,10 @@
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
+    },
+    "./state/thread-execution-presentation": {
+      "types": "./src/state/threadExecutionPresentation.ts",
+      "default": "./src/state/threadExecutionPresentation.ts"
     },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",

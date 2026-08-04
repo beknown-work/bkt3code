@@ -180,13 +180,13 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     ): Effect.Effect<
       {
         threadId: ThreadId;
-        turns: ReadonlyArray<{ id: TurnId; items: readonly [] }>;
+        turns: ReadonlyArray<{ id: TurnId; items: readonly []; state: "completed" }>;
       },
       ProviderAdapterError
     > =>
       Effect.succeed({
         threadId,
-        turns: [{ id: asTurnId("turn-1"), items: [] }],
+        turns: [{ id: asTurnId("turn-1"), items: [], state: "completed" }],
       }),
   );
 
@@ -209,6 +209,9 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     provider,
     capabilities: {
       sessionModelSwitch: "in-session" as const,
+      // T3-CUSTOM(expbkt3): explicit durable execution behavior.
+      activeTurnInput: "steer" as const,
+      durableResume: "supported" as const,
     },
     startSession,
     sendTurn,
@@ -851,6 +854,28 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("reads provider history through the persisted thread route", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-read-history");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const history = yield* provider.readThread!(threadId);
+      assert.equal(history.threadId, threadId);
+      assert.deepEqual(
+        history.turns.map((turn) => turn.id),
+        [asTurnId("turn-1")],
+      );
+      assert.equal(routing.codex.readThread.mock.calls.at(-1)?.[0], threadId);
+    }),
+  );
+
   it.effect("exposes and can terminate a session while the adapter is still starting", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

@@ -19,6 +19,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -29,6 +30,8 @@ import {
 } from "../provider/Services/ProviderService.ts";
 import { ThreadExecutionSupervisor } from "./ThreadExecutionSupervisor.ts";
 import { ThreadExecutionSupervisorLive } from "./ThreadExecutionSupervisorLive.ts";
+// T3-CUSTOM(expbkt3): verifies Stop fences the durable coordinator claim.
+import { DurableExecutionIntentRepositoryLive } from "./DurableExecutionIntentRepository.ts";
 // T3-CUSTOM(expbkt3): the supervisor journals session-recovery intent.
 import { layer as SessionRecoveryStateLayer } from "../persistence/SessionRecoveryState.ts";
 
@@ -62,6 +65,71 @@ const startEvent = (
 const layer = it.layer(SqlitePersistenceMemory);
 
 layer("ThreadExecutionSupervisor", (it) => {
+  // T3-CUSTOM(expbkt3): durable desired state is streamed with provider observation.
+  it.effect("joins and refreshes the durable intent in execution snapshots", () =>
+    Effect.gen(function* () {
+      const providerService = {
+        inspectSession: () => Effect.succeed(null),
+        streamEvents: Stream.empty,
+      } as unknown as ProviderServiceShape;
+      const orchestration = {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
+      } as OrchestrationEngineService["Service"];
+      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        Layer.provide(DurableExecutionIntentRepositoryLive),
+        Layer.provide(SessionRecoveryStateLayer),
+        Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+        Layer.provide(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const intentThreadId = ThreadId.make("thread-execution-intent-snapshot");
+        yield* sql`
+          INSERT INTO projection_thread_execution_intents (
+            work_item_id, thread_id, message_id, command_id,
+            desired_state, phase, delivery_certainty, runnable,
+            accepted_at, updated_at
+          ) VALUES (
+            'command-intent', ${intentThreadId}, 'message-intent', 'command-intent',
+            'running', 'recovering', 'uncertain', 1, ${createdAt}, ${createdAt}
+          )
+        `;
+
+        const refreshed = yield* supervisor.refreshIntent(intentThreadId);
+        const snapshot = yield* supervisor.getSnapshot(intentThreadId);
+
+        assert.strictEqual(refreshed.revision, 1);
+        assert.strictEqual(snapshot.intent?.workItemId, "command-intent");
+        assert.strictEqual(snapshot.intent?.phase, "recovering");
+        assert.strictEqual(snapshot.intent?.recovery.maximumAttempts, 10);
+
+        const stopped = yield* supervisor.stopExecution({ threadId: intentThreadId });
+        const rows = yield* sql<{
+          readonly desiredState: string;
+          readonly runnable: number;
+          readonly claimGeneration: number;
+        }>`
+          SELECT desired_state AS "desiredState", runnable,
+                 claim_generation AS "claimGeneration"
+          FROM projection_thread_execution_intents
+          WHERE work_item_id = 'command-intent'
+        `;
+
+        assert.strictEqual(stopped.disposition, "already-stopped");
+        assert.strictEqual(stopped.snapshot.intent, undefined);
+        assert.strictEqual(rows[0]?.desiredState, "stopped");
+        assert.strictEqual(rows[0]?.runnable, 0);
+        assert.strictEqual(rows[0]?.claimGeneration, 1);
+      }).pipe(Effect.provide(supervisorLayer));
+    }),
+  );
+
   it.effect("atomically admits only one idle turn and makes same-command retries idempotent", () =>
     Effect.gen(function* () {
       const providerService = {
@@ -266,20 +334,13 @@ layer("ThreadExecutionSupervisor", (it) => {
     }),
   );
 
-  it.effect("does not reap an execution while its provider session is still starting", () =>
+  // T3-CUSTOM(expbkt3): Durable bootstrap admits work before a provider runtime exists.
+  it.effect("does not reap an admitted execution before its provider runtime exists", () =>
     Effect.gen(function* () {
       const inspectionCount = yield* Ref.make(0);
       const providerService = {
         inspectSession: () =>
-          Ref.update(inspectionCount, (count) => count + 1).pipe(
-            Effect.as({
-              threadId,
-              generation: 1,
-              state: "starting" as const,
-              activeProviderTurnId: null,
-              runtimeAlive: true,
-            }),
-          ),
+          Ref.update(inspectionCount, (count) => count + 1).pipe(Effect.as(null)),
         streamEvents: Stream.empty,
       } as unknown as ProviderServiceShape;
       const orchestration = {

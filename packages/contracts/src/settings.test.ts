@@ -274,13 +274,41 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin on for legacy configs", () => {
-    expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(true);
+    const settings = decodeServerSettings({});
+
+    expect(settings.newWorktreesStartFromOrigin).toBe(true);
+    expect(settings.defaultThreadModelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+    expect(settings.defaultThreadRuntimeMode).toBe("full-access");
+    expect(settings.defaultThreadInteractionMode).toBe("default");
   });
 
   it("accepts start-from-origin updates", () => {
     expect(
       decodeServerSettingsPatch({ newWorktreesStartFromOrigin: false }).newWorktreesStartFromOrigin,
     ).toBe(false);
+  });
+
+  it("accepts thread model, access, and interaction default updates", () => {
+    const patch = decodeServerSettingsPatch({
+      defaultThreadModelSelection: {
+        instanceId: "claudeAgent",
+        model: "claude-opus-5",
+        options: [{ id: "effort", value: "high" }],
+      },
+      defaultThreadRuntimeMode: "approval-required",
+      defaultThreadInteractionMode: "plan",
+    });
+
+    expect(patch.defaultThreadModelSelection).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5",
+      options: [{ id: "effort", value: "high" }],
+    });
+    expect(patch.defaultThreadRuntimeMode).toBe("approval-required");
+    expect(patch.defaultThreadInteractionMode).toBe("plan");
   });
 });
 

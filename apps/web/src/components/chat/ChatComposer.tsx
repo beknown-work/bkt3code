@@ -178,6 +178,7 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  RotateCcwIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -282,6 +283,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   planSidebarOpen: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  // T3-CUSTOM(expbkt3): reverse action for explicit fresh-thread defaults.
+  showCreationDefaultsReset: boolean;
+  onResetCreationDefaults: () => void;
   onTogglePlanSidebar: () => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
@@ -368,6 +372,30 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       </Tooltip>
 
       {interactionModeToggle}
+
+      {/* T3-CUSTOM(expbkt3): return all fresh-thread creation fields to inheritance. */}
+      {props.showCreationDefaultsReset ? (
+        <>
+          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ComposerControl
+                  type="button"
+                  onClick={props.onResetCreationDefaults}
+                  aria-label="Use project or app creation defaults"
+                />
+              }
+            >
+              <ComposerControlIcon icon={RotateCcwIcon} />
+              <span className="sr-only">Use project/app defaults</span>
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              Reset model, access, mode, location, and base ref to inherited defaults
+            </TooltipPopup>
+          </Tooltip>
+        </>
+      ) : null}
 
       {props.showPlanToggle ? (
         <>
@@ -563,6 +591,8 @@ export interface ChatComposerProps {
   // Mode
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  // T3-CUSTOM(expbkt3): only fresh drafts expose the inherited-defaults reset.
+  showCreationDefaultsReset: boolean;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
@@ -611,6 +641,7 @@ export interface ChatComposerProps {
   toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  onResetCreationDefaults: () => void;
   togglePlanSidebar: () => void;
 
   focusComposer: () => void;
@@ -660,6 +691,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     planSidebarOpen,
     runtimeMode,
     interactionMode,
+    showCreationDefaultsReset,
     lockedProvider,
     providerStatuses,
     activeProjectDefaultModelSelection,
@@ -688,6 +720,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
+    onResetCreationDefaults,
     togglePlanSidebar,
     focusComposer,
     scheduleComposerFocus,
@@ -3182,10 +3215,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     planSidebarOpen={planSidebarOpen}
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                    showCreationDefaultsReset={showCreationDefaultsReset}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
                     onTogglePlanSidebar={togglePlanSidebar}
                     onRuntimeModeChange={handleRuntimeModeChange}
+                    onResetCreationDefaults={onResetCreationDefaults}
                   />
                 ) : (
                   <>
@@ -3204,6 +3239,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       planSidebarOpen={planSidebarOpen}
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
+                      showCreationDefaultsReset={showCreationDefaultsReset}
+                      onResetCreationDefaults={onResetCreationDefaults}
                       onTogglePlanSidebar={togglePlanSidebar}
                     />
                   </>

@@ -20,6 +20,8 @@ import { ProjectionProjectRepository } from "../../persistence/Services/Projecti
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
+// T3-CUSTOM(expbkt3): persist durable bootstrap progress independently from thread shells.
+import { ProjectionThreadBootstrapRepository } from "../../persistence/Services/ProjectionThreadBootstraps.ts";
 import {
   type ProjectionThreadMessage,
   ProjectionThreadMessageRepository,
@@ -40,6 +42,8 @@ import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layer
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
+// T3-CUSTOM(expbkt3): persist durable bootstrap progress independently from thread shells.
+import { ProjectionThreadBootstrapRepositoryLive } from "../../persistence/Layers/ProjectionThreadBootstraps.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
@@ -56,6 +60,13 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+// T3-CUSTOM(expbkt3): additive durable intent projector/repository seam.
+import {
+  DurableExecutionIntentRepository,
+  DurableExecutionIntentRepositoryLive,
+} from "../../execution/DurableExecutionIntentRepository.ts";
+// T3-CUSTOM(expbkt3): keep routine activity and streaming deltas off the full-history summary path.
+import { shouldRefreshThreadShellSummary } from "../threadShellSummaryRefresh.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -63,10 +74,14 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
+  // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress.
+  threadBootstraps: "projection.thread-bootstraps",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  // T3-CUSTOM(expbkt3): accepted work is projected in the command transaction.
+  durableExecutionIntents: "projection.durable-execution-intents",
 } as const;
 
 type ProjectorName =
@@ -483,10 +498,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
+    // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress.
+    const projectionThreadBootstrapRepository = yield* ProjectionThreadBootstrapRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
     const projectionMembershipRepository = yield* ProjectionMembershipRepository;
+    // T3-CUSTOM(expbkt3): durable intent is a peer projection in the same SQL transaction.
+    const durableExecutionIntentRepository = yield* DurableExecutionIntentRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -502,6 +521,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             title: event.payload.title,
             workspaceRoot: event.payload.workspaceRoot,
             defaultModelSelection: event.payload.defaultModelSelection,
+            threadCreationDefaults: event.payload.threadCreationDefaults ?? {
+              environmentMode: null,
+              worktreeBaseRef: null,
+              runtimeMode: null,
+              interactionMode: null,
+            },
             scripts: event.payload.scripts,
             ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
@@ -571,6 +596,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.defaultModelSelection !== undefined
               ? { defaultModelSelection: event.payload.defaultModelSelection }
+              : {}),
+            ...(event.payload.threadCreationDefaults !== undefined
+              ? { threadCreationDefaults: event.payload.threadCreationDefaults }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,
@@ -682,6 +710,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             snoozedAt: null,
             // T3-CUSTOM(expbkt3): session priority.
             priority: event.payload.priority ?? null,
+            // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
+            linearIssueUrl: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -691,6 +721,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             rollingSummary: null,
             deletedAt: null,
           });
+          // T3-CUSTOM(expbkt3): BEGIN — keep creator tagging atomic with the owner
+          // projection so a first shell snapshot can never observe half of it.
+          if (
+            event.payload.createdByUserId !== null &&
+            event.payload.createdByUserId !== undefined
+          ) {
+            yield* projectionMembershipRepository.upsertThreadMember({
+              threadId: event.payload.threadId,
+              userId: event.payload.createdByUserId,
+              addedByUserId: event.payload.createdByUserId,
+              addedAt: event.payload.createdAt,
+            });
+          }
+          // T3-CUSTOM(expbkt3): END
           return;
 
         case "thread.member-added":
@@ -860,6 +904,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             // T3-CUSTOM(expbkt3): session priority.
             ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
+            // T3-CUSTOM(expbkt3): durable manual Linear tag.
+            ...(event.payload.linearIssueUrl !== undefined
+              ? { linearIssueUrl: event.payload.linearIssueUrl }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -941,7 +989,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          // T3-CUSTOM(expbkt3): only summary-relevant events hydrate historical bodies.
+          if (shouldRefreshThreadShellSummary(event)) {
+            yield* refreshThreadShellSummary(event.payload.threadId);
+          }
           return;
         }
 
@@ -1048,40 +1099,54 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     )(function* (event, attachmentSideEffects) {
       switch (event.type) {
         case "thread.message-sent": {
+          // T3-CUSTOM(expbkt3): BEGIN atomic streaming-delta hot path.
+          const nextAttachments =
+            event.payload.attachments !== undefined
+              ? yield* materializeAttachmentsForProjection({
+                  attachments: event.payload.attachments,
+                })
+              : undefined;
+          if (event.payload.streaming) {
+            yield* projectionThreadMessageRepository.appendTextDelta({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+              role: event.payload.role,
+              delta: event.payload.text,
+              ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+              isStreaming: true,
+              sentByUserId: event.payload.sentByUserId ?? null,
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+
           const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId: event.payload.messageId,
           });
           const previousMessage = Option.getOrUndefined(existingMessage);
           const nextText = Option.match(existingMessage, {
             onNone: () => event.payload.text,
-            onSome: (message) => {
-              if (event.payload.streaming) {
-                return `${message.text}${event.payload.text}`;
-              }
-              if (event.payload.text.length === 0) {
-                return message.text;
-              }
-              return event.payload.text;
-            },
+            onSome: (message) =>
+              event.payload.text.length === 0 ? message.text : event.payload.text,
           });
-          const nextAttachments =
-            event.payload.attachments !== undefined
-              ? yield* materializeAttachmentsForProjection({
-                  attachments: event.payload.attachments,
-                })
-              : previousMessage?.attachments;
+          const persistedAttachments = nextAttachments ?? previousMessage?.attachments;
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
             role: event.payload.role,
             text: nextText,
-            ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(persistedAttachments !== undefined
+              ? { attachments: [...persistedAttachments] }
+              : {}),
             isStreaming: event.payload.streaming,
             sentByUserId: event.payload.sentByUserId ?? previousMessage?.sentByUserId ?? null,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          // T3-CUSTOM(expbkt3): END atomic streaming-delta hot path.
           return;
         }
 
@@ -1726,6 +1791,205 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    // T3-CUSTOM(expbkt3): the coordinator stores its resolved request and public
+    // progress here so setup state survives client reconnects and server restarts.
+    const applyThreadBootstrapsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadBootstrapsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.bootstrap-requested":
+          yield* projectionThreadBootstrapRepository.upsert({
+            threadId: event.payload.threadId,
+            bootstrapId: event.payload.request.bootstrapId,
+            status: event.payload.progress.status,
+            progress: event.payload.progress,
+            request: event.payload.request,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.createdAt,
+          });
+          return;
+
+        case "thread.bootstrap-step-updated": {
+          const existing = yield* projectionThreadBootstrapRepository.getByThreadId(
+            event.payload.threadId,
+          );
+          if (Option.isNone(existing) || existing.value.bootstrapId !== event.payload.bootstrapId) {
+            return;
+          }
+
+          const currentStep = existing.value.progress[event.payload.step];
+          const nextStep = {
+            ...currentStep,
+            status: event.payload.status,
+            attempt: event.payload.attempt,
+            ...(event.payload.terminalId !== undefined
+              ? { terminalId: event.payload.terminalId }
+              : {}),
+            ...(event.payload.exitCode !== undefined ? { exitCode: event.payload.exitCode } : {}),
+            ...(event.payload.error !== undefined ? { error: event.payload.error } : {}),
+            ...(event.payload.worktreePath !== undefined
+              ? { worktreePath: event.payload.worktreePath }
+              : {}),
+          };
+          const progress = {
+            ...existing.value.progress,
+            status:
+              event.payload.status === "failed"
+                ? ("failed" as const)
+                : event.payload.status === "running" || event.payload.status === "pending"
+                  ? ("running" as const)
+                  : existing.value.progress.status === "failed"
+                    ? ("running" as const)
+                    : existing.value.progress.status,
+            [event.payload.step]: nextStep,
+            updatedAt: event.payload.updatedAt,
+          };
+          yield* projectionThreadBootstrapRepository.upsert({
+            ...existing.value,
+            status: progress.status,
+            progress,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.bootstrap-completed": {
+          const existing = yield* projectionThreadBootstrapRepository.getByThreadId(
+            event.payload.threadId,
+          );
+          if (Option.isNone(existing) || existing.value.bootstrapId !== event.payload.bootstrapId) {
+            return;
+          }
+          yield* projectionThreadBootstrapRepository.upsert({
+            ...existing.value,
+            status: "ready",
+            progress: {
+              ...existing.value.progress,
+              status: "ready",
+              updatedAt: event.payload.completedAt,
+            },
+            updatedAt: event.payload.completedAt,
+          });
+          return;
+        }
+
+        case "thread.bootstrap-retry-requested": {
+          if (!event.payload.baseRef) return;
+          const existing = yield* projectionThreadBootstrapRepository.getByThreadId(
+            event.payload.threadId,
+          );
+          if (
+            Option.isNone(existing) ||
+            existing.value.bootstrapId !== event.payload.bootstrapId ||
+            existing.value.request.workspace.mode !== "new-worktree"
+          ) {
+            return;
+          }
+          yield* projectionThreadBootstrapRepository.upsert({
+            ...existing.value,
+            request: {
+              ...existing.value.request,
+              workspace: {
+                ...existing.value.request.workspace,
+                baseRef: event.payload.baseRef,
+              },
+            },
+            updatedAt: event.payload.requestedAt,
+          });
+          return;
+        }
+
+        case "thread.deleted":
+          yield* projectionThreadBootstrapRepository.deleteByThreadId(event.payload.threadId);
+          return;
+
+        default:
+          return;
+      }
+    });
+
+    // T3-CUSTOM(expbkt3): BEGIN — one marked delegation keeps fork recovery
+    // behavior out of the upstream-owned projection machinery.
+    const applyDurableExecutionIntentsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyDurableExecutionIntentsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.turn-start-requested": {
+          const message = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
+          });
+          yield* durableExecutionIntentRepository.acceptFromEvent({
+            event,
+            message: Option.getOrNull(message),
+          });
+          return;
+        }
+        case "thread.turn-interrupt-requested":
+        case "thread.archived":
+        case "thread.deleted":
+          yield* durableExecutionIntentRepository.stopThread({
+            threadId: event.payload.threadId,
+            reason: event.type,
+            at: event.occurredAt,
+          });
+          return;
+        case "thread.session-stop-requested": {
+          // T3-CUSTOM(expbkt3): Stop doubles as Dismiss for exhausted attention.
+          const items = yield* durableExecutionIntentRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const exhausted = items.findLast(
+            (item) => item.phase === "recovery-exhausted" && item.dismissedAt === null,
+          );
+          if (exhausted !== undefined) {
+            yield* durableExecutionIntentRepository.dismissExhausted({
+              threadId: event.payload.threadId,
+              at: event.occurredAt,
+            });
+          } else {
+            yield* durableExecutionIntentRepository.stopThread({
+              threadId: event.payload.threadId,
+              reason: event.type,
+              at: event.occurredAt,
+            });
+          }
+          return;
+        }
+        case "thread.session-restart-requested":
+          yield* durableExecutionIntentRepository.retryExhausted({
+            threadId: event.payload.threadId,
+            at: event.occurredAt,
+          });
+          return;
+        case "thread.session-set":
+          yield* durableExecutionIntentRepository.observeSession({
+            threadId: event.payload.threadId,
+            status: event.payload.session.status,
+            providerTurnId: event.payload.session.activeTurnId,
+            error: event.payload.session.lastError,
+            at: event.payload.session.updatedAt,
+          });
+          return;
+        case "thread.activity-appended":
+          if (
+            event.payload.activity.kind === "approval.requested" ||
+            event.payload.activity.kind === "approval.resolved" ||
+            event.payload.activity.kind === "user-input.requested" ||
+            event.payload.activity.kind === "user-input.resolved"
+          ) {
+            yield* durableExecutionIntentRepository.observeBlockingActivity({
+              threadId: event.payload.threadId,
+              kind: event.payload.activity.kind,
+              at: event.payload.activity.createdAt,
+            });
+          }
+          return;
+        default:
+          return;
+      }
+    });
+    // T3-CUSTOM(expbkt3): END
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
@@ -1744,12 +2008,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyThreadActivitiesProjection,
       },
       {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadBootstraps,
+        apply: applyThreadBootstrapsProjection,
+      },
+      {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
         apply: applyThreadSessionsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
         apply: applyThreadTurnsProjection,
+      },
+      {
+        // T3-CUSTOM(expbkt3): atomic accepted-work projection.
+        name: ORCHESTRATION_PROJECTOR_NAMES.durableExecutionIntents,
+        apply: applyDurableExecutionIntentsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
@@ -1862,9 +2135,13 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
+  // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress.
+  Layer.provideMerge(ProjectionThreadBootstrapRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionMembershipRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  // T3-CUSTOM(expbkt3): fork-owned durable execution repository.
+  Layer.provideMerge(DurableExecutionIntentRepositoryLive),
 );

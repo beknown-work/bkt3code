@@ -75,9 +75,16 @@ export function applyThreadDetailEvent(
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           sourceControlProfileId: event.payload.sourceControlProfileId,
+          // T3-CUSTOM(expbkt3): bootstrap arrives in its own durable event.
+          bootstrap: null,
           latestTurn: null,
           ownerUserId: event.payload.createdByUserId ?? null,
-          memberUserIds: [],
+          // T3-CUSTOM(expbkt3): BEGIN — creation tags the authenticated owner too.
+          memberUserIds:
+            event.payload.createdByUserId === null || event.payload.createdByUserId === undefined
+              ? []
+              : [event.payload.createdByUserId],
+          // T3-CUSTOM(expbkt3): END
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
@@ -191,6 +198,10 @@ export function applyThreadDetailEvent(
             : {}),
           // T3-CUSTOM(expbkt3): session priority.
           ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
+          // T3-CUSTOM(expbkt3): durable manual Linear tag.
+          ...(event.payload.linearIssueUrl !== undefined
+            ? { linearIssueUrl: event.payload.linearIssueUrl }
+            : {}),
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -569,10 +580,85 @@ export function applyThreadDetailEvent(
       };
     }
 
+    // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress is reduced from
+    // events so live views and reconnected snapshots converge identically.
+    case "thread.bootstrap-requested":
+      return event.payload.threadId === thread.id
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              bootstrap: event.payload.progress,
+              updatedAt: event.payload.createdAt,
+            },
+          }
+        : { kind: "unchanged" };
+
+    case "thread.bootstrap-step-updated": {
+      if (
+        event.payload.threadId !== thread.id ||
+        !thread.bootstrap ||
+        thread.bootstrap.id !== event.payload.bootstrapId
+      ) {
+        return { kind: "unchanged" };
+      }
+      const current = thread.bootstrap[event.payload.step];
+      const step = {
+        ...current,
+        status: event.payload.status,
+        attempt: event.payload.attempt,
+        ...(event.payload.terminalId !== undefined ? { terminalId: event.payload.terminalId } : {}),
+        ...(event.payload.exitCode !== undefined ? { exitCode: event.payload.exitCode } : {}),
+        ...(event.payload.error !== undefined ? { error: event.payload.error } : {}),
+        ...(event.payload.worktreePath !== undefined
+          ? { worktreePath: event.payload.worktreePath }
+          : {}),
+      };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          bootstrap: {
+            ...thread.bootstrap,
+            status:
+              event.payload.status === "failed"
+                ? "failed"
+                : event.payload.status === "running" || event.payload.status === "pending"
+                  ? "running"
+                  : thread.bootstrap.status === "failed"
+                    ? "running"
+                    : thread.bootstrap.status,
+            [event.payload.step]: step,
+            updatedAt: event.payload.updatedAt,
+          },
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap-completed":
+      return event.payload.threadId === thread.id && thread.bootstrap
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              bootstrap: {
+                ...thread.bootstrap,
+                status: "ready",
+                updatedAt: event.payload.completedAt,
+              },
+              updatedAt: event.payload.completedAt,
+            },
+          }
+        : { kind: "unchanged" };
+
     // ── Events that don't mutate thread state directly ──────────────
     case "thread.approval-response-requested":
     case "thread.user-input-response-requested":
     case "thread.checkpoint-revert-requested":
+    case "thread.bootstrap-stop-requested":
+    case "thread.bootstrap-retry-requested":
+    case "thread.bootstrap-continue-requested":
       return { kind: "unchanged" };
   }
 

@@ -18,9 +18,15 @@ export * from "./keybindings.ts";
 export * from "./server.ts";
 export * from "./settings.ts";
 export * from "./personalMcp.ts";
+// T3-CUSTOM(expbkt3): lifecycle-row Linear issue status schemas
+export * from "./linearIssue.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
+// T3-CUSTOM(expbkt3): fork source-control identity schemas
+export * from "./sourceControlProfiles.ts";
+// T3-CUSTOM(expbkt3): fork websocket RPC definitions
+export * from "./rpcFork.ts";
 export * from "./orchestration.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";

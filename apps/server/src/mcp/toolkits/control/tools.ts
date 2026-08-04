@@ -7,10 +7,13 @@ import {
   ProviderApprovalDecision,
   ProviderInteractionMode,
   ProviderUserInputAnswers,
+  ProjectScript,
   RuntimeMode,
   ServerSettingsPatch,
+  ProjectThreadCreationDefaults,
   ThreadId,
   ThreadPriority,
+  WorktreeBaseRef,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Path from "effect/Path";
@@ -333,6 +336,12 @@ export const T3CreateProjectTool = mutatingTool(
             "Optional project default provider/model selection, or null to inherit the server default. Discover valid values with t3_get_configuration.",
         }),
       ),
+      threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults).pipe(
+        Schema.annotateKey({
+          description:
+            "Optional per-project location, base-ref, runtime, and interaction defaults. Null fields inherit app defaults.",
+        }),
+      ),
     }),
     success: Schema.Unknown,
     failure: T3ControlToolError,
@@ -341,6 +350,38 @@ export const T3CreateProjectTool = mutatingTool(
     .annotate(Tool.Title, "Create T3 project")
     .annotate(Tool.Destructive, false)
     .annotate(Tool.Idempotent, true),
+);
+
+export const T3UpdateProjectTool = mutatingTool(
+  Tool.make("t3_update_project", {
+    description:
+      "Update an existing T3 project, including its default agent model, new-thread creation defaults, and project actions. External operators only; omitted fields remain unchanged.",
+    parameters: Schema.Struct({
+      projectId: described(Schema.String, "Target project ID obtained from t3_list_projects."),
+      title: Schema.optional(described(Schema.String, "Optional replacement project title.")),
+      defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)).pipe(
+        Schema.annotateKey({
+          description:
+            "Optional project agent model/options override, or null to inherit the app default.",
+        }),
+      ),
+      threadCreationDefaults: Schema.optional(ProjectThreadCreationDefaults).pipe(
+        Schema.annotateKey({
+          description:
+            "Optional per-project location, base-ref, runtime, and interaction defaults. Null fields inherit app defaults.",
+        }),
+      ),
+      scripts: Schema.optional(Schema.Array(ProjectScript)).pipe(
+        Schema.annotateKey({
+          description:
+            "Optional complete project-action list. At most one action should enable runOnWorktreeCreate.",
+        }),
+      ),
+    }),
+    success: Schema.Unknown,
+    failure: T3ControlToolError,
+    dependencies,
+  }).annotate(Tool.Title, "Update T3 project"),
 );
 
 export const T3CreateSessionTool = mutatingTool(
@@ -377,6 +418,24 @@ export const T3CreateSessionTool = mutatingTool(
         described(
           Schema.NullOr(Schema.String),
           "Optional existing worktree path. Omit to use normal T3 project behavior.",
+        ),
+      ),
+      workspace: Schema.optional(
+        described(
+          Schema.Union([
+            Schema.Struct({ mode: Schema.Literal("local") }),
+            Schema.Struct({
+              mode: Schema.Literal("existing-worktree"),
+              path: Schema.String,
+              branch: Schema.optional(Schema.String),
+            }),
+            Schema.Struct({
+              mode: Schema.Literal("new-worktree"),
+              baseRef: Schema.optional(WorktreeBaseRef),
+              newBranch: Schema.optional(Schema.String),
+            }),
+          ]),
+          "Optional workspace override. Omit to use project then app defaults.",
         ),
       ),
       // T3-CUSTOM(expbkt3): session priority.
@@ -497,6 +556,7 @@ export const T3ControlToolkit = Toolkit.make(
   T3RespondApprovalTool,
   T3RespondUserInputTool,
   T3CreateProjectTool,
+  T3UpdateProjectTool,
   T3CreateSessionTool,
   T3SubmitPlanTool,
   T3ListPlannotatorReviewsTool,

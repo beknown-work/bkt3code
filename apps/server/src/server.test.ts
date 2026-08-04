@@ -11,12 +11,14 @@ import {
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  EnvironmentUserId,
   EventId,
   GitCommandError,
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
   type OrchestrationThreadShell,
+  type OrchestrationProjectShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -29,6 +31,7 @@ import {
   SourceControlProfileId,
   ThreadId,
   ThreadTurnAdmissionConflictError,
+  TurnId,
   UserId,
   WS_METHODS,
   WsRpcGroup,
@@ -86,8 +89,13 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
-import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationListenerCallbackError,
+} from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+// T3-CUSTOM(expbkt3): router seams use an in-memory durable-bootstrap boundary.
+import { ProjectionThreadBootstrapRepository } from "./persistence/Services/ProjectionThreadBootstraps.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -172,6 +180,12 @@ const makeDefaultOrchestrationReadModel = () => {
         title: "Default Project",
         workspaceRoot: "/tmp/default-project",
         defaultModelSelection,
+        threadCreationDefaults: {
+          environmentMode: null,
+          worktreeBaseRef: null,
+          runtimeMode: null,
+          interactionMode: null,
+        },
         scripts: [],
         createdAt: now,
         updatedAt: now,
@@ -211,6 +225,26 @@ const makeDefaultOrchestrationReadModel = () => {
     ],
   };
 };
+
+// T3-CUSTOM(expbkt3): durable creation resolves project/app defaults before it
+// queues filesystem work, so router tests expose a realistic project shell.
+const makeDefaultProjectShell = (workspaceRoot = "/tmp/project"): OrchestrationProjectShell => ({
+  id: defaultProjectId,
+  title: "Default Project",
+  workspaceRoot,
+  defaultModelSelection,
+  threadCreationDefaults: {
+    environmentMode: null,
+    worktreeBaseRef: null,
+    runtimeMode: null,
+    interactionMode: null,
+  },
+  scripts: [],
+  ownerUserId: null,
+  memberUserIds: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
 
 const makeDefaultOrchestrationThreadShell = (
   overrides: Partial<OrchestrationThreadShell> = {},
@@ -398,6 +432,8 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    clerkIdentityVerifier?: Partial<ClerkIdentityVerifier.ClerkIdentityVerifier["Service"]>;
+    environmentUserService?: Partial<EnvironmentUserService.EnvironmentUserService["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -590,7 +626,16 @@ const buildAppUnderTest = (options?: {
       disableLogger: true,
     }).pipe(
       Layer.provide(PlannotatorManager.layer),
-      Layer.provide(OrchestrationCommandDispatcher.layer),
+      Layer.provide(
+        OrchestrationCommandDispatcher.layerWithBootstrapRepository.pipe(
+          Layer.provide(
+            Layer.mock(ProjectionThreadBootstrapRepository)({
+              getByThreadId: () => Effect.succeed(Option.none()),
+              listIncomplete: () => Effect.succeed([]),
+            }),
+          ),
+        ),
+      ),
       Layer.provide(
         options?.layers?.threadExecutionSupervisor
           ? Layer.mock(ThreadExecutionSupervisor)({
@@ -652,6 +697,7 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(ClerkIdentityVerifier.ClerkIdentityVerifier)({
             verify: () => Effect.die("Clerk identity verifier not stubbed"),
+            ...options?.layers?.clerkIdentityVerifier,
           }),
           Layer.mock(EnvironmentUserService.EnvironmentUserService)({
             assertAllowed: () => Effect.void,
@@ -663,6 +709,7 @@ const buildAppUnderTest = (options?: {
             setSourceControlProfile: () =>
               Effect.die("environment user source-control assignment not stubbed"),
             revokeUnidentifiedSessions: Effect.succeed(0),
+            ...options?.layers?.environmentUserService,
           }),
         ),
       ),
@@ -1077,6 +1124,7 @@ const bootstrapBrowserSession = (
   credential = defaultDesktopBootstrapToken,
   options?: {
     readonly headers?: Record<string, string>;
+    readonly identityToken?: string;
   },
 ) =>
   Effect.gen(function* () {
@@ -1089,6 +1137,7 @@ const bootstrapBrowserSession = (
       },
       body: jsonRequestBody({
         credential,
+        ...(options?.identityToken ? { identityToken: options.identityToken } : {}),
       }),
     });
     const body = yield* responseJsonEffect<{
@@ -1629,6 +1678,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(sessionResponse.status, 200);
       assert.equal(sessionBody.authenticated, true);
       assert.equal(sessionBody.sessionMethod, "browser-session-cookie");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("logs out the current browser session and expires its cookie", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { response: bootstrapResponse, cookie: setCookie } = yield* bootstrapBrowserSession();
+      const sessionCookie = setCookie?.split(";")[0] ?? "";
+      const cookieName = sessionCookie.split("=", 1)[0] ?? "";
+      assert.equal(bootstrapResponse.status, 200);
+      assert.notEqual(sessionCookie, "");
+
+      const logoutResponse = yield* fetchEffect(yield* getHttpServerUrl("/api/auth/logout"), {
+        method: "POST",
+        headers: { cookie: sessionCookie },
+      });
+      const logoutBody = yield* responseJsonEffect<{ readonly revoked: boolean }>(logoutResponse);
+      const expiredCookie = logoutResponse.headers["set-cookie"];
+
+      assert.equal(logoutResponse.status, 200);
+      assert.equal(logoutBody.revoked, true);
+      assert.equal(expiredCookie?.split(";", 1)[0], `${cookieName}=`);
+      assert.include(expiredCookie ?? "", "Max-Age=0");
+      assert.include(expiredCookie ?? "", "Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+
+      const sessionResponse = yield* fetchEffect(yield* getHttpServerUrl("/api/auth/session"), {
+        headers: { cookie: sessionCookie },
+      });
+      const sessionBody = yield* responseJsonEffect<{ readonly authenticated: boolean }>(
+        sessionResponse,
+      );
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, false);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -6021,6 +6104,195 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  // T3-CUSTOM(expbkt3): a durable first turn creates its thread atomically, so
+  // source-control validation must use the embedded creation request instead
+  // of looking up a projection row that cannot exist yet.
+  it.effect(
+    "uses the durable user bound to a non-Clerk browser session and accepts retried first-turn creation",
+    () =>
+      Effect.gen(function* () {
+        const profileId = SourceControlProfileId.make("github_creator");
+        const creatorUserId = EnvironmentUserId.make("user_creator");
+        const threadId = ThreadId.make("thread-durable-create-profile");
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const dispatchedActorUserIds: Array<UserId | null | undefined> = [];
+        let existingThreadReads = 0;
+        let resolvedProfileId: SourceControlProfileId | null = null;
+        let threadAccepted = false;
+
+        yield* buildAppUnderTest({
+          layers: {
+            serverSettings: {
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                sourceControlIdentityMode: "thread-profile",
+                sourceControlProfiles: {
+                  [profileId]: {
+                    id: profileId,
+                    provider: "github",
+                    label: "Thread Creator",
+                    login: "creator",
+                    accountId: 42,
+                    avatarUrl: null,
+                    gitName: "Thread Creator",
+                    gitEmail: "creator@example.com",
+                    ownerUserId: creatorUserId,
+                    archived: false,
+                  },
+                },
+              }),
+            },
+            clerkIdentityVerifier: {
+              verify: () =>
+                Effect.succeed({
+                  userId: creatorUserId,
+                  displayName: "Thread Creator",
+                  primaryEmail: "creator@example.com",
+                  avatarUrl: null,
+                }),
+            },
+            environmentUserService: {
+              admit: () =>
+                Effect.succeed({
+                  userId: creatorUserId,
+                  displayName: "Thread Creator",
+                  primaryEmail: "creator@example.com",
+                  avatarUrl: null,
+                  role: "member",
+                  status: "active",
+                  firstSeenAt: TEST_EPOCH,
+                  lastSeenAt: TEST_EPOCH,
+                }),
+            },
+            sourceControlProfileService: {
+              resolveExecutionContext: (inputProfileId) =>
+                Effect.sync(() => {
+                  resolvedProfileId = inputProfileId;
+                  return {
+                    profileId: inputProfileId,
+                    provider: "github" as const,
+                    login: "creator",
+                    gitName: "Thread Creator",
+                    gitEmail: "creator@example.com",
+                    environment: {},
+                  };
+                }),
+            },
+            projectionSnapshotQuery: {
+              getProjectShellById: () =>
+                Effect.succeed(
+                  Option.some({
+                    ...makeDefaultProjectShell(),
+                    ownerUserId: UserId.make(creatorUserId),
+                  }),
+                ),
+              getThreadShellById: () =>
+                Effect.sync(() => {
+                  existingThreadReads += 1;
+                  return threadAccepted
+                    ? Option.some(
+                        makeDefaultOrchestrationThreadShell({
+                          id: threadId,
+                          ownerUserId: UserId.make(creatorUserId),
+                          latestTurn: {
+                            turnId: TurnId.make("turn-durable-create-profile"),
+                            state: "running",
+                            requestedAt: "2026-08-04T10:00:00.000Z",
+                            startedAt: "2026-08-04T10:00:00.000Z",
+                            completedAt: null,
+                            assistantMessageId: null,
+                            durationMs: null,
+                          },
+                        }),
+                      )
+                    : Option.none();
+                }),
+            },
+            orchestrationEngine: {
+              dispatch: (command, options) =>
+                Effect.gen(function* () {
+                  if (
+                    command.type === "thread.turn.start" &&
+                    command.bootstrap?.createThread &&
+                    threadAccepted
+                  ) {
+                    return yield* new OrchestrationCommandInvariantError({
+                      commandType: command.type,
+                      detail: `bootstrap thread ${threadId} already exists`,
+                    });
+                  }
+                  dispatchedCommands.push(command);
+                  dispatchedActorUserIds.push(options?.actorUserId);
+                  threadAccepted = true;
+                  return { sequence: 1 };
+                }),
+              readEvents: () => Stream.empty,
+            },
+          },
+        });
+
+        const createdAt = "2026-08-04T10:00:00.000Z";
+        const browserSession = yield* bootstrapBrowserSession(defaultDesktopBootstrapToken, {
+          identityToken: "creator-clerk-token",
+        });
+        assert.equal(browserSession.response.status, 200);
+        assert.isDefined(browserSession.cookie);
+        const wsUrl = appendSessionCookieToWsUrl(
+          yield* getWsServerUrl("/ws"),
+          browserSession.cookie?.split(";")[0] ?? "",
+        );
+        const durableCreateCommand = (commandId: string) =>
+          ({
+            type: "thread.turn.start",
+            commandId: CommandId.make(commandId),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-durable-create-profile"),
+              role: "user",
+              text: "create this thread",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              request: {
+                createThread: true,
+                bootstrapId: "web:thread-durable-create-profile:msg-durable-create-profile",
+                projectId: defaultProjectId,
+                title: "Durable creation",
+                sourceControlProfileId: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          }) as const;
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand](
+                durableCreateCommand("cmd-durable-create-profile"),
+              );
+              yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand](
+                durableCreateCommand("cmd-durable-create-profile-retry"),
+              );
+            }),
+          ),
+        );
+
+        assert.equal(resolvedProfileId, profileId);
+        assert.equal(existingThreadReads, 2);
+        assert.equal(dispatchedCommands.length, 1);
+        const dispatched = dispatchedCommands[0];
+        assert.equal(dispatched?.type, "thread.turn.start");
+        if (dispatched?.type === "thread.turn.start") {
+          assert.equal(dispatched.bootstrap?.createThread?.sourceControlProfileId, profileId);
+          assert.equal(dispatched.bootstrap?.createThread?.ownerUserId, UserId.make(creatorUserId));
+        }
+        assert.deepEqual(dispatchedActorUserIds, [UserId.make(creatorUserId)]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc orchestration methods", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
@@ -7399,12 +7671,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect(
     // T3-CUSTOM(expbkt3): delegated HTTP bootstrap ownership must be atomic with first turn.
-    "assigns delegated bootstrap owner before dispatching the first turn",
+    "accepts delegated bootstrap ownership before durable preparation",
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const dispatchedActorUserIds: Array<UserId | null> = [];
         const bootstrapGitOperations: string[] = [];
+        // T3-CUSTOM(expbkt3): legacy creation returns after durable queueing;
+        // wait on the dispatched first turn instead of timing the detached worker.
+        const agentStarted = yield* Deferred.make<void>();
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
             isRepo: true,
@@ -7440,6 +7714,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               };
             }),
         );
+        const listRefs = vi.fn(() =>
+          Effect.succeed({
+            refs: [
+              {
+                name: "origin/main",
+                current: false,
+                isDefault: true,
+                isRemote: true,
+                remoteName: "origin",
+                worktreePath: null,
+                sourceControlProfileId: null,
+              },
+            ],
+            isRepo: true,
+            hasPrimaryRemote: true,
+            nextCursor: null,
+            totalCount: 1,
+          }),
+        );
         const createWorktree = vi.fn(
           (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
             Effect.sync(() => {
@@ -7454,23 +7747,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         const runForThread = vi.fn(
           (
-            _: Parameters<
+            input: Parameters<
               ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
             >[0],
           ) =>
-            Effect.succeed({
-              status: "started" as const,
-              scriptId: "setup",
-              scriptName: "Setup",
-              terminalId: "setup-setup",
-              cwd: "/tmp/bootstrap-worktree",
-            }),
+            (
+              input.onStarted?.({
+                scriptId: "setup",
+                scriptName: "Setup",
+                terminalId: "setup-setup",
+                cwd: "/tmp/bootstrap-worktree",
+              }) ?? Effect.void
+            ).pipe(
+              Effect.as({
+                status: "completed" as const,
+                scriptId: "setup",
+                scriptName: "Setup",
+                terminalId: "setup-setup",
+                cwd: "/tmp/bootstrap-worktree",
+                exitCode: 0 as const,
+              }),
+            ),
         );
 
         yield* buildAppUnderTest({
           layers: {
+            vcsDriver: {
+              isInsideWorkTree: () => Effect.succeed(true),
+            },
             gitVcsDriver: {
               fetchRemote,
+              listRefs,
               resolveRemoteTrackingCommit,
               createWorktree,
             },
@@ -7479,15 +7786,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             orchestrationEngine: {
               dispatch: (command, options) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
                   dispatchedCommands.push(command);
-                  dispatchedActorUserIds.push(options?.actorUserId ?? null);
-                  return { sequence: dispatchedCommands.length };
+                  if (command.type === "thread.turn.start") {
+                    yield* Deferred.succeed(agentStarted, undefined);
+                  }
+                  return { sequence: dispatchedCommands.length, actorUserId: options?.actorUserId };
                 }),
               readEvents: () => Stream.empty,
             },
             projectSetupScriptRunner: {
               runForThread,
+            },
+            projectionSnapshotQuery: {
+              getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
             },
           },
         });
@@ -7542,67 +7854,43 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const response = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
 
         assert.equal(httpResponse.status, 200);
-        assert.equal(response.sequence, 5);
-        assert.deepEqual(
-          dispatchedCommands.map((command) => command.type),
-          [
-            "thread.create",
-            "thread.meta.update",
-            "thread.activity.append",
-            "thread.activity.append",
-            "thread.turn.start",
-          ],
-        );
-        assert.equal(dispatchedActorUserIds[0], "user-linear-starter");
-        assert.equal(dispatchedActorUserIds[4], "user-linear-starter");
-        assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: fetchedOriginCommit,
-          newRefName: "t3code/bootstrap-refName",
-          baseRefName: "main",
-          path: null,
-        });
-        assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          remoteName: "origin",
-        });
-        assert.deepEqual(resolveRemoteTrackingCommit.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: "main",
-          fallbackRemoteName: "origin",
-        });
-        assert.deepEqual(bootstrapGitOperations, [
-          "fetch",
-          "resolve-remote-commit",
-          "create-worktree",
-        ]);
-        assert.deepEqual(runForThread.mock.calls[0]?.[0], {
-          threadId: ThreadId.make("thread-bootstrap"),
-          projectId: defaultProjectId,
-          projectCwd: "/tmp/project",
-          worktreePath: "/tmp/bootstrap-worktree",
-        });
-        assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
-
-        const setupActivities = dispatchedCommands.filter(
-          (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
-            command.type === "thread.activity.append",
-        );
-        assert.deepEqual(
-          setupActivities.map((command) => command.activity.kind),
-          ["setup-script.requested", "setup-script.started"],
-        );
-        const finalCommand = dispatchedCommands[4];
-        assertTrue(finalCommand?.type === "thread.turn.start");
-        if (finalCommand?.type === "thread.turn.start") {
-          assert.equal(finalCommand.bootstrap, undefined);
+        // T3-CUSTOM(expbkt3): acceptance commits the exact bootstrap before
+        // the durable coordinator performs any fallible worktree/setup work.
+        assert.equal(response.sequence, 1);
+        yield* Deferred.await(agentStarted);
+        const acceptedCommand = dispatchedCommands[0];
+        assertTrue(acceptedCommand?.type === "thread.turn.start");
+        if (acceptedCommand?.type === "thread.turn.start") {
+          assert.equal(acceptedCommand.bootstrap?.createThread?.ownerUserId, "user-linear-starter");
         }
+        assert.equal(createWorktree.mock.calls.length, 0);
+        assert.equal(runForThread.mock.calls.length, 0);
+        assert.deepEqual(bootstrapGitOperations, []);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("records setup-script failures without aborting bootstrap turn start", () =>
+  it.effect("accepts setup work before any fallible setup side effect", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
+      // T3-CUSTOM(expbkt3): setup failure is durable and must gate the first turn.
+      const setupFailed = yield* Deferred.make<void>();
+      const listRefs = vi.fn(() =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "main",
+              current: true,
+              isDefault: true,
+              worktreePath: null,
+              sourceControlProfileId: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.succeed({
@@ -7622,7 +7910,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
               threadId: input.threadId,
               worktreePath: input.worktreePath,
-              operation: "openTerminal",
+              operation: "runCommand",
               cause: { message: "pty unavailable" },
             }),
           ),
@@ -7630,19 +7918,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
+            listRefs,
             createWorktree,
           },
           orchestrationEngine: {
             dispatch: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 dispatchedCommands.push(command);
+                if (
+                  command.type === "thread.activity.append" &&
+                  command.activity.kind === "setup-script.failed"
+                ) {
+                  yield* Deferred.succeed(setupFailed, undefined);
+                }
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
           },
           projectSetupScriptRunner: {
             runForThread,
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
           },
         },
       });
@@ -7688,27 +7989,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 4);
+      // T3-CUSTOM(expbkt3): setup runs only after the bootstrap-bearing turn
+      // is accepted; this router seam must perform no setup side effect.
+      assert.equal(response.sequence, 1);
+      assert.equal(runForThread.mock.calls.length, 0);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.turn.start"],
+        ["thread.turn.start"],
       );
-      const setupFailureActivity = dispatchedCommands.find(
-        (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
-          command.type === "thread.activity.append",
-      );
-      assert.equal(setupFailureActivity?.activity.kind, "setup-script.failed");
-      assert.deepEqual(setupFailureActivity?.activity.payload, {
-        detail: "pty unavailable",
-        worktreePath: "/tmp/bootstrap-worktree",
-      });
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("does not misattribute setup activity dispatch failures as setup launch failures", () =>
+  it.effect("does not dispatch setup activities before durable acceptance", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
+      // T3-CUSTOM(expbkt3): activity compatibility failures never undo a
+      // successful durable setup result or duplicate the agent turn.
+      const agentStarted = yield* Deferred.make<void>();
+      const listRefs = vi.fn(() =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "main",
+              current: true,
+              isDefault: true,
+              worktreePath: null,
+              sourceControlProfileId: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.succeed({
@@ -7720,23 +8034,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       const runForThread = vi.fn(
         (
-          _: Parameters<
+          input: Parameters<
             ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
           >[0],
         ) =>
-          Effect.succeed({
-            status: "started" as const,
-            scriptId: "setup",
-            scriptName: "Setup",
-            terminalId: "setup-setup",
-            cwd: "/tmp/bootstrap-worktree",
-          }),
+          (
+            input.onStarted?.({
+              scriptId: "setup",
+              scriptName: "Setup",
+              terminalId: "setup-setup",
+              cwd: "/tmp/bootstrap-worktree",
+            }) ?? Effect.void
+          ).pipe(
+            Effect.as({
+              status: "completed" as const,
+              scriptId: "setup",
+              scriptName: "Setup",
+              terminalId: "setup-setup",
+              cwd: "/tmp/bootstrap-worktree",
+              exitCode: 0 as const,
+            }),
+          ),
       );
       let setupActivityAppendAttempt = 0;
 
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
+            listRefs,
             createWorktree,
           },
           orchestrationEngine: {
@@ -7756,8 +8084,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }
               }
 
-              return Effect.sync(() => {
+              return Effect.gen(function* () {
                 dispatchedCommands.push(command);
+                if (command.type === "thread.turn.start") {
+                  yield* Deferred.succeed(agentStarted, undefined);
+                }
                 return { sequence: dispatchedCommands.length };
               });
             },
@@ -7765,6 +8096,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           projectSetupScriptRunner: {
             runForThread,
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
           },
         },
       });
@@ -7810,29 +8144,42 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 4);
+      // T3-CUSTOM(expbkt3): activity emission belongs to the post-commit
+      // coordinator, never the command-acceptance path.
+      assert.equal(response.sequence, 1);
+      yield* Deferred.await(agentStarted);
+      assert.equal(runForThread.mock.calls.length, 0);
+      assert.equal(setupActivityAppendAttempt, 0);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.turn.start"],
+        ["thread.turn.start"],
       );
-      const setupActivities = dispatchedCommands.filter(
-        (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
-          command.type === "thread.activity.append",
-      );
-      assert.deepEqual(
-        setupActivities.map((command) => command.activity.kind),
-        ["setup-script.requested"],
-      );
-      assertTrue(
-        setupActivities.every((command) => command.activity.kind !== "setup-script.failed"),
-      );
-      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
+  it.effect("accepts worktree preparation before any fallible worktree side effect", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
+      // T3-CUSTOM(expbkt3): worktree failures are projected for retry and never
+      // delete the durable thread that owns the failure state.
+      const worktreeFailed = yield* Deferred.make<void>();
+      const listRefs = vi.fn(() =>
+        Effect.succeed({
+          refs: [
+            {
+              name: "main",
+              current: true,
+              isDefault: true,
+              worktreePath: null,
+              sourceControlProfileId: null,
+            },
+          ],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 1,
+        }),
+      );
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.die(new Error("worktree exploded")),
@@ -7840,16 +8187,30 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
+            listRefs,
             createWorktree,
           },
           orchestrationEngine: {
             dispatch: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 dispatchedCommands.push(command);
+                if (
+                  command.type === "thread.bootstrap.step.update" &&
+                  command.step === "worktree" &&
+                  command.status === "failed"
+                ) {
+                  yield* Deferred.succeed(worktreeFailed, undefined);
+                }
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
           },
         },
       });
@@ -7892,15 +8253,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             createdAt,
           }),
-        ).pipe(Effect.result),
+        ),
       );
 
-      assertTrue(result._tag === "Failure");
-      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
-      assert.include(result.failure.message, "worktree exploded");
+      // T3-CUSTOM(expbkt3): worktree preparation is reconciled from the
+      // accepted durable item, so acceptance cannot run createWorktree.
+      assert.equal(result.sequence, 1);
+      assert.equal(createWorktree.mock.calls.length, 0);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.delete"],
+        ["thread.turn.start"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

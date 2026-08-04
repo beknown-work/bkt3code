@@ -23,9 +23,14 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import { ProjectionThreadBootstrapRepositoryLive } from "../persistence/Layers/ProjectionThreadBootstraps.ts";
+import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
+// T3-CUSTOM(expbkt3): high-level creation is resolved and queued by one durable coordinator.
+import * as ThreadBootstrapCoordinator from "../thread-bootstrap/Coordinator.ts";
+import * as ThreadCreationDefaultsResolver from "../thread-bootstrap/DefaultsResolver.ts";
 // T3-CUSTOM(expbkt3): attach-to-external-session.
 import {
   buildExternalResumeCursor,
@@ -60,6 +65,11 @@ function setupFailureDetail(error: ProjectSetupScriptRunner.ProjectSetupScriptRu
       return setupFailureDescription(error.cause);
     case "ProjectSetupScriptProjectNotFoundError":
       return "Project was not found for setup script execution.";
+    case "ProjectSetupScriptCommandError":
+      return (
+        error.detail ??
+        `Setup terminal exited with code ${String(error.exitCode)} and signal ${String(error.exitSignal)}.`
+      );
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -109,6 +119,8 @@ export const make = Effect.gen(function* () {
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
+  // T3-CUSTOM(expbkt3): shared web/HTTP/WebSocket/MCP bootstrap path.
+  const threadBootstrapCoordinator = yield* ThreadBootstrapCoordinator.ThreadBootstrapCoordinator;
   // T3-CUSTOM(expbkt3): attach-to-external-session seeds the provider binding
   // before the first turn, which is all the existing resume path needs.
   const providerService = yield* ProviderService;
@@ -321,7 +333,7 @@ export const make = Effect.gen(function* () {
               onFailure: (error) =>
                 recordSetupScriptLaunchFailure({ error, requestedAt, worktreePath }),
               onSuccess: (setupResult) =>
-                setupResult.status === "started"
+                setupResult.status === "completed"
                   ? recordSetupScriptStarted({
                       requestedAt,
                       worktreePath,
@@ -417,6 +429,9 @@ export const make = Effect.gen(function* () {
         }),
       );
     });
+    // T3-CUSTOM(expbkt3): retained for the compatibility release, but v2 must
+    // never invoke the pre-commit bootstrap path.
+    void dispatchBootstrapTurnStart;
 
     // T3-CUSTOM(expbkt3): BEGIN — attach a new thread to an existing external
     // provider session.
@@ -560,21 +575,121 @@ export const make = Effect.gen(function* () {
     });
     // T3-CUSTOM(expbkt3): END
 
-    const baseDispatchEffect =
-      command.type === "thread.turn.start" && command.bootstrap
-        ? dispatchBootstrapTurnStart(command)
-        : // T3-CUSTOM(expbkt3): attach-to-external-session. Validate first, so
-          // a bad session id fails before a thread exists, then seed the
-          // provider binding so the first turn resumes instead of starting new.
-          command.type === "thread.create" && command.externalSession
-          ? dispatchAttachedThreadCreate(command, command.externalSession)
-          : orchestrationEngine
-              .dispatch(command, dispatchOptions)
+    const normalizeBootstrapDispatch = <A>(
+      effect: Effect.Effect<A, ThreadBootstrapCoordinator.ThreadBootstrapCoordinatorError>,
+    ): Effect.Effect<A, OrchestrationDispatchCommandError> =>
+      effect.pipe(
+        Effect.mapError((cause) =>
+          toDispatchCommandError(cause, "Failed to dispatch thread bootstrap command"),
+        ),
+      );
+
+    // T3-CUSTOM(expbkt3): resolve creation defaults without performing provider
+    // or workspace side effects, then let the coordinator dispatch one atomic
+    // turn command carrying both the exact message and resolved bootstrap spec.
+    const dispatchDurableBootstrapTurn = Effect.fn(
+      "OrchestrationCommandDispatcher.dispatchDurableBootstrapTurn",
+    )(function* (turnStart: Extract<OrchestrationCommand, { type: "thread.turn.start" }>) {
+      const request = turnStart.bootstrap?.request;
+      if (request === undefined) {
+        return yield* orchestrationEngine
+          .dispatch(turnStart, dispatchOptions)
+          .pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+            ),
+          );
+      }
+      let createThread = request.createThread;
+      if (createThread) {
+        // A browser retry can carry a fresh command id after the atomic first
+        // turn already committed. Match the legacy bootstrap path: completed
+        // creation is a no-op, while a half-created thread resumes in place.
+        const existing = yield* snapshotQuery
+          .getThreadShellById(turnStart.threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(
+                cause,
+                "Failed to check thread existence for durable bootstrap.",
+              ),
+            ),
+          );
+        if (Option.isSome(existing)) {
+          if (existing.value.latestTurn !== null) {
+            const { snapshotSequence } = yield* snapshotQuery
+              .getSnapshotSequence()
               .pipe(
                 Effect.mapError((cause) =>
-                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                  toDispatchCommandError(cause, "Failed to read projection sequence."),
                 ),
               );
+            return { sequence: snapshotSequence };
+          }
+          createThread = false;
+        }
+      }
+      return yield* normalizeBootstrapDispatch(
+        threadBootstrapCoordinator.request(
+          {
+            type: "thread.bootstrap.request",
+            commandId: turnStart.commandId,
+            bootstrapId: request.bootstrapId,
+            threadId: turnStart.threadId,
+            projectId: request.projectId,
+            title: request.title,
+            initialTurn: {
+              messageId: turnStart.message.messageId,
+              text: turnStart.message.text,
+              attachments: turnStart.message.attachments,
+              ...(turnStart.titleSeed ? { titleSeed: turnStart.titleSeed } : {}),
+            },
+            ...(request.overrides ? { overrides: request.overrides } : {}),
+            ...(request.sourceControlProfileId !== undefined
+              ? { sourceControlProfileId: request.sourceControlProfileId }
+              : {}),
+            ...(request.priority !== undefined ? { priority: request.priority } : {}),
+            ...(request.ownerUserId ? { ownerUserId: request.ownerUserId } : {}),
+            createdAt: request.createdAt,
+          },
+          {
+            actorUserId: options?.actorUserId ?? null,
+            createThread,
+            turnStart,
+          },
+        ),
+      );
+    });
+
+    const baseDispatchEffect =
+      // T3-CUSTOM(expbkt3): public bootstrap controls never reach the strict decider.
+      command.type === "thread.turn.start" && command.bootstrap?.request !== undefined
+        ? dispatchDurableBootstrapTurn(command)
+        : command.type === "thread.bootstrap.request"
+          ? normalizeBootstrapDispatch(
+              threadBootstrapCoordinator.request(command, {
+                actorUserId: options?.actorUserId ?? null,
+              }),
+            )
+          : command.type === "thread.bootstrap.retry"
+            ? normalizeBootstrapDispatch(threadBootstrapCoordinator.retry(command))
+            : command.type === "thread.bootstrap.stop"
+              ? normalizeBootstrapDispatch(threadBootstrapCoordinator.stop(command))
+              : command.type === "thread.bootstrap.continue"
+                ? normalizeBootstrapDispatch(threadBootstrapCoordinator.continue(command))
+                : // T3-CUSTOM(expbkt3): bootstrap-bearing turn starts reach the
+                  // engine unchanged so thread, message, intent, and receipt share
+                  // one transaction. The durable execution coordinator owns every
+                  // post-commit worktree, setup, and provider side effect.
+                  command.type === "thread.create" && command.externalSession
+                  ? dispatchAttachedThreadCreate(command, command.externalSession)
+                  : orchestrationEngine
+                      .dispatch(command, dispatchOptions)
+                      .pipe(
+                        Effect.mapError((cause) =>
+                          toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                        ),
+                      );
 
     const dispatchEffect =
       command.type === "thread.turn.start" && command.precondition
@@ -610,7 +725,20 @@ export const make = Effect.gen(function* () {
   return OrchestrationCommandDispatcher.of({ dispatch });
 });
 
-export const layer = Layer.effect(OrchestrationCommandDispatcher, make);
+// T3-CUSTOM(expbkt3): test and alternate runtimes may provide their own durable
+// bootstrap repository while production composes the SQLite implementation.
+export const layerWithBootstrapRepository = Layer.effect(OrchestrationCommandDispatcher, make).pipe(
+  // T3-CUSTOM(expbkt3): additive bootstrap modules keep the upstream dispatcher seam small.
+  Layer.provideMerge(
+    ThreadBootstrapCoordinator.layer.pipe(Layer.provide(ThreadCreationDefaultsResolver.layer)),
+  ),
+);
+
+export const layer = layerWithBootstrapRepository.pipe(
+  Layer.provide(
+    ProjectionThreadBootstrapRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+  ),
+);
 
 export const passthroughLayer = Layer.effect(
   OrchestrationCommandDispatcher,

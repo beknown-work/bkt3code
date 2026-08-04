@@ -16,7 +16,7 @@ import {
   GitHubSourceControlProfileMetadata,
   SourceControlIdentityMode,
   SourceControlProfileId,
-} from "./sourceControl.ts";
+} from "./sourceControlProfiles.ts";
 import { EnvironmentUserIdentityMode } from "./users.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -604,6 +604,22 @@ export const ServerSettings = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  // T3-CUSTOM(expbkt3): agent-session defaults are separate from the small
+  // text-generation model used for titles, summaries, and source-control copy.
+  defaultThreadModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_MODEL,
+      }),
+    ),
+  ),
+  defaultThreadRuntimeMode: RuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE)),
+  ),
+  defaultThreadInteractionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
@@ -763,6 +779,9 @@ export const ServerSettingsPatch = Schema.Struct({
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultThreadModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  defaultThreadRuntimeMode: Schema.optionalKey(RuntimeMode),
+  defaultThreadInteractionMode: Schema.optionalKey(ProviderInteractionMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(

@@ -29,7 +29,7 @@ interface ProviderRateLimitState {
   readonly entries: ReadonlyMap<string, ProviderRateLimitEntryState>;
 }
 
-interface ProviderRateLimitsShape {
+export interface ProviderRateLimitsShape {
   readonly snapshot: Effect.Effect<ProviderRateLimitsStreamSnapshot>;
   readonly stream: Stream.Stream<ProviderRateLimitsStreamSnapshot>;
 }

@@ -55,9 +55,17 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** T3-CUSTOM(expbkt3): server understands priority on thread.create and
       thread.meta.update. Same version-skew contract as threadSnooze. */
   threadPriority: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): durable manual Linear tags on thread metadata. */
+  threadLinearIssue: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): server understands externalSession on thread.create
       (attach a new thread to an existing provider session). */
   threadExternalSessionAttach: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): server accepts durable thread.bootstrap commands. */
+  durableThreadBootstrap: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): app/project creation-default settings are supported. */
+  threadCreationDefaults: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): accepted turns have durable desired-state and recovery. */
+  durableExecutionRecovery: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */

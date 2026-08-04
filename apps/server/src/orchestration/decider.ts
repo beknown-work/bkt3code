@@ -14,9 +14,6 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
   requireActiveProjectWorkspaceRootAbsent,
-  requireMemberAddable,
-  requireMemberRemovable,
-  requireOwnershipTransferable,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -24,6 +21,8 @@ import {
   requireThreadAbsent,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
+// T3-CUSTOM(expbkt3): fork command decisions
+import { decideForkOrchestrationCommand, isForkOrchestrationCommand } from "./deciderForkCases.ts";
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -236,6 +235,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   OrchestrationCommandInvariantError | PlatformError.PlatformError,
   Crypto.Crypto
 > {
+  // T3-CUSTOM(expbkt3): BEGIN fork commands are decided in deciderForkCases.ts.
+  // Narrowing here keeps upstream's `command satisfies never` default exhaustive.
+  if (isForkOrchestrationCommand(command)) {
+    return yield* decideForkOrchestrationCommand({ command, readModel, actor, withEventBase });
+  }
+  // T3-CUSTOM(expbkt3): END
+
   switch (command.type) {
     case "project.create": {
       yield* requireProjectAbsent({
@@ -263,6 +269,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
+          // T3-CUSTOM(expbkt3): absent overrides inherit app creation defaults.
+          threadCreationDefaults: command.threadCreationDefaults ?? {
+            environmentMode: null,
+            worktreeBaseRef: null,
+            runtimeMode: null,
+            interactionMode: null,
+          },
           scripts: [],
           createdByUserId: actor,
           createdAt: command.createdAt,
@@ -300,6 +313,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.workspaceRoot !== undefined ? { workspaceRoot: command.workspaceRoot } : {}),
           ...(command.defaultModelSelection !== undefined
             ? { defaultModelSelection: command.defaultModelSelection }
+            : {}),
+          ...(command.threadCreationDefaults !== undefined
+            ? { threadCreationDefaults: command.threadCreationDefaults }
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           updatedAt: occurredAt,
@@ -387,7 +403,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
-          createdByUserId: actor,
+          // T3-CUSTOM(expbkt3): BEGIN — authenticated creator ownership.
+          // The authenticated creator is authoritative;
+          // trusted automation owner hints are only a non-Web fallback.
+          createdByUserId: actor ?? command.ownerUserId ?? null,
+          // T3-CUSTOM(expbkt3): END
           sourceControlProfileId: command.sourceControlProfileId,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -693,6 +713,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
           // T3-CUSTOM(expbkt3): undefined leaves priority unchanged; null clears it.
           ...(command.priority !== undefined ? { priority: command.priority } : {}),
+          // T3-CUSTOM(expbkt3): undefined leaves the manual Linear tag unchanged.
+          ...(command.linearIssueUrl !== undefined
+            ? { linearIssueUrl: command.linearIssueUrl }
+            : {}),
           updatedAt: occurredAt,
         },
       };
@@ -719,192 +743,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(requestIsCurrent && command.title !== undefined ? { title: command.title } : {}),
           ...(requestIsCurrent ? { titleRegeneration: null } : {}),
           updatedAt: requestIsCurrent ? occurredAt : thread.updatedAt,
-        },
-      };
-    }
-
-    case "thread.member.add": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      yield* requireMemberAddable({
-        commandType: command.type,
-        entityLabel: `thread '${command.threadId}'`,
-        ownerUserId: thread.ownerUserId,
-        memberUserIds: thread.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.member-added",
-        payload: {
-          threadId: command.threadId,
-          userId: command.userId,
-          addedByUserId: actor,
-          addedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.member.remove": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      yield* requireMemberRemovable({
-        commandType: command.type,
-        entityLabel: `thread '${command.threadId}'`,
-        ownerUserId: thread.ownerUserId,
-        memberUserIds: thread.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.member-removed",
-        payload: {
-          threadId: command.threadId,
-          userId: command.userId,
-          removedByUserId: actor,
-          removedAt: occurredAt,
-        },
-      };
-    }
-
-    case "thread.owner.transfer": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      yield* requireOwnershipTransferable({
-        commandType: command.type,
-        entityLabel: `thread '${command.threadId}'`,
-        ownerUserId: thread.ownerUserId,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.owner-transferred",
-        payload: {
-          threadId: command.threadId,
-          previousOwnerUserId: thread.ownerUserId,
-          ownerUserId: command.userId,
-          transferredByUserId: actor,
-          transferredAt: occurredAt,
-        },
-      };
-    }
-
-    case "project.member.add": {
-      const project = yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
-      yield* requireMemberAddable({
-        commandType: command.type,
-        entityLabel: `project '${command.projectId}'`,
-        ownerUserId: project.ownerUserId,
-        memberUserIds: project.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.member-added",
-        payload: {
-          projectId: command.projectId,
-          userId: command.userId,
-          addedByUserId: actor,
-          addedAt: occurredAt,
-        },
-      };
-    }
-
-    case "project.member.remove": {
-      const project = yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
-      yield* requireMemberRemovable({
-        commandType: command.type,
-        entityLabel: `project '${command.projectId}'`,
-        ownerUserId: project.ownerUserId,
-        memberUserIds: project.memberUserIds,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.member-removed",
-        payload: {
-          projectId: command.projectId,
-          userId: command.userId,
-          removedByUserId: actor,
-          removedAt: occurredAt,
-        },
-      };
-    }
-
-    case "project.owner.transfer": {
-      const project = yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
-      yield* requireOwnershipTransferable({
-        commandType: command.type,
-        entityLabel: `project '${command.projectId}'`,
-        ownerUserId: project.ownerUserId,
-        userId: command.userId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "project",
-          aggregateId: command.projectId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "project.owner-transferred",
-        payload: {
-          projectId: command.projectId,
-          previousOwnerUserId: project.ownerUserId,
-          ownerUserId: command.userId,
-          transferredByUserId: actor,
-          transferredAt: occurredAt,
         },
       };
     }
@@ -955,45 +793,41 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.source-control-profile.set": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (
-        thread.latestTurn?.state === "running" ||
-        thread.session?.status === "starting" ||
-        thread.session?.status === "running"
-      ) {
+    case "thread.turn.start": {
+      // T3-CUSTOM(expbkt3): A bootstrap turn is one durable command. Create the
+      // thread in the same event batch as its first message and execution
+      // intent so an acknowledgement can never expose a half-created thread.
+      const existingTargetThread = readModel.threads.find(
+        (thread) => thread.id === command.threadId,
+      );
+      const bootstrapCreate = command.bootstrap?.createThread;
+      if (existingTargetThread && bootstrapCreate) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `thread ${command.threadId} is busy and its source-control owner cannot change`,
+          detail: `bootstrap thread ${command.threadId} already exists`,
         });
       }
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.source-control-profile-set",
-        payload: {
+      if (!existingTargetThread && !bootstrapCreate) {
+        yield* requireThread({
+          readModel,
+          command,
           threadId: command.threadId,
-          previousSourceControlProfileId: thread.sourceControlProfileId,
-          sourceControlProfileId: command.sourceControlProfileId,
-          changedAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.turn.start": {
-      const targetThread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
+        });
+      }
+      if (!existingTargetThread && bootstrapCreate) {
+        yield* requireProject({
+          readModel,
+          command,
+          projectId: bootstrapCreate.projectId,
+        });
+      }
+      const targetProjectId = existingTargetThread?.projectId ?? bootstrapCreate?.projectId;
+      if (targetProjectId === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} does not exist`,
+        });
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -1012,7 +846,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan.planId}' does not exist on thread '${sourceProposedPlan.threadId}'.`,
         });
       }
-      if (sourceThread && sourceThread.projectId !== targetThread.projectId) {
+      if (sourceThread && sourceThread.projectId !== targetProjectId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
@@ -1055,19 +889,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
+          runtimeMode:
+            existingTargetThread?.runtimeMode ??
+            bootstrapCreate?.runtimeMode ??
+            command.runtimeMode,
+          interactionMode:
+            existingTargetThread?.interactionMode ??
+            bootstrapCreate?.interactionMode ??
+            command.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          // T3-CUSTOM(expbkt3): bootstrap is part of the accepted durable intent.
+          ...(command.bootstrap !== undefined ? { bootstrap: command.bootstrap } : {}),
           createdAt: command.createdAt,
         },
       };
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> | null =
+        !existingTargetThread && bootstrapCreate
+          ? {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: bootstrapCreate.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.created",
+              payload: {
+                threadId: command.threadId,
+                projectId: bootstrapCreate.projectId,
+                title: bootstrapCreate.title,
+                modelSelection: bootstrapCreate.modelSelection,
+                runtimeMode: bootstrapCreate.runtimeMode,
+                interactionMode: bootstrapCreate.interactionMode,
+                branch: bootstrapCreate.branch,
+                worktreePath: bootstrapCreate.worktreePath,
+                // T3-CUSTOM(expbkt3): BEGIN — authenticated bootstrap ownership.
+                // Never let a stale draft/bootstrap owner
+                // override the user authenticated on this WebSocket.
+                createdByUserId: actor ?? bootstrapCreate.ownerUserId ?? null,
+                // T3-CUSTOM(expbkt3): END
+                sourceControlProfileId: bootstrapCreate.sourceControlProfileId,
+                createdAt: bootstrapCreate.createdAt,
+                updatedAt: bootstrapCreate.createdAt,
+                priority: bootstrapCreate.priority ?? null,
+              },
+            }
+          : null;
       // Real activity resets ANY override: it wakes an explicitly settled
       // thread, and it clears a keep-active pin back to neutral so the
       // thread can auto-settle again after this burst of work goes stale.
       // A snooze clears the same way — sending a message to a snoozed
       // thread is the user re-engaging, so the return ticket is spent.
       const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
-      if (targetThread.settledOverride !== null) {
+      if (existingTargetThread?.settledOverride !== null && existingTargetThread !== undefined) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",
@@ -1083,7 +956,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      if (targetThread.snoozedUntil != null) {
+      if (existingTargetThread?.snoozedUntil != null) {
         lifecycleResetEvents.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",
@@ -1099,7 +972,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
-      return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+      return [
+        ...(threadCreatedEvent === null ? [] : [threadCreatedEvent]),
+        ...lifecycleResetEvents,
+        userMessageEvent,
+        turnStartRequestedEvent,
+      ];
     }
 
     case "thread.turn.interrupt": {
@@ -1212,27 +1090,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         type: "thread.session-stop-requested",
-        payload: {
-          threadId: command.threadId,
-          createdAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.session.restart": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.session-restart-requested",
         payload: {
           threadId: command.threadId,
           createdAt: command.createdAt,
@@ -1393,54 +1250,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.catchup-summary.request": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.catchup-summary-requested",
-        payload: {
-          threadId: command.threadId,
-          turnId: command.turnId,
-          createdAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.catchup-summary.update": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.catchup-summary-updated",
-        payload: {
-          threadId: command.threadId,
-          turnId: command.turnId,
-          assistantMessageId: command.assistantMessageId,
-          rollingSummary: command.rollingSummary,
-          displaySummary: command.displaySummary,
-          progress: command.progress,
-          createdAt: command.createdAt,
-        },
-      };
-    }
-
     case "thread.revert.complete": {
       yield* requireThread({
         readModel,
@@ -1515,6 +1324,106 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
       return [unsettledEvent, activityAppendedEvent];
     }
+
+    // T3-CUSTOM(expbkt3): durable workspace-bootstrap events. The public
+    // request/control commands are intercepted by ThreadBootstrapCoordinator;
+    // only these record commands reach the event-sourced engine.
+    case "thread.bootstrap.request.record": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.bootstrap-requested",
+        payload: {
+          threadId: command.threadId,
+          request: command.request,
+          progress: command.progress,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.step.update": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.bootstrap-step-updated",
+        payload: {
+          threadId: command.threadId,
+          bootstrapId: command.bootstrapId,
+          step: command.step,
+          status: command.status,
+          attempt: command.attempt,
+          ...(command.terminalId !== undefined ? { terminalId: command.terminalId } : {}),
+          ...(command.exitCode !== undefined ? { exitCode: command.exitCode } : {}),
+          ...(command.error !== undefined ? { error: command.error } : {}),
+          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.control.record": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const eventType =
+        command.action === "stop"
+          ? "thread.bootstrap-stop-requested"
+          : command.action === "retry"
+            ? "thread.bootstrap-retry-requested"
+            : "thread.bootstrap-continue-requested";
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: eventType,
+        payload: {
+          threadId: command.threadId,
+          bootstrapId: command.bootstrapId,
+          ...(command.step !== undefined ? { step: command.step } : {}),
+          ...(command.baseRef !== undefined ? { baseRef: command.baseRef } : {}),
+          requestedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.complete": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.bootstrap-completed",
+        payload: {
+          threadId: command.threadId,
+          bootstrapId: command.bootstrapId,
+          completedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap.request":
+    case "thread.bootstrap.retry":
+    case "thread.bootstrap.stop":
+    case "thread.bootstrap.continue":
+      return yield* new OrchestrationCommandInvariantError({
+        commandType: command.type,
+        detail: `${command.type} must be handled by ThreadBootstrapCoordinator.`,
+      });
 
     default: {
       command satisfies never;

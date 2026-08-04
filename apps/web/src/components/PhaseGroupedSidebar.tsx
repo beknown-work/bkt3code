@@ -12,7 +12,17 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
-import { ProviderDriverKind, type ScopedThreadRef, type VcsStatusResult } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): BEGIN — sidebar rows consume shared durable execution state.
+import { ANONYMOUS_OUTBOX_IDENTITY } from "@t3tools/client-runtime/outbox";
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
+// T3-CUSTOM(expbkt3): END
+import {
+  ProviderDriverKind,
+  type EnvironmentId,
+  type LinearIssueStatusSummary,
+  type ScopedThreadRef,
+  type VcsStatusResult,
+} from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
   AlarmClockIcon,
@@ -67,7 +77,10 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
-import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+// T3-CUSTOM(expbkt3): live Linear state for tagged lifecycle rows.
+import { linearIssueStatusesEnvironment } from "../state/linearIssues";
+// T3-CUSTOM(expbkt3): pending IndexedDB sends drive sidebar state before acknowledgement.
+import { durableThreadOutbox, threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -81,9 +94,9 @@ import { LinearIcon } from "./Icons";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import {
   canReconnectThreadSession,
+  hasUnseenCompletion,
   isTrailingDoubleClick,
   resolveSettledTimestamp,
-  resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
 import {
@@ -92,7 +105,6 @@ import {
   snoozeWakeLabel,
   type SnoozePreset,
 } from "./Sidebar.snooze";
-import { ThreadStatusLabel } from "./ThreadStatusIndicators";
 import {
   PHASE_SIDEBAR_PHASES,
   buildPhaseSidebarFilterChips,
@@ -103,6 +115,10 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   partitionPhaseSidebarRows,
+  // T3-CUSTOM(expbkt3): Session priority badge tone.
+  phaseSidebarPriorityBadgeClassName,
+  phaseSidebarCanForceStopAgent,
+  resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
   resolvePhaseSidebarDisplayPhase,
@@ -113,10 +129,17 @@ import {
   phaseSidebarRowClassName,
   formatThreadPriority,
   PHASE_SIDEBAR_PRIORITY_CHOICES,
+  compactPhaseSidebarTimeLabel,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
   type PhaseSidebarSection,
 } from "./sidebar/PhaseGroupedSidebar.logic";
+// T3-CUSTOM(expbkt3): BEGIN — adaptive fork-owned phase-row layout.
+import {
+  PHASE_SIDEBAR_CONTENT_CLASS_NAME,
+  PHASE_SIDEBAR_METADATA_CLASS_NAME,
+} from "./sidebar/PhaseSidebarRowLayout";
+// T3-CUSTOM(expbkt3): END
 import { useCurrentUserId } from "../state/identity";
 import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
@@ -129,6 +152,12 @@ import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
 import { T3ConductorCard } from "./sidebar/T3ConductorCard";
 import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
+import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
+import { RunningSessionDivider } from "./sidebar/RunningSessionDivider";
+import {
+  runningSessionDividerPhase,
+  shouldShowRunningSessionGlint,
+} from "./sidebar/RunningSessionGlint.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -154,26 +183,16 @@ import {
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-
-const PHASE_ACCENT_CLASS: Record<PhaseSidebarPhaseId, string> = {
-  // T3-CUSTOM(expbkt3): Urgent question phase is visually distinct from lifecycle work.
-  needs_input: "animate-pulse bg-red-500",
-  plan_ready: "bg-primary",
-  ready_for_review: "bg-emerald-500",
-  ready_to_merge: "bg-violet-500",
-  planning: "bg-info",
-  implementing: "bg-success",
-  in_review: "bg-amber-500",
-  merging: "bg-violet-500",
-  merged: "bg-purple-500",
-  checking: "bg-muted-foreground/45",
-  ready: "bg-muted-foreground/45",
-};
+import { PhaseSidebarUnreadIndicator } from "./sidebar/PhaseSidebarUnreadIndicator";
+import { LinearIssueTagDialog } from "./sidebar/LinearIssueTagDialog";
 
 // T3-CUSTOM(expbkt3): Settled-tail paging — recent history is the common
 // lookup; the deep tail stays behind an explicit Show more.
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
+
+const linearIssueStatusKey = (environmentId: string, identifier: string) =>
+  `${environmentId}\0${identifier}`;
 
 // The failed branch of a settle/snooze command — the four of them share one
 // error reporter, so it takes the widened failure shape.
@@ -218,6 +237,42 @@ function ThreadWorkflowProbe({
   );
 
   useEffect(() => onStatus(threadKey, result.data), [onStatus, result.data, threadKey]);
+  return null;
+}
+
+// T3-CUSTOM(expbkt3): one batched status request per environment keeps a long
+// sidebar from issuing one Bifrost request per row.
+function LinearIssueStatusProbe({
+  environmentId,
+  identifiers,
+  refreshMinute,
+  onStatus,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly identifiers: ReadonlyArray<string>;
+  readonly refreshMinute: string;
+  readonly onStatus: (
+    environmentId: EnvironmentId,
+    identifiers: ReadonlyArray<string>,
+    issues: ReadonlyArray<LinearIssueStatusSummary> | null,
+    error: string | null,
+  ) => void;
+}) {
+  const { data, error, refresh } = useEnvironmentQuery(
+    linearIssueStatusesEnvironment({ environmentId, input: { identifiers } }),
+  );
+  const previousRefreshMinute = useRef(refreshMinute);
+
+  useEffect(() => {
+    onStatus(environmentId, identifiers, data?.issues ?? null, error);
+  }, [data, environmentId, error, identifiers, onStatus]);
+
+  useEffect(() => {
+    if (previousRefreshMinute.current === refreshMinute) return;
+    previousRefreshMinute.current = refreshMinute;
+    refresh();
+  }, [refresh, refreshMinute]);
+
   return null;
 }
 
@@ -326,9 +381,6 @@ function PhaseFilterPopover({
                 checked={phaseIds.includes(phase.id)}
                 label={phase.label}
                 onCheckedChange={() => togglePhase(phase.id)}
-                leading={
-                  <span className={cn("size-1.5 rounded-full", PHASE_ACCENT_CLASS[phase.id])} />
-                }
               />
             ))}
           </FacetSection>
@@ -625,6 +677,7 @@ interface PhaseThreadRowProps {
   readonly onCancelRename: () => void;
   readonly onNavigate: (threadRef: ScopedThreadRef) => void;
   readonly onReconnect: (threadRef: ScopedThreadRef) => Promise<void>;
+  readonly onForceStop: (row: PhaseSidebarRow) => void;
   readonly onArchive: (row: PhaseSidebarRow) => void;
   readonly onDelete: (row: PhaseSidebarRow) => void;
   readonly onSettle: (row: PhaseSidebarRow) => void;
@@ -633,6 +686,9 @@ interface PhaseThreadRowProps {
   readonly onUnsnooze: (row: PhaseSidebarRow) => void;
   // T3-CUSTOM(expbkt3): null clears the priority.
   readonly onSetPriority: (row: PhaseSidebarRow, priority: 0 | 1 | 2 | 3 | 4 | null) => void;
+  // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
+  readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
+  readonly linearIssueStatus: LinearIssueStatusSummary | null;
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
@@ -652,6 +708,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onCancelRename,
     onNavigate,
     onReconnect,
+    onForceStop,
     onArchive,
     onDelete,
     onSettle,
@@ -659,9 +716,27 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onUnsettle,
     onUnsnooze,
     onSetPriority,
+    onSetLinearIssueUrl,
+    linearIssueStatus,
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  // T3-CUSTOM(expbkt3): BEGIN — show Sending/Queued/Recovering on the next row render.
+  const currentUserId = useCurrentUserId();
+  const outboxItems = useAtomValue(
+    durableThreadOutbox.itemsValueAtom(
+      row.thread.environmentId,
+      currentUserId ?? ANONYMOUS_OUTBOX_IDENTITY,
+    ),
+  );
+  const executionPresentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem: outboxItems.some(
+      (item) => item.threadId === row.thread.id && item.deliveryState !== "failed",
+    ),
+    intent: row.thread.execution?.intent ?? null,
+    providerActivity: row.thread.execution?.activity ?? "idle",
+  });
+  // T3-CUSTOM(expbkt3): END
   const selected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const toggleThread = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -669,15 +744,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const setAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
-  const status = resolveThreadStatusPill({ thread: { ...row.thread, lastVisitedAt } });
-  const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch);
+  const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
   const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
+  const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
+  const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
   // While the preset popover is open the pointer sits over the popup, not
   // the row, so the hover cluster has to stay pinned.
   const [snoozeMenuOpenRaw, setSnoozeMenuOpen] = useState(false);
+  const [linearTagDialogOpen, setLinearTagDialogOpen] = useState(false);
   // Snooze is offered only where it can succeed: capability-gated, and never
   // on a thread that is blocked on the user (hiding a pending request would
   // defeat it).
@@ -694,15 +771,24 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     section === "active" &&
     wokeAt !== null &&
     (lastVisitedAt === undefined || Date.parse(wokeAt) > Date.parse(lastVisitedAt));
+  const shouldEmphasizeTitle =
+    row.isUnreadCompletion ||
+    active ||
+    selected ||
+    attentionKind !== null ||
+    showWokePill ||
+    (row.thread.priority != null && row.thread.priority <= 2);
   // Snoozed rows read "when does this come BACK"; settled rows read "when
   // did this wrap up" — the same timestamp they sort by.
   const timeLabel =
     section === "snoozed" && row.thread.snoozedUntil != null
       ? snoozeWakeLabel(row.thread.snoozedUntil, { now: new Date().toISOString() })
-      : formatRelativeTimeLabel(
-          (section === "settled" ? resolveSettledTimestamp(row.thread) : null) ??
-            row.thread.updatedAt,
-        ).replace(" ago", "");
+      : compactPhaseSidebarTimeLabel(
+          formatRelativeTimeLabel(
+            (section === "settled" ? resolveSettledTimestamp(row.thread) : null) ??
+              row.thread.updatedAt,
+          ),
+        );
   // T3-CUSTOM(expbkt3): END
 
   const openLinearIssue = (event: { preventDefault(): void; stopPropagation(): void }) => {
@@ -789,18 +875,36 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           },
         ]
       : [];
+    const linearItems = row.linearIssueSupported
+      ? [
+          {
+            id: "tag-linear",
+            label: row.thread.linearIssueUrl ? "Change Linear tag…" : "Tag Linear…",
+          },
+          ...(row.thread.linearIssueUrl
+            ? [{ id: "remove-linear", label: "Remove manual Linear tag" }]
+            : []),
+        ]
+      : [];
     // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
         { id: "rename", label: "Rename" },
         { id: "mark-unread", label: "Mark unread" },
         ...priorityItems,
+        ...linearItems,
         ...settlementItems,
         ...snoozeItems,
         {
+          id: recoveryExhausted ? "dismiss-recovery" : "force-stop-agent",
+          label: recoveryExhausted ? "Dismiss recovery failure" : "Force stop agent",
+          disabled: !recoveryExhausted && !phaseSidebarCanForceStopAgent(row.thread.session),
+          destructive: !recoveryExhausted,
+        },
+        {
           id: "reconnect-session",
-          label: "Reconnect session",
-          disabled: !canReconnectThreadSession(row.thread),
+          label: recoveryExhausted ? "Retry recovery" : "Reconnect session",
+          disabled: !recoveryExhausted && !canReconnectThreadSession(row.thread),
         },
         { id: "copy-path", label: "Copy Path", disabled: workspacePath === null },
         {
@@ -831,7 +935,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       );
       if (choice) onSetPriority(row, choice.value);
     }
+    if (action === "tag-linear") setLinearTagDialogOpen(true);
+    if (action === "remove-linear") onSetLinearIssueUrl(row, null);
     // T3-CUSTOM(expbkt3): END
+    if (action === "force-stop-agent") onForceStop(row);
+    if (action === "dismiss-recovery") onForceStop(row);
     if (action === "reconnect-session") await onReconnect(threadRef);
     if (action === "copy-path" && workspacePath) {
       await navigator.clipboard.writeText(workspacePath);
@@ -848,12 +956,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseSidebarRowClassName(
-          active,
-          selected,
-          needsUserInput,
-          row.thread.priority === 0,
-        )}
+        className={phaseSidebarRowClassName(active, selected, needsUserInput, row.thread.priority)}
         aria-current={active ? "page" : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
@@ -861,6 +964,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         onDoubleClick={() => onStartRename(row)}
         onContextMenu={(event) => void handleContextMenu(event)}
       >
+        {executionPresentation.active || shouldShowRunningSessionGlint(row.phaseId, section) ? (
+          <RunningSessionGlint />
+        ) : null}
         {active ? (
           <span
             aria-hidden
@@ -868,12 +974,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             className="pointer-events-none absolute inset-y-1 right-0 w-0.5 rounded-full bg-primary shadow-[0_0_6px_var(--color-primary)]"
           />
         ) : null}
-        {status ? (
-          <ThreadStatusLabel status={status} compact />
-        ) : (
-          <span className="size-3.5 shrink-0" />
-        )}
-        <span className="min-w-0 flex-1">
+        <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
+        {/* T3-CUSTOM(expbkt3): Vertically centered adaptive content lane. */}
+        <span className={PHASE_SIDEBAR_CONTENT_CLASS_NAME}>
           {renaming ? (
             <input
               autoFocus
@@ -890,15 +993,25 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               }}
             />
           ) : (
-            <span className="block truncate text-xs font-medium text-foreground">
+            <span
+              className={cn(
+                "block truncate text-xs transition-colors",
+                row.isUnreadCompletion
+                  ? "font-semibold text-foreground"
+                  : shouldEmphasizeTitle
+                    ? "font-medium text-foreground"
+                    : "font-normal text-muted-foreground/75 group-hover/phase-row:text-foreground",
+              )}
+            >
               {row.thread.title}
             </span>
           )}
-          {/* T3-CUSTOM(expbkt3): Keep checkout details left-aligned and pin the provider at right. */}
-          <span className="relative mt-0.5 flex min-w-0 items-center justify-start gap-1.5 pr-5 text-[10px] leading-none text-muted-foreground/65">
+          {/* T3-CUSTOM(expbkt3): Checkout and Linear details remain in the content lane. */}
+          <span className={PHASE_SIDEBAR_METADATA_CLASS_NAME}>
             <Tooltip>
+              {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
-                render={<span className="inline-flex min-w-0 max-w-20 items-center gap-1" />}
+                render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {project ? (
                   <ProjectFavicon
@@ -909,11 +1022,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 ) : null}
                 <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
+              {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
             </Tooltip>
             <Tooltip>
+              {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
-                render={<span className="inline-flex min-w-0 max-w-24 items-center gap-1" />}
+                render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {checkoutMetadata.kind === "worktree" ? (
                   <FolderGit2Icon aria-hidden className="size-2.5 shrink-0" />
@@ -922,10 +1037,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 )}
                 <span className="min-w-0 truncate">{checkoutMetadata.label}</span>
               </TooltipTrigger>
+              {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
             </Tooltip>
             {linearIssue ? (
               <Tooltip>
+                {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
                 <TooltipTrigger
                   render={
                     <span
@@ -933,7 +1050,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                       tabIndex={0}
                       data-testid={`linear-issue-${row.thread.id}`}
                       aria-label={`Open ${linearIssue.identifier} in Linear`}
-                      className="inline-flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       onClick={openLinearIssue}
                       onDoubleClick={(event) => event.stopPropagation()}
                       onKeyDown={(event) => {
@@ -944,52 +1061,52 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   }
                 >
                   <LinearIcon aria-hidden className="size-2.5 shrink-0" />
-                  <span>{linearIssue.identifier}</span>
+                  <span className="max-w-32 truncate">
+                    {linearIssue.identifier} (
+                    {linearIssueStatus?.status ??
+                      (linearIssueStatus?.error ? "unavailable" : "syncing…")}
+                    )
+                  </span>
                 </TooltipTrigger>
-                <TooltipPopup side="top">Open {linearIssue.identifier} in Linear</TooltipPopup>
+                {/* T3-CUSTOM(expbkt3): END */}
+                <TooltipPopup side="top">
+                  {linearIssue.identifier} (
+                  {linearIssueStatus?.status ?? linearIssueStatus?.error ?? "syncing…"})
+                </TooltipPopup>
               </Tooltip>
             ) : null}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className="absolute right-0 inline-flex size-3 items-center justify-center"
-                    aria-label={row.providerName}
-                  />
-                }
-              >
-                <ProviderInstanceIcon
-                  driverKind={ProviderDriverKind.make(row.providerKind)}
-                  displayName={row.providerName}
-                  className="size-3"
-                  iconClassName="size-3 text-[8px]"
-                />
-              </TooltipTrigger>
-              <TooltipPopup side="top">{row.providerName}</TooltipPopup>
-            </Tooltip>
           </span>
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1">
-          {/* T3-CUSTOM(expbkt3): P0 is loud because it is the one level that
-              claims attention across every lifecycle group; P1-P4 stay quiet
-              markers so they read as metadata, not alarms. */}
-          {row.thread.priority != null ? (
+        {/* T3-CUSTOM(expbkt3): status/time own a fixed top-right lane. */}
+        <span className="absolute top-2 right-2 flex max-w-[55%] shrink-0 items-center gap-1">
+          {executionPresentation.active && executionPresentation.label && attentionKind === null ? (
             <span
-              aria-label={`Priority ${formatThreadPriority(row.thread.priority)}`}
-              data-testid={`phase-thread-priority-${row.thread.id}`}
-              className={cn(
-                "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide",
-                row.thread.priority === 0
-                  ? "bg-amber-500 text-white shadow-sm"
-                  : "bg-muted-foreground/15 text-muted-foreground",
-              )}
+              role="status"
+              className="rounded-sm bg-sky-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:text-sky-300"
             >
-              {formatThreadPriority(row.thread.priority)}
+              {executionPresentation.label.toUpperCase()}
             </span>
           ) : null}
-          {needsUserInput ? (
-            <span className="rounded-sm bg-red-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm">
+          {attentionKind === "input" ? (
+            <span
+              aria-label="Awaiting input"
+              className="rounded-sm bg-red-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm"
+            >
               INPUT
+            </span>
+          ) : attentionKind === "approval" ? (
+            <span
+              aria-label="Pending approval"
+              className="rounded-sm bg-amber-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-amber-700 shadow-sm dark:text-amber-300"
+            >
+              APPROVAL
+            </span>
+          ) : attentionKind === "error" ? (
+            <span
+              aria-label="Session error"
+              className="rounded-sm bg-red-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-red-700 shadow-sm dark:text-red-300"
+            >
+              ERROR
             </span>
           ) : null}
           {/* T3-CUSTOM(expbkt3): A woken thread returns to its original sort
@@ -1008,6 +1125,39 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             <Kbd className="h-4 min-w-0 rounded-sm px-1 text-[9px]">{jumpLabel}</Kbd>
           ) : null}
           <span className="text-[9px] tabular-nums text-muted-foreground/50">{timeLabel}</span>
+        </span>
+        {/* T3-CUSTOM(expbkt3): priority and provider stay anchored together at bottom-right. */}
+        <span className="absolute right-2 bottom-2 flex h-3.5 items-center gap-1">
+          {row.thread.priority != null ? (
+            <span
+              aria-label={`Priority ${formatThreadPriority(row.thread.priority)}`}
+              data-testid={`phase-thread-priority-${row.thread.id}`}
+              className={cn(
+                "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide",
+                phaseSidebarPriorityBadgeClassName(row.thread.priority),
+              )}
+            >
+              {formatThreadPriority(row.thread.priority)}
+            </span>
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className="inline-flex size-3.5 items-center justify-center"
+                  aria-label={row.providerName}
+                />
+              }
+            >
+              <ProviderInstanceIcon
+                driverKind={ProviderDriverKind.make(row.providerKind)}
+                displayName={row.providerName}
+                className="size-3.5"
+                iconClassName="size-3.5 text-[8px]"
+              />
+            </TooltipTrigger>
+            <TooltipPopup side="top">{row.providerName}</TooltipPopup>
+          </Tooltip>
         </span>
         {/* T3-CUSTOM(expbkt3): BEGIN — hover actions overlay the row instead of reflowing metadata. */}
         <span
@@ -1071,6 +1221,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         </span>
         {/* T3-CUSTOM(expbkt3): END */}
       </button>
+      <LinearIssueTagDialog
+        open={linearTagDialogOpen}
+        initialUrl={row.thread.linearIssueUrl ?? linearIssue?.url ?? ""}
+        threadTitle={row.thread.title}
+        onOpenChange={setLinearTagDialogOpen}
+        onSave={(url) => onSetLinearIssueUrl(row, url)}
+      />
     </li>
   );
 });
@@ -1165,6 +1322,7 @@ export function PhaseGroupedSidebar() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
@@ -1199,6 +1357,9 @@ export function PhaseGroupedSidebar() {
   const [attachSessionOpen, setAttachSessionOpen] = useState(false);
   const [vcsStatusByThreadKey, setVcsStatusByThreadKey] = useState<
     ReadonlyMap<string, VcsStatusResult | null>
+  >(() => new Map());
+  const [linearIssueStatusByKey, setLinearIssueStatusByKey] = useState<
+    ReadonlyMap<string, LinearIssueStatusSummary>
   >(() => new Map());
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
@@ -1266,6 +1427,37 @@ export function PhaseGroupedSidebar() {
       return next;
     });
   }, []);
+  const recordLinearIssueStatuses = useCallback(
+    (
+      environmentId: EnvironmentId,
+      identifiers: ReadonlyArray<string>,
+      issues: ReadonlyArray<LinearIssueStatusSummary> | null,
+      error: string | null,
+    ) => {
+      if (issues === null && error === null) return;
+      setLinearIssueStatusByKey((current) => {
+        const next = new Map(current);
+        if (issues) {
+          for (const issue of issues) {
+            next.set(linearIssueStatusKey(environmentId, issue.identifier), issue);
+          }
+        } else if (error) {
+          for (const identifier of identifiers) {
+            next.set(linearIssueStatusKey(environmentId, identifier), {
+              identifier,
+              url: null,
+              status: null,
+              statusType: null,
+              updatedAt: null,
+              error,
+            });
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const allRows = useMemo<ReadonlyArray<PhaseSidebarRow>>(
     () =>
       threads
@@ -1291,11 +1483,10 @@ export function PhaseGroupedSidebar() {
           const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
           const vcsStatus = vcsStatusByThreadKey.get(threadKey);
           const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
-          const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
-          const lastVisitedAt = Date.parse(lastVisitedAtByThreadKey[threadKey] ?? "");
-          const isUnreadCompletion =
-            Number.isFinite(completedAt) &&
-            (!Number.isFinite(lastVisitedAt) || completedAt > lastVisitedAt);
+          const isUnreadCompletion = hasUnseenCompletion({
+            ...thread,
+            lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
+          });
           return {
             thread,
             phaseId: resolvePhaseSidebarDisplayPhase(
@@ -1312,11 +1503,12 @@ export function PhaseGroupedSidebar() {
               provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
             isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
             attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
-            unreadPriority: isUnreadCompletion ? 0 : 1,
+            isUnreadCompletion,
             // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
             settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
             snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
             prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
+            linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
             changeRequestState: vcsStatus?.pr?.state ?? null,
             // T3-CUSTOM(expbkt3): END
           };
@@ -1364,6 +1556,8 @@ export function PhaseGroupedSidebar() {
     () => buildPhaseSidebarGroups(activeRows, filters, sortOrder),
     [activeRows, filters, sortOrder],
   );
+  // T3-CUSTOM(expbkt3): Separate idle lifecycle groups from live agent work.
+  const runningDividerPhaseId = runningSessionDividerPhase(groups.map((group) => group.id));
   const activeVisibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
 
   // The settled tail renders in pages: history must not dominate the list.
@@ -1422,12 +1616,26 @@ export function PhaseGroupedSidebar() {
     () => [...activeVisibleRows, ...renderedSnoozedRows, ...renderedSettledRows],
     [activeVisibleRows, renderedSnoozedRows, renderedSettledRows],
   );
+  const linearIssueStatusRequests = useMemo(() => {
+    const identifiersByEnvironment = new Map<EnvironmentId, Set<string>>();
+    for (const row of visibleRows) {
+      const issue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
+      if (!issue || !row.linearIssueSupported) continue;
+      const identifiers = identifiersByEnvironment.get(row.thread.environmentId) ?? new Set();
+      identifiers.add(issue.identifier);
+      identifiersByEnvironment.set(row.thread.environmentId, identifiers);
+    }
+    return [...identifiersByEnvironment].map(([environmentId, identifiers]) => ({
+      environmentId,
+      identifiers: [...identifiers].sort(),
+    }));
+  }, [visibleRows]);
   // T3-CUSTOM(expbkt3): END
 
   useEffect(() => {
     const next = new Map(lastKnownPhaseByThreadKeyRef.current);
     for (const row of allRows) {
-      if (allEnvironmentShellsLive || row.phaseId !== "checking") {
+      if (allEnvironmentShellsLive) {
         next.set(
           scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
           row.phaseId,
@@ -1665,6 +1873,36 @@ export function PhaseGroupedSidebar() {
     },
     [updateThreadMetadata],
   );
+  const setThreadLinearIssueUrl = useCallback(
+    (row: PhaseSidebarRow, linearIssueUrl: string | null) => {
+      if ((row.thread.linearIssueUrl ?? null) === linearIssueUrl) return;
+      void updateThreadMetadata({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id, linearIssueUrl },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to tag Linear issue",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [updateThreadMetadata],
+  );
+  const forceStopAgent = useCallback(
+    (row: PhaseSidebarRow) => {
+      void forceStopThreadSession({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id },
+      });
+    },
+    [forceStopThreadSession],
+  );
   // T3-CUSTOM(expbkt3): END
   const requestArchive = useCallback(
     async (row: PhaseSidebarRow) => {
@@ -1877,6 +2115,7 @@ export function PhaseGroupedSidebar() {
         onCancelRename={cancelRename}
         onNavigate={navigateToRow}
         onReconnect={reconnectThreadSession}
+        onForceStop={forceStopAgent}
         onArchive={handleArchive}
         onDelete={requestDelete}
         onSettle={attemptSettle}
@@ -1884,6 +2123,18 @@ export function PhaseGroupedSidebar() {
         onSnooze={attemptSnooze}
         onUnsnooze={attemptUnsnooze}
         onSetPriority={setThreadPriority}
+        onSetLinearIssueUrl={setThreadLinearIssueUrl}
+        linearIssueStatus={(() => {
+          const issue = resolvePhaseSidebarLinearIssue(
+            row.thread.branch,
+            row.thread.linearIssueUrl,
+          );
+          return issue
+            ? (linearIssueStatusByKey.get(
+                linearIssueStatusKey(row.thread.environmentId, issue.identifier),
+              ) ?? null)
+            : null;
+        })()}
       />
     );
   };
@@ -1905,6 +2156,15 @@ export function PhaseGroupedSidebar() {
           />
         );
       })}
+      {linearIssueStatusRequests.map(({ environmentId, identifiers }) => (
+        <LinearIssueStatusProbe
+          key={`linear:${environmentId}:${identifiers.join(",")}`}
+          environmentId={environmentId}
+          identifiers={identifiers}
+          refreshMinute={nowMinute}
+          onStatus={recordLinearIssueStatuses}
+        />
+      ))}
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent className="gap-0">
         <SidebarGroup className="px-2 pt-2 pb-1">
@@ -1964,11 +2224,15 @@ export function PhaseGroupedSidebar() {
         >
           {groups.map((group) => (
             <section key={group.id} className="mb-3" data-phase-id={group.id}>
+              {/* T3-CUSTOM(expbkt3): A quiet boundary before live agent work. */}
+              {group.id === runningDividerPhaseId ? <RunningSessionDivider /> : null}
               <header className="mb-1 flex items-center gap-2 px-2">
                 <span
-                  className={cn("size-1.5 shrink-0 rounded-full", PHASE_ACCENT_CLASS[group.id])}
-                />
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground/80">
+                  className={cn(
+                    "text-[10px] font-semibold uppercase tracking-wider text-foreground/80",
+                    group.id === "needs_input" && "text-red-600 dark:text-red-400",
+                  )}
+                >
                   {group.label}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[9px] text-muted-foreground/50">

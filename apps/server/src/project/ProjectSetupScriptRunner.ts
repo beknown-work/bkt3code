@@ -13,17 +13,26 @@ export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
 }
 
-export interface ProjectSetupScriptRunnerResultStarted {
-  readonly status: "started";
+// T3-CUSTOM(expbkt3): BEGIN — durable bootstrap observes setup launch and completion.
+export interface ProjectSetupScriptRunnerResultCompleted {
+  readonly status: "completed";
+  readonly scriptId: string;
+  readonly scriptName: string;
+  readonly terminalId: string;
+  readonly cwd: string;
+  readonly exitCode: 0;
+}
+
+export type ProjectSetupScriptRunnerResult =
+  | ProjectSetupScriptRunnerResultNoScript
+  | ProjectSetupScriptRunnerResultCompleted;
+
+export interface ProjectSetupScriptRunnerStarted {
   readonly scriptId: string;
   readonly scriptName: string;
   readonly terminalId: string;
   readonly cwd: string;
 }
-
-export type ProjectSetupScriptRunnerResult =
-  | ProjectSetupScriptRunnerResultNoScript
-  | ProjectSetupScriptRunnerResultStarted;
 
 export interface ProjectSetupScriptRunnerInput {
   readonly threadId: string;
@@ -31,7 +40,9 @@ export interface ProjectSetupScriptRunnerInput {
   readonly projectCwd?: string;
   readonly worktreePath: string;
   readonly preferredTerminalId?: string;
+  readonly onStarted?: (started: ProjectSetupScriptRunnerStarted) => Effect.Effect<void>;
 }
+// T3-CUSTOM(expbkt3): END
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
@@ -40,12 +51,35 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
     projectId: Schema.optional(Schema.String),
     projectCwd: Schema.optional(Schema.String),
     worktreePath: Schema.String,
-    operation: Schema.Literals(["resolveProject", "openTerminal", "writeCommand"]),
+    // T3-CUSTOM(expbkt3): BEGIN — launch failures identify the retained setup terminal.
+    operation: Schema.Literals(["resolveProject", "runCommand"]),
+    // whose retained history the caller may expose.
+    terminalId: Schema.optional(Schema.String),
+    // T3-CUSTOM(expbkt3): END
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
     return `Project setup script operation '${this.operation}' failed for thread '${this.threadId}' in '${this.worktreePath}'.`;
+  }
+}
+
+// T3-CUSTOM(expbkt3): BEGIN — setup completion failures remain typed and inspectable.
+export class ProjectSetupScriptCommandError extends Schema.TaggedErrorClass<ProjectSetupScriptCommandError>()(
+  "ProjectSetupScriptCommandError",
+  {
+    threadId: Schema.String,
+    projectId: Schema.optional(Schema.String),
+    projectCwd: Schema.optional(Schema.String),
+    worktreePath: Schema.String,
+    terminalId: Schema.String,
+    exitCode: Schema.NullOr(Schema.Int),
+    exitSignal: Schema.NullOr(Schema.Int),
+    detail: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Project setup script failed in terminal '${this.terminalId}' for thread '${this.threadId}'.`;
   }
 }
 
@@ -62,10 +96,14 @@ export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorCl
     return `Project was not found for setup script execution for thread '${this.threadId}' in '${this.worktreePath}'.`;
   }
 }
+// T3-CUSTOM(expbkt3): END
 
 export const ProjectSetupScriptRunnerError = Schema.Union([
   ProjectSetupScriptOperationError,
   ProjectSetupScriptProjectNotFoundError,
+  // T3-CUSTOM(expbkt3): BEGIN — completion-aware setup failure.
+  ProjectSetupScriptCommandError,
+  // T3-CUSTOM(expbkt3): END
 ]);
 export type ProjectSetupScriptRunnerError = typeof ProjectSetupScriptRunnerError.Type;
 
@@ -78,6 +116,8 @@ export class ProjectSetupScriptRunner extends Context.Service<
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
+// T3-CUSTOM(expbkt3): BEGIN — setup is completion-aware and preserves an interactive
+// terminal identity so durable bootstrap can gate, retry, stop, and inspect it.
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
@@ -138,51 +178,59 @@ export const make = Effect.gen(function* () {
       worktreePath: input.worktreePath,
     });
 
-    yield* terminalManager
-      .open({
+    const completion = yield* terminalManager
+      .runCommand({
         threadId: input.threadId,
         terminalId,
         cwd,
         worktreePath: input.worktreePath,
         env,
+        command: script.command,
+        ...(input.onStarted
+          ? {
+              onStarted: () =>
+                input.onStarted!({
+                  scriptId: script.id,
+                  scriptName: script.name,
+                  terminalId,
+                  cwd,
+                }),
+            }
+          : {}),
       })
       .pipe(
         Effect.mapError(
           (cause) =>
             new ProjectSetupScriptOperationError({
               ...errorContext,
-              operation: "openTerminal",
+              operation: "runCommand",
+              terminalId,
               cause,
             }),
         ),
       );
-    yield* terminalManager
-      .write({
-        threadId: input.threadId,
+    if (completion.exitCode !== 0 || completion.exitSignal !== null || completion.error !== null) {
+      return yield* new ProjectSetupScriptCommandError({
+        ...errorContext,
         terminalId,
-        data: `${script.command}\r`,
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProjectSetupScriptOperationError({
-              ...errorContext,
-              operation: "writeCommand",
-              cause,
-            }),
-        ),
-      );
+        exitCode: completion.exitCode,
+        exitSignal: completion.exitSignal,
+        detail: completion.error,
+      });
+    }
 
     return {
-      status: "started",
+      status: "completed",
       scriptId: script.id,
       scriptName: script.name,
       terminalId,
       cwd,
+      exitCode: 0,
     } as const;
   });
 
   return ProjectSetupScriptRunner.of({ runForThread });
 });
+// T3-CUSTOM(expbkt3): END
 
 export const layer = Layer.effect(ProjectSetupScriptRunner, make);

@@ -2,6 +2,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -27,6 +28,7 @@ const ALICE = asUserId("user_alice");
 const BOB = asUserId("user_bob");
 const PROJECT = asProjectId("project-members");
 const THREAD = asThreadId("thread-members");
+const WEB_THREAD = asThreadId("thread-created-from-web");
 
 // A read model with one project + thread both owned by OWNER.
 const seedReadModel = Effect.gen(function* () {
@@ -100,6 +102,59 @@ const applyPlanned = (
 };
 
 it.layer(NodeServices.layer)("decider membership invariants", (it) => {
+  it.effect("makes the authenticated web creator both owner and tagged member", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: asCommandId("cmd-web-thread-create"),
+          threadId: WEB_THREAD,
+          message: {
+            messageId: MessageId.make("message-web-thread-create"),
+            role: "user",
+            text: "Start from the web",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          bootstrap: {
+            createThread: {
+              projectId: PROJECT,
+              title: "Web-created thread",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5-codex",
+              },
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              branch: null,
+              worktreePath: null,
+              sourceControlProfileId: null,
+              ownerUserId: BOB,
+              createdAt: NOW,
+            },
+          },
+          createdAt: NOW,
+        },
+        readModel,
+        actor: ALICE,
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const created = events.find((event) => event.type === "thread.created");
+
+      expect(created?.type).toBe("thread.created");
+      if (created?.type === "thread.created") {
+        expect(created.payload.createdByUserId).toBe(ALICE);
+      }
+
+      const projected = yield* applyPlanned(readModel, events);
+      const thread = projected.threads.find((entry) => entry.id === WEB_THREAD);
+      expect(thread?.ownerUserId).toBe(ALICE);
+      expect(thread?.memberUserIds).toEqual([ALICE]);
+    }),
+  );
+
   it.effect("adds a thread member and records the actor", () =>
     Effect.gen(function* () {
       const readModel = yield* seedReadModel;
@@ -265,7 +320,7 @@ it.layer(NodeServices.layer)("decider membership invariants", (it) => {
       const seeded = yield* seedReadModel;
       const thread = seeded.threads.find((entry) => entry.id === THREAD);
       expect(thread?.ownerUserId).toBe(OWNER);
-      expect(thread?.memberUserIds).toEqual([]);
+      expect(thread?.memberUserIds).toEqual([OWNER]);
 
       const added = yield* decideOrchestrationCommand({
         command: {
@@ -278,7 +333,10 @@ it.layer(NodeServices.layer)("decider membership invariants", (it) => {
         actor: OWNER,
       });
       const afterAdd = yield* applyPlanned(seeded, added);
-      expect(afterAdd.threads.find((entry) => entry.id === THREAD)?.memberUserIds).toEqual([ALICE]);
+      expect(afterAdd.threads.find((entry) => entry.id === THREAD)?.memberUserIds).toEqual([
+        OWNER,
+        ALICE,
+      ]);
     }),
   );
 

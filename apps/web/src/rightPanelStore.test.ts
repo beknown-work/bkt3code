@@ -139,6 +139,7 @@ describe("rightPanelStore", () => {
   });
 
   it("drops unsafe persisted Plannotator URLs during migration", () => {
+    // T3-CUSTOM(expbkt3): Invalid legacy review descriptors leave no ghost panel record.
     expect(
       migratePersistedRightPanelState({
         byThreadKey: {
@@ -155,15 +156,7 @@ describe("rightPanelStore", () => {
           },
         },
       }),
-    ).toEqual({
-      byThreadKey: {
-        "env-1:thread-A": {
-          isOpen: true,
-          activeSurfaceId: null,
-          surfaces: [],
-        },
-      },
-    });
+    ).toEqual({ byThreadKey: {} });
   });
 
   it("reopening an inactive singleton activates its existing surface", () => {

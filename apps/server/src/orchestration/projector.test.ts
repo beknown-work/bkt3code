@@ -88,6 +88,8 @@ describe("orchestration projector", () => {
         branch: null,
         worktreePath: null,
         sourceControlProfileId: null,
+        // T3-CUSTOM(expbkt3): thread projections expose durable bootstrap readiness.
+        bootstrap: null,
         latestTurn: null,
         ownerUserId: null,
         memberUserIds: [],
@@ -99,6 +101,8 @@ describe("orchestration projector", () => {
         snoozedUntil: null,
         snoozedAt: null,
         priority: null,
+        // T3-CUSTOM(expbkt3): no manual Linear tag on a new thread.
+        linearIssueUrl: null,
         deletedAt: null,
         messages: [],
         proposedPlans: [],

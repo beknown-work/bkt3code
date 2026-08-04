@@ -11,29 +11,42 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
-  type TurnId,
+  TurnId,
   type UserId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
+import {
+  durableExecutionGuardedContinuationsTotal,
+  durableExecutions,
+  increment,
+  orchestrationEventsProcessedTotal,
+  setMetric,
+} from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import type { ProviderSessionExecutionOptions } from "../../provider/Services/ProviderAdapter.ts";
+import type {
+  ProviderSessionExecutionOptions,
+  ProviderThreadSnapshot,
+} from "../../provider/Services/ProviderAdapter.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -49,8 +62,84 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadExecutionSupervisor } from "../../execution/ThreadExecutionSupervisor.ts";
 import { SourceControlProfileService } from "../../sourceControl/SourceControlProfileService.ts";
+import { ServerConfig } from "../../config.ts";
+// T3-CUSTOM(expbkt3): schema guards preserve setup launch certainty across the durable boundary.
+import {
+  ProjectSetupScriptCommandError,
+  ProjectSetupScriptOperationError,
+  ProjectSetupScriptProjectNotFoundError,
+  ProjectSetupScriptRunner,
+} from "../../project/ProjectSetupScriptRunner.ts";
+// T3-CUSTOM(expbkt3): durable turns reuse the bootstrap defaults resolver at
+// the post-commit worktree boundary.
+import { resolveExactBranch } from "../../thread-bootstrap/DefaultsResolver.ts";
+// T3-CUSTOM(expbkt3): durable dispatch control plane; provider mechanics stay here.
+import {
+  DurableExecutionDispatchError,
+  makeDurableExecutionCoordinator,
+} from "../../execution/DurableExecutionCoordinator.ts";
+import { DurableExecutionIntentRepository } from "../../execution/DurableExecutionIntentRepository.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const isProjectSetupScriptCommandError = Schema.is(ProjectSetupScriptCommandError);
+const isProjectSetupScriptOperationError = Schema.is(ProjectSetupScriptOperationError);
+const isProjectSetupScriptProjectNotFoundError = Schema.is(ProjectSetupScriptProjectNotFoundError);
+
+// T3-CUSTOM(expbkt3): mere provider-history presence is not terminal evidence.
+export function providerHistoryProvesCompletion(
+  history: ProviderThreadSnapshot,
+  providerTurnId: TurnId,
+): boolean {
+  return history.turns.some((turn) => turn.id === providerTurnId && turn.state === "completed");
+}
+
+// T3-CUSTOM(expbkt3): Codex only materializes a thread after its first user message.
+export function providerHistoryReadProvesUndelivered(cause: unknown): boolean {
+  if (!isProviderAdapterRequestError(cause)) return false;
+  const detail = cause.detail.toLowerCase();
+  return (
+    cause.provider === "codex" &&
+    cause.method === "thread/read" &&
+    detail.includes("not materialized yet") &&
+    detail.includes("before first user message")
+  );
+}
+
+// T3-CUSTOM(expbkt3): ten retries cannot repair missing resume state or removed configuration.
+export function durableRecoveryFailure(
+  cause: unknown,
+  fallbackFailureType: string,
+): DurableExecutionDispatchError {
+  const tag =
+    typeof cause === "object" && cause !== null && "_tag" in cause ? String(cause._tag) : "";
+  const detail = String(cause);
+  const normalized = detail.toLowerCase();
+  const permanentTag =
+    tag === "ProviderAdapterValidationError" ||
+    tag === "ProviderValidationError" ||
+    tag === "ProviderUnsupportedError" ||
+    tag === "ProviderInstanceNotFoundError" ||
+    tag === "ProviderSessionNotFoundError";
+  const permanentDetail =
+    /resume (?:cursor|state).*(?:missing|unavailable|not found)/.test(normalized) ||
+    /(?:session|thread).*(?:does not exist|not found|unknown)/.test(normalized) ||
+    /worktree.*(?:does not exist|not found|missing)/.test(normalized) ||
+    normalized.includes("enoent") ||
+    normalized.includes("permission denied") ||
+    normalized.includes("access revoked");
+  const retryable = !(permanentTag || permanentDetail);
+  return new DurableExecutionDispatchError({
+    failureType: retryable ? fallbackFailureType : "durable-resume-unavailable",
+    detail,
+    retryable,
+    cause,
+  });
+}
+
+const normalizeDurableDispatchError = (cause: unknown, fallbackFailureType: string) =>
+  Schema.is(DurableExecutionDispatchError)(cause)
+    ? cause
+    : durableRecoveryFailure(cause, fallbackFailureType);
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -63,7 +152,9 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
-      | "thread.session-restart-requested";
+      | "thread.session-restart-requested"
+      | "thread.archived"
+      | "thread.session-set";
   }
 >;
 
@@ -261,6 +352,12 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
+  const serverConfig = yield* ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const projectSetupScriptRunner = yield* Effect.serviceOption(ProjectSetupScriptRunner);
+  // T3-CUSTOM(expbkt3): optional keeps isolated upstream reactor tests lightweight.
+  const durableIntentRepository = yield* Effect.serviceOption(DurableExecutionIntentRepository);
   const sourceControlProfiles = yield* Effect.serviceOption(SourceControlProfileService);
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -1059,13 +1156,25 @@ const make = Effect.gen(function* () {
 
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+    recovery?: {
+      readonly messageText: string;
+      readonly useOriginalAttachments: boolean;
+    },
+    claimGuard?: Effect.Effect<void, DurableExecutionDispatchError>,
   ) {
+    if (claimGuard !== undefined) yield* claimGuard;
     const key = turnStartKeyForEvent(event);
-    if (yield* hasHandledTurnStartRecently(key)) {
+    if (
+      recovery === undefined &&
+      Option.isNone(durableIntentRepository) &&
+      (yield* hasHandledTurnStartRecently(key))
+    ) {
       return;
     }
     const executionId = String(event.commandId ?? event.eventId);
-    const preparedExecution = yield* executionSupervisor.prepareExecution(event);
+    const preparedExecution = yield* recovery === undefined
+      ? executionSupervisor.prepareExecution(event)
+      : executionSupervisor.recoverExecution(event);
     if (preparedExecution.turn?.executionId !== executionId) {
       return;
     }
@@ -1098,7 +1207,7 @@ const make = Effect.gen(function* () {
           projects: project ? [project] : [],
         }) ?? process.cwd();
       const generationInput = {
-        messageText: message.text,
+        messageText: recovery?.messageText ?? message.text,
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };
@@ -1158,10 +1267,14 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    if (claimGuard !== undefined) yield* claimGuard;
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      messageText: recovery?.messageText ?? message.text,
+      ...((recovery === undefined || recovery.useOriginalAttachments) &&
+      message.attachments !== undefined
+        ? { attachments: message.attachments }
+        : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),
@@ -1174,7 +1287,7 @@ const make = Effect.gen(function* () {
     );
 
     if (Option.isNone(sendTurnRequest)) {
-      return;
+      return undefined;
     }
 
     const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
@@ -1188,20 +1301,26 @@ const make = Effect.gen(function* () {
       yield* providerService
         .terminateSession({ threadId: event.payload.threadId })
         .pipe(Effect.catchCause(Effect.logWarning));
-      return;
+      return undefined;
     }
 
-    yield* executionSupervisor.canContinueExecution(event.payload.threadId, executionId).pipe(
-      Effect.flatMap((canContinue) =>
-        canContinue
-          ? providerService
-              .sendTurn(sendTurnRequest.value, sourceControlExecutionOptions)
-              .pipe(Effect.asVoid)
-          : Effect.void,
-      ),
-      Effect.catchCause(recoverTurnStartFailure),
-      Effect.forkScoped,
-    );
+    if (claimGuard !== undefined) yield* claimGuard;
+
+    return yield* executionSupervisor
+      .canContinueExecution(event.payload.threadId, executionId)
+      .pipe(
+        Effect.flatMap((canContinue) =>
+          canContinue
+            ? providerService.sendTurn(
+                { ...sendTurnRequest.value, clientExecutionId: executionId },
+                sourceControlExecutionOptions,
+              )
+            : Effect.succeed(undefined),
+        ),
+        Effect.catchCause((cause) =>
+          recoverTurnStartFailure(cause).pipe(Effect.andThen(Effect.failCause(cause))),
+        ),
+      );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1345,7 +1464,10 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
+    // T3-CUSTOM(expbkt3): The projection can say stopped while a provider
+    // process remains alive. Treat session.stop as idempotent against the
+    // provider registry so the sidebar's force-stop escape hatch is real.
+    if (thread.session) {
       yield* providerService.stopSession({ threadId: thread.id });
     }
     threadCredentialActors.delete(thread.id);
@@ -1391,6 +1513,953 @@ const make = Effect.gen(function* () {
     yield* ensureSessionForThread(thread.id, event.payload.createdAt, { modelSelection });
   });
 
+  // T3-CUSTOM(expbkt3): New-thread preparation runs only after the accepted
+  // turn and its exact bootstrap specification are durable. Each external
+  // step has a persisted uncertainty boundary so a restart never launches a
+  // worktree or setup script twice merely because the acknowledgement was lost.
+  const prepareDurableBootstrap = Effect.fn("prepareDurableBootstrap")(function* (input: {
+    readonly intent: import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent;
+    readonly event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>;
+    readonly owner: string;
+    readonly generation: number;
+  }) {
+    const bootstrap = input.event.payload.bootstrap;
+    if (bootstrap === undefined || Option.isNone(durableIntentRepository)) return;
+    const resolvedBootstrapRequest = bootstrap.resolvedRequest;
+    const resolvedBootstrapWorkspace = resolvedBootstrapRequest?.workspace;
+    const resolvedBootstrapCwd =
+      resolvedBootstrapWorkspace?.mode === "new-worktree"
+        ? resolvedBootstrapWorkspace.projectCwd
+        : resolvedBootstrapWorkspace?.path;
+    const repository = durableIntentRepository.value;
+    const operation = yield* repository.getBootstrapOperation({
+      workItemId: input.intent.workItemId,
+    });
+    if (Option.isNone(operation)) {
+      return yield* new DurableExecutionDispatchError({
+        failureType: "bootstrap-state-missing",
+        detail: "The accepted bootstrap specification has no durable operation record.",
+        retryable: false,
+      });
+    }
+    const fail = (failureType: string, detail: string, retryable: boolean, cause?: unknown) =>
+      new DurableExecutionDispatchError({
+        failureType,
+        detail,
+        retryable,
+        ...(cause === undefined ? {} : { cause }),
+      });
+    const currentTime = () => Effect.map(DateTime.now, DateTime.formatIso);
+    let thread = yield* resolveThread(input.intent.threadId);
+    if (!thread) {
+      return yield* fail(
+        "bootstrap-thread-missing",
+        "The thread committed with this durable work item is no longer available.",
+        false,
+      );
+    }
+    let worktreePath = thread.worktreePath ?? operation.value.worktreePath;
+
+    const worktreeStep = yield* repository.beginBootstrapStep({
+      workItemId: input.intent.workItemId,
+      owner: input.owner,
+      generation: input.generation,
+      step: "worktree",
+      at: yield* currentTime(),
+    });
+    if (Option.isNone(worktreeStep)) {
+      return yield* fail(
+        "bootstrap-claim-fenced",
+        "Bootstrap preparation lost its execution claim before worktree reconciliation.",
+        false,
+      );
+    }
+
+    if (worktreeStep.value !== "acknowledged" && worktreeStep.value !== "not-required") {
+      const prepare = bootstrap.prepareWorktree;
+      const resolvedPrepare =
+        resolvedBootstrapWorkspace?.mode === "new-worktree"
+          ? resolvedBootstrapWorkspace
+          : undefined;
+      if (prepare === undefined && resolvedPrepare === undefined) {
+        return yield* fail(
+          "bootstrap-worktree-spec-missing",
+          "Durable worktree state requires preparation but the accepted specification is absent.",
+          false,
+        );
+      }
+      const projectCwd = prepare?.projectCwd ?? resolvedPrepare!.projectCwd;
+      const targetBranch = prepare?.branch ?? prepare?.baseBranch ?? resolvedPrepare?.newBranch;
+      if (targetBranch === undefined) {
+        return yield* fail(
+          "bootstrap-worktree-branch-missing",
+          "The durable bootstrap has no deterministic worktree branch identity.",
+          false,
+        );
+      }
+      const deterministicPath =
+        resolvedPrepare?.intendedPath ??
+        path.join(
+          serverConfig.worktreesDir,
+          path.basename(projectCwd),
+          targetBranch.replace(/\//g, "-"),
+        );
+      const candidatePath = worktreePath ?? deterministicPath;
+      const candidateExists = yield* fileSystem
+        .exists(candidatePath)
+        .pipe(
+          Effect.mapError((cause) =>
+            fail(
+              "bootstrap-worktree-inspection-failed",
+              `Could not inspect deterministic worktree path '${candidatePath}'.`,
+              true,
+              cause,
+            ),
+          ),
+        );
+      if (candidateExists) {
+        const status = yield* gitWorkflow
+          .localStatus({ cwd: candidatePath })
+          .pipe(
+            Effect.mapError((cause) =>
+              fail(
+                "bootstrap-worktree-inspection-failed",
+                `Could not reconcile the existing worktree '${candidatePath}'.`,
+                true,
+                cause,
+              ),
+            ),
+          );
+        if (!status.isRepo || status.refName !== targetBranch) {
+          return yield* fail(
+            "bootstrap-worktree-conflict",
+            `The deterministic path '${candidatePath}' exists but is not worktree branch '${targetBranch}'.`,
+            false,
+          );
+        }
+        worktreePath = candidatePath;
+      } else {
+        if (worktreeStep.value === "running") {
+          yield* repository.markBootstrapStepFailed({
+            workItemId: input.intent.workItemId,
+            owner: input.owner,
+            generation: input.generation,
+            step: "worktree",
+            phase: "uncertain",
+            detail:
+              "The server restarted during worktree creation and no matching deterministic worktree can be proven.",
+            at: yield* currentTime(),
+          });
+          return yield* fail(
+            "bootstrap-worktree-uncertain",
+            "The server restarted during worktree creation and no matching deterministic worktree can be proven.",
+            false,
+          );
+        }
+        if (
+          !(yield* repository.isClaimCurrent({
+            workItemId: input.intent.workItemId,
+            owner: input.owner,
+            generation: input.generation,
+            now: yield* currentTime(),
+          }))
+        ) {
+          return yield* fail(
+            "bootstrap-claim-fenced",
+            "Bootstrap preparation was stopped before worktree creation.",
+            false,
+          );
+        }
+        let baseBranch = prepare?.baseBranch ?? null;
+        let startFromOrigin = prepare?.startFromOrigin === true;
+        if (resolvedPrepare !== undefined) {
+          startFromOrigin = resolvedPrepare.baseRef.source === "origin";
+          if (startFromOrigin) {
+            yield* gitWorkflow
+              .fetchRemote({ cwd: projectCwd, remoteName: "origin" })
+              .pipe(
+                Effect.mapError((cause) =>
+                  fail(
+                    "bootstrap-worktree-fetch-failed",
+                    `Could not fetch the configured base for '${targetBranch}'.`,
+                    true,
+                    cause,
+                  ),
+                ),
+              );
+          }
+          const refs = yield* gitWorkflow
+            .listRefs({ cwd: projectCwd, refresh: true, includeMatchingRemoteRefs: true })
+            .pipe(
+              Effect.mapError((cause) =>
+                fail(
+                  "bootstrap-worktree-base-unavailable",
+                  "Could not inspect the configured worktree base.",
+                  true,
+                  cause,
+                ),
+              ),
+            );
+          const exactBaseRef = resolveExactBranch(refs.refs, resolvedPrepare.baseRef);
+          if (exactBaseRef === null || exactBaseRef.kind !== "branch") {
+            return yield* fail(
+              "bootstrap-worktree-base-unavailable",
+              "The configured worktree base is no longer available.",
+              false,
+            );
+          }
+          baseBranch = exactBaseRef.branch;
+        }
+        if (baseBranch === null) {
+          return yield* fail(
+            "bootstrap-worktree-base-unavailable",
+            "The accepted worktree specification has no base branch.",
+            false,
+          );
+        }
+        let worktreeBaseRef = baseBranch;
+        if (startFromOrigin) {
+          if (resolvedPrepare === undefined) {
+            yield* gitWorkflow
+              .fetchRemote({ cwd: projectCwd, remoteName: "origin" })
+              .pipe(
+                Effect.mapError((cause) =>
+                  fail(
+                    "bootstrap-worktree-fetch-failed",
+                    `Could not fetch the base for '${targetBranch}'.`,
+                    true,
+                    cause,
+                  ),
+                ),
+              );
+          }
+          const resolved = yield* gitWorkflow
+            .resolveRemoteTrackingCommit({
+              cwd: projectCwd,
+              refName: baseBranch,
+              fallbackRemoteName: "origin",
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                fail(
+                  "bootstrap-worktree-base-unavailable",
+                  `Could not resolve base branch '${baseBranch}'.`,
+                  false,
+                  cause,
+                ),
+              ),
+            );
+          worktreeBaseRef = resolved.commitSha;
+        }
+        const created = yield* gitWorkflow
+          .createWorktree({
+            cwd: projectCwd,
+            refName: worktreeBaseRef,
+            ...(resolvedPrepare !== undefined || prepare?.branch !== undefined
+              ? { newRefName: targetBranch }
+              : {}),
+            baseRefName: baseBranch,
+            path: deterministicPath,
+          })
+          .pipe(
+            Effect.mapError((cause) =>
+              fail(
+                "bootstrap-worktree-create-failed",
+                `Could not create worktree branch '${targetBranch}'.`,
+                true,
+                cause,
+              ),
+            ),
+          );
+        worktreePath = created.worktree.path;
+      }
+
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make(`durable-bootstrap:worktree:${input.intent.workItemId}`),
+          threadId: input.intent.threadId,
+          branch: targetBranch,
+          worktreePath,
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            fail(
+              "bootstrap-worktree-record-failed",
+              "The worktree exists but its durable thread metadata could not be recorded.",
+              true,
+              cause,
+            ),
+          ),
+        );
+      if (
+        !(yield* repository.acknowledgeBootstrapStep({
+          workItemId: input.intent.workItemId,
+          owner: input.owner,
+          generation: input.generation,
+          step: "worktree",
+          worktreePath,
+          at: yield* currentTime(),
+        }))
+      ) {
+        return yield* fail(
+          "bootstrap-claim-fenced",
+          "Worktree preparation completed after the execution claim was fenced.",
+          false,
+        );
+      }
+      yield* vcsStatusBroadcaster
+        .refreshStatus(worktreePath)
+        .pipe(Effect.ignoreCause({ log: true }));
+      thread = (yield* resolveThread(input.intent.threadId)) ?? thread;
+    }
+
+    const setupStep = yield* repository.beginBootstrapStep({
+      workItemId: input.intent.workItemId,
+      owner: input.owner,
+      generation: input.generation,
+      step: "setup",
+      at: yield* currentTime(),
+    });
+    if (Option.isNone(setupStep)) {
+      return yield* fail(
+        "bootstrap-claim-fenced",
+        "Bootstrap preparation lost its execution claim before setup reconciliation.",
+        false,
+      );
+    }
+    if (setupStep.value === "acknowledged" || setupStep.value === "not-required") return;
+    const terminalId = operation.value.setupTerminalId;
+    if (setupStep.value === "running") {
+      const adopted = thread.activities.some(
+        (activity) =>
+          activity.kind === "setup-script.started" &&
+          typeof activity.payload === "object" &&
+          activity.payload !== null &&
+          "terminalId" in activity.payload &&
+          activity.payload.terminalId === terminalId,
+      );
+      const detail = adopted
+        ? "Setup launch was recorded before restart, but its completion cannot be proven. Automatic relaunch is disabled."
+        : "Setup launch may have started before restart; automatic relaunch is disabled.";
+      yield* repository.markBootstrapStepFailed({
+        workItemId: input.intent.workItemId,
+        owner: input.owner,
+        generation: input.generation,
+        step: "setup",
+        phase: "uncertain",
+        detail,
+        at: yield* currentTime(),
+      });
+      return yield* fail("bootstrap-setup-uncertain", detail, false);
+    } else if (setupStep.value === "uncertain") {
+      return yield* fail(
+        "bootstrap-setup-uncertain",
+        operation.value.lastFailureDetail ??
+          "Setup delivery is uncertain and cannot be launched again automatically.",
+        false,
+      );
+    } else if (setupStep.value === "failed") {
+      return yield* fail(
+        "bootstrap-setup-failed",
+        operation.value.lastFailureDetail ?? "Setup failed and requires an explicit retry.",
+        false,
+      );
+    } else {
+      if (Option.isNone(projectSetupScriptRunner)) {
+        return yield* fail(
+          "bootstrap-setup-runner-unavailable",
+          "The durable setup runner is unavailable in this server environment.",
+          false,
+        );
+      }
+      const setupPath =
+        worktreePath ??
+        thread.worktreePath ??
+        bootstrap.prepareWorktree?.projectCwd ??
+        resolvedBootstrapCwd;
+      if (setupPath === undefined || setupPath === null) {
+        return yield* fail(
+          "bootstrap-setup-path-missing",
+          "The setup script has no durable workspace path.",
+          false,
+        );
+      }
+      if (
+        !(yield* repository.isClaimCurrent({
+          workItemId: input.intent.workItemId,
+          owner: input.owner,
+          generation: input.generation,
+          now: yield* currentTime(),
+        }))
+      ) {
+        return yield* fail(
+          "bootstrap-claim-fenced",
+          "Bootstrap preparation was stopped before setup launch.",
+          false,
+        );
+      }
+      const projectId = bootstrap.createThread?.projectId ?? resolvedBootstrapRequest?.projectId;
+      const projectCwd = bootstrap.prepareWorktree?.projectCwd ?? resolvedBootstrapCwd;
+      const resultExit = yield* Effect.exit(
+        projectSetupScriptRunner.value.runForThread({
+          threadId: input.intent.threadId,
+          ...(projectId === undefined ? {} : { projectId }),
+          ...(projectCwd === undefined ? {} : { projectCwd }),
+          worktreePath: setupPath,
+          preferredTerminalId: terminalId,
+        }),
+      );
+      if (Exit.isFailure(resultExit)) {
+        const setupFailure = Cause.squash(resultExit.cause);
+        const failedBeforeLaunch =
+          isProjectSetupScriptProjectNotFoundError(setupFailure) ||
+          (isProjectSetupScriptOperationError(setupFailure) &&
+            setupFailure.operation === "resolveProject");
+        const knownCompletedFailure = isProjectSetupScriptCommandError(setupFailure);
+        const safeToRetry = failedBeforeLaunch || knownCompletedFailure;
+        const detail = knownCompletedFailure
+          ? "The setup script completed with a failure."
+          : failedBeforeLaunch
+            ? "Setup could not start because its project configuration is unavailable."
+            : "Setup launch or completion could not be proven.";
+        yield* repository.markBootstrapStepFailed({
+          workItemId: input.intent.workItemId,
+          owner: input.owner,
+          generation: input.generation,
+          step: "setup",
+          phase: safeToRetry ? "failed" : "uncertain",
+          detail,
+          at: yield* currentTime(),
+        });
+        return yield* fail(
+          safeToRetry ? "bootstrap-setup-failed" : "bootstrap-setup-uncertain",
+          detail,
+          false,
+          setupFailure,
+        );
+      }
+    }
+    if (
+      !(yield* repository.acknowledgeBootstrapStep({
+        workItemId: input.intent.workItemId,
+        owner: input.owner,
+        generation: input.generation,
+        step: "setup",
+        at: yield* currentTime(),
+      }))
+    ) {
+      return yield* fail(
+        "bootstrap-claim-fenced",
+        "Setup preparation completed after the execution claim was fenced.",
+        false,
+      );
+    }
+  });
+
+  const assertDurableClaimCurrent = (
+    intent: import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent,
+    boundary: string,
+  ): Effect.Effect<void, DurableExecutionDispatchError> => {
+    const owner = intent.claimOwner;
+    const repository = Option.getOrNull(durableIntentRepository);
+    if (repository === null || owner === null) {
+      return Effect.fail(
+        new DurableExecutionDispatchError({
+          failureType: "execution-claim-missing",
+          detail: `Durable execution claim is unavailable at '${boundary}'.`,
+          retryable: false,
+        }),
+      );
+    }
+    return Effect.gen(function* () {
+      const current = yield* repository
+        .isClaimCurrent({
+          workItemId: intent.workItemId,
+          owner,
+          generation: intent.claimGeneration,
+          now: yield* Effect.map(DateTime.now, DateTime.formatIso),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new DurableExecutionDispatchError({
+                failureType: "execution-claim-check-failed",
+                detail: `Durable execution claim could not be checked at '${boundary}'.`,
+                retryable: true,
+                cause,
+              }),
+          ),
+        );
+      if (!current) {
+        return yield* new DurableExecutionDispatchError({
+          failureType: "execution-claim-fenced",
+          detail: `Durable execution was fenced before '${boundary}'.`,
+          retryable: false,
+        });
+      }
+    });
+  };
+
+  const dispatchDurableOriginal = Effect.fn("dispatchDurableOriginal")(function* (input: {
+    readonly intent: import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent;
+    readonly event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>;
+  }) {
+    const thread = yield* resolveThread(input.intent.threadId);
+    if (!thread) {
+      return yield* new DurableExecutionDispatchError({
+        failureType: "thread-missing",
+        detail: `Thread '${input.intent.threadId}' no longer exists.`,
+        retryable: false,
+      });
+    }
+    const snapshot = yield* executionSupervisor.getSnapshot(input.intent.threadId);
+    const activeProviderTurnId =
+      (snapshot.activity === "active" || snapshot.activity === "blocked") &&
+      snapshot.turn?.providerTurnId
+        ? snapshot.turn.providerTurnId
+        : null;
+    if (activeProviderTurnId !== null) {
+      const providerInstanceId =
+        thread.session?.providerInstanceId ?? input.intent.modelSelection?.instanceId;
+      if (providerInstanceId === undefined) {
+        return yield* new DurableExecutionDispatchError({
+          failureType: "provider-instance-missing",
+          detail: "The active turn has no provider instance for busy-message delivery.",
+          retryable: false,
+        });
+      }
+      const capabilities = yield* providerService.getCapabilities(providerInstanceId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new DurableExecutionDispatchError({
+              failureType: "provider-instance-unavailable",
+              detail: String(cause),
+              retryable: false,
+              cause,
+            }),
+        ),
+      );
+      if (capabilities.activeTurnInput === "queue") {
+        return {
+          providerTurnId: null,
+          providerInstanceId,
+          deferred: true,
+        } as const;
+      }
+      const message = thread.messages.find((candidate) => candidate.id === input.intent.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new DurableExecutionDispatchError({
+          failureType: "accepted-message-missing",
+          detail: `Accepted message '${input.intent.messageId}' is unavailable for steering.`,
+          retryable: false,
+        });
+      }
+      const request = yield* buildSendTurnRequestForThread({
+        threadId: input.intent.threadId,
+        messageText: input.intent.messageText ?? message.text,
+        ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+        ...(input.intent.modelSelection === null
+          ? {}
+          : { modelSelection: input.intent.modelSelection }),
+        interactionMode: input.event.payload.interactionMode,
+        actorUserId: input.intent.actingUserId ?? thread.ownerUserId,
+        createdAt: input.event.payload.createdAt,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new DurableExecutionDispatchError({
+              failureType: "provider-steer-prepare-failed",
+              detail: String(cause),
+              retryable: true,
+              cause,
+            }),
+        ),
+      );
+      const executionOptions = yield* resolveSourceControlExecutionOptions(
+        thread,
+        "thread.turn.start",
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new DurableExecutionDispatchError({
+              failureType: "provider-steer-options-failed",
+              detail: String(cause),
+              retryable: true,
+              cause,
+            }),
+        ),
+      );
+      yield* assertDurableClaimCurrent(input.intent, "provider-steer");
+      const steered = yield* providerService
+        .sendTurn({ ...request, clientExecutionId: input.intent.workItemId }, executionOptions)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new DurableExecutionDispatchError({
+                failureType: "provider-steer-failed",
+                detail: String(cause),
+                retryable: true,
+                cause,
+              }),
+          ),
+        );
+      return {
+        providerTurnId: steered.turnId ?? activeProviderTurnId,
+        providerInstanceId,
+        adoptedExecutionId: snapshot.turn?.executionId ?? input.intent.workItemId,
+      };
+    }
+
+    const result = yield* processTurnStartRequested(
+      input.event,
+      undefined,
+      assertDurableClaimCurrent(input.intent, "provider-turn-start"),
+    ).pipe(
+      Effect.mapError((cause) => durableRecoveryFailure(cause, "provider-turn-dispatch-failed")),
+    );
+    if (result === undefined) {
+      return yield* new DurableExecutionDispatchError({
+        failureType: "provider-turn-not-acknowledged",
+        detail: "Provider turn dispatch completed without a turn acknowledgement.",
+        retryable: true,
+      });
+    }
+    return {
+      providerTurnId: result.turnId,
+      providerInstanceId: input.intent.modelSelection?.instanceId ?? null,
+      adoptedExecutionId: input.intent.workItemId,
+    };
+  });
+
+  const appendDurableRecoveryActivity = Effect.fn("appendDurableRecoveryActivity")(
+    function* (input: {
+      readonly intent: import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent;
+      readonly kind: "started" | "recovered" | "paused" | "exhausted";
+      readonly attempt: number;
+      readonly detail?: string;
+    }) {
+      const createdAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      const presentation =
+        input.kind === "started"
+          ? { tone: "info" as const, summary: "Recovering interrupted agent work" }
+          : input.kind === "recovered"
+            ? { tone: "info" as const, summary: "Agent work recovered" }
+            : input.kind === "paused"
+              ? { tone: "approval" as const, summary: "Recovery paused for attention" }
+              : { tone: "error" as const, summary: "Automatic recovery exhausted" };
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(
+            `durable-recovery:${input.kind}:${input.intent.workItemId}:${input.attempt}`,
+          ),
+          threadId: input.intent.threadId,
+          activity: {
+            id: yield* serverEventId(),
+            tone: presentation.tone,
+            kind: `recovery.${input.kind}`,
+            summary: presentation.summary,
+            payload: {
+              workItemId: input.intent.workItemId,
+              attempt: input.attempt,
+              maximumAttempts: input.intent.maximumRecoveryAttempts,
+              ...(input.detail === undefined ? {} : { detail: input.detail }),
+            },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to append durable recovery activity", {
+              threadId: input.intent.threadId,
+              workItemId: input.intent.workItemId,
+              kind: input.kind,
+              attempt: input.attempt,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+    },
+  );
+
+  // T3-CUSTOM(expbkt3): BEGIN — the coordinator owns every normal/recovery
+  // provider turn in production, while this reactor remains the adapter seam.
+  const refreshDurablePhaseMetrics = Option.isSome(durableIntentRepository)
+    ? Effect.gen(function* () {
+        const counts = yield* durableIntentRepository.value.countVisibleByPhase;
+        for (const phase of [
+          "queued",
+          "preparing",
+          "starting",
+          "running",
+          "waiting-for-approval",
+          "waiting-for-input",
+          "recovering",
+          "retry-wait",
+          "stopping",
+          "recovery-exhausted",
+        ]) {
+          yield* setMetric(durableExecutions, { phase }, counts[phase] ?? 0);
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to refresh durable execution phase metrics", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      )
+    : Effect.void;
+  const durableCoordinator = Option.isSome(durableIntentRepository)
+    ? yield* makeDurableExecutionCoordinator({
+        ownerId: executionSupervisor.authorityEpoch,
+        // T3-CUSTOM(expbkt3): intent phases are part of the execution snapshot stream.
+        onTransition: ({ threadId }) =>
+          Effect.gen(function* () {
+            yield* executionSupervisor.refreshIntent(threadId);
+            yield* refreshDurablePhaseMetrics;
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to publish durable execution transition", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        onRecoveryActivity: (input) =>
+          appendDurableRecoveryActivity(input).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to publish durable recovery activity", {
+                threadId: input.intent.threadId,
+                workItemId: input.intent.workItemId,
+                kind: input.kind,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        terminateObserved: (intent) =>
+          providerService.terminateSession({ threadId: intent.threadId }).pipe(
+            Effect.asVoid,
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to terminate durable execution provider session", {
+                threadId: intent.threadId,
+                workItemId: intent.workItemId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        loadEvent: (intent) =>
+          Stream.runHead(
+            orchestrationEngine.readEvents((intent.requestEventSequence ?? 1) - 1, 1),
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new DurableExecutionDispatchError({
+                  failureType: "persisted-event-unavailable",
+                  detail: String(cause),
+                  retryable: false,
+                  cause,
+                }),
+            ),
+            Effect.flatMap((loaded) => {
+              const event = Option.getOrNull(loaded);
+              return event?.type === "thread.turn-start-requested"
+                ? Effect.succeed(event)
+                : Effect.fail(
+                    new DurableExecutionDispatchError({
+                      failureType: "persisted-event-unavailable",
+                      detail: `Turn request event sequence '${intent.requestEventSequence}' is unavailable.`,
+                      retryable: false,
+                    }),
+                  );
+            }),
+          ),
+        prepare: (input) =>
+          prepareDurableBootstrap(input).pipe(
+            Effect.mapError((cause) =>
+              normalizeDurableDispatchError(cause, "bootstrap-preparation-failed"),
+            ),
+          ),
+        dispatchOriginal: (input) =>
+          dispatchDurableOriginal(input).pipe(
+            Effect.mapError((cause) =>
+              normalizeDurableDispatchError(cause, "provider-turn-dispatch-failed"),
+            ),
+          ),
+        recover: ({ intent, event, mode }) =>
+          Effect.gen(function* () {
+            let effectiveMode = mode;
+            const inspection = yield* providerService.inspectSession(intent.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DurableExecutionDispatchError({
+                    failureType: "provider-inspection-failed",
+                    detail: String(cause),
+                    retryable: true,
+                    cause,
+                  }),
+              ),
+            );
+            const execution = yield* executionSupervisor.getSnapshot(intent.threadId);
+            const activeProviderTurnId = inspection?.activeProviderTurnId ?? null;
+            const activeTurnMatches =
+              activeProviderTurnId !== null &&
+              (activeProviderTurnId === intent.providerTurnId ||
+                execution.turn?.executionId === intent.workItemId);
+            if (activeTurnMatches) {
+              return {
+                providerTurnId: activeProviderTurnId,
+                providerInstanceId:
+                  execution.providerSession.providerInstanceId ??
+                  intent.modelSelection?.instanceId ??
+                  null,
+                adoptedExecutionId: execution.turn?.executionId ?? intent.workItemId,
+              };
+            }
+            if (activeProviderTurnId !== null) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "provider-active-turn-mismatch",
+                detail: `Provider turn '${activeProviderTurnId}' is active, but it cannot be correlated with work item '${intent.workItemId}'.`,
+                retryable: true,
+              });
+            }
+            const thread = yield* resolveThread(intent.threadId);
+            if (!thread) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "thread-missing",
+                detail: `Thread '${intent.threadId}' no longer exists.`,
+                retryable: false,
+              });
+            }
+            const providerInstanceId =
+              thread.session?.providerInstanceId ?? intent.modelSelection?.instanceId;
+            if (providerInstanceId === undefined) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "provider-instance-missing",
+                detail: "The durable work item no longer resolves to a provider instance.",
+                retryable: false,
+              });
+            }
+            const capabilities = yield* providerService.getCapabilities(providerInstanceId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new DurableExecutionDispatchError({
+                    failureType: "provider-instance-unavailable",
+                    detail: String(cause),
+                    retryable: false,
+                    cause,
+                  }),
+              ),
+            );
+            const readProviderThread = providerService.readThread;
+            if (mode === "inspect-or-continue" && readProviderThread === undefined) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "provider-history-unavailable",
+                detail: `Provider instance '${providerInstanceId}' cannot inspect persisted history before guarded continuation.`,
+                retryable: false,
+              });
+            }
+            if (
+              readProviderThread !== undefined &&
+              (mode === "inspect-or-continue" || intent.providerTurnId !== null)
+            ) {
+              const executionOptions = yield* resolveSourceControlExecutionOptions(
+                thread,
+                "thread.turn.start",
+              ).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new DurableExecutionDispatchError({
+                      failureType: "provider-history-options-failed",
+                      detail: String(cause),
+                      retryable: true,
+                      cause,
+                    }),
+                ),
+              );
+              yield* assertDurableClaimCurrent(intent, "provider-history-resume");
+              const providerHistoryExit = yield* Effect.exit(
+                readProviderThread(intent.threadId, executionOptions),
+              );
+              if (Exit.isFailure(providerHistoryExit)) {
+                const cause = Cause.squash(providerHistoryExit.cause);
+                if (intent.providerTurnId === null && providerHistoryReadProvesUndelivered(cause)) {
+                  effectiveMode = "exact-undelivered";
+                } else {
+                  return yield* durableRecoveryFailure(cause, "provider-history-read-failed");
+                }
+              } else if (
+                intent.providerTurnId !== null &&
+                providerHistoryProvesCompletion(
+                  providerHistoryExit.value,
+                  TurnId.make(intent.providerTurnId),
+                )
+              ) {
+                return {
+                  providerTurnId: intent.providerTurnId,
+                  providerInstanceId,
+                  completed: true,
+                };
+              }
+            }
+            if (
+              effectiveMode === "inspect-or-continue" &&
+              capabilities.durableResume === "unsupported"
+            ) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "durable-resume-unsupported",
+                detail: `Provider instance '${providerInstanceId}' cannot safely resume uncertain delivery.`,
+                retryable: false,
+              });
+            }
+            const messageText =
+              effectiveMode === "exact-undelivered"
+                ? (intent.messageText ?? "")
+                : "Continue the unfinished task from the persisted conversation and current workspace state. Inspect what already completed before acting, and do not repeat completed external actions.";
+            if (effectiveMode === "inspect-or-continue") {
+              yield* increment(durableExecutionGuardedContinuationsTotal, {
+                threadId: intent.threadId,
+                workItemId: intent.workItemId,
+                providerInstanceId,
+              });
+            }
+            const result = yield* processTurnStartRequested(
+              event,
+              {
+                messageText,
+                useOriginalAttachments: effectiveMode === "exact-undelivered",
+              },
+              assertDurableClaimCurrent(intent, "provider-recovery-turn-start"),
+            ).pipe(
+              Effect.mapError((cause) =>
+                durableRecoveryFailure(cause, "provider-recovery-dispatch-failed"),
+              ),
+            );
+            if (result === undefined) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "provider-recovery-not-acknowledged",
+                detail: "Guarded recovery completed without provider-turn evidence.",
+                retryable: true,
+              });
+            }
+            return {
+              providerTurnId: result.turnId,
+              providerInstanceId,
+              adoptedExecutionId: intent.workItemId,
+            };
+          }).pipe(
+            Effect.mapError((cause) =>
+              normalizeDurableDispatchError(cause, "provider-recovery-failed"),
+            ),
+          ),
+      }).pipe(
+        Effect.provideService(DurableExecutionIntentRepository, durableIntentRepository.value),
+      )
+    : null;
+  // T3-CUSTOM(expbkt3): END
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
     event: ProviderIntentEvent,
   ) {
@@ -1420,7 +2489,11 @@ const make = Effect.gen(function* () {
         return;
       }
       case "thread.turn-start-requested":
-        yield* processTurnStartRequested(event);
+        if (durableCoordinator !== null && event.commandId !== null) {
+          yield* durableCoordinator.wake(event.commandId);
+        } else {
+          yield* processTurnStartRequested(event);
+        }
         return;
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
@@ -1435,7 +2508,35 @@ const make = Effect.gen(function* () {
         yield* processSessionStopRequested(event);
         return;
       case "thread.session-restart-requested":
+        if (durableCoordinator !== null && Option.isSome(durableIntentRepository)) {
+          // T3-CUSTOM(expbkt3): Retry resets an exhausted work item; it is not
+          // a blind provider reconnect and works even when no session remains.
+          const items = yield* durableIntentRepository.value.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const retried = items.findLast(
+            (item) =>
+              item.desiredState === "running" &&
+              item.phase === "recovering" &&
+              item.recoveryAttempts === 0,
+          );
+          if (retried !== undefined) {
+            yield* durableCoordinator.wake(retried.workItemId);
+            return;
+          }
+        }
         yield* processSessionRestartRequested(event);
+        if (durableCoordinator !== null) yield* durableCoordinator.runDue;
+        return;
+      case "thread.archived":
+        // T3-CUSTOM(expbkt3): archive fences the durable item transactionally
+        // and also terminates any provider process observed after that fence.
+        yield* providerService
+          .terminateSession({ threadId: event.payload.threadId })
+          .pipe(Effect.catchCause(Effect.logWarning), Effect.asVoid);
+        return;
+      case "thread.session-set":
+        if (durableCoordinator !== null) yield* durableCoordinator.runDue;
         return;
     }
   });
@@ -1465,7 +2566,9 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
-        event.type === "thread.session-restart-requested"
+        event.type === "thread.session-restart-requested" ||
+        event.type === "thread.archived" ||
+        event.type === "thread.session-set"
       ) {
         return yield* worker.enqueue(event);
       }
@@ -1495,6 +2598,11 @@ const make = Effect.gen(function* () {
 
   return {
     start,
+    // T3-CUSTOM(expbkt3): startup invokes this after stale-session reconciliation.
+    startDurableRecovery: () =>
+      durableCoordinator === null
+        ? Effect.void
+        : refreshDurablePhaseMetrics.pipe(Effect.andThen(durableCoordinator.start())),
     drain: Effect.gen(function* () {
       yield* worker.drain;
       yield* threadTitleRegenerationWorker.drain;

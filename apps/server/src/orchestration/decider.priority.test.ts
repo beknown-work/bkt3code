@@ -178,4 +178,40 @@ it.layer(NodeServices.layer)("thread priority decider", (it) => {
       }
     }),
   );
+
+  it.effect("sets and clears a manual Linear issue through thread metadata", () =>
+    Effect.gen(function* () {
+      const tagged = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-tag-linear"),
+          threadId: ThreadId.make("thread-1"),
+          linearIssueUrl: "https://linear.app/beknown/issue/TEC-811",
+        },
+        readModel: makeReadModel(),
+      });
+      const taggedEvents = Array.isArray(tagged) ? tagged : [tagged];
+      expect(
+        taggedEvents[0]?.type === "thread.meta-updated"
+          ? taggedEvents[0].payload.linearIssueUrl
+          : undefined,
+      ).toBe("https://linear.app/beknown/issue/TEC-811");
+
+      const cleared = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-clear-linear"),
+          threadId: ThreadId.make("thread-1"),
+          linearIssueUrl: null,
+        },
+        readModel: makeReadModel(),
+      });
+      const clearedEvents = Array.isArray(cleared) ? cleared : [cleared];
+      expect(
+        clearedEvents[0]?.type === "thread.meta-updated"
+          ? clearedEvents[0].payload.linearIssueUrl
+          : undefined,
+      ).toBeNull();
+    }),
+  );
 });

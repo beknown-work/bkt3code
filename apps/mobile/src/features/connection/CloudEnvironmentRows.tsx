@@ -6,14 +6,17 @@ import {
 } from "@t3tools/client-runtime/connection";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useState } from "react";
+// T3-CUSTOM(expbkt3): BEGIN — native confirmation protects the durable message outbox.
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   Switch,
   type NativeSyntheticEvent,
   type TextLayoutEventData,
   View,
 } from "react-native";
+// T3-CUSTOM(expbkt3): END
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
@@ -73,10 +76,25 @@ function CloudEnvironmentRowsContent(props: CloudEnvironmentRowsProps) {
     [controller],
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
   const handleDisconnectCloudEnvironment = useCallback(
-    (environmentId: EnvironmentId) => controller.removeEnvironment(environmentId),
+    (environmentId: EnvironmentId) => {
+      Alert.alert(
+        "Disconnect environment?",
+        "Any unsent messages saved for this environment will also be removed.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Disconnect",
+            style: "destructive",
+            onPress: () => void controller.removeEnvironment(environmentId),
+          },
+        ],
+      );
+    },
     [controller],
   );
+  // T3-CUSTOM(expbkt3): END
 
   const handleToggleCloudError = useCallback((environmentId: string) => {
     setExpandedErrorId((current) => (current === environmentId ? null : environmentId));

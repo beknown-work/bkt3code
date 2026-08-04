@@ -16,6 +16,8 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+// T3-CUSTOM(expbkt3): Keep live Plannotator iframes out of durable panel state.
+import { withoutPersistedPlannotatorSurfaces } from "./plannotatorRightPanelPersistence";
 
 export const RIGHT_PANEL_KINDS = [
   "plan",
@@ -56,7 +58,8 @@ export type RightPanelSurface =
   | { id: "plan"; kind: "plan" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 8;
+// T3-CUSTOM(expbkt3): Version 9 removes legacy persisted Plannotator surfaces.
+const RIGHT_PANEL_STORAGE_VERSION = 9;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -273,7 +276,8 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
           ),
         )
       : {};
-  return { byThreadKey };
+  // T3-CUSTOM(expbkt3): A saved descriptor alone must never recreate process ownership.
+  return { byThreadKey: withoutPersistedPlannotatorSurfaces(byThreadKey) };
 }
 
 export const useRightPanelStore = create<RightPanelStoreState>()(
@@ -576,7 +580,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      partialize: (state) => ({ byThreadKey: state.byThreadKey }),
+      // T3-CUSTOM(expbkt3): Runtime-hidden reviews stay mounted; only the saved copy is filtered.
+      partialize: (state) => ({
+        byThreadKey: withoutPersistedPlannotatorSurfaces(state.byThreadKey),
+      }),
       migrate: migratePersistedRightPanelState,
     },
   ),

@@ -1,9 +1,9 @@
 /**
  * Events that mutate the live thread-detail document delivered to clients.
  *
- * T3-CUSTOM(expbkt3): Keep catch-up summary progress in this routing list.
- * The projection can persist a summary successfully while an already-open
- * thread remains stale if its event is omitted here.
+ * T3-CUSTOM(expbkt3): Keep fork-owned catch-up and bootstrap progress in this
+ * routing list. The projection can persist progress successfully while an
+ * already-open thread remains stale if its event is omitted here.
  */
 import type { OrchestrationEvent } from "@t3tools/contracts";
 
@@ -16,6 +16,9 @@ export type ThreadDetailEvent = Extract<
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.catchup-summary-updated"
+      | "thread.bootstrap-requested"
+      | "thread.bootstrap-step-updated"
+      | "thread.bootstrap-completed"
       | "thread.reverted"
       | "thread.session-set"
       | "thread.member-added"
@@ -31,6 +34,9 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is ThreadD
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.catchup-summary-updated" ||
+    event.type === "thread.bootstrap-requested" ||
+    event.type === "thread.bootstrap-step-updated" ||
+    event.type === "thread.bootstrap-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.session-set" ||
     event.type === "thread.member-added" ||

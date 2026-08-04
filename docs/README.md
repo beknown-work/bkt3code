@@ -9,6 +9,7 @@
 - [Keeping app and server in sync](./user/updating.md)
 - [User management](./user/user-management.md)
 - [Source control integrations](./user/source-control.md)
+- [Worktree setup and new-thread defaults](./user/worktree-setup.md)
 - [T3 Code MCP control center](./user/t3-mcp-control.md)
 - [Background service (Linux)](./user/background-service.md)
 - [Provider usage limits](./user/provider-limits.md)
@@ -25,6 +26,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 
 - [Architecture overview](./internals/overview.md)
 - [Workspace layout](./internals/workspace-layout.md)
+- [Durable thread bootstrap](./internals/thread-bootstrap.md)
 - [Glossary](./internals/glossary.md)
 - [Scripts](./internals/scripts.md)
 - [Connection runtime](./internals/connection-runtime.md)

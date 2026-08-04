@@ -82,7 +82,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const { environments } = useEnvironments();
-  // T3-CUSTOM(expbkt3): BEGIN — derive experimental global attention/running counters.
+  // T3-CUSTOM(expbkt3): BEGIN — derive experimental global unsettled/running counters.
   const threads = useThreadShells();
   const stageLabel = useEnvironmentStageLabel();
   const counts = useMemo(() => summarizeSidebarSessions(threads), [threads]);
@@ -134,19 +134,19 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           <span
             className={cn(
               "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
-              counts.attention > 0
+              counts.nonRunning >= 2
                 ? onBackdrop
-                  ? "animate-pulse border-white/70 bg-white text-red-600 shadow-[0_0_18px_rgba(255,255,255,0.9)]"
-                  : "animate-pulse border-red-500 bg-red-500 text-white shadow-[0_0_18px_rgba(239,68,68,0.75)]"
+                  ? "border-white/70 bg-white text-orange-600 shadow-[0_0_18px_rgba(255,255,255,0.9)]"
+                  : "border-orange-500 bg-orange-500 text-black shadow-[0_0_18px_rgba(249,115,22,0.55)]"
                 : onBackdrop
-                  ? "border-white/20 bg-white/10 text-white/55"
-                  : "border-border bg-muted text-muted-foreground",
+                  ? "border-emerald-200/60 bg-emerald-400/30 text-white"
+                  : "border-emerald-500/35 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
             )}
-            data-attention-state={counts.attention > 0 ? "urgent" : "clear"}
+            data-attention-state={counts.nonRunning >= 2 ? "attention" : "clear"}
             role="status"
-            title={`${counts.attention} session${counts.attention === 1 ? "" : "s"} need human attention`}
+            title={`${counts.nonRunning} non-running session${counts.nonRunning === 1 ? "" : "s"}`}
           >
-            {counts.attention}
+            {counts.nonRunning}
           </span>
           <span
             className={cn(

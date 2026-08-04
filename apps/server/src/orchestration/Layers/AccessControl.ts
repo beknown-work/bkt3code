@@ -1,4 +1,4 @@
-import { userIdFromSubject } from "@t3tools/contracts";
+import { UserId, userIdFromSubject } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -13,7 +13,10 @@ import {
 const makeAccessControl = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
 
-  const actorFor: OrchestrationAccessControlShape["actorFor"] = (subject) => {
+  const actorFor: OrchestrationAccessControlShape["actorFor"] = (subject, boundUserId) => {
+    if (boundUserId !== null) {
+      return Option.some(UserId.make(boundUserId));
+    }
     const userId = userIdFromSubject(subject);
     return userId === null ? Option.none() : Option.some(userId);
   };

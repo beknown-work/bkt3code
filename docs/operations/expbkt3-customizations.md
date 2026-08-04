@@ -20,21 +20,89 @@ Find every marked boundary with:
 rg 'T3-CUSTOM\\(expbkt3\\)'
 ```
 
+Marker discipline is enforced in CI by `scripts/check-fork-markers.ts`
+(`.github/workflows/fork-markers.yml`). It diffs the branch against
+`origin/main` — the byte-pure upstream mirror — and fails when a hunk in an
+upstream-owned file sits outside a marker. Files the fork _added_ are
+fork-owned and skipped; ownership is decided by git status, never by sniffing
+file contents, because upstream-owned files routinely carry a marked fork import
+near the top.
+
+`scripts/fork-marker-baseline.json` grandfathers the files that were already
+non-compliant when the check landed. It is a ratchet: a new violation in a file
+outside the baseline fails, and a baselined file that becomes fully compliant
+also fails, with an instruction to drop it from the list. Regenerate with
+`node scripts/check-fork-markers.ts --write-baseline` (add `--force` only when
+deliberately adopting new violations).
+
+## Core exceptions — permanently fork-owned, not flag-gated
+
+Most fork features sit behind a flag so upstream's code path stays intact and a
+post-merge regression can be isolated by switching ours off. The subsystems
+below are deliberate exceptions: they are load-bearing infrastructure whose
+"off" path would be a second, untested execution mode — flag-gating them would
+_increase_ merge and correctness risk rather than reduce it. Treat them as
+permanent fork surface and keep them marked instead.
+
+| Subsystem                         | Why it is not flag-gated                                                                                    |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| User management / Clerk team mode | The reason the fork exists. Already conditioned on `T3CODE_CLERK_SECRET_KEY` being configured.              |
+| Ownership + access control        | A disabled access-control path is a data-exposure bug, not a fallback. Part of user management in practice. |
+| ThreadExecutionSupervisor         | Turn admission and execution revisions are in the dispatch path; a bypass mode would be a second scheduler. |
+| Session recovery                  | Reconnect-after-restart has no meaningful "off" state — off is just the pre-existing stuck-session bug.     |
+| Thread priority                   | A projection column plus ordering. Nothing to disable; the sidebar that consumes it is itself flag-gated.   |
+| Thread Linear tags                | Durable metadata plus a read-only status lookup. The sidebar that consumes it is itself flag-gated.         |
+| Shell projection barrier          | Sync-correctness hardening. Disabling it reintroduces the drift it was written to fix.                      |
+| Plannotator plan review           | Relied on daily and mounted unconditionally; documented here rather than retrofitted behind a flag.         |
+
+Everything outside this table should follow the flag rule in `AGENTS.md`.
+
+## Deliberately not extracted
+
+Not every fork seam is worth moving to a fork-owned file. These were evaluated
+and left in place on purpose — re-deriving the decision costs more than reading
+it:
+
+- **`server.ts` fork layers.** Extracting the fork layer graph behind a factory
+  saves roughly 80 lines, but the factory needs one generic parameter per
+  upstream layer (plus Effect diagnostic suppressions) to keep the service types
+  flowing. That makes the file that composes the whole server runtime harder to
+  read, and mis-ordering `provide` vs `provideMerge` fails only on a real boot.
+  `server.ts` is already among the best-marked files in the fork and its
+  conflicts are mechanical, so the seams stay inline and marked.
+- **`ProjectionSnapshotQuery.ts` column threading**, **`ProviderService.ts`
+  parameter threading**, contract struct field additions, and web component JSX
+  mounts. There is no hook shape that removes these; marker discipline is the
+  only available lever.
+- **`ws.ts` `stopExecution` / `replayEvents` handlers.** They reach into
+  ws.ts-local replay machinery (`clamp`, `projectActivityEvent`,
+  `enrichOrchestrationEvents`); injecting all of it costs more seam than the
+  extraction saves.
+
+Semantic divergence is the expensive kind of fork change — where we _replaced_
+an upstream algorithm rather than adding to it. Those merge cleanly and then
+break at runtime, so they deserve the loudest markers: the `dispatch`
+acknowledgement-timeout rewrite in `client-runtime/operations/commands.ts`, the
+turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
+`ProviderCommandReactor.ts`, and session teardown in `CodexAdapter.ts`.
+
 ## Feature ownership
 
-| Area                      | Dedicated implementation                                                                                        | Upstream-facing seams                                                                   |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Active Projects           | `ActiveProjectsSettingsPanel*`, `settings.projects.tsx`                                                         | `SettingsSidebarNav.tsx`, generated route tree                                          |
-| Personal MCP identity     | `ExternalMcpSettingsSection*`, `UserMcpProfileStore.ts`, `McpUpstreamProxy.ts`, `personalMcp.ts`                | provider adapters, RPC group, server route/layer wiring                                 |
-| MCP operator/native tools | `apps/server/src/mcp/toolkits/control/`                                                                         | MCP toolkit assembly and server route wiring                                            |
-| Plannotator runtime       | `apps/server/src/plannotator/`, `packages/shared/src/plannotator.ts`                                            | server service layers and proxy route                                                   |
-| Native-plan detection     | `NativePlanBridge.ts`                                                                                           | orchestration plan lifecycle hooks                                                      |
-| Focused review UI         | `PlannotatorFocusSurface*`                                                                                      | chat, plan card/sidebar, and right-panel store seams                                    |
-| Lifecycle counters        | experimental sidebar counter components                                                                         | `SidebarChrome.tsx`                                                                     |
-| Urgent pending input      | `PhaseGroupedSidebar.logic.ts`                                                                                  | `PhaseGroupedSidebar.tsx`                                                               |
-| Lifecycle parking shelves | `PhaseGroupedSidebar.logic.ts` (`partitionPhaseSidebarRows`), `PhaseGroupedSidebar.tsx`                         | `useThreadActions.ts`, `Sidebar.snooze.ts`, `Sidebar.logic.ts` (all read-only)          |
-| T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorLinearIssueControl.tsx`, `T3ConductorSettingsSection.tsx` | experimental settings schema, `PhaseGroupedSidebar.tsx`, and one `ChatHeader.tsx` mount |
-| Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                       | none                                                                                    |
+| Area                      | Dedicated implementation                                                                                        | Upstream-facing seams                                                                           |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Active Projects           | `ActiveProjectsSettingsPanel*`, `settings.projects.tsx`                                                         | `SettingsSidebarNav.tsx`, generated route tree                                                  |
+| Personal MCP identity     | `ExternalMcpSettingsSection*`, `UserMcpProfileStore.ts`, `McpUpstreamProxy.ts`, `personalMcp.ts`                | provider adapters, RPC group, server route/layer wiring                                         |
+| MCP operator/native tools | `apps/server/src/mcp/toolkits/control/`                                                                         | MCP toolkit assembly and server route wiring                                                    |
+| Plannotator runtime       | `apps/server/src/plannotator/`, `packages/shared/src/plannotator.ts`                                            | server service layers and proxy route                                                           |
+| Native-plan detection     | `NativePlanBridge.ts`                                                                                           | orchestration plan lifecycle hooks                                                              |
+| Focused review UI         | `PlannotatorFocusSurface*`                                                                                      | chat, plan card/sidebar, and right-panel store seams                                            |
+| Lifecycle counters        | experimental sidebar counter components                                                                         | `SidebarChrome.tsx`                                                                             |
+| Urgent pending input      | `PhaseGroupedSidebar.logic.ts`                                                                                  | `PhaseGroupedSidebar.tsx`                                                                       |
+| Lifecycle parking shelves | `PhaseGroupedSidebar.logic.ts` (`partitionPhaseSidebarRows`), `PhaseGroupedSidebar.tsx`                         | `useThreadActions.ts`, `Sidebar.snooze.ts`, `Sidebar.logic.ts` (all read-only)                  |
+| Thread Linear tags        | `LinearIssueResolver.ts`, `LinearIssueTagDialog.tsx`, `linearIssue.ts`, migration 1004                          | orchestration/contracts projections, `ws.ts`, `PhaseGroupedSidebar.tsx`                         |
+| T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorLinearIssueControl.tsx`, `T3ConductorSettingsSection.tsx` | experimental settings schema, `PhaseGroupedSidebar.tsx`, and one `ChatHeader.tsx` mount         |
+| Durable thread bootstrap  | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                 | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams |
+| Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                       | none                                                                                            |
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
 markers; they are regenerated from marked route sources.
@@ -91,6 +159,25 @@ is de-duplicated by annotation content because Plannotator assigns new internal
 IDs when saved annotations are replayed. Keep lifecycle changes inside
 `apps/server/src/plannotator/` and the existing focused-surface seam so upstream
 plan rendering remains isolated.
+
+Process lifetime follows an in-memory browser lease registry rather than thread
+state. Every mounted focus surface has an unpersisted UUID lease: visible
+surfaces renew through the 500 ms status cadence, retained-hidden surfaces renew
+every 30 seconds, and legacy clients share one compatible lease. Multiple
+browsers may own one review; releasing one UUID does not affect the others.
+Releasing the final UUID makes the process immediately suspendible, while a
+crashed browser expires after two minutes and is collected by the 30-second
+reaper. Launch and reopen receive the same two-minute acquisition window so a
+process whose iframe never mounts cannot remain indefinitely.
+
+Suspension writes `exited` and clears live port fields before stopping the
+manager-captured child. It preserves the manifest, plan, log, cumulative
+annotations, and Plannotator recovery draft. The right-panel persistence
+transform excludes Plannotator descriptors (storage version 9), but runtime
+hidden surfaces remain mounted; a full browser restart therefore requires an
+intentional **Review →** reopen instead of resurrecting ghost ownership from
+localStorage. Terminal `exited` and `error` responses stop the single recursive
+poll loop and remove only the stale panel surface.
 
 ## Upstream merge workflow
 
