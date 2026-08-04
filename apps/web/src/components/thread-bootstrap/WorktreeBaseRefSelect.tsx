@@ -12,6 +12,17 @@ export interface WorktreeBaseRefOption {
   readonly baseRef: WorktreeBaseRef;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — exact remote-ref query target.
+// Keep the ref-query contract testable without rendering
+// the Base UI select.
+export function worktreeBaseRefQueryTarget(
+  environmentId: EnvironmentId | null,
+  workspaceRoot: string | null,
+) {
+  return { environmentId, cwd: workspaceRoot, includeMatchingRemoteRefs: true };
+}
+// T3-CUSTOM(expbkt3): END
+
 function remoteBranchName(ref: VcsRef): string {
   return ref.remoteName && ref.name.startsWith(`${ref.remoteName}/`)
     ? ref.name.slice(ref.remoteName.length + 1)
@@ -84,7 +95,8 @@ export function WorktreeBaseRefSelect({
   disabled = false,
   includeInherit = true,
 }: WorktreeBaseRefSelectProps) {
-  const refsQuery = useBranches({ environmentId, cwd: workspaceRoot });
+  // T3-CUSTOM(expbkt3): Include origin counterparts even when local names match.
+  const refsQuery = useBranches(worktreeBaseRefQueryTarget(environmentId, workspaceRoot));
   const options = useMemo(
     () => buildWorktreeBaseRefOptions(refsQuery.data?.refs ?? []),
     [refsQuery.data?.refs],

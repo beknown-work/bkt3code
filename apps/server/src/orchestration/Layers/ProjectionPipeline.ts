@@ -721,6 +721,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             rollingSummary: null,
             deletedAt: null,
           });
+          // T3-CUSTOM(expbkt3): BEGIN — keep creator tagging atomic with the owner
+          // projection so a first shell snapshot can never observe half of it.
+          if (
+            event.payload.createdByUserId !== null &&
+            event.payload.createdByUserId !== undefined
+          ) {
+            yield* projectionMembershipRepository.upsertThreadMember({
+              threadId: event.payload.threadId,
+              userId: event.payload.createdByUserId,
+              addedByUserId: event.payload.createdByUserId,
+              addedAt: event.payload.createdAt,
+            });
+          }
+          // T3-CUSTOM(expbkt3): END
           return;
 
         case "thread.member-added":

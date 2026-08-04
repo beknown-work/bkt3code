@@ -312,7 +312,15 @@ export function projectEvent(
             // Owner is the creator (team mode). Preserve a prior owner on
             // idempotent re-creation (bootstrap retry after compensation).
             ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
-            memberUserIds: existing?.memberUserIds ?? [],
+            // T3-CUSTOM(expbkt3): BEGIN — creator ownership and explicit tagging.
+            // The creator is both the durable owner and an
+            // explicit tagged member from the first projection.
+            memberUserIds:
+              existing?.memberUserIds ??
+              (payload.createdByUserId === null || payload.createdByUserId === undefined
+                ? []
+                : [payload.createdByUserId]),
+            // T3-CUSTOM(expbkt3): END
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,

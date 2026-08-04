@@ -280,6 +280,14 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           updatedAt: "2026-07-23T00:00:00.000Z",
         },
       });
+      // T3-CUSTOM(expbkt3): A creator is tagged in the same SQL projection as
+      // ownership, before any follow-up membership command can run.
+      const creatorMemberRows = yield* sql<{ readonly userId: string }>`
+        SELECT user_id AS "userId"
+        FROM projection_thread_members
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(creatorMemberRows, [{ userId: previousOwner }]);
       yield* appendAndProject({
         type: "thread.member-added",
         eventId: EventId.make("evt-owner-transfer-2"),

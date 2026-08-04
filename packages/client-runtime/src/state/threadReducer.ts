@@ -79,7 +79,12 @@ export function applyThreadDetailEvent(
           bootstrap: null,
           latestTurn: null,
           ownerUserId: event.payload.createdByUserId ?? null,
-          memberUserIds: [],
+          // T3-CUSTOM(expbkt3): BEGIN — creation tags the authenticated owner too.
+          memberUserIds:
+            event.payload.createdByUserId === null || event.payload.createdByUserId === undefined
+              ? []
+              : [event.payload.createdByUserId],
+          // T3-CUSTOM(expbkt3): END
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,

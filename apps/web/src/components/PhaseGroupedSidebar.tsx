@@ -134,6 +134,12 @@ import {
   type PhaseSidebarRow,
   type PhaseSidebarSection,
 } from "./sidebar/PhaseGroupedSidebar.logic";
+// T3-CUSTOM(expbkt3): BEGIN — adaptive fork-owned phase-row layout.
+import {
+  PHASE_SIDEBAR_CONTENT_CLASS_NAME,
+  PHASE_SIDEBAR_METADATA_CLASS_NAME,
+} from "./sidebar/PhaseSidebarRowLayout";
+// T3-CUSTOM(expbkt3): END
 import { useCurrentUserId } from "../state/identity";
 import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
@@ -969,7 +975,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           />
         ) : null}
         <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
-        <span className="min-w-0 flex-1 pr-20">
+        {/* T3-CUSTOM(expbkt3): Vertically centered adaptive content lane. */}
+        <span className={PHASE_SIDEBAR_CONTENT_CLASS_NAME}>
           {renaming ? (
             <input
               autoFocus
@@ -1000,10 +1007,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             </span>
           )}
           {/* T3-CUSTOM(expbkt3): Checkout and Linear details remain in the content lane. */}
-          <span className="mt-1 flex min-w-0 items-center justify-start gap-1.5 text-[10px] leading-none text-muted-foreground/65">
+          <span className={PHASE_SIDEBAR_METADATA_CLASS_NAME}>
             <Tooltip>
+              {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
-                render={<span className="inline-flex min-w-0 max-w-20 items-center gap-1" />}
+                render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {project ? (
                   <ProjectFavicon
@@ -1014,11 +1022,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 ) : null}
                 <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
+              {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
             </Tooltip>
             <Tooltip>
+              {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
-                render={<span className="inline-flex min-w-0 max-w-24 items-center gap-1" />}
+                render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {checkoutMetadata.kind === "worktree" ? (
                   <FolderGit2Icon aria-hidden className="size-2.5 shrink-0" />
@@ -1027,10 +1037,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 )}
                 <span className="min-w-0 truncate">{checkoutMetadata.label}</span>
               </TooltipTrigger>
+              {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
             </Tooltip>
             {linearIssue ? (
               <Tooltip>
+                {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
                 <TooltipTrigger
                   render={
                     <span
@@ -1038,7 +1050,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                       tabIndex={0}
                       data-testid={`linear-issue-${row.thread.id}`}
                       aria-label={`Open ${linearIssue.identifier} in Linear`}
-                      className="inline-flex min-w-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       onClick={openLinearIssue}
                       onDoubleClick={(event) => event.stopPropagation()}
                       onKeyDown={(event) => {
@@ -1056,6 +1068,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                     )
                   </span>
                 </TooltipTrigger>
+                {/* T3-CUSTOM(expbkt3): END */}
                 <TooltipPopup side="top">
                   {linearIssue.identifier} (
                   {linearIssueStatus?.status ?? linearIssueStatus?.error ?? "syncing…"})

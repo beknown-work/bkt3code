@@ -403,7 +403,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
-          createdByUserId: actor,
+          // T3-CUSTOM(expbkt3): BEGIN — authenticated creator ownership.
+          // The authenticated creator is authoritative;
+          // trusted automation owner hints are only a non-Web fallback.
+          createdByUserId: actor ?? command.ownerUserId ?? null,
+          // T3-CUSTOM(expbkt3): END
           sourceControlProfileId: command.sourceControlProfileId,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -918,7 +922,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 interactionMode: bootstrapCreate.interactionMode,
                 branch: bootstrapCreate.branch,
                 worktreePath: bootstrapCreate.worktreePath,
-                createdByUserId: bootstrapCreate.ownerUserId ?? actor,
+                // T3-CUSTOM(expbkt3): BEGIN — authenticated bootstrap ownership.
+                // Never let a stale draft/bootstrap owner
+                // override the user authenticated on this WebSocket.
+                createdByUserId: actor ?? bootstrapCreate.ownerUserId ?? null,
+                // T3-CUSTOM(expbkt3): END
                 sourceControlProfileId: bootstrapCreate.sourceControlProfileId,
                 createdAt: bootstrapCreate.createdAt,
                 updatedAt: bootstrapCreate.createdAt,

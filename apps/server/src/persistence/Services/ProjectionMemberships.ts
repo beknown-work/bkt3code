@@ -62,7 +62,7 @@ export interface ProjectionMembershipRepositoryShape {
     input: RemoveProjectMemberInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /** Member user ids for a single thread (excludes the owner). */
+  /** T3-CUSTOM(expbkt3): Explicitly tagged users; a creator can also be the owner. */
   readonly listThreadMemberIds: (
     threadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<UserId>, ProjectionRepositoryError>;

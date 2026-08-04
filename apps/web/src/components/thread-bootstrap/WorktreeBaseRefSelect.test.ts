@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildWorktreeBaseRefOptions,
   parseWorktreeBaseRefValue,
+  worktreeBaseRefQueryTarget,
   worktreeBaseRefValue,
 } from "./WorktreeBaseRefSelect";
 
@@ -15,6 +16,14 @@ const ref = (input: Partial<VcsRef> & Pick<VcsRef, "name">): VcsRef => ({
 });
 
 describe("WorktreeBaseRefSelect", () => {
+  it("requests matching origin refs so named remote branches are selectable", () => {
+    expect(worktreeBaseRefQueryTarget(null, "/repo")).toEqual({
+      environmentId: null,
+      cwd: "/repo",
+      includeMatchingRemoteRefs: true,
+    });
+  });
+
   it("keeps matching local and origin refs as distinct exact choices", () => {
     const options = buildWorktreeBaseRefOptions([
       ref({ name: "main", isDefault: true }),

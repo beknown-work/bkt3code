@@ -271,7 +271,8 @@ export function phaseSidebarRowClassName(
   priority: number | null = null,
 ): string {
   return cn(
-    "group/phase-row relative flex min-h-14 w-full cursor-pointer select-none items-start gap-2 rounded-md px-2 py-2 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+    // T3-CUSTOM(expbkt3): Center the adaptive title/metadata content lane.
+    "group/phase-row relative flex min-h-14 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-2 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
     isActive && isSelected
       ? "bg-primary/18 text-foreground font-semibold ring-1 ring-inset ring-primary/40 hover:bg-primary/22 dark:bg-primary/24"
       : isSelected
@@ -402,12 +403,16 @@ export function resolvePhaseSidebarPhase(
 ): PhaseSidebarPhaseId {
   if (phaseSidebarNeedsUserInput(thread)) return "needs_input";
 
+  // T3-CUSTOM(expbkt3): BEGIN — group from the same durable intent as the badge.
   const isActive =
+    (thread.execution?.intent !== undefined &&
+      thread.execution.intent.phase !== "recovery-exhausted") ||
     thread.execution?.activity === "active" ||
     thread.execution?.activity === "blocked" ||
     thread.execution?.activity === "stopping" ||
     thread.session?.status === "starting" ||
     thread.session?.status === "running";
+  // T3-CUSTOM(expbkt3): END
   if (isActive) {
     return thread.interactionMode === "plan" ? "planning" : "implementing";
   }

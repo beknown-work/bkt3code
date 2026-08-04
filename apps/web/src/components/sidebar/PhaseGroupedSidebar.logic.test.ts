@@ -1,6 +1,7 @@
 import {
   DEFAULT_RUNTIME_MODE,
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -84,6 +85,13 @@ describe("phaseSidebarRowClassName", () => {
     );
     expect(className).not.toContain("ring-orange-500/80");
     expect(className).not.toContain("inset_3px_0_0_0_var(--color-orange-500)");
+  });
+
+  it("vertically centers the adaptive content lane", () => {
+    const className = phaseSidebarRowClassName(false, false, false);
+
+    expect(className).toContain("items-center");
+    expect(className).not.toContain("items-start");
   });
 });
 
@@ -301,6 +309,32 @@ describe("phase sidebar lifecycle", () => {
         }),
       ),
     ).toBe("needs_input");
+  });
+
+  it("keeps a durable running intent in agent work when the live turn is briefly idle", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          execution: makeExecution({
+            intent: {
+              workItemId: "work-item-1",
+              messageId: MessageId.make("message-1"),
+              desiredState: "running",
+              phase: "running",
+              acceptedAt: now,
+              updatedAt: now,
+              recovery: {
+                attempt: 0,
+                maximumAttempts: 3,
+                nextAttemptAt: null,
+                reason: null,
+                userActionRequired: false,
+              },
+            },
+          }),
+        }),
+      ),
+    ).toBe("implementing");
   });
 
   it("promotes durable and live pending questions to the first lifecycle group", () => {
