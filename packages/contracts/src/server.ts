@@ -428,6 +428,17 @@ export const ServerResourceCgroupSample = Schema.Struct({
   memoryHighBytes: Schema.NullOr(NonNegativeInt),
   memoryMaxBytes: Schema.NullOr(NonNegativeInt),
   memoryPeakBytes: Schema.NullOr(NonNegativeInt),
+  memoryWorkingSetBytes: Schema.optionalKey(NonNegativeInt),
+  memoryAnonBytes: Schema.optionalKey(NonNegativeInt),
+  memoryFileBytes: Schema.optionalKey(NonNegativeInt),
+  memoryInactiveFileBytes: Schema.optionalKey(NonNegativeInt),
+  memorySlabReclaimableBytes: Schema.optionalKey(NonNegativeInt),
+  memorySwapCurrentBytes: Schema.optionalKey(NonNegativeInt),
+  pidsCurrent: Schema.optionalKey(NonNegativeInt),
+  memoryEventsHigh: Schema.optionalKey(NonNegativeInt),
+  memoryEventsMax: Schema.optionalKey(NonNegativeInt),
+  memoryEventsOom: Schema.optionalKey(NonNegativeInt),
+  memoryEventsOomKill: Schema.optionalKey(NonNegativeInt),
   cpuPercent: Schema.NullOr(Schema.Number),
 });
 export type ServerResourceCgroupSample = typeof ServerResourceCgroupSample.Type;

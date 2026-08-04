@@ -36,6 +36,9 @@ jobs:
           node-version: 24.16.0
           cache: pnpm
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -63,6 +66,16 @@ jobs:
       - name: Build server bundle
         run: pnpm exec vp run --filter t3 build:bundle
 
+      - name: Build Linux x64 resource monitor
+        run: |
+          cargo build --locked --release \
+            --manifest-path native/resource-monitor/Cargo.toml \
+            --target x86_64-unknown-linux-gnu
+          install -D -m 0755 \
+            native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor \
+            apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+          test -x apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+
       # T3-CUSTOM(expbkt3): The production host installs this verified artifact
       # instead of rebuilding application code on the server.
       - name: Prepare experimental deployment artifact
@@ -71,6 +84,7 @@ jobs:
           cp -a apps/web/dist deployment-artifact/apps/web/
           cp -a apps/server/dist deployment-artifact/apps/server/
           printf '%s\n' "$GITHUB_SHA" > deployment-artifact/SHA
+          test -x deployment-artifact/apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
 
       - name: Publish experimental deployment artifact
         uses: actions/upload-artifact@v7
