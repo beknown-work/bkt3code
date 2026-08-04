@@ -64,6 +64,8 @@ export function mergeEnvironmentThread(
     snoozedUntil: shell.snoozedUntil,
     snoozedAt: shell.snoozedAt,
     session: shell.session,
+    // T3-CUSTOM(expbkt3): Keep chat lifecycle in sync with the shell used by the sidebar.
+    ...(shell.execution === undefined ? {} : { execution: shell.execution }),
   };
 }
 
