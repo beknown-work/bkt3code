@@ -201,6 +201,22 @@ iframe. A sticky **Close** action in the upper-left restores the session view.
 T3's proxy supplies the narrow CORS behavior its bundled review UI needs;
 reviewed HTML cannot access the parent T3 document.
 
+A Plannotator process is owned by browser review surfaces, not by the T3
+session's running, stopped, or archived state. A visible review checks status
+frequently; using **Close** keeps its iframe mounted and uses a reduced
+heartbeat, so unfinished annotations remain in place while the panel is hidden.
+Each browser owns its review independently. Closing or evicting one browser's
+surface releases only that browser; the process is suspended immediately after
+the final explicit release. If a browser crashes or loses connectivity, its
+ownership expires after two minutes and is reclaimed on the next 30-second
+sweep.
+
+Hidden Plannotator panel descriptors are not restored from browser storage
+after a complete reload. Select **Review →** to reopen the same durable review,
+including submitted annotation history and any interrupted recovery draft.
+Terminal `exited` and `error` reviews stop status checks and are removed from the
+panel without deleting their durable review data.
+
 Decisions return through T3's proxy and durable command path:
 
 - **Approve:** first persists the T3 session in Build/default mode, then starts

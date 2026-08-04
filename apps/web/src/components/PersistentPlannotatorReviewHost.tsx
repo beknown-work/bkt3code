@@ -24,6 +24,13 @@ export function hidePlannotatorReview(threadRef: ScopedThreadRef): void {
   useRightPanelStore.getState().close(threadRef);
 }
 
+export function removePlannotatorReview(
+  threadRef: ScopedThreadRef,
+  surfaceId: PlannotatorSurface["id"],
+): void {
+  useRightPanelStore.getState().closeSurface(threadRef, surfaceId);
+}
+
 const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFocusSurface({
   threadRef,
   surface,
@@ -33,7 +40,7 @@ const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFoc
     hidePlannotatorReview(threadRef);
   }, [threadRef]);
   const remove = useCallback(() => {
-    useRightPanelStore.getState().closeSurface(threadRef, surface.id);
+    removePlannotatorReview(threadRef, surface.id);
   }, [surface.id, threadRef]);
   const handleDecision = useCallback(
     (decision: "approved" | "feedback" | "denied") => {
@@ -51,6 +58,7 @@ const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFoc
       visible={visible}
       onClose={hide}
       onDecision={handleDecision}
+      onTerminal={remove}
     />
   );
 });
