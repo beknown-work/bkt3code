@@ -6212,7 +6212,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(dispatched?.type, "thread.turn.start");
         if (dispatched?.type === "thread.turn.start") {
           assert.equal(dispatched.bootstrap?.createThread?.sourceControlProfileId, profileId);
-          assert.equal(dispatched.bootstrap?.createThread?.ownerUserId, creatorUserId);
+          assert.equal(dispatched.bootstrap?.createThread?.ownerUserId, UserId.make(creatorUserId));
         }
         assert.deepEqual(dispatchedActorUserIds, [UserId.make(creatorUserId)]);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
