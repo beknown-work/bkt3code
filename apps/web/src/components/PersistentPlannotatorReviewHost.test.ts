@@ -2,7 +2,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { hidePlannotatorReview } from "./PersistentPlannotatorReviewHost";
+import { hidePlannotatorReview, removePlannotatorReview } from "./PersistentPlannotatorReviewHost";
 import {
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
@@ -40,6 +40,33 @@ describe("hidePlannotatorReview", () => {
     expect(
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces,
     ).toHaveLength(1);
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef),
+    ).toEqual({ id: `plannotator:${reviewUrl}`, kind: "plannotator", url: reviewUrl });
+  });
+
+  it("removes a terminal surface and recreates it on an intentional reopen", () => {
+    useRightPanelStore.getState().open(threadRef, "plan");
+    useRightPanelStore.getState().openPlannotator(threadRef, reviewUrl);
+
+    removePlannotatorReview(threadRef, `plannotator:${reviewUrl}`);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef),
+    ).toEqual({
+      isOpen: true,
+      activeSurfaceId: "plan",
+      surfaces: [{ id: "plan", kind: "plan" }],
+    });
+
+    useRightPanelStore.getState().openPlannotator(threadRef, reviewUrl);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces,
+    ).toEqual([
+      { id: "plan", kind: "plan" },
+      { id: `plannotator:${reviewUrl}`, kind: "plannotator", url: reviewUrl },
+    ]);
     expect(
       selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef),
     ).toEqual({ id: `plannotator:${reviewUrl}`, kind: "plannotator", url: reviewUrl });

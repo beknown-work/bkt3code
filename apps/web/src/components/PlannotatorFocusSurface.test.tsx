@@ -16,6 +16,7 @@ describe("PlannotatorFocusSurface", () => {
         url="/plannotator/review_token/"
         onClose={vi.fn()}
         onDecision={vi.fn()}
+        onTerminal={vi.fn()}
       />,
     );
 
@@ -37,6 +38,7 @@ describe("PlannotatorFocusSurface", () => {
         visible={false}
         onClose={vi.fn()}
         onDecision={vi.fn()}
+        onTerminal={vi.fn()}
       />,
     );
 
