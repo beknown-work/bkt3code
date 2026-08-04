@@ -11,6 +11,7 @@ import {
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  EnvironmentUserId,
   EventId,
   GitCommandError,
   KeybindingRule,
@@ -427,6 +428,8 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    clerkIdentityVerifier?: Partial<ClerkIdentityVerifier.ClerkIdentityVerifier["Service"]>;
+    environmentUserService?: Partial<EnvironmentUserService.EnvironmentUserService["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -690,6 +693,7 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(ClerkIdentityVerifier.ClerkIdentityVerifier)({
             verify: () => Effect.die("Clerk identity verifier not stubbed"),
+            ...options?.layers?.clerkIdentityVerifier,
           }),
           Layer.mock(EnvironmentUserService.EnvironmentUserService)({
             assertAllowed: () => Effect.void,
@@ -701,6 +705,7 @@ const buildAppUnderTest = (options?: {
             setSourceControlProfile: () =>
               Effect.die("environment user source-control assignment not stubbed"),
             revokeUnidentifiedSessions: Effect.succeed(0),
+            ...options?.layers?.environmentUserService,
           }),
         ),
       ),
@@ -1115,6 +1120,7 @@ const bootstrapBrowserSession = (
   credential = defaultDesktopBootstrapToken,
   options?: {
     readonly headers?: Record<string, string>;
+    readonly identityToken?: string;
   },
 ) =>
   Effect.gen(function* () {
@@ -1127,6 +1133,7 @@ const bootstrapBrowserSession = (
       },
       body: jsonRequestBody({
         credential,
+        ...(options?.identityToken ? { identityToken: options.identityToken } : {}),
       }),
     });
     const body = yield* responseJsonEffect<{
@@ -6062,59 +6069,113 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   // T3-CUSTOM(expbkt3): a durable first turn creates its thread atomically, so
   // source-control validation must use the embedded creation request instead
   // of looking up a projection row that cannot exist yet.
-  it.effect("classifies durable first-turn creation before an existing-thread lookup", () =>
-    Effect.gen(function* () {
-      const profileId = SourceControlProfileId.make("github_creator");
-      const threadId = ThreadId.make("thread-durable-create-profile");
-      const dispatchedCommands: Array<OrchestrationCommand> = [];
-      let existingThreadReads = 0;
-      let resolvedProfileId: SourceControlProfileId | null = null;
+  it.effect(
+    "uses the durable user bound to a non-Clerk browser session for first-turn creation",
+    () =>
+      Effect.gen(function* () {
+        const profileId = SourceControlProfileId.make("github_creator");
+        const creatorUserId = EnvironmentUserId.make("user_creator");
+        const threadId = ThreadId.make("thread-durable-create-profile");
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const dispatchedActorUserIds: Array<UserId | null | undefined> = [];
+        let existingThreadReads = 0;
+        let resolvedProfileId: SourceControlProfileId | null = null;
 
-      yield* buildAppUnderTest({
-        layers: {
-          serverSettings: {
-            getSettings: Effect.succeed({
-              ...DEFAULT_SERVER_SETTINGS,
-              sourceControlIdentityMode: "thread-profile",
-            }),
-          },
-          sourceControlProfileService: {
-            resolveExecutionContext: (inputProfileId) =>
-              Effect.sync(() => {
-                resolvedProfileId = inputProfileId;
-                return {
-                  profileId: inputProfileId,
-                  provider: "github" as const,
-                  login: "creator",
-                  gitName: "Thread Creator",
-                  gitEmail: "creator@example.com",
-                  environment: {},
-                };
+        yield* buildAppUnderTest({
+          layers: {
+            serverSettings: {
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                sourceControlIdentityMode: "thread-profile",
+                sourceControlProfiles: {
+                  [profileId]: {
+                    id: profileId,
+                    provider: "github",
+                    label: "Thread Creator",
+                    login: "creator",
+                    accountId: 42,
+                    avatarUrl: null,
+                    gitName: "Thread Creator",
+                    gitEmail: "creator@example.com",
+                    ownerUserId: creatorUserId,
+                    archived: false,
+                  },
+                },
               }),
+            },
+            clerkIdentityVerifier: {
+              verify: () =>
+                Effect.succeed({
+                  userId: creatorUserId,
+                  displayName: "Thread Creator",
+                  primaryEmail: "creator@example.com",
+                  avatarUrl: null,
+                }),
+            },
+            environmentUserService: {
+              admit: () =>
+                Effect.succeed({
+                  userId: creatorUserId,
+                  displayName: "Thread Creator",
+                  primaryEmail: "creator@example.com",
+                  avatarUrl: null,
+                  role: "member",
+                  status: "active",
+                  firstSeenAt: TEST_EPOCH,
+                  lastSeenAt: TEST_EPOCH,
+                }),
+            },
+            sourceControlProfileService: {
+              resolveExecutionContext: (inputProfileId) =>
+                Effect.sync(() => {
+                  resolvedProfileId = inputProfileId;
+                  return {
+                    profileId: inputProfileId,
+                    provider: "github" as const,
+                    login: "creator",
+                    gitName: "Thread Creator",
+                    gitEmail: "creator@example.com",
+                    environment: {},
+                  };
+                }),
+            },
+            projectionSnapshotQuery: {
+              getProjectShellById: () =>
+                Effect.succeed(
+                  Option.some({
+                    ...makeDefaultProjectShell(),
+                    ownerUserId: UserId.make(creatorUserId),
+                  }),
+                ),
+              getThreadShellById: () =>
+                Effect.sync(() => {
+                  existingThreadReads += 1;
+                  return Option.none();
+                }),
+            },
+            orchestrationEngine: {
+              dispatch: (command, options) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  dispatchedActorUserIds.push(options?.actorUserId);
+                  return { sequence: 1 };
+                }),
+              readEvents: () => Stream.empty,
+            },
           },
-          projectionSnapshotQuery: {
-            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
-            getThreadShellById: () =>
-              Effect.sync(() => {
-                existingThreadReads += 1;
-                return Option.none();
-              }),
-          },
-          orchestrationEngine: {
-            dispatch: (command) =>
-              Effect.sync(() => {
-                dispatchedCommands.push(command);
-                return { sequence: 1 };
-              }),
-            readEvents: () => Stream.empty,
-          },
-        },
-      });
+        });
 
-      const createdAt = "2026-08-04T10:00:00.000Z";
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const error = yield* Effect.flip(
-        Effect.scoped(
+        const createdAt = "2026-08-04T10:00:00.000Z";
+        const browserSession = yield* bootstrapBrowserSession(defaultDesktopBootstrapToken, {
+          identityToken: "creator-clerk-token",
+        });
+        assert.equal(browserSession.response.status, 200);
+        assert.isDefined(browserSession.cookie);
+        const wsUrl = appendSessionCookieToWsUrl(
+          yield* getWsServerUrl("/ws"),
+          browserSession.cookie?.split(";")[0] ?? "",
+        );
+        yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
             client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
               type: "thread.turn.start",
@@ -6135,27 +6196,26 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   bootstrapId: "web:thread-durable-create-profile:msg-durable-create-profile",
                   projectId: defaultProjectId,
                   title: "Durable creation",
-                  sourceControlProfileId: profileId,
+                  sourceControlProfileId: null,
                   createdAt,
                 },
               },
               createdAt,
             }),
           ),
-        ),
-      );
-
-      assert.equal(error._tag, "OrchestrationDispatchCommandError");
-      if (error._tag === "OrchestrationDispatchCommandError") {
-        assert.equal(
-          error.message,
-          "Assign a connected GitHub profile to your user in Settings before creating a thread.",
         );
-      }
-      assert.equal(resolvedProfileId, null);
-      assert.equal(existingThreadReads, 0);
-      assert.deepEqual(dispatchedCommands, []);
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+
+        assert.equal(resolvedProfileId, profileId);
+        assert.equal(existingThreadReads, 0);
+        assert.equal(dispatchedCommands.length, 1);
+        const dispatched = dispatchedCommands[0];
+        assert.equal(dispatched?.type, "thread.turn.start");
+        if (dispatched?.type === "thread.turn.start") {
+          assert.equal(dispatched.bootstrap?.createThread?.sourceControlProfileId, profileId);
+          assert.equal(dispatched.bootstrap?.createThread?.ownerUserId, creatorUserId);
+        }
+        assert.deepEqual(dispatchedActorUserIds, [UserId.make(creatorUserId)]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc orchestration methods", () =>

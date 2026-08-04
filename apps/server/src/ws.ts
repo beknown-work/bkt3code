@@ -351,9 +351,12 @@ const makeWsRpcLayer = (
         yield* OrchestrationCommandDispatcher.OrchestrationCommandDispatcher;
       const accessControl = yield* OrchestrationAccessControl;
       const clerkDirectory = yield* ClerkDirectory;
-      // The operating Clerk user for this connection, or null for an
-      // unrestricted operator (pairing/CLI/single-user) which skips filtering.
-      const actorUserId = Option.getOrNull(accessControl.actorFor(currentSession.subject));
+      // T3-CUSTOM(expbkt3): Identity binding preserves the transport subject, so
+      // authorization must prefer the durable user attached to the session;
+      // unidentified local operators remain unrestricted.
+      const actorUserId = Option.getOrNull(
+        accessControl.actorFor(currentSession.subject, currentSession.userId),
+      );
       // T3-CUSTOM(expbkt3): Local/single-user transports share a deterministic
       // personal profile; team-mode connections use the authenticated Clerk id.
       const personalMcpUserId = actorUserId ?? UserId.make("local-user");

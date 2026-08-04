@@ -58,7 +58,10 @@ export const checkCommandAccess = (
       // creates the thread — the thread doesn't exist yet, so gate on access to
       // the target project. A normal turn-start on an existing thread gates on
       // thread access.
-      const bootstrapProjectId = command.bootstrap?.createThread?.projectId;
+      const durableRequest = command.bootstrap?.request;
+      const bootstrapProjectId =
+        command.bootstrap?.createThread?.projectId ??
+        (durableRequest?.createThread ? durableRequest.projectId : undefined);
       return bootstrapProjectId !== undefined
         ? accessControl.canAccessProject(actorUserId, bootstrapProjectId)
         : accessControl.canAccessThread(actorUserId, command.threadId);

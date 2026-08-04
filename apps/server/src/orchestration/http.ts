@@ -66,11 +66,12 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
       };
     });
 
-    // Resolve the operating Clerk user for the current request, or null for an
-    // unrestricted operator (pairing/CLI/single-user) which skips all filtering.
+    // Resolve the operating durable user, or null for an unrestricted local operator.
     const currentActorUserId = Effect.gen(function* () {
       const principal = yield* EnvironmentAuthenticatedPrincipal;
-      return Option.getOrNull(accessControl.actorFor(principal.subject));
+      // T3-CUSTOM(expbkt3): A browser identity bind updates userId without
+      // rewriting the original one-time-token subject.
+      return Option.getOrNull(accessControl.actorFor(principal.subject, principal.userId));
     });
 
     return handlers

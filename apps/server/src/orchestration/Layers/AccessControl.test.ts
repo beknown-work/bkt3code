@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, UserId } from "@t3tools/contracts";
+import { EnvironmentUserId, ProjectId, ThreadId, UserId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -32,6 +32,19 @@ const snapshotQueryStub = Layer.succeed(ProjectionSnapshotQuery)({
 } as unknown as typeof ProjectionSnapshotQuery.Service);
 
 const TestLayer = OrchestrationAccessControlLive.pipe(Layer.provide(snapshotQueryStub));
+
+it.effect("uses a session's durable user before its non-Clerk subject", () =>
+  Effect.gen(function* () {
+    const accessControl = yield* OrchestrationAccessControl;
+    const boundUser = EnvironmentUserId.make("user-bound-browser");
+
+    assert.deepEqual(
+      accessControl.actorFor("one-time-token", boundUser),
+      Option.some(UserId.make(boundUser)),
+    );
+    assert.deepEqual(accessControl.actorFor("one-time-token", null), Option.none());
+  }).pipe(Effect.provide(TestLayer)),
+);
 
 it.effect("authorizes the owner of an archived thread (so it can be unarchived)", () =>
   Effect.gen(function* () {
