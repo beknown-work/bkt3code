@@ -316,7 +316,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
         <T3ConnectSidebarSignIn />
-        {/* T3-CUSTOM(expbkt3): Match the logout action exposed by the thread sidebar footer. */}
+        {/* T3-CUSTOM(expbkt3): Keep logout in Settings instead of the main thread sidebar. */}
         <WebLogoutControl />
         <div className="flex items-center gap-1">
           <SidebarMenu className="min-w-0 flex-1">
