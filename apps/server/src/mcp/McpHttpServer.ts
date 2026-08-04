@@ -28,6 +28,8 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+// T3-CUSTOM(expbkt3): compact parity bridge for the authenticated web UI RPCs.
+import { WebUiRpcRegistrationLive } from "./toolkits/webUi/registration.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -236,4 +238,5 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   T3ControlToolkitRegistrationLive,
+  WebUiRpcRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
