@@ -149,7 +149,10 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import * as ThreadSourceControlActionLock from "./sourceControl/ThreadSourceControlActionLock.ts";
-import { applyAssignedSourceControlProfile } from "./sourceControl/ThreadSourceControlProfileSelection.ts";
+import {
+  applyAssignedSourceControlProfile,
+  creationSourceControlProfileId,
+} from "./sourceControl/ThreadSourceControlProfileSelection.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
@@ -1149,13 +1152,7 @@ const makeWsRpcLayer = (
                   normalizedCommand,
                   assignedProfileId,
                 );
-                const creationProfileId =
-                  normalizedCommand.type === "thread.create"
-                    ? normalizedCommand.sourceControlProfileId
-                    : normalizedCommand.type === "thread.turn.start" &&
-                        normalizedCommand.bootstrap?.createThread
-                      ? normalizedCommand.bootstrap.createThread.sourceControlProfileId
-                      : undefined;
+                const creationProfileId = creationSourceControlProfileId(normalizedCommand);
                 if (creationProfileId === null) {
                   return yield* new OrchestrationDispatchCommandError({
                     message:

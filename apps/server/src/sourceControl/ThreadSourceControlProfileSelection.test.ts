@@ -9,7 +9,10 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyAssignedSourceControlProfile } from "./ThreadSourceControlProfileSelection.ts";
+import {
+  applyAssignedSourceControlProfile,
+  creationSourceControlProfileId,
+} from "./ThreadSourceControlProfileSelection.ts";
 
 const assignedProfileId = SourceControlProfileId.make("github_alice");
 const explicitProfileId = SourceControlProfileId.make("github_bob");
@@ -65,6 +68,33 @@ const bootstrapTurnCommand = (sourceControlProfileId: SourceControlProfileId | n
     createdAt,
   }) satisfies OrchestrationCommand;
 
+const durableBootstrapTurnCommand = (sourceControlProfileId: SourceControlProfileId | null) =>
+  ({
+    type: "thread.turn.start",
+    commandId: CommandId.make("command-durable-turn"),
+    threadId: ThreadId.make("thread-durable-turn"),
+    message: {
+      messageId: MessageId.make("message-durable-1"),
+      role: "user",
+      text: "Start durable work",
+      attachments: [],
+    },
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    bootstrap: {
+      request: {
+        createThread: true,
+        bootstrapId: "web:thread-durable-turn:message-durable-1",
+        projectId: ProjectId.make("project-1"),
+        title: "New durable thread",
+        sourceControlProfileId,
+        createdAt,
+      },
+    },
+    createdAt,
+  }) satisfies OrchestrationCommand;
+
 describe("applyAssignedSourceControlProfile", () => {
   it("fills a missing owner on direct thread creation", () => {
     const command = applyAssignedSourceControlProfile(createThreadCommand(null), assignedProfileId);
@@ -85,6 +115,19 @@ describe("applyAssignedSourceControlProfile", () => {
     if (command.type === "thread.turn.start") {
       expect(command.bootstrap?.createThread?.sourceControlProfileId).toBe(assignedProfileId);
     }
+  });
+
+  it("assigns the authenticated profile to durable first-turn creation", () => {
+    const command = applyAssignedSourceControlProfile(
+      durableBootstrapTurnCommand(explicitProfileId),
+      assignedProfileId,
+    );
+
+    expect(command.type).toBe("thread.turn.start");
+    if (command.type === "thread.turn.start") {
+      expect(command.bootstrap?.request?.sourceControlProfileId).toBe(assignedProfileId);
+    }
+    expect(creationSourceControlProfileId(command)).toBe(assignedProfileId);
   });
 
   it("overrides an explicit profile with the creator's assigned profile", () => {

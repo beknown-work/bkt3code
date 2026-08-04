@@ -6059,6 +6059,105 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  // T3-CUSTOM(expbkt3): a durable first turn creates its thread atomically, so
+  // source-control validation must use the embedded creation request instead
+  // of looking up a projection row that cannot exist yet.
+  it.effect("classifies durable first-turn creation before an existing-thread lookup", () =>
+    Effect.gen(function* () {
+      const profileId = SourceControlProfileId.make("github_creator");
+      const threadId = ThreadId.make("thread-durable-create-profile");
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      let existingThreadReads = 0;
+      let resolvedProfileId: SourceControlProfileId | null = null;
+
+      yield* buildAppUnderTest({
+        layers: {
+          serverSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              sourceControlIdentityMode: "thread-profile",
+            }),
+          },
+          sourceControlProfileService: {
+            resolveExecutionContext: (inputProfileId) =>
+              Effect.sync(() => {
+                resolvedProfileId = inputProfileId;
+                return {
+                  profileId: inputProfileId,
+                  provider: "github" as const,
+                  login: "creator",
+                  gitName: "Thread Creator",
+                  gitEmail: "creator@example.com",
+                  environment: {},
+                };
+              }),
+          },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(makeDefaultProjectShell())),
+            getThreadShellById: () =>
+              Effect.sync(() => {
+                existingThreadReads += 1;
+                return Option.none();
+              }),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: 1 };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const createdAt = "2026-08-04T10:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+              type: "thread.turn.start",
+              commandId: CommandId.make("cmd-durable-create-profile"),
+              threadId,
+              message: {
+                messageId: MessageId.make("msg-durable-create-profile"),
+                role: "user",
+                text: "create this thread",
+                attachments: [],
+              },
+              modelSelection: defaultModelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              bootstrap: {
+                request: {
+                  createThread: true,
+                  bootstrapId: "web:thread-durable-create-profile:msg-durable-create-profile",
+                  projectId: defaultProjectId,
+                  title: "Durable creation",
+                  sourceControlProfileId: profileId,
+                  createdAt,
+                },
+              },
+              createdAt,
+            }),
+          ),
+        ),
+      );
+
+      assert.equal(error._tag, "OrchestrationDispatchCommandError");
+      if (error._tag === "OrchestrationDispatchCommandError") {
+        assert.equal(
+          error.message,
+          "Assign a connected GitHub profile to your user in Settings before creating a thread.",
+        );
+      }
+      assert.equal(resolvedProfileId, null);
+      assert.equal(existingThreadReads, 0);
+      assert.deepEqual(dispatchedCommands, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc orchestration methods", () =>
     Effect.gen(function* () {
       const now = "2026-01-01T00:00:00.000Z";
