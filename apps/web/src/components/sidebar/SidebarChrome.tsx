@@ -33,6 +33,8 @@ import { SidebarProviderRateLimits } from "./SidebarProviderRateLimits";
 import { SidebarResourceMonitorPill } from "./SidebarResourceMonitorPill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 import { summarizeSidebarSessions } from "./sidebarSessionCounters";
+// T3-CUSTOM(expbkt3): Signed-in web users need an explicit, server-backed logout action.
+import { WebLogoutControl } from "../clerk/WebLogoutControl";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -228,6 +230,8 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>
+      {/* T3-CUSTOM(expbkt3): End the current environment and Clerk sessions together. */}
+      <WebLogoutControl />
     </SidebarFooter>
   );
 });

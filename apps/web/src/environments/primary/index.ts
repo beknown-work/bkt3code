@@ -21,6 +21,8 @@ export {
   isPrimaryEnvironmentRequestError,
   listServerClientSessions,
   listServerPairingLinks,
+  // T3-CUSTOM(expbkt3): Expose current-session logout to the web account control.
+  logoutPrimaryEnvironment,
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,

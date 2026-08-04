@@ -32,6 +32,10 @@ connection. Closing a browser or losing connectivity changes presence to **Offli
 durable user remains in the directory. **Sign out devices** revokes every active environment session
 for that user; it does not delete their Clerk account.
 
+On web, choose **Log out** in the sidebar footer to end only the current browser session. T3 revokes
+the environment session, clears its browser cookie, signs out of Clerk, and returns to the sign-in
+screen. Other devices and browser sessions remain connected.
+
 ## Connect GitHub attribution
 
 Administrators create GitHub profiles in **Settings → Users → GitHub profiles**. Each profile needs

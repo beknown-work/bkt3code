@@ -286,6 +286,31 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         ),
       );
 
+    // T3-CUSTOM(expbkt3): BEGIN — revoke the caller and expire its HttpOnly browser cookie.
+    const logoutHandler = Effect.fn("environment.auth.logout")(
+      function* (args) {
+        yield* annotateEnvironmentRequest(args.endpoint.name);
+        const session = yield* EnvironmentAuthenticatedPrincipal;
+        const revoked = yield* serverAuth.revokeSession(session.sessionId);
+
+        yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+          Effect.succeed(
+            HttpServerResponse.expireCookieUnsafe(response, sessions.cookieName, {
+              httpOnly: true,
+              path: "/",
+              sameSite: "lax",
+            }),
+          ),
+        );
+        yield* appendCredentialResponseHeaders;
+        return { revoked };
+      },
+      Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+        failEnvironmentInternal("client_session_revoke_failed", error),
+      ),
+    );
+    // T3-CUSTOM(expbkt3): END
+
     return handlers
       .handle(
         "session",
@@ -300,6 +325,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           ),
         ),
       )
+      .handle("logout", logoutHandler) // T3-CUSTOM(expbkt3): Server-backed web logout.
       .handle(
         "browserSession",
         Effect.fn("environment.auth.browserSession")(

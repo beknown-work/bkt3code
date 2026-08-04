@@ -25,6 +25,8 @@ import { readManagedClerkIdentityToken } from "../../cloud/managedIdentity";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
+  // T3-CUSTOM(expbkt3): Web logout revokes the current environment session.
+  "logout-current-session",
   "exchange-bootstrap-credential",
   "exchange-clerk-session",
   "bind-current-identity",
@@ -206,6 +208,26 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
     }
   });
 }
+
+// T3-CUSTOM(expbkt3): BEGIN — terminate the server cookie session before Clerk signs out.
+export async function logoutPrimaryEnvironment(): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.logout({ headers: {} })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "logout-current-session",
+      cause: error,
+    });
+  }
+
+  resolvedAuthenticatedGateState = null;
+  bootstrapPromise = null;
+}
+// T3-CUSTOM(expbkt3): END
 
 function readHttpApiStatus(error: unknown): number | null {
   if (isEnvironmentHttpCommonError(error)) {

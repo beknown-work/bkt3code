@@ -11,6 +11,7 @@ import {
   type AuthIdentityBindingRequest,
   type AuthIdentityBindingResult,
   type AuthPairingCredentialResult,
+  type AuthSessionLogoutResult,
   type AuthSessionState,
   type ExecutionEnvironmentDescriptor,
   type EnvironmentAuthInvalidError,
@@ -33,6 +34,7 @@ type BrowserSessionHandler = (
 interface EnvironmentHttpTestScenario {
   readonly descriptor?: () => Effect.Effect<ExecutionEnvironmentDescriptor>;
   readonly session?: () => Effect.Effect<AuthSessionState>;
+  readonly logout?: () => Effect.Effect<AuthSessionLogoutResult>;
   readonly browserSession?: BrowserSessionHandler;
   readonly bindIdentity?: (
     payload: AuthIdentityBindingRequest,
@@ -46,6 +48,7 @@ interface EnvironmentHttpTestScenario {
 export interface EnvironmentHttpTestCalls {
   descriptor: number;
   session: number;
+  logout: number;
   browserSession: Array<AuthBrowserSessionRequest>;
   bindIdentity: Array<AuthIdentityBindingRequest>;
   pairingCredential: Array<AuthCreatePairingCredentialInput>;
@@ -72,6 +75,7 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
   const calls: EnvironmentHttpTestCalls = {
     descriptor: 0,
     session: 0,
+    logout: 0,
     browserSession: [],
     bindIdentity: [],
     pairingCredential: [],
@@ -97,6 +101,13 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
               Effect.fn("test.environment.auth.session")(function* () {
                 calls.session += 1;
                 return yield* scenario.session?.() ?? unexpectedEndpoint("auth.session");
+              }),
+            )
+            .handle(
+              "logout",
+              Effect.fn("test.environment.auth.logout")(function* () {
+                calls.logout += 1;
+                return yield* scenario.logout?.() ?? unexpectedEndpoint("auth.logout");
               }),
             )
             .handle(

@@ -98,6 +98,7 @@ let disposeHttpTest: (() => Promise<void>) | undefined;
 
 async function installAuthApi(input: {
   readonly session?: () => AuthSessionState;
+  readonly logout?: () => Effect.Effect<{ readonly revoked: boolean }>;
   readonly browserSession?: (
     credential: string,
   ) => Effect.Effect<AuthBrowserSessionResult, EnvironmentAuthInvalidError>;
@@ -113,6 +114,7 @@ async function installAuthApi(input: {
 }) {
   const testApi = await installEnvironmentHttpTest({
     ...(input.session ? { session: () => Effect.succeed(input.session!()) } : {}),
+    ...(input.logout ? { logout: input.logout } : {}),
     ...(input.browserSession
       ? { browserSession: (payload) => input.browserSession!(payload.credential) }
       : {}),
@@ -457,6 +459,26 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     expect(testApi.calls.session).toBe(1);
+  });
+
+  it("logs out the current environment session and invalidates the authenticated gate cache", async () => {
+    const testApi = await installAuthApi({
+      session: sequence(authenticatedSession(LOOPBACK_AUTH), unauthenticatedSession(LOOPBACK_AUTH)),
+      logout: () => Effect.succeed({ revoked: true }),
+    });
+    const { logoutPrimaryEnvironment, resolveInitialServerAuthGateState } =
+      await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "authenticated",
+    });
+    await expect(logoutPrimaryEnvironment()).resolves.toBeUndefined();
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: LOOPBACK_AUTH,
+    });
+    expect(testApi.calls.logout).toBe(1);
+    expect(testApi.calls.session).toBe(2);
   });
 
   it("binds an existing browser session to the signed-in Clerk user", async () => {

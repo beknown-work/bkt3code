@@ -1681,6 +1681,40 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("logs out the current browser session and expires its cookie", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const { response: bootstrapResponse, cookie: setCookie } = yield* bootstrapBrowserSession();
+      const sessionCookie = setCookie?.split(";")[0] ?? "";
+      const cookieName = sessionCookie.split("=", 1)[0] ?? "";
+      assert.equal(bootstrapResponse.status, 200);
+      assert.notEqual(sessionCookie, "");
+
+      const logoutResponse = yield* fetchEffect(yield* getHttpServerUrl("/api/auth/logout"), {
+        method: "POST",
+        headers: { cookie: sessionCookie },
+      });
+      const logoutBody = yield* responseJsonEffect<{ readonly revoked: boolean }>(logoutResponse);
+      const expiredCookie = logoutResponse.headers["set-cookie"];
+
+      assert.equal(logoutResponse.status, 200);
+      assert.equal(logoutBody.revoked, true);
+      assert.equal(expiredCookie?.split(";", 1)[0], `${cookieName}=`);
+      assert.include(expiredCookie ?? "", "Max-Age=0");
+      assert.include(expiredCookie ?? "", "Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+
+      const sessionResponse = yield* fetchEffect(yield* getHttpServerUrl("/api/auth/session"), {
+        headers: { cookie: sessionCookie },
+      });
+      const sessionBody = yield* responseJsonEffect<{ readonly authenticated: boolean }>(
+        sessionResponse,
+      );
+      assert.equal(sessionResponse.status, 200);
+      assert.equal(sessionBody.authenticated, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("exchanges a bootstrap grant for a scoped bearer access token", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

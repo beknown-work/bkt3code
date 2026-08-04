@@ -431,6 +431,13 @@ export const AuthClientSessionRevokeResult = Schema.Struct({
 });
 export type AuthClientSessionRevokeResult = typeof AuthClientSessionRevokeResult.Type;
 
+// T3-CUSTOM(expbkt3): BEGIN — current-session logout is distinct from administrative revocation.
+export const AuthSessionLogoutResult = Schema.Struct({
+  revoked: Schema.Boolean,
+});
+export type AuthSessionLogoutResult = typeof AuthSessionLogoutResult.Type;
+// T3-CUSTOM(expbkt3): END
+
 export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
   revokedCount: Schema.Number,
 });
@@ -450,6 +457,15 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       error: [EnvironmentInternalError],
     }),
   )
+  // T3-CUSTOM(expbkt3): BEGIN — let an authenticated web client end its own session.
+  .add(
+    HttpApiEndpoint.post("logout", "/api/auth/logout", {
+      headers: OptionalBearerHeaders,
+      success: AuthSessionLogoutResult,
+      error: EnvironmentAuthenticationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  // T3-CUSTOM(expbkt3): END
   .add(
     HttpApiEndpoint.post("browserSession", "/api/auth/browser-session", {
       payload: AuthBrowserSessionRequest,
