@@ -93,6 +93,18 @@ export function providerHistoryProvesCompletion(
   return history.turns.some((turn) => turn.id === providerTurnId && turn.state === "completed");
 }
 
+// T3-CUSTOM(expbkt3): Codex only materializes a thread after its first user message.
+export function providerHistoryReadProvesUndelivered(cause: unknown): boolean {
+  if (!isProviderAdapterRequestError(cause)) return false;
+  const detail = cause.detail.toLowerCase();
+  return (
+    cause.provider === "codex" &&
+    cause.method === "thread/read" &&
+    detail.includes("not materialized yet") &&
+    detail.includes("before first user message")
+  );
+}
+
 // T3-CUSTOM(expbkt3): ten retries cannot repair missing resume state or removed configuration.
 export function durableRecoveryFailure(
   cause: unknown,
@@ -2278,6 +2290,7 @@ const make = Effect.gen(function* () {
           ),
         recover: ({ intent, event, mode }) =>
           Effect.gen(function* () {
+            let effectiveMode = mode;
             const inspection = yield* providerService.inspectSession(intent.threadId).pipe(
               Effect.mapError(
                 (cause) =>
@@ -2367,17 +2380,22 @@ const make = Effect.gen(function* () {
                 ),
               );
               yield* assertDurableClaimCurrent(intent, "provider-history-resume");
-              const providerHistory = yield* readProviderThread(
-                intent.threadId,
-                executionOptions,
-              ).pipe(
-                Effect.mapError((cause) =>
-                  durableRecoveryFailure(cause, "provider-history-read-failed"),
-                ),
+              const providerHistoryExit = yield* Effect.exit(
+                readProviderThread(intent.threadId, executionOptions),
               );
-              if (
+              if (Exit.isFailure(providerHistoryExit)) {
+                const cause = Cause.squash(providerHistoryExit.cause);
+                if (intent.providerTurnId === null && providerHistoryReadProvesUndelivered(cause)) {
+                  effectiveMode = "exact-undelivered";
+                } else {
+                  return yield* durableRecoveryFailure(cause, "provider-history-read-failed");
+                }
+              } else if (
                 intent.providerTurnId !== null &&
-                providerHistoryProvesCompletion(providerHistory, TurnId.make(intent.providerTurnId))
+                providerHistoryProvesCompletion(
+                  providerHistoryExit.value,
+                  TurnId.make(intent.providerTurnId),
+                )
               ) {
                 return {
                   providerTurnId: intent.providerTurnId,
@@ -2386,7 +2404,10 @@ const make = Effect.gen(function* () {
                 };
               }
             }
-            if (mode === "inspect-or-continue" && capabilities.durableResume === "unsupported") {
+            if (
+              effectiveMode === "inspect-or-continue" &&
+              capabilities.durableResume === "unsupported"
+            ) {
               return yield* new DurableExecutionDispatchError({
                 failureType: "durable-resume-unsupported",
                 detail: `Provider instance '${providerInstanceId}' cannot safely resume uncertain delivery.`,
@@ -2394,10 +2415,10 @@ const make = Effect.gen(function* () {
               });
             }
             const messageText =
-              mode === "exact-undelivered"
+              effectiveMode === "exact-undelivered"
                 ? (intent.messageText ?? "")
                 : "Continue the unfinished task from the persisted conversation and current workspace state. Inspect what already completed before acting, and do not repeat completed external actions.";
-            if (mode === "inspect-or-continue") {
+            if (effectiveMode === "inspect-or-continue") {
               yield* increment(durableExecutionGuardedContinuationsTotal, {
                 threadId: intent.threadId,
                 workItemId: intent.workItemId,
@@ -2408,7 +2429,7 @@ const make = Effect.gen(function* () {
               event,
               {
                 messageText,
-                useOriginalAttachments: mode === "exact-undelivered",
+                useOriginalAttachments: effectiveMode === "exact-undelivered",
               },
               assertDurableClaimCurrent(intent, "provider-recovery-turn-start"),
             ).pipe(

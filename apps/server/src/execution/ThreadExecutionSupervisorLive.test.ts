@@ -334,20 +334,13 @@ layer("ThreadExecutionSupervisor", (it) => {
     }),
   );
 
-  it.effect("does not reap an execution while its provider session is still starting", () =>
+  // T3-CUSTOM(expbkt3): Durable bootstrap admits work before a provider runtime exists.
+  it.effect("does not reap an admitted execution before its provider runtime exists", () =>
     Effect.gen(function* () {
       const inspectionCount = yield* Ref.make(0);
       const providerService = {
         inspectSession: () =>
-          Ref.update(inspectionCount, (count) => count + 1).pipe(
-            Effect.as({
-              threadId,
-              generation: 1,
-              state: "starting" as const,
-              activeProviderTurnId: null,
-              runtimeAlive: true,
-            }),
-          ),
+          Ref.update(inspectionCount, (count) => count + 1).pipe(Effect.as(null)),
         streamEvents: Stream.empty,
       } as unknown as ProviderServiceShape;
       const orchestration = {

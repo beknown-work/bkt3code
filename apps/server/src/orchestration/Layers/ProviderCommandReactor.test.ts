@@ -51,6 +51,7 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
   durableRecoveryFailure,
+  providerHistoryReadProvesUndelivered,
   providerHistoryProvesCompletion,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
@@ -98,6 +99,24 @@ it("fails missing durable resume state without spending ten identical retries", 
   expect(missing.retryable).toBe(false);
   expect(transient.failureType).toBe("provider-history-read-failed");
   expect(transient.retryable).toBe(true);
+});
+
+// T3-CUSTOM(expbkt3): An unmaterialized Codex thread has never received its first prompt.
+it("treats unmaterialized Codex history as proof the original prompt was not delivered", () => {
+  const unmaterialized = new ProviderAdapterRequestError({
+    provider: "codex",
+    method: "thread/read",
+    detail:
+      "thread provider-thread-1 is not materialized yet; includeTurns is unavailable before first user message",
+  });
+  const unrelated = new ProviderAdapterRequestError({
+    provider: "codex",
+    method: "thread/read",
+    detail: "transport disconnected",
+  });
+
+  expect(providerHistoryReadProvesUndelivered(unmaterialized)).toBe(true);
+  expect(providerHistoryReadProvesUndelivered(unrelated)).toBe(false);
 });
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>

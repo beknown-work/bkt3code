@@ -1236,6 +1236,16 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
       (snapshot) =>
         Effect.gen(function* () {
           const inspection = yield* provider.inspectSession(snapshot.threadId);
+          // T3-CUSTOM(expbkt3): Durable bootstrap admits the turn before it creates a
+          // provider runtime. A missing runtime is expected while both sides are starting;
+          // the dispatch path remains responsible for publishing a real startup failure.
+          if (
+            inspection === null &&
+            snapshot.providerSession.state === "starting" &&
+            snapshot.turn?.state === "starting"
+          ) {
+            return;
+          }
           if (inspection === null || !inspection.runtimeAlive) {
             yield* increment(threadExecutionInvariantRepairsTotal, {
               mismatch: inspection === null ? "missing-session" : "dead-runtime",
