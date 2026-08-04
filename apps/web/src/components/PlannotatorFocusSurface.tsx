@@ -5,6 +5,7 @@
 import { XIcon } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
+import { randomUUID } from "../lib/utils";
 import { Button } from "./ui/button";
 import {
   createPlannotatorPollingController,
@@ -89,7 +90,7 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
   onTerminal,
 }: PlannotatorFocusSurfaceProps) {
   const clientIdRef = useRef<string | null>(null);
-  if (clientIdRef.current === null) clientIdRef.current = crypto.randomUUID();
+  if (clientIdRef.current === null) clientIdRef.current = randomUUID();
   const clientId = clientIdRef.current;
   const controllerRef = useRef<PlannotatorPollingController | null>(null);
   const onDecisionRef = useRef(onDecision);
