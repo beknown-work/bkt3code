@@ -288,8 +288,8 @@ export const authHttpApiLayer = HttpApiBuilder.group(
 
     // T3-CUSTOM(expbkt3): BEGIN — revoke the caller and expire its HttpOnly browser cookie.
     const logoutHandler = Effect.fn("environment.auth.logout")(
-      function* (args) {
-        yield* annotateEnvironmentRequest(args.endpoint.name);
+      function* () {
+        yield* annotateEnvironmentRequest("logout");
         const session = yield* EnvironmentAuthenticatedPrincipal;
         const revoked = yield* serverAuth.revokeSession(session.sessionId);
 
