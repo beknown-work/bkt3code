@@ -13,6 +13,7 @@ import {
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import { plannotatorProxyPath } from "@t3tools/shared/plannotator";
 import * as NodeOS from "node:os";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -40,6 +41,7 @@ import {
   latestPlansForNativeReview,
   type NativePlanBridgeInput,
 } from "./NativePlanBridge.ts";
+import { PLANNOTATOR_CLIENT_REAPER_MS, PlannotatorClientLease } from "./PlannotatorClientLease.ts";
 import {
   mergePlannotatorAnnotationHistory,
   type PlannotatorDecision,
@@ -267,6 +269,11 @@ interface PlannotatorManagerShape {
   readonly getByToken: (token: string) => Effect.Effect<PlannotatorSession | null>;
   readonly getById: (id: string) => Effect.Effect<PlannotatorSession | null>;
   readonly list: (threadId?: ThreadId) => Effect.Effect<ReadonlyArray<PlannotatorSession>>;
+  readonly renewClientLease: (token: string, clientId: string | null) => Effect.Effect<void>;
+  readonly releaseClientLease: (
+    token: string,
+    clientId: string,
+  ) => Effect.Effect<void, PlannotatorManagerError>;
   readonly reopen: (
     input: ReopenPlannotatorInput,
   ) => Effect.Effect<PlannotatorSession, PlannotatorManagerError>;
@@ -283,6 +290,10 @@ export class PlannotatorManager extends Context.Service<
 >()("t3/plannotator/PlannotatorManager") {}
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+function hasLivePlannotatorProcess(status: PlannotatorSessionStatus): boolean {
+  return status === "starting" || status === "running" || status === "applying";
+}
 
 function publicSession(session: PersistedPlannotatorSession): PlannotatorSession {
   const { token: _token, version: _version, ...visible } = session;
@@ -334,6 +345,7 @@ export const make = Effect.gen(function* () {
   const sessions = new Map<string, PersistedPlannotatorSession>();
   const handles = new Map<string, ChildProcessSpawner.ChildProcessHandle>();
   const reopenLocks = new Map<string, Semaphore.Semaphore>();
+  const clientLeases = new PlannotatorClientLease();
 
   const manifestPath = (session: PersistedPlannotatorSession) =>
     path.join(sessionsDir, `${session.id}.json`);
@@ -361,6 +373,7 @@ export const make = Effect.gen(function* () {
     const updatedAt = yield* nowIso;
     const next: PersistedPlannotatorSession = { ...current, ...patch, updatedAt };
     sessions.set(next.token, next);
+    if (!hasLivePlannotatorProcess(next.status)) clientLeases.removeReview(next.token);
     yield* persist(next);
     return next;
   });
@@ -372,6 +385,53 @@ export const make = Effect.gen(function* () {
       handles.delete(token);
       yield* handle.kill({ forceKillAfter: "2 seconds" }).pipe(Effect.ignore);
     });
+
+  const suspendIfUnowned = (token: string) => {
+    let lock = reopenLocks.get(token);
+    if (!lock) {
+      lock = Semaphore.makeUnsafe(1);
+      reopenLocks.set(token, lock);
+    }
+    return lock.withPermit(
+      Effect.gen(function* () {
+        const current = sessions.get(token);
+        if (!current) {
+          clientLeases.removeReview(token);
+          return;
+        }
+        if (!hasLivePlannotatorProcess(current.status)) {
+          clientLeases.removeReview(token);
+          return;
+        }
+
+        const [now, updatedAt] = yield* Effect.all([Clock.currentTimeMillis, nowIso]);
+        if (clientLeases.isOwned(token, now)) return;
+
+        // T3-CUSTOM(expbkt3): Publish terminal state synchronously before the
+        // captured child is stopped. A concurrent heartbeat then sees a
+        // terminal review and cannot resurrect ownership during persistence.
+        const suspended: PersistedPlannotatorSession = {
+          ...current,
+          status: "exited",
+          port: null,
+          directUrl: null,
+          error: null,
+          updatedAt,
+        };
+        sessions.set(token, suspended);
+        clientLeases.removeReview(token);
+        yield* persist(suspended).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              sessions.set(token, current);
+              clientLeases.trackUnowned(token);
+            }),
+          ),
+        );
+        yield* stopHandle(token);
+      }),
+    );
+  };
 
   const probePort = (port: number) =>
     httpClient.execute(HttpClientRequest.get(`http://127.0.0.1:${port}/`)).pipe(
@@ -519,6 +579,7 @@ export const make = Effect.gen(function* () {
         Effect.mapError(managerError("start", "Could not launch Plannotator")),
       );
     handles.set(current.token, handle);
+    clientLeases.registerReview(current.token, yield* Clock.currentTimeMillis);
     yield* Stream.run(
       handle.all,
       fileSystem.sink(current.logPath, { flag: "a", mode: 0o600 }),
@@ -546,6 +607,8 @@ export const make = Effect.gen(function* () {
           }
           yield* update(latest, {
             status: code === 0 ? "exited" : "error",
+            port: null,
+            directUrl: null,
             error: code === 0 ? null : `Plannotator exited with code ${code}.`,
           }).pipe(Effect.ignore);
         }),
@@ -624,6 +687,7 @@ export const make = Effect.gen(function* () {
               }
             : decoded;
         sessions.set(loaded.token, loaded);
+        if (isLive) clientLeases.registerReview(loaded.token, yield* Clock.currentTimeMillis);
         if (loaded !== decoded) yield* persist(loaded);
       }).pipe(Effect.ignore),
     { concurrency: 4, discard: true },
@@ -718,6 +782,7 @@ export const make = Effect.gen(function* () {
         [...sessions.values()].find((session) => session.id === tokenOrId);
       if (!current) return;
       yield* stopHandle(current.token);
+      clientLeases.removeReview(current.token);
       sessions.delete(current.token);
       yield* Effect.all(
         [
@@ -793,6 +858,7 @@ export const make = Effect.gen(function* () {
           (yield* probePort(latest.port));
 
         if (processIsLive && !contentChanged && !formatChanged) {
+          clientLeases.registerReview(current.token, yield* Clock.currentTimeMillis);
           const unchanged =
             planIdChanged && nextPlanId !== undefined
               ? yield* update(latest, { planId: nextPlanId })
@@ -1036,7 +1102,27 @@ export const make = Effect.gen(function* () {
       return publicSession(decided);
     });
 
-  yield* Effect.addFinalizer(() => Scope.close(childScope, Exit.void));
+  const renewClientLease: PlannotatorManagerShape["renewClientLease"] = (token, clientId) =>
+    Effect.gen(function* () {
+      const current = sessions.get(token);
+      if (!current || !hasLivePlannotatorProcess(current.status)) {
+        clientLeases.removeReview(token);
+        return;
+      }
+      clientLeases.renew(token, clientId, yield* Clock.currentTimeMillis);
+    });
+
+  const releaseClientLease: PlannotatorManagerShape["releaseClientLease"] = (token, clientId) =>
+    Effect.gen(function* () {
+      const becameUnowned = clientLeases.release(token, clientId, yield* Clock.currentTimeMillis);
+      if (becameUnowned) yield* suspendIfUnowned(token);
+    });
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => clientLeases.clear()).pipe(
+      Effect.andThen(Scope.close(childScope, Exit.void)),
+    ),
+  );
 
   const manager = PlannotatorManager.of({
     start,
@@ -1058,9 +1144,37 @@ export const make = Effect.gen(function* () {
           .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
           .map(publicSession),
       ),
+    renewClientLease,
+    releaseClientLease,
     reopen,
     applyDecision,
   });
+
+  const reapExpiredClientLeases = Effect.fn("PlannotatorManager.reapExpiredClientLeases")(
+    function* () {
+      const expiredTokens = clientLeases.collectExpired(yield* Clock.currentTimeMillis);
+      yield* Effect.forEach(
+        expiredTokens,
+        (token) =>
+          suspendIfUnowned(token).pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => clientLeases.retryUnowned(token)).pipe(
+                Effect.andThen(
+                  Effect.logWarning("Failed to suspend browser-unowned Plannotator review", {
+                    cause,
+                    plannotatorSessionId: sessions.get(token)?.id,
+                  }),
+                ),
+              ),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+    },
+  );
+  yield* Effect.forever(
+    Effect.sleep(PLANNOTATOR_CLIENT_REAPER_MS).pipe(Effect.andThen(reapExpiredClientLeases)),
+  ).pipe(Effect.forkIn(childScope));
 
   const attachNativePlanSafely = Effect.fn("PlannotatorManager.attachNativePlanSafely")(function* (
     threadId: ThreadId,

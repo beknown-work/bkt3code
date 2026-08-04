@@ -18,6 +18,21 @@ import { parsePlannotatorSubmission, rewritePlannotatorHtml } from "./model.ts";
 
 const PLANNOTATOR_PROXY_PATH = /^\/plannotator\/([A-Za-z0-9_-]+)(\/.*)?$/;
 export const PLANNOTATOR_STATUS_PATH = "/__t3/status";
+export const PLANNOTATOR_CLIENT_ID_HEADER = "x-t3-plannotator-client-id";
+const PLANNOTATOR_CLIENT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function parsePlannotatorClientIdHeader(
+  value: string | undefined,
+):
+  | { readonly kind: "legacy"; readonly clientId: null }
+  | { readonly kind: "client"; readonly clientId: string }
+  | { readonly kind: "invalid" } {
+  if (value === undefined) return { kind: "legacy", clientId: null };
+  return value.length <= 64 && PLANNOTATOR_CLIENT_ID.test(value)
+    ? { kind: "client", clientId: value }
+    : { kind: "invalid" };
+}
 
 export function plannotatorStatusPayload(status: PlannotatorSessionStatus) {
   return {
@@ -25,10 +40,10 @@ export function plannotatorStatusPayload(status: PlannotatorSessionStatus) {
     decision: status === "approved" || status === "feedback" || status === "denied" ? status : null,
   } as const;
 }
-const PLANNOTATOR_IFRAME_CORS_HEADERS = {
+export const PLANNOTATOR_IFRAME_CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "access-control-allow-headers": "content-type",
+  "access-control-allow-headers": `content-type, ${PLANNOTATOR_CLIENT_ID_HEADER}`,
 } as const;
 const REQUEST_HEADERS_NOT_FORWARDED = [
   "authorization",
@@ -128,14 +143,29 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
     // T3-CUSTOM(expbkt3): The parent T3 surface cannot inspect the sandboxed
     // iframe. This token-scoped status response lets it close completed reviews
     // and synchronize Build mode after approval.
-    if (request.method === "GET" && proxyPath === PLANNOTATOR_STATUS_PATH) {
-      return HttpServerResponse.jsonUnsafe(plannotatorStatusPayload(session.status), {
-        status: 200,
-        headers: {
-          ...PLANNOTATOR_IFRAME_CORS_HEADERS,
-          "cache-control": "no-store",
-        },
-      });
+    if (proxyPath === PLANNOTATOR_STATUS_PATH) {
+      const client = parsePlannotatorClientIdHeader(request.headers[PLANNOTATOR_CLIENT_ID_HEADER]);
+      if (client.kind === "invalid" || (request.method === "DELETE" && client.kind !== "client")) {
+        return HttpServerResponse.text("Invalid Plannotator client ID.", { status: 400 });
+      }
+      if (request.method === "GET") {
+        yield* manager.renewClientLease(token, client.clientId);
+        return HttpServerResponse.jsonUnsafe(plannotatorStatusPayload(session.status), {
+          status: 200,
+          headers: {
+            ...PLANNOTATOR_IFRAME_CORS_HEADERS,
+            "cache-control": "no-store",
+          },
+        });
+      }
+      if (request.method === "DELETE" && client.kind === "client") {
+        yield* manager.releaseClientLease(token, client.clientId);
+        return HttpServerResponse.empty({
+          status: 204,
+          headers: PLANNOTATOR_IFRAME_CORS_HEADERS,
+        });
+      }
+      return HttpServerResponse.text("Method Not Allowed", { status: 405 });
     }
     if (session.port === null) {
       return HttpServerResponse.text("Plannotator review is still starting.", { status: 425 });

@@ -160,6 +160,25 @@ IDs when saved annotations are replayed. Keep lifecycle changes inside
 `apps/server/src/plannotator/` and the existing focused-surface seam so upstream
 plan rendering remains isolated.
 
+Process lifetime follows an in-memory browser lease registry rather than thread
+state. Every mounted focus surface has an unpersisted UUID lease: visible
+surfaces renew through the 500 ms status cadence, retained-hidden surfaces renew
+every 30 seconds, and legacy clients share one compatible lease. Multiple
+browsers may own one review; releasing one UUID does not affect the others.
+Releasing the final UUID makes the process immediately suspendible, while a
+crashed browser expires after two minutes and is collected by the 30-second
+reaper. Launch and reopen receive the same two-minute acquisition window so a
+process whose iframe never mounts cannot remain indefinitely.
+
+Suspension writes `exited` and clears live port fields before stopping the
+manager-captured child. It preserves the manifest, plan, log, cumulative
+annotations, and Plannotator recovery draft. The right-panel persistence
+transform excludes Plannotator descriptors (storage version 9), but runtime
+hidden surfaces remain mounted; a full browser restart therefore requires an
+intentional **Review →** reopen instead of resurrecting ghost ownership from
+localStorage. Terminal `exited` and `error` responses stop the single recursive
+poll loop and remove only the stale panel surface.
+
 ## Upstream merge workflow
 
 1. Fetch and merge `upstream/main` into `expbkmain` — the long-lived staging
