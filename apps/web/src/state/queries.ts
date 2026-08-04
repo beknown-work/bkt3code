@@ -15,6 +15,7 @@ import type {
   ProjectContentMatch,
   ProjectEntryKind,
   ThreadId,
+  VcsListRefsInput, // T3-CUSTOM(expbkt3): exact remote-ref query input.
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
