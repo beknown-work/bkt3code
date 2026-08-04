@@ -31,6 +31,7 @@ import {
   SourceControlProfileId,
   ThreadId,
   ThreadTurnAdmissionConflictError,
+  TurnId,
   UserId,
   WS_METHODS,
   WsRpcGroup,
@@ -88,7 +89,10 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
-import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationListenerCallbackError,
+} from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 // T3-CUSTOM(expbkt3): router seams use an in-memory durable-bootstrap boundary.
 import { ProjectionThreadBootstrapRepository } from "./persistence/Services/ProjectionThreadBootstraps.ts";
@@ -6070,7 +6074,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   // source-control validation must use the embedded creation request instead
   // of looking up a projection row that cannot exist yet.
   it.effect(
-    "uses the durable user bound to a non-Clerk browser session for first-turn creation",
+    "uses the durable user bound to a non-Clerk browser session and accepts retried first-turn creation",
     () =>
       Effect.gen(function* () {
         const profileId = SourceControlProfileId.make("github_creator");
@@ -6080,6 +6084,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const dispatchedActorUserIds: Array<UserId | null | undefined> = [];
         let existingThreadReads = 0;
         let resolvedProfileId: SourceControlProfileId | null = null;
+        let threadAccepted = false;
 
         yield* buildAppUnderTest({
           layers: {
@@ -6150,14 +6155,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               getThreadShellById: () =>
                 Effect.sync(() => {
                   existingThreadReads += 1;
-                  return Option.none();
+                  return threadAccepted
+                    ? Option.some(
+                        makeDefaultOrchestrationThreadShell({
+                          id: threadId,
+                          ownerUserId: UserId.make(creatorUserId),
+                          latestTurn: {
+                            turnId: TurnId.make("turn-durable-create-profile"),
+                            state: "running",
+                            requestedAt: "2026-08-04T10:00:00.000Z",
+                            startedAt: "2026-08-04T10:00:00.000Z",
+                            completedAt: null,
+                            assistantMessageId: null,
+                            durationMs: null,
+                          },
+                        }),
+                      )
+                    : Option.none();
                 }),
             },
             orchestrationEngine: {
               dispatch: (command, options) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
+                  if (
+                    command.type === "thread.turn.start" &&
+                    command.bootstrap?.createThread &&
+                    threadAccepted
+                  ) {
+                    return yield* new OrchestrationCommandInvariantError({
+                      commandType: command.type,
+                      detail: `bootstrap thread ${threadId} already exists`,
+                    });
+                  }
                   dispatchedCommands.push(command);
                   dispatchedActorUserIds.push(options?.actorUserId);
+                  threadAccepted = true;
                   return { sequence: 1 };
                 }),
               readEvents: () => Stream.empty,
@@ -6175,38 +6207,47 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           yield* getWsServerUrl("/ws"),
           browserSession.cookie?.split(";")[0] ?? "",
         );
+        const durableCreateCommand = (commandId: string) =>
+          ({
+            type: "thread.turn.start",
+            commandId: CommandId.make(commandId),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-durable-create-profile"),
+              role: "user",
+              text: "create this thread",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              request: {
+                createThread: true,
+                bootstrapId: "web:thread-durable-create-profile:msg-durable-create-profile",
+                projectId: defaultProjectId,
+                title: "Durable creation",
+                sourceControlProfileId: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          }) as const;
         yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
-            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
-              type: "thread.turn.start",
-              commandId: CommandId.make("cmd-durable-create-profile"),
-              threadId,
-              message: {
-                messageId: MessageId.make("msg-durable-create-profile"),
-                role: "user",
-                text: "create this thread",
-                attachments: [],
-              },
-              modelSelection: defaultModelSelection,
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              bootstrap: {
-                request: {
-                  createThread: true,
-                  bootstrapId: "web:thread-durable-create-profile:msg-durable-create-profile",
-                  projectId: defaultProjectId,
-                  title: "Durable creation",
-                  sourceControlProfileId: null,
-                  createdAt,
-                },
-              },
-              createdAt,
+            Effect.gen(function* () {
+              yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand](
+                durableCreateCommand("cmd-durable-create-profile"),
+              );
+              yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand](
+                durableCreateCommand("cmd-durable-create-profile-retry"),
+              );
             }),
           ),
         );
 
         assert.equal(resolvedProfileId, profileId);
-        assert.equal(existingThreadReads, 0);
+        assert.equal(existingThreadReads, 2);
         assert.equal(dispatchedCommands.length, 1);
         const dispatched = dispatchedCommands[0];
         assert.equal(dispatched?.type, "thread.turn.start");

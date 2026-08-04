@@ -587,12 +587,12 @@ export const make = Effect.gen(function* () {
     // T3-CUSTOM(expbkt3): resolve creation defaults without performing provider
     // or workspace side effects, then let the coordinator dispatch one atomic
     // turn command carrying both the exact message and resolved bootstrap spec.
-    const dispatchDurableBootstrapTurn = (
-      turnStart: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
-    ) => {
+    const dispatchDurableBootstrapTurn = Effect.fn(
+      "OrchestrationCommandDispatcher.dispatchDurableBootstrapTurn",
+    )(function* (turnStart: Extract<OrchestrationCommand, { type: "thread.turn.start" }>) {
       const request = turnStart.bootstrap?.request;
       if (request === undefined) {
-        return orchestrationEngine
+        return yield* orchestrationEngine
           .dispatch(turnStart, dispatchOptions)
           .pipe(
             Effect.mapError((cause) =>
@@ -600,7 +600,36 @@ export const make = Effect.gen(function* () {
             ),
           );
       }
-      return normalizeBootstrapDispatch(
+      let createThread = request.createThread;
+      if (createThread) {
+        // A browser retry can carry a fresh command id after the atomic first
+        // turn already committed. Match the legacy bootstrap path: completed
+        // creation is a no-op, while a half-created thread resumes in place.
+        const existing = yield* snapshotQuery
+          .getThreadShellById(turnStart.threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toDispatchCommandError(
+                cause,
+                "Failed to check thread existence for durable bootstrap.",
+              ),
+            ),
+          );
+        if (Option.isSome(existing)) {
+          if (existing.value.latestTurn !== null) {
+            const { snapshotSequence } = yield* snapshotQuery
+              .getSnapshotSequence()
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to read projection sequence."),
+                ),
+              );
+            return { sequence: snapshotSequence };
+          }
+          createThread = false;
+        }
+      }
+      return yield* normalizeBootstrapDispatch(
         threadBootstrapCoordinator.request(
           {
             type: "thread.bootstrap.request",
@@ -625,12 +654,12 @@ export const make = Effect.gen(function* () {
           },
           {
             actorUserId: options?.actorUserId ?? null,
-            createThread: request.createThread,
+            createThread,
             turnStart,
           },
         ),
       );
-    };
+    });
 
     const baseDispatchEffect =
       // T3-CUSTOM(expbkt3): public bootstrap controls never reach the strict decider.
