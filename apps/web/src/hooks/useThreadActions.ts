@@ -121,9 +121,7 @@ export function useThreadActions() {
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
   });
-  const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
-    reportFailure: false,
-  });
+  // T3-CUSTOM(expbkt3): Worktree removal already refreshes the server-side VCS broadcaster.
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
@@ -363,19 +361,8 @@ export function useThreadActions() {
           force: true,
         },
       });
-      const refreshResult =
-        removeResult._tag === "Success"
-          ? await refreshVcsStatus({
-              environmentId: threadRef.environmentId,
-              input: { cwd: threadProject.workspaceRoot },
-            })
-          : null;
-      const cleanupFailure =
-        removeResult._tag === "Failure"
-          ? removeResult
-          : refreshResult?._tag === "Failure"
-            ? refreshResult
-            : null;
+      // T3-CUSTOM(expbkt3): A second refresh here cannot identify the thread after deletion.
+      const cleanupFailure = removeResult._tag === "Failure" ? removeResult : null;
       if (cleanupFailure) {
         const error = squashAtomCommandFailure(cleanupFailure);
         const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
@@ -403,8 +390,8 @@ export function useThreadActions() {
       closeTerminal,
       deleteThreadMutation,
       getCurrentRouteThreadRef,
-      refreshVcsStatus,
       removeWorktree,
+      // T3-CUSTOM(expbkt3): VCS refresh is part of the remove-worktree RPC.
       router,
       resolveThreadTarget,
       sidebarThreadSortOrder,
