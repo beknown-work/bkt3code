@@ -37,6 +37,13 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Install Linux arm64 linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gcc-aarch64-linux-gnu
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -69,15 +76,24 @@ jobs:
       - name: Build server bundle
         run: pnpm exec vp run --filter t3 build:bundle
 
-      - name: Build Linux x64 resource monitor
+      - name: Build Linux resource monitors
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           cargo build --locked --release \
             --manifest-path native/resource-monitor/Cargo.toml \
             --target x86_64-unknown-linux-gnu
+          cargo build --locked --release \
+            --manifest-path native/resource-monitor/Cargo.toml \
+            --target aarch64-unknown-linux-gnu
           install -D -m 0755 \
             native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor \
             apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+          install -D -m 0755 \
+            native/resource-monitor/target/aarch64-unknown-linux-gnu/release/t3-resource-monitor \
+            apps/server/dist/resource-monitor/linux-arm64/t3-resource-monitor
           test -x apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+          test -x apps/server/dist/resource-monitor/linux-arm64/t3-resource-monitor
 
       # The bkt3 host installs this verified artifact instead of rebuilding
       # application code on the shared dev server.
@@ -88,6 +104,7 @@ jobs:
           cp -a apps/server/dist deployment-artifact/apps/server/
           printf '%s\n' "$GITHUB_SHA" > deployment-artifact/SHA
           test -x deployment-artifact/apps/server/dist/resource-monitor/linux-x64/t3-resource-monitor
+          test -x deployment-artifact/apps/server/dist/resource-monitor/linux-arm64/t3-resource-monitor
 
       - name: Publish deployment artifact
         uses: actions/upload-artifact@v7
