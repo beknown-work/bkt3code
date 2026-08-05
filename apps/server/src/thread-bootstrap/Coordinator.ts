@@ -36,7 +36,8 @@ import {
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
-import { resolveExactBranch, ThreadCreationDefaultsResolver } from "./DefaultsResolver.ts";
+import { ThreadCreationDefaultsResolver } from "./DefaultsResolver.ts";
+import { resolveAvailableWorktreeBase } from "./WorktreeBaseResolver.ts";
 
 export class ThreadBootstrapCoordinatorError extends Data.TaggedError(
   "ThreadBootstrapCoordinatorError",
@@ -445,12 +446,12 @@ const make = Effect.gen(function* () {
         if (input.baseRef.source === "origin") {
           yield* gitWorkflow.fetchRemote({ cwd: projectCwd, remoteName: "origin" });
         }
-        const refs = yield* gitWorkflow.listRefs({
+        const exactBaseRef = yield* resolveAvailableWorktreeBase({
           cwd: projectCwd,
-          refresh: true,
-          includeMatchingRemoteRefs: true,
+          baseRef: input.baseRef,
+          listRefs: gitWorkflow.listRefs,
+          resolveRemoteTrackingCommit: gitWorkflow.resolveRemoteTrackingCommit,
         });
-        const exactBaseRef = resolveExactBranch(refs.refs, input.baseRef);
         if (!exactBaseRef || exactBaseRef.kind !== "branch") {
           const selected =
             input.baseRef.kind === "repository-default"
