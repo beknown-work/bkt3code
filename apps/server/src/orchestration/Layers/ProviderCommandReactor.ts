@@ -70,9 +70,8 @@ import {
   ProjectSetupScriptProjectNotFoundError,
   ProjectSetupScriptRunner,
 } from "../../project/ProjectSetupScriptRunner.ts";
-// T3-CUSTOM(expbkt3): durable turns reuse the bootstrap defaults resolver at
-// the post-commit worktree boundary.
-import { resolveExactBranch } from "../../thread-bootstrap/DefaultsResolver.ts";
+// T3-CUSTOM(expbkt3): exact durable-bootstrap bases bypass ref-list pagination.
+import { resolveAvailableWorktreeBase } from "../../thread-bootstrap/WorktreeBaseResolver.ts";
 // T3-CUSTOM(expbkt3): durable dispatch control plane; provider mechanics stay here.
 import {
   DurableExecutionDispatchError,
@@ -1688,19 +1687,20 @@ const make = Effect.gen(function* () {
                 ),
               );
           }
-          const refs = yield* gitWorkflow
-            .listRefs({ cwd: projectCwd, refresh: true, includeMatchingRemoteRefs: true })
-            .pipe(
-              Effect.mapError((cause) =>
-                fail(
-                  "bootstrap-worktree-base-unavailable",
-                  "Could not inspect the configured worktree base.",
-                  true,
-                  cause,
-                ),
+          const exactBaseRef = yield* resolveAvailableWorktreeBase({
+            cwd: projectCwd,
+            baseRef: resolvedPrepare.baseRef,
+            listRefs: gitWorkflow.listRefs,
+          }).pipe(
+            Effect.mapError((cause) =>
+              fail(
+                "bootstrap-worktree-base-unavailable",
+                "Could not inspect the configured worktree base.",
+                true,
+                cause,
               ),
-            );
-          const exactBaseRef = resolveExactBranch(refs.refs, resolvedPrepare.baseRef);
+            ),
+          );
           if (exactBaseRef === null || exactBaseRef.kind !== "branch") {
             return yield* fail(
               "bootstrap-worktree-base-unavailable",
