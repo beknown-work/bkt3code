@@ -7,6 +7,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadActivity,
   ScopedThreadRef,
+  ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -22,6 +23,20 @@ const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.free
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
 const EMPTY_CHECKPOINTS: ReadonlyArray<OrchestrationCheckpointSummary> = Object.freeze([]);
 
+// T3-CUSTOM(expbkt3): Shell and detail execution frames race independently;
+// reconcile their revisioned snapshots instead of making either cache win.
+function latestExecutionSnapshot(
+  detail: ThreadExecutionSnapshot | null | undefined,
+  shell: ThreadExecutionSnapshot | null | undefined,
+): ThreadExecutionSnapshot | null | undefined {
+  if (shell === undefined) return detail;
+  if (shell === null || detail === null || detail === undefined) return shell;
+  if (detail.authorityEpoch === shell.authorityEpoch) {
+    return detail.revision > shell.revision ? detail : shell;
+  }
+  return Date.parse(detail.observedAt) > Date.parse(shell.observedAt) ? detail : shell;
+}
+
 /**
  * Combine detail-only collections with the shell's authoritative thread metadata.
  *
@@ -29,7 +44,8 @@ const EMPTY_CHECKPOINTS: ReadonlyArray<OrchestrationCheckpointSummary> = Object.
  * therefore briefly outlive a newer shell snapshot after reconnecting. Workspace
  * consumers must use the shell branch/worktree/project fields so they do not target
  * a stale checkout while retaining messages, activities, plans, checkpoints, and
- * catch-up summaries from the detail subscription.
+ * catch-up summaries from the detail subscription. Execution is revisioned and can
+ * arrive through either stream first, so the newest snapshot wins independently.
  */
 export function mergeEnvironmentThread(
   detail: EnvironmentThread | null,
@@ -41,6 +57,7 @@ export function mergeEnvironmentThread(
   if (detail.environmentId !== shell.environmentId || detail.id !== shell.id) {
     return detail;
   }
+  const execution = latestExecutionSnapshot(detail.execution, shell.execution);
 
   return {
     ...detail,
@@ -64,8 +81,8 @@ export function mergeEnvironmentThread(
     snoozedUntil: shell.snoozedUntil,
     snoozedAt: shell.snoozedAt,
     session: shell.session,
-    // T3-CUSTOM(expbkt3): Keep chat lifecycle in sync with the shell used by the sidebar.
-    ...(shell.execution === undefined ? {} : { execution: shell.execution }),
+    // T3-CUSTOM(expbkt3): Keep chat and sidebar on the newest execution frame.
+    ...(execution === undefined ? {} : { execution }),
   };
 }
 

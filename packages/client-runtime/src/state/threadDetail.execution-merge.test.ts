@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -43,6 +44,27 @@ function executionSnapshot(activity: "active" | "idle", revision: number) {
       lastError: null,
     },
   } satisfies ThreadExecutionSnapshot;
+}
+
+function recoveryFailedSnapshot(revision: number): ThreadExecutionSnapshot {
+  return {
+    ...executionSnapshot("idle", revision),
+    intent: {
+      workItemId: "work-item-1",
+      messageId: MessageId.make("message-1"),
+      desiredState: "stopped",
+      phase: "recovery-exhausted",
+      acceptedAt: timestamp,
+      updatedAt: timestamp,
+      recovery: {
+        attempt: 1,
+        maximumAttempts: 3,
+        nextAttemptAt: null,
+        reason: "The configured worktree base is no longer available.",
+        userActionRequired: true,
+      },
+    },
+  };
 }
 
 function threadShell(execution: ThreadExecutionSnapshot): EnvironmentThreadShell {
@@ -98,5 +120,24 @@ describe("thread detail execution merge", () => {
 
     expect(merged?.execution).toBe(stoppedShell.execution);
     expect(merged?.execution?.activity).toBe("idle");
+  });
+
+  it("uses a newer detail execution when recovery fails before the shell refreshes", () => {
+    const recoveryFailedDetail = threadDetail(recoveryFailedSnapshot(2));
+    const staleRunningShell = threadShell(executionSnapshot("active", 1));
+
+    const merged = mergeEnvironmentThread(recoveryFailedDetail, staleRunningShell);
+
+    expect(merged?.execution).toBe(recoveryFailedDetail.execution);
+    expect(merged?.execution?.intent?.phase).toBe("recovery-exhausted");
+  });
+
+  it("keeps detail execution when an older shell omits execution snapshots", () => {
+    const runningDetail = threadDetail(executionSnapshot("active", 1));
+    const { execution: _execution, ...legacyShell } = threadShell(executionSnapshot("idle", 2));
+
+    const merged = mergeEnvironmentThread(runningDetail, legacyShell);
+
+    expect(merged?.execution).toBe(runningDetail.execution);
   });
 });
