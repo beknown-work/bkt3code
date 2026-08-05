@@ -37,6 +37,7 @@ import {
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
 } from "./threads.ts";
+import { THREAD_SUBSCRIPTION_RETRY_DELAYS_MS } from "./threadSubscriptionRetry.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -533,7 +534,8 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("does not resurrect a deleted thread when the app returns to the foreground", () =>
+  // T3-CUSTOM(expbkt3): terminal threads must not restart a failing subscription loop.
+  it.effect("does not resubscribe a deleted thread when the app returns to the foreground", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         cached: BASE_THREAD,
@@ -550,12 +552,11 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
       yield* Queue.offer(harness.wakeups, "application-active");
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
         yield* Effect.yieldNow;
       }
 
       const latest = yield* Ref.get(harness.latest);
-      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
       expect(latest.status).toBe("deleted");
       expect(Option.isNone(latest.data)).toBe(true);
@@ -660,6 +661,36 @@ describe("EnvironmentThreads", () => {
       expect(Option.isNone(recovered.error)).toBe(true);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.retryCount)).toBe(0);
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): missing archived/deleted routes must not retry forever.
+  it.effect("makes a persistently missing thread subscription dormant after bounded retries", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 1) break;
+        yield* Effect.yieldNow;
+      }
+      for (const [attempt, delay] of THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.entries()) {
+        yield* Queue.offer(harness.inputs, new Error(`thread missing ${attempt}`));
+        yield* TestClock.adjust(delay);
+        for (let spin = 0; spin < 100; spin += 1) {
+          if ((yield* Ref.get(harness.subscriptionCount)) >= attempt + 2) break;
+          yield* Effect.yieldNow;
+        }
+      }
+
+      yield* Queue.offer(harness.inputs, new Error("thread still missing"));
+      yield* TestClock.adjust("1 hour");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(
+        THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.length + 1,
+      );
     }),
   );
 
