@@ -1,13 +1,13 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { LoaderIcon, SettingsIcon, TriangleAlertIcon } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../../connection/useDesktopLocalBootstraps";
 import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useThreadShells } from "../../state/entities";
+import { useServerConfigs, useThreadShells } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -84,8 +84,24 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const { environments } = useEnvironments();
   // T3-CUSTOM(expbkt3): BEGIN — derive experimental global unsettled/running counters.
   const threads = useThreadShells();
+  const serverConfigs = useServerConfigs();
   const stageLabel = useEnvironmentStageLabel();
-  const counts = useMemo(() => summarizeSidebarSessions(threads), [threads]);
+  const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
+  const counts = useMemo(() => {
+    void snoozeWakeTick;
+    return summarizeSidebarSessions(threads, {
+      now: new Date().toISOString(),
+      snoozeSupported: (thread) =>
+        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true,
+    });
+  }, [serverConfigs, snoozeWakeTick, threads]);
+  useEffect(() => {
+    const nextWakeAtMs = Date.parse(counts.nextSnoozeWakeAt ?? "");
+    if (!Number.isFinite(nextWakeAtMs)) return;
+    const delayMs = Math.min(Math.max(0, nextWakeAtMs - Date.now()) + 50, 2_147_483_647);
+    const id = window.setTimeout(() => bumpSnoozeWakeTick((tick) => tick + 1), delayMs);
+    return () => window.clearTimeout(id);
+  }, [counts.nextSnoozeWakeAt]);
   const providerRateLimitsEnabled = useClientSettings(
     (settings) => settings.providerRateLimitsEnabled,
   );
