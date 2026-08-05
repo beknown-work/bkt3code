@@ -35,7 +35,9 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import {
   increment,
@@ -246,6 +248,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     cancelRequested: boolean;
   }
   const sessionStartups = new Map<ThreadId, ProviderSessionStartup>();
+  const lifecycleSemaphores = yield* SynchronizedRef.make<
+    ReadonlyMap<ThreadId, Semaphore.Semaphore>
+  >(new Map());
+  const getLifecycleSemaphore = (threadId: ThreadId) =>
+    SynchronizedRef.modify(lifecycleSemaphores, (semaphores) => {
+      const existing = semaphores.get(threadId);
+      if (existing !== undefined) return [existing, semaphores] as const;
+      const semaphore = Semaphore.makeUnsafe(1);
+      return [semaphore, new Map(semaphores).set(threadId, semaphore)] as const;
+    });
+  const withThreadLifecycle =
+    (threadId: ThreadId) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      Effect.flatMap(getLifecycleSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
   const sessionGenerationKey = (instanceId: ProviderInstanceId, threadId: ThreadId) =>
     `${instanceId}\u0000${threadId}`;
   const bumpSessionGeneration = (instanceId: ProviderInstanceId, threadId: ThreadId) => {
@@ -275,6 +291,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
     );
+  const logLifecycleInvariant = Effect.fn("logLifecycleInvariant")(function* (input: {
+    readonly operation: "start" | "recover" | "stop" | "terminate";
+    readonly threadId: ThreadId;
+    readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+    readonly expectsAdapterSession: boolean;
+  }) {
+    const startupPresent = sessionStartups.has(input.threadId);
+    const adapterSessionPresent = yield* input.adapter.hasSession(input.threadId);
+    if (!startupPresent && adapterSessionPresent === input.expectsAdapterSession) return;
+    yield* Effect.logWarning("provider.session.lifecycle-invariant-violated", {
+      operation: input.operation,
+      threadId: input.threadId,
+      provider: input.adapter.provider,
+      startupPresent,
+      adapterSessionPresent,
+      expectsAdapterSession: input.expectsAdapterSession,
+    });
+  });
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
@@ -440,6 +474,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             strategy: "adopt-existing",
             hasResumeCursor: existing.resumeCursor !== undefined,
           });
+          yield* logLifecycleInvariant({
+            operation: "recover",
+            threadId: input.binding.threadId,
+            adapter,
+            expectsAdapterSession: true,
+          });
           return { adapter, session: existing } as const;
         }
       }
@@ -500,6 +540,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         strategy: "resume-thread",
         hasResumeCursor: resumed.resumeCursor !== undefined,
       });
+      yield* logLifecycleInvariant({
+        operation: "recover",
+        threadId: input.binding.threadId,
+        adapter,
+        expectsAdapterSession: true,
+      });
       return { adapter, session: resumed } as const;
     }).pipe(
       withMetrics({
@@ -508,6 +554,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           operation: "recover",
         }),
       }),
+      withThreadLifecycle(input.binding.threadId),
     );
   });
 
@@ -560,40 +607,44 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     } as const;
   });
 
-  const stopStaleSessionsForThread = Effect.fn("stopStaleSessionsForThread")(function* (input: {
-    readonly threadId: ThreadId;
-    readonly currentInstanceId: ProviderInstanceId;
-  }) {
-    const currentAdapters = yield* getAdapterEntries;
-    yield* Effect.forEach(
-      currentAdapters,
-      ([instanceId, adapter]) =>
-        instanceId === input.currentInstanceId
-          ? Effect.void
-          : Effect.gen(function* () {
-              const hasSession = yield* adapter.hasSession(input.threadId);
-              if (!hasSession) {
-                return;
-              }
+  const terminateExistingSessionsForThread = Effect.fn("terminateExistingSessionsForThread")(
+    function* (threadId: ThreadId) {
+      const currentAdapters = yield* getAdapterEntries;
+      const terminated = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
+        Effect.gen(function* () {
+          if (!(yield* adapter.hasSession(threadId))) return null;
+          const termination = yield* adapter.terminateSession(threadId);
+          if (!termination.verified || !termination.processTreeExited) {
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              `Existing provider session '${threadId}' could not be terminated before replacement.`,
+            );
+          }
+          yield* analytics.record("provider.session.stopped", {
+            provider: adapter.provider,
+          });
+          return { instanceId, provider: adapter.provider } as const;
+        }),
+      );
+      const terminatedEntries = terminated.filter((entry) => entry !== null);
+      if (terminatedEntries.length === 0) return;
 
-              yield* adapter.stopSession(input.threadId).pipe(
-                Effect.tap(() =>
-                  analytics.record("provider.session.stopped", {
-                    provider: adapter.provider,
-                  }),
-                ),
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("provider.session.stop-stale-failed", {
-                    threadId: input.threadId,
-                    provider: adapter.provider,
-                    cause,
-                  }),
-                ),
-              );
-            }),
-      { discard: true },
-    );
-  });
+      yield* clearMcpSession(threadId);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      if (binding === undefined) return;
+      const matchingEntry = terminatedEntries.find((entry) => entry.provider === binding.provider);
+      yield* directory.upsert({
+        threadId,
+        provider: binding.provider,
+        providerInstanceId:
+          binding.providerInstanceId ??
+          matchingEntry?.instanceId ??
+          terminatedEntries[0]!.instanceId,
+        status: "stopped",
+        runtimePayload: { activeTurnId: null },
+      });
+    },
+  );
 
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
     function* (threadId, rawInput, executionOptions) {
@@ -666,6 +717,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        yield* terminateExistingSessionsForThread(threadId);
         yield* prepareMcpSession(
           threadId,
           resolvedInstanceId,
@@ -680,76 +732,94 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           cancelRequested: false,
         };
         sessionStartups.set(threadId, startup);
-        const session = yield* adapter
-          .startSession(
-            {
-              ...input,
+        const sessionWithInstance = yield* Effect.gen(function* () {
+          const session = yield* adapter
+            .startSession(
+              {
+                ...input,
+                providerInstanceId: resolvedInstanceId,
+                ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+                ...(effectiveResumeCursor !== undefined
+                  ? { resumeCursor: effectiveResumeCursor }
+                  : {}),
+              },
+              executionOptions,
+            )
+            .pipe(Effect.onError(() => clearMcpSession(threadId)));
+
+          if (session.provider !== adapter.provider) {
+            yield* clearMcpSession(threadId);
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
+            );
+          }
+          const sessionWithInstance = {
+            ...session,
+            providerInstanceId: resolvedInstanceId,
+          };
+          yield* upsertSessionBinding(sessionWithInstance, threadId, {
+            modelSelection: input.modelSelection,
+            sourceControlIdentityRequired: executionOptions?.environment !== undefined,
+          });
+
+          if (startup.cancelRequested) {
+            const termination = yield* adapter.terminateSession(threadId);
+            if (!termination.verified || !termination.processTreeExited) {
+              return yield* toValidationError(
+                "ProviderService.startSession",
+                `Provider session '${threadId}' startup cancellation could not be verified.`,
+              );
+            }
+            yield* clearMcpSession(threadId);
+            yield* directory.upsert({
+              threadId,
+              provider: adapter.provider,
               providerInstanceId: resolvedInstanceId,
-              ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-              ...(effectiveResumeCursor !== undefined
-                ? { resumeCursor: effectiveResumeCursor }
-                : {}),
-            },
-            executionOptions,
-          )
-          .pipe(
-            Effect.onError(() => clearMcpSession(threadId)),
-            Effect.flatMap((session) =>
-              startup.cancelRequested
-                ? adapter.terminateSession(threadId).pipe(
-                    Effect.andThen(clearMcpSession(threadId)),
-                    Effect.andThen(
-                      Effect.fail(
-                        new ProviderAdapterRequestError({
-                          provider: resolvedProvider,
-                          method: "startSession",
-                          detail: "Provider session startup was cancelled.",
-                        }),
-                      ),
-                    ),
-                  )
-                : Effect.succeed(session),
-            ),
-            Effect.ensuring(
-              Effect.sync(() => sessionStartups.get(threadId) === startup).pipe(
-                Effect.tap((isCurrent) =>
-                  isCurrent ? Effect.sync(() => sessionStartups.delete(threadId)) : Effect.void,
-                ),
-                Effect.andThen(Deferred.succeed(settled, undefined)),
-                Effect.asVoid,
+              status: "stopped",
+              runtimePayload: { activeTurnId: null },
+            });
+            return yield* new ProviderAdapterRequestError({
+              provider: resolvedProvider,
+              method: "startSession",
+              detail: "Provider session startup was cancelled.",
+            });
+          }
+
+          yield* analytics.record("provider.session.started", {
+            provider: sessionWithInstance.provider,
+            runtimeMode: input.runtimeMode,
+            hasResumeCursor: sessionWithInstance.resumeCursor !== undefined,
+            hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
+            hasModel:
+              typeof input.modelSelection?.model === "string" &&
+              input.modelSelection.model.trim().length > 0,
+          });
+          return sessionWithInstance;
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => sessionStartups.get(threadId) === startup).pipe(
+              Effect.flatMap((isCurrent) =>
+                isCurrent
+                  ? Effect.sync(() => sessionStartups.delete(threadId))
+                  : Effect.logWarning("provider.session.startup-entry-replaced", {
+                      threadId,
+                      provider: resolvedProvider,
+                      generation,
+                      currentGeneration: sessionStartups.get(threadId)?.generation,
+                    }),
               ),
+              Effect.andThen(Deferred.succeed(settled, undefined)),
+              Effect.asVoid,
             ),
-          );
-
-        if (session.provider !== adapter.provider) {
-          yield* clearMcpSession(threadId);
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
-          );
-        }
-        const sessionWithInstance = {
-          ...session,
-          providerInstanceId: resolvedInstanceId,
-        };
-        yield* stopStaleSessionsForThread({
+          ),
+        );
+        yield* logLifecycleInvariant({
+          operation: "start",
           threadId,
-          currentInstanceId: resolvedInstanceId,
+          adapter,
+          expectsAdapterSession: true,
         });
-        yield* upsertSessionBinding(sessionWithInstance, threadId, {
-          modelSelection: input.modelSelection,
-          sourceControlIdentityRequired: executionOptions?.environment !== undefined,
-        });
-        yield* analytics.record("provider.session.started", {
-          provider: sessionWithInstance.provider,
-          runtimeMode: input.runtimeMode,
-          hasResumeCursor: sessionWithInstance.resumeCursor !== undefined,
-          hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
-          hasModel:
-            typeof input.modelSelection?.model === "string" &&
-            input.modelSelection.model.trim().length > 0,
-        });
-
         return sessionWithInstance;
       }).pipe(
         withMetrics({
@@ -759,6 +829,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               operation: "start",
             }),
         }),
+        withThreadLifecycle(threadId),
       );
     },
   );
@@ -948,34 +1019,59 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const startup = sessionStartups.get(input.threadId);
       if (startup) {
         startup.cancelRequested = true;
-        yield* Deferred.await(startup.settled);
       }
-      const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
-      const providerInstanceId = startup?.instanceId ?? binding?.providerInstanceId;
-      if (!providerInstanceId) {
-        return { verified: true, graceful: true, processTreeExited: true };
-      }
-      const adapter = yield* registry.getByInstance(providerInstanceId);
-      if (!(yield* adapter.hasSession(input.threadId))) {
+      return yield* Effect.gen(function* () {
+        if (startup) {
+          yield* Deferred.await(startup.settled);
+        }
+        const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+        const providerInstanceId = binding?.providerInstanceId ?? startup?.instanceId;
+        if (!providerInstanceId) {
+          return { verified: true, graceful: true, processTreeExited: true };
+        }
+        const adapter = yield* registry.getByInstance(providerInstanceId);
+        if (!(yield* adapter.hasSession(input.threadId))) {
+          yield* clearMcpSession(input.threadId);
+          if (binding !== undefined) {
+            yield* directory.upsert({
+              threadId: input.threadId,
+              provider: binding.provider,
+              providerInstanceId,
+              status: "stopped",
+              runtimePayload: { activeTurnId: null },
+            });
+          }
+          yield* logLifecycleInvariant({
+            operation: "terminate",
+            threadId: input.threadId,
+            adapter,
+            expectsAdapterSession: false,
+          });
+          return { verified: true, graceful: true, processTreeExited: true };
+        }
+        const termination = yield* adapter.terminateSession(input.threadId);
+        if (!termination.verified || !termination.processTreeExited) {
+          return yield* toValidationError(
+            "ProviderService.terminateSession",
+            `Provider session '${input.threadId}' termination could not be verified.`,
+          );
+        }
         yield* clearMcpSession(input.threadId);
-        return { verified: true, graceful: true, processTreeExited: true };
-      }
-      const termination = yield* adapter.terminateSession(input.threadId);
-      if (!termination.verified || !termination.processTreeExited) {
-        return yield* toValidationError(
-          "ProviderService.terminateSession",
-          `Provider session '${input.threadId}' termination could not be verified.`,
-        );
-      }
-      yield* clearMcpSession(input.threadId);
-      yield* directory.upsert({
-        threadId: input.threadId,
-        provider: adapter.provider,
-        providerInstanceId,
-        status: "stopped",
-        runtimePayload: { activeTurnId: null },
-      });
-      return termination;
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: adapter.provider,
+          providerInstanceId,
+          status: "stopped",
+          runtimePayload: { activeTurnId: null },
+        });
+        yield* logLifecycleInvariant({
+          operation: "terminate",
+          threadId: input.threadId,
+          adapter,
+          expectsAdapterSession: false,
+        });
+        return termination;
+      }).pipe(withThreadLifecycle(input.threadId));
     },
   );
 
@@ -1089,6 +1185,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* analytics.record("provider.session.stopped", {
           provider: routed.adapter.provider,
         });
+        yield* logLifecycleInvariant({
+          operation: "stop",
+          threadId: input.threadId,
+          adapter: routed.adapter,
+          expectsAdapterSession: false,
+        });
       }).pipe(
         withMetrics({
           counter: providerSessionsTotal,
@@ -1097,6 +1199,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               operation: "stop",
             }),
         }),
+        withThreadLifecycle(input.threadId),
       );
     },
   );

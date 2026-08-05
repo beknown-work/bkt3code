@@ -1,4 +1,6 @@
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -21,6 +23,23 @@ import {
 import { ProviderService } from "../Services/ProviderService.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
+export const PROVIDER_SESSION_INACTIVITY_ENV = "T3CODE_PROVIDER_SESSION_INACTIVITY_MS";
+export const providerSessionInactivityThresholdConfig = Config.int(
+  PROVIDER_SESSION_INACTIVITY_ENV,
+).pipe(
+  Config.withDefault(DEFAULT_INACTIVITY_THRESHOLD_MS),
+  Config.mapOrFail((value) =>
+    value > 0
+      ? Effect.succeed(value)
+      : Effect.fail(
+          new Config.ConfigError(
+            new ConfigProvider.SourceError({
+              message: `${PROVIDER_SESSION_INACTIVITY_ENV} must be a positive integer.`,
+            }),
+          ),
+        ),
+  ),
+);
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 /**
  * Last-resort backstop for a turn that is still "running" with a live provider
@@ -53,10 +72,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       Crypto.Crypto | OrchestrationEngine.OrchestrationEngineService | SqlClient.SqlClient
     >();
 
-    const inactivityThresholdMs = Math.max(
-      1,
-      options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
-    );
+    const inactivityThresholdMs =
+      options?.inactivityThresholdMs ?? (yield* providerSessionInactivityThresholdConfig);
+    if (inactivityThresholdMs <= 0) {
+      return yield* Effect.fail(
+        new Config.ConfigError(
+          new ConfigProvider.SourceError({
+            message: "Provider session inactivity threshold must be positive.",
+          }),
+        ),
+      );
+    }
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
     const turnAbsoluteCapMs = Math.max(
       1,
@@ -157,7 +183,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const reaped = yield* providerService.stopSession({ threadId: binding.threadId }).pipe(
+        const reaped = yield* providerService.terminateSession({ threadId: binding.threadId }).pipe(
           Effect.tap(() =>
             Effect.logInfo("provider.session.reaped", {
               threadId: binding.threadId,
@@ -168,7 +194,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           ),
           Effect.as(true),
           Effect.catchCause((cause) =>
-            Effect.logWarning("provider.session.reaper.stop-failed", {
+            Effect.logWarning("provider.session.reaper.termination-failed", {
               threadId: binding.threadId,
               provider: binding.provider,
               idleDurationMs,

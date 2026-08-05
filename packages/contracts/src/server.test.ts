@@ -1,11 +1,39 @@
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerConfig, ServerProvider, ServerUpsertKeybindingResult } from "./server.ts";
+import {
+  ServerConfig,
+  ServerProvider,
+  ServerResourceSample,
+  ServerUpsertKeybindingResult,
+} from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
+const decodeServerResourceSample = Schema.decodeUnknownSync(ServerResourceSample);
+
+const resourceSampleBase = {
+  version: 1,
+  sampledAt: DateTime.makeUnsafe("2026-08-04T00:00:00.000Z"),
+  process: {
+    rssBytes: 3_500,
+    heapUsedBytes: 1_200,
+    heapTotalBytes: 2_000,
+    externalBytes: 100,
+    cpuPercent: 25,
+  },
+  system: {
+    totalMemoryBytes: 30_000,
+    freeMemoryBytes: 10_000,
+    loadAverage1m: 1,
+    loadAverage5m: 2,
+    loadAverage15m: 3,
+    cpuCount: 16,
+  },
+  disk: null,
+} as const;
 
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {
@@ -94,5 +122,52 @@ describe("server config forward compatibility", () => {
     const parsed = decodeAvailableEditors(["zed", "some-future-editor", "vscode"]);
 
     expect(parsed).toEqual(["zed", "vscode"]);
+  });
+});
+
+describe("ServerResourceSample", () => {
+  it("decodes samples produced before cgroup memory details were added", () => {
+    const parsed = decodeServerResourceSample({
+      ...resourceSampleBase,
+      cgroup: {
+        memoryCurrentBytes: 12_000,
+        memoryHighBytes: 16_000,
+        memoryMaxBytes: 16_000,
+        memoryPeakBytes: 14_000,
+        cpuPercent: 60,
+      },
+    });
+
+    expect(parsed.cgroup?.memoryWorkingSetBytes).toBeUndefined();
+    expect(parsed.cgroup?.memoryEventsOomKill).toBeUndefined();
+  });
+
+  it("decodes enriched cgroup memory details without changing protocol version", () => {
+    const parsed = decodeServerResourceSample({
+      ...resourceSampleBase,
+      cgroup: {
+        memoryCurrentBytes: 12_000,
+        memoryHighBytes: 16_000,
+        memoryMaxBytes: 16_000,
+        memoryPeakBytes: 14_000,
+        memoryWorkingSetBytes: 8_200,
+        memoryAnonBytes: 5_000,
+        memoryFileBytes: 6_000,
+        memoryInactiveFileBytes: 3_800,
+        memorySlabReclaimableBytes: 200,
+        memorySwapCurrentBytes: 500,
+        pidsCurrent: 120,
+        memoryEventsHigh: 2,
+        memoryEventsMax: 0,
+        memoryEventsOom: 0,
+        memoryEventsOomKill: 0,
+        cpuPercent: 60,
+      },
+    });
+
+    expect(parsed.version).toBe(1);
+    expect(parsed.cgroup?.memoryWorkingSetBytes).toBe(8_200);
+    expect(parsed.cgroup?.memoryEventsHigh).toBe(2);
+    expect(parsed.cgroup?.pidsCurrent).toBe(120);
   });
 });

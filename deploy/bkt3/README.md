@@ -31,6 +31,16 @@ become healthy. If the health check fails it restores the previous artifact and
 restarts again. Dependency installation, tests, and application builds run in
 GitHub Actions; they do not run on the shared dev server.
 
+The checked-in systemd unit sets idle provider sessions to terminate after ten
+minutes with `T3CODE_PROVIDER_SESSION_INACTIVITY_MS=600000`. Artifact deployment
+does not install unit files. After changing `t3-bkmain.service`, install it and
+reload systemd before the next drained restart:
+
+```bash
+sudo install -m 0644 deploy/bkt3/t3-bkmain.service /etc/systemd/system/t3-bkmain.service
+sudo systemctl daemon-reload
+```
+
 > Deploying bkt3 from a session hosted **on** bkt3 kills that session. Agent
 > worktrees under `/home/ubuntu/.t3/bkt3-dev/worktrees/` run as children of
 > `t3-bkmain.service`, which this script restarts — interrupting every in-flight

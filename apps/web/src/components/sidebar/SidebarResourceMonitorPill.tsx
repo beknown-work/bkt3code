@@ -7,7 +7,7 @@ import { usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 
-function formatBytes(value: number): string {
+export function formatBytes(value: number): string {
   if (value < 1024) return `${Math.round(value)} B`;
   const units = ["KB", "MB", "GB", "TB"] as const;
   let unitIndex = -1;
@@ -19,13 +19,53 @@ function formatBytes(value: number): string {
   return `${next.toFixed(next >= 10 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function memoryTone(sample: ServerResourceSample): "default" | "warning" | "danger" {
+export function memoryTone(sample: ServerResourceSample): "default" | "warning" | "danger" {
   const cgroup = sample.cgroup;
   const current = cgroup?.memoryCurrentBytes ?? null;
   if (cgroup === null || current === null) return "default";
   if (cgroup.memoryMaxBytes !== null && current >= cgroup.memoryMaxBytes * 0.9) return "danger";
   if (cgroup.memoryHighBytes !== null && current > cgroup.memoryHighBytes) return "warning";
   return "default";
+}
+
+export function memoryPresentation(sample: ServerResourceSample): {
+  readonly node: string;
+  readonly service: string | null;
+  readonly serviceDetails: string | null;
+} {
+  const cgroup = sample.cgroup;
+  const node = `Node ${formatBytes(sample.process.rssBytes)} RSS · heap ${formatBytes(sample.process.heapUsedBytes)}/${formatBytes(sample.process.heapTotalBytes)} · external ${formatBytes(sample.process.externalBytes)}`;
+  if (cgroup === null || cgroup.memoryCurrentBytes === null) {
+    return { node, service: null, serviceDetails: null };
+  }
+
+  const working = cgroup.memoryWorkingSetBytes ?? cgroup.memoryCurrentBytes;
+  const service = `Service ${formatBytes(working)} working · ${formatBytes(cgroup.memoryCurrentBytes)} accounted`;
+  const details = [
+    cgroup.memoryAnonBytes === undefined ? null : `anon ${formatBytes(cgroup.memoryAnonBytes)}`,
+    cgroup.memoryFileBytes === undefined ? null : `file ${formatBytes(cgroup.memoryFileBytes)}`,
+    cgroup.memoryInactiveFileBytes === undefined
+      ? null
+      : `inactive file ${formatBytes(cgroup.memoryInactiveFileBytes)}`,
+    cgroup.memorySlabReclaimableBytes === undefined
+      ? null
+      : `reclaimable slab ${formatBytes(cgroup.memorySlabReclaimableBytes)}`,
+    cgroup.memorySwapCurrentBytes === undefined
+      ? null
+      : `swap ${formatBytes(cgroup.memorySwapCurrentBytes)}`,
+    cgroup.pidsCurrent === undefined ? null : `${cgroup.pidsCurrent} PIDs`,
+  ]
+    .filter((detail): detail is string => detail !== null)
+    .join(" · ");
+
+  return {
+    node,
+    service,
+    serviceDetails:
+      details === ""
+        ? "Includes agents, MCPs, kernel memory, and reclaimable filesystem cache."
+        : `Includes agents, MCPs, kernel memory, and reclaimable filesystem cache. ${details}.`,
+  };
 }
 
 function MemoryUsageBar({ sample }: { sample: ServerResourceSample }) {
@@ -77,6 +117,7 @@ function ResourceMonitorCard() {
   const { data: sample } = useEnvironmentQuery(
     environmentId === null ? null : serverEnvironment.resources({ environmentId, input: {} }),
   );
+  const memory = sample === null ? null : memoryPresentation(sample);
 
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-border/40 bg-muted/30 px-2 py-1.5 text-[11px] leading-4">
@@ -90,11 +131,16 @@ function ResourceMonitorCard() {
         </span>
       ) : (
         <div className="flex flex-col gap-1 text-muted-foreground">
-          <span className="truncate tabular-nums">
-            Mem {formatBytes(sample.process.rssBytes)} RSS · heap{" "}
-            {formatBytes(sample.process.heapUsedBytes)}
-          </span>
+          <span className="truncate tabular-nums">{memory?.node}</span>
+          {memory?.service ? (
+            <span className="truncate tabular-nums">{memory?.service}</span>
+          ) : null}
           <MemoryUsageBar sample={sample} />
+          {memory?.serviceDetails ? (
+            <span className="text-[10px] leading-3 text-muted-foreground/60">
+              {memory?.serviceDetails}
+            </span>
+          ) : null}
           <span className="truncate tabular-nums">
             CPU {Math.round(sample.cgroup?.cpuPercent ?? sample.process.cpuPercent)}% · load{" "}
             {sample.system.loadAverage1m.toFixed(1)} / {sample.system.cpuCount}
