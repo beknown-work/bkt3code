@@ -54,9 +54,12 @@ A generic configuration looks like:
 
 The personal token is a password-equivalent secret. It resolves to the user who
 created it and can see or control only that user's accessible projects and
-sessions. It may create user-owned sessions but cannot update server settings,
-create server-wide projects, or use the raw command escape hatch. Rotating the
-token immediately invalidates the previous token.
+sessions. The compact web UI bridge may perform any operation that the same
+logged-in web user is authorized to perform, including validated settings and
+orchestration operations. It does not grant access-management or relay-write
+scopes, make another user's project or thread visible, or bypass administrator
+checks inside a handler. Rotating the token immediately invalidates the previous
+token.
 
 Reverse proxies must preserve `Authorization`, support streaming responses, and
 avoid buffering the `/mcp` endpoint.
@@ -129,10 +132,62 @@ custom-header authentication are also supported.
 | `t3_list_plannotator_reviews` | Inspect review state, decision, feedback, proxy path, and diagnostics.                                                |
 | `t3_update_server_settings`   | Apply a validated settings patch. External operators only.                                                            |
 | `t3_dispatch_command`         | Dispatch any current validated orchestration command. External operators only; prefer focused tools.                  |
+| `t3_ui_list_tools`            | List every virtual tool generated from the authenticated web UI RPC contract, with scope and stream metadata.         |
+| `t3_ui_get_tool`              | Read the exact input, success, and declared error schemas for one virtual web UI tool.                                |
+| `t3_ui_call`                  | Execute one virtual web UI tool through the browser's handler, validation, authorization, and visibility path.        |
+| `t3_ui_batch`                 | Execute up to 25 virtual web UI tools sequentially in a shared handler scope.                                         |
 
 The MCP JSON schemas describe every field. Agents should call
 `t3_get_configuration` before changing models and `t3_get_session` before
 answering approvals or structured input.
+
+## Complete web UI parity and code mode
+
+The four `t3_ui_*` bridge tools expose the complete authenticated WebSocket RPC surface
+without advertising roughly one hundred large schemas in every provider prompt.
+At the time of this release the catalog contains 100 virtual tools, including 19
+streams. The list is generated from `WsRpcGroup`, so a later web RPC is present
+automatically and the parity test fails if naming, authorization coverage, or
+schema generation becomes incomplete.
+
+Use this code-mode sequence:
+
+1. Call `t3_ui_list_tools` with no filters to receive the full virtual tool list.
+   Each entry includes its generated name, underlying RPC method, category,
+   required transport scope, read/write hint, stream mode, and whether the
+   current caller has that scope.
+2. Call `t3_ui_get_tool` with the chosen virtual name to retrieve its exact
+   input, success, and declared error JSON schemas.
+3. Call `t3_ui_call` with `tool` and `input`, or combine dependent operations in
+   `t3_ui_batch`. Batch execution is sequential and may stop on the first error.
+
+For example, `server.getConfig` is exposed as
+`t3_ui_server_get_config`, while
+`sourceControl.profiles.replaceCredential` is exposed as
+`t3_ui_source_control_profiles_replace_credential`. Dots and camel-case
+boundaries become lower-case underscores; `t3_ui_list_tools` is the canonical
+list rather than documentation copied by hand.
+
+Calls reuse the same in-process handlers as the web socket client. That means
+payload decoding, transport scopes, Clerk administrator checks, per-user
+project/thread visibility, settings redaction, orchestration receipts, and
+provider-specific behavior stay identical to the web UI. An `authorized: true`
+catalog entry confirms only the transport scope; the handler still checks the
+specific project, thread, user, process, or external resource at call time.
+
+Streaming virtual tools return bounded event arrays. Subscription streams use a
+short snapshot-oriented window by default; progress streams use a longer window
+for operations such as server updates, relay installation, and stacked Git
+actions. Callers may set `maxItems` (1–500), `idleTimeoutMs` (100–60,000), and
+`totalTimeoutMs` (1,000–300,000). Every value is clamped server-side, so a
+subscription cannot leave an MCP request open indefinitely.
+
+Browser-local preferences, HTTP authentication/session bootstrap, and cloud-link
+handshakes that are not part of the authenticated WebSocket contract are not in
+this catalog. Focused tools
+such as `t3_get_session`, `t3_send_prompt`, and the `preview_*` family remain the
+preferred interface for routine agent work; the bridge is the complete escape
+hatch for deep control and read parity.
 
 `t3_create_session` resolves omitted workspace, model/options, access, and Build/Plan fields from
 the target project's defaults and then that environment's app defaults. Its structured `workspace`
@@ -289,6 +344,8 @@ fragment, T3 migrates the same durable review to `.html` before relaunching it.
   `apps/server/src/mcp/{UserMcpProfileStore,McpUpstreamProxy}.ts`
 - Tool contracts and handlers:
   `apps/server/src/mcp/toolkits/control/`
+- Complete authenticated web UI bridge:
+  `apps/server/src/mcp/toolkits/webUi/`
 - Plannotator lifecycle and proxy:
   `apps/server/src/plannotator/`
 - Sidebar status derivation:
