@@ -6,29 +6,11 @@ import { expect } from "vite-plus/test";
 
 import { resolveAvailableWorktreeBase } from "./WorktreeBaseResolver.ts";
 
-it.effect("finds an exact origin base beyond the default ref-list page", () =>
+it.effect("uses exact Git proof when the ref list misses the configured origin base", () =>
   Effect.gen(function* () {
-    const listRefs = (input: VcsListRefsInput): Effect.Effect<VcsListRefsResult> =>
+    const listRefs = (_input: VcsListRefsInput): Effect.Effect<VcsListRefsResult> =>
       Effect.succeed({
-        refs:
-          input.query === "origin/bkmain"
-            ? [
-                {
-                  name: "origin/bkmain",
-                  current: false,
-                  isDefault: false,
-                  isRemote: true,
-                  remoteName: "origin",
-                  worktreePath: null,
-                },
-              ]
-            : Array.from({ length: 100 }, (_, index) => ({
-                name: `local-${index}`,
-                current: false,
-                isDefault: false,
-                isRemote: false,
-                worktreePath: null,
-              })),
+        refs: [],
         isRepo: true,
         hasPrimaryRemote: true,
         nextCursor: null,
@@ -39,8 +21,33 @@ it.effect("finds an exact origin base beyond the default ref-list page", () =>
       cwd: "/repo",
       baseRef: { kind: "branch", source: "origin", branch: "bkmain" },
       listRefs,
+      resolveRemoteTrackingCommit: () =>
+        Effect.succeed({
+          commitSha: "0123456789abcdef",
+          remoteRefName: "origin/bkmain",
+        }),
     });
 
     expect(resolved).toEqual({ kind: "branch", source: "origin", branch: "bkmain" });
+  }),
+);
+
+it.effect("keeps a genuinely missing origin base unavailable", () =>
+  Effect.gen(function* () {
+    const resolved = yield* resolveAvailableWorktreeBase({
+      cwd: "/repo",
+      baseRef: { kind: "branch", source: "origin", branch: "missing" },
+      listRefs: () =>
+        Effect.succeed({
+          refs: [],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: 0,
+        }),
+      resolveRemoteTrackingCommit: () => Effect.fail("missing"),
+    });
+
+    expect(resolved).toBeNull();
   }),
 );

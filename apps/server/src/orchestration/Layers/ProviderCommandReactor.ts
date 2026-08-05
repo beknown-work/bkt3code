@@ -1691,6 +1691,7 @@ const make = Effect.gen(function* () {
             cwd: projectCwd,
             baseRef: resolvedPrepare.baseRef,
             listRefs: gitWorkflow.listRefs,
+            resolveRemoteTrackingCommit: gitWorkflow.resolveRemoteTrackingCommit,
           }).pipe(
             Effect.mapError((cause) =>
               fail(
