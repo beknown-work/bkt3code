@@ -173,7 +173,13 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
-  readonly retryExpectedFailureAfter?: Duration.Input;
+  // T3-CUSTOM(expbkt3): allow hot subscriptions to back off and become dormant.
+  readonly retryExpectedFailureAfter?:
+    | Duration.Input
+    | ((
+        attempt: number,
+        cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+      ) => Option.Option<Duration.Input>);
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
 }
 
@@ -211,7 +217,9 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               >;
-              const subscribeToSession = (): Stream.Stream<
+              const subscribeToSession = (
+                retryAttempt = 0,
+              ): Stream.Stream<
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               > =>
@@ -251,16 +259,26 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                             const handled = Stream.fromEffect(
                               options.onExpectedFailure(cause),
                             ).pipe(Stream.drain);
-                            if (options.retryExpectedFailureAfter === undefined) {
+                            const retryExpectedFailureAfter = options.retryExpectedFailureAfter;
+                            if (retryExpectedFailureAfter === undefined) {
+                              return handled;
+                            }
+                            // T3-CUSTOM(expbkt3): a policy may end retries without
+                            // waiting for the whole WebSocket session to be replaced.
+                            const retryDelay =
+                              typeof retryExpectedFailureAfter === "function"
+                                ? retryExpectedFailureAfter(retryAttempt, cause)
+                                : Option.some(retryExpectedFailureAfter);
+                            if (Option.isNone(retryDelay)) {
                               return handled;
                             }
                             return handled.pipe(
                               Stream.concat(
-                                Stream.fromEffect(
-                                  Effect.sleep(options.retryExpectedFailureAfter),
-                                ).pipe(Stream.drain),
+                                Stream.fromEffect(Effect.sleep(retryDelay.value)).pipe(
+                                  Stream.drain,
+                                ),
                               ),
-                              Stream.concat(subscribeToSession()),
+                              Stream.concat(subscribeToSession(retryAttempt + 1)),
                             );
                           }
                           return Stream.failCause(cause);
