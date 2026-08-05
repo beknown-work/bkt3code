@@ -79,6 +79,9 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
+            // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+            getSessionListDetails: () => Effect.succeed([]),
+            listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
             getShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
             getArchivedShellSnapshot: () =>
@@ -190,6 +193,9 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
+            // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+            getSessionListDetails: () => Effect.succeed([]),
+            listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
             getShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
             getArchivedShellSnapshot: () =>
@@ -276,6 +282,9 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
+            // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+            getSessionListDetails: () => Effect.succeed([]),
+            listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
             getShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
             getArchivedShellSnapshot: () =>
@@ -347,6 +356,9 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
+            // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+            getSessionListDetails: () => Effect.succeed([]),
+            listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
             getShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
             getArchivedShellSnapshot: () =>
@@ -403,6 +415,9 @@ describe("CheckpointDiffQuery.layer", () => {
               Effect.die("CheckpointDiffQuery should not request the command read model"),
             getSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the full orchestration snapshot"),
+            // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+            getSessionListDetails: () => Effect.succeed([]),
+            listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
             getShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request the orchestration shell snapshot"),
             getArchivedShellSnapshot: () =>

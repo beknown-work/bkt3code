@@ -38,7 +38,7 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   attachNativePlanReview,
-  latestPlansForNativeReview,
+  // T3-CUSTOM(expbkt3): bounded startup reconciliation candidate shape.
   type NativePlanBridgeInput,
 } from "./NativePlanBridge.ts";
 import { PLANNOTATOR_CLIENT_REAPER_MS, PlannotatorClientLease } from "./PlannotatorClientLease.ts";
@@ -288,6 +288,24 @@ export class PlannotatorManager extends Context.Service<
   PlannotatorManager,
   PlannotatorManagerShape
 >()("t3/plannotator/PlannotatorManager") {}
+
+// T3-CUSTOM(expbkt3): Plannotator startup reads only newest active plan candidates.
+export const reconcileNativePlansOnStartup = Effect.fn(
+  "PlannotatorManager.reconcileNativePlansOnStartup",
+)(function* (
+  query: Pick<ProjectionSnapshotQuery["Service"], "listLatestProposedPlansForActiveThreads">,
+  scheduleNativePlanAttachment: (
+    threadId: ThreadId,
+    proposedPlan: NativePlanBridgeInput["proposedPlan"],
+  ) => Effect.Effect<void>,
+) {
+  const candidates = yield* query.listLatestProposedPlansForActiveThreads();
+  yield* Effect.forEach(
+    candidates,
+    ({ threadId, proposedPlan }) => scheduleNativePlanAttachment(threadId, proposedPlan),
+    { concurrency: 4, discard: true },
+  );
+});
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -1234,14 +1252,8 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  yield* query.getSnapshot().pipe(
-    Effect.flatMap((snapshot) =>
-      Effect.forEach(
-        latestPlansForNativeReview(snapshot.threads),
-        ({ threadId, proposedPlan }) => scheduleNativePlanAttachment(threadId, proposedPlan),
-        { concurrency: 4, discard: true },
-      ),
-    ),
+  // T3-CUSTOM(expbkt3): avoid hydrating full projection history during startup.
+  yield* reconcileNativePlansOnStartup(query, scheduleNativePlanAttachment).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("could not reconcile native proposed plans with Plannotator", {
         cause: String(cause),

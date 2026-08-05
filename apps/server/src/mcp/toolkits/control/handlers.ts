@@ -30,6 +30,8 @@ import { ThreadExecutionSupervisor } from "../../../execution/ThreadExecutionSup
 import { OrchestrationCommandDispatcher } from "../../../orchestration/dispatchCommand.ts";
 import { OrchestrationAccessControl } from "../../../orchestration/Services/AccessControl.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+// T3-CUSTOM(expbkt3): bounded catch-up detail for t3_list_sessions.
+import type { ProjectionSessionListDetail } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PlannotatorManager } from "../../../plannotator/PlannotatorManager.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "../../../serverSettings.ts";
@@ -207,6 +209,7 @@ function attentionReasons(
   return reasons;
 }
 
+// T3-CUSTOM(expbkt3): list summaries consume narrow catch-up detail, not full threads.
 function sessionSummary(
   thread: OrchestrationThreadShell,
   execution: ThreadExecutionSnapshot,
@@ -217,10 +220,9 @@ function sessionSummary(
         readonly workspaceRoot: string;
       }
     | undefined,
-  detail: OrchestrationThread | undefined,
+  detail: ProjectionSessionListDetail | undefined,
 ) {
   const reasons = attentionReasons(thread, execution);
-  const turnSummaries = detail?.turnSummaries ?? [];
   return {
     sessionId: thread.id,
     title: thread.title,
@@ -241,7 +243,7 @@ function sessionSummary(
     humanAttentionReasons: reasons,
     catchup: {
       rollingSummary: detail?.rollingSummary ?? null,
-      latestTurnSummary: turnSummaries.at(-1) ?? null,
+      latestTurnSummary: detail?.latestTurnSummary ?? null,
     },
     latestTurn: thread.latestTurn,
     updatedAt: thread.updatedAt,
@@ -294,9 +296,8 @@ const handlers = {
     const scope = yield* requireCapability(operation, "t3.read");
     const query = yield* ProjectionSnapshotQuery;
     const executionSupervisor = yield* ThreadExecutionSupervisor;
-    const [shell, full] = yield* Effect.all([query.getShellSnapshot(), query.getSnapshot()]).pipe(
-      mapControlError(operation),
-    );
+    // T3-CUSTOM(expbkt3): never materialize full message/activity history for session lists.
+    const shell = yield* query.getShellSnapshot().pipe(mapControlError(operation));
     const archived =
       input.includeArchived === true && hasUserWideScope(scope)
         ? yield* query.getArchivedShellSnapshot().pipe(mapControlError(operation))
@@ -320,36 +321,44 @@ const handlers = {
         },
       ]),
     );
-    const details = new Map(full.threads.map((thread) => [thread.id, thread]));
-    const summaries = threads
-      .map((thread) =>
-        sessionSummary(
-          thread,
+    // T3-CUSTOM(expbkt3): cap first, then bulk-read only catch-up fields for returned sessions.
+    const selected = threads
+      .map((thread) => ({
+        thread,
+        execution:
           executions.get(thread.id) ??
-            ({
-              threadId: thread.id,
-              authorityEpoch: "unavailable",
-              revision: 0,
-              observedAt: thread.updatedAt,
-              activity: "idle",
-              canStop: false,
-              providerSession: {
-                state: "absent",
-                generation: 0,
-                providerInstanceId: null,
-                startedAt: null,
-                lastObservedAt: null,
-                lastError: null,
-              },
-              turn: null,
-            } satisfies ThreadExecutionSnapshot),
-          projects.get(thread.projectId),
-          details.get(thread.id),
-        ),
+          ({
+            threadId: thread.id,
+            authorityEpoch: "unavailable",
+            revision: 0,
+            observedAt: thread.updatedAt,
+            activity: "idle",
+            canStop: false,
+            providerSession: {
+              state: "absent",
+              generation: 0,
+              providerInstanceId: null,
+              startedAt: null,
+              lastObservedAt: null,
+              lastError: null,
+            },
+            turn: null,
+          } satisfies ThreadExecutionSnapshot),
+      }))
+      .filter(
+        ({ thread, execution }) =>
+          input.attentionOnly !== true || attentionReasons(thread, execution).length > 0,
       )
-      .filter((summary) => input.attentionOnly !== true || summary.needsHumanAttention)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => right.thread.updatedAt.localeCompare(left.thread.updatedAt))
       .slice(0, boundedLimit(input.limit, 100, 500));
+    const details = new Map(
+      (yield* query
+        .getSessionListDetails(selected.map(({ thread }) => thread.id))
+        .pipe(mapControlError(operation))).map((detail) => [detail.threadId, detail]),
+    );
+    const summaries = selected.map(({ thread, execution }) =>
+      sessionSummary(thread, execution, projects.get(thread.projectId), details.get(thread.id)),
+    );
     return {
       totals: {
         returned: summaries.length,
@@ -1107,4 +1116,6 @@ export const T3ControlToolkitHandlersLive = T3ControlToolkit.toLayer(handlers);
 /** Exposed for focused authorization tests. */
 export const __testing = {
   resolveSessionId,
+  // T3-CUSTOM(expbkt3): caller-seam regression for bounded session list reads.
+  listSessions: handlers.t3_list_sessions,
 };

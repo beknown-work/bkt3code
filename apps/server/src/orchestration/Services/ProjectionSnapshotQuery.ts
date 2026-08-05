@@ -18,6 +18,9 @@ import type {
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadShell,
+  // T3-CUSTOM(expbkt3): bounded list/startup projection reads.
+  OrchestrationProposedPlan,
+  OrchestrationTurnCatchupSummary,
   ProjectId,
   ThreadId,
   UserId,
@@ -65,6 +68,19 @@ export interface ProjectionThreadAccess {
   readonly memberUserIds: ReadonlyArray<UserId>;
 }
 
+// T3-CUSTOM(expbkt3): t3_list_sessions needs catch-up data, never full thread history.
+export interface ProjectionSessionListDetail {
+  readonly threadId: ThreadId;
+  readonly rollingSummary: string | null;
+  readonly latestTurnSummary: OrchestrationTurnCatchupSummary | null;
+}
+
+// T3-CUSTOM(expbkt3): Plannotator startup needs only the newest active plan per thread.
+export interface ProjectionLatestProposedPlan {
+  readonly threadId: ThreadId;
+  readonly proposedPlan: OrchestrationProposedPlan;
+}
+
 /**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
@@ -85,6 +101,17 @@ export interface ProjectionSnapshotQueryShape {
    * projector cursor state.
    */
   readonly getSnapshot: () => Effect.Effect<OrchestrationReadModel, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): bounded bulk detail for the capped MCP session list.
+  readonly getSessionListDetails: (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<ProjectionSessionListDetail>, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): bounded Plannotator startup reconciliation candidates.
+  readonly listLatestProposedPlansForActiveThreads: () => Effect.Effect<
+    ReadonlyArray<ProjectionLatestProposedPlan>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the latest orchestration shell snapshot.

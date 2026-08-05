@@ -355,6 +355,9 @@ describe("OrchestrationEngine", () => {
               fullSnapshotReadCount += 1;
               return projectionSnapshot;
             }),
+          // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+          getSessionListDetails: () => Effect.succeed([]),
+          listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: projectionSnapshot.snapshotSequence,

@@ -263,6 +263,9 @@ describe("ProviderSessionReaper", () => {
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
+          // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+          getSessionListDetails: () => Effect.succeed([]),
+          listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
           getShellSnapshot: () => Effect.die("unused"),
           getArchivedShellSnapshot: () => Effect.die("unused"),
           getSnapshotSequence: () =>
