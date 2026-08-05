@@ -63,6 +63,9 @@ import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
+  // T3-CUSTOM(expbkt3): bounded list/startup projection reads.
+  type ProjectionLatestProposedPlan,
+  type ProjectionSessionListDetail,
   type ProjectionSnapshotCounts,
   type ProjectionThreadAccess,
   type ProjectionThreadCheckpointContext,
@@ -132,6 +135,19 @@ const ProjectionThreadAccessRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   projectId: ProjectionThread.fields.projectId,
   ownerUserId: ProjectionThread.fields.ownerUserId,
+});
+// T3-CUSTOM(expbkt3): one row per requested session, with only catch-up fields.
+const ProjectionSessionListDetailRowSchema = Schema.Struct({
+  threadId: ThreadId,
+  rollingSummary: Schema.NullOr(Schema.String),
+  turnId: Schema.NullOr(TurnId),
+  assistantMessageId: Schema.NullOr(MessageId),
+  summary: Schema.NullOr(Schema.String),
+  status: Schema.NullOr(Schema.Literals(["pending", "ready", "error"])),
+  createdAt: Schema.NullOr(IsoDateTime),
+});
+const ProjectionSessionListDetailRequest = Schema.Struct({
+  threadIds: Schema.Array(ThreadId),
 });
 const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
@@ -1297,6 +1313,84 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // T3-CUSTOM(expbkt3): Bound t3_list_sessions to one catch-up row per requested thread.
+  const listSessionListDetailRows = SqlSchema.findAll({
+    Request: ProjectionSessionListDetailRequest,
+    Result: ProjectionSessionListDetailRowSchema,
+    execute: ({ threadIds }) =>
+      sql`
+        WITH requested_threads AS (
+          SELECT
+            threads.thread_id,
+            threads.rolling_summary
+          FROM projection_threads AS threads
+          WHERE threads.thread_id IN ${sql.in(threadIds)}
+        ), ranked_catchup AS (
+          SELECT
+            turns.thread_id,
+            turns.turn_id,
+            turns.assistant_message_id,
+            turns.catchup_summary,
+            turns.catchup_summary_status,
+            turns.catchup_summary_created_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY turns.thread_id
+              ORDER BY turns.catchup_summary_created_at DESC, turns.row_id DESC
+            ) AS catchup_rank
+          FROM projection_turns AS turns
+          INNER JOIN requested_threads AS requested
+            ON requested.thread_id = turns.thread_id
+          WHERE turns.catchup_summary_status IS NOT NULL
+            AND turns.catchup_summary_created_at IS NOT NULL
+        )
+        SELECT
+          requested.thread_id AS "threadId",
+          requested.rolling_summary AS "rollingSummary",
+          catchup.turn_id AS "turnId",
+          catchup.assistant_message_id AS "assistantMessageId",
+          catchup.catchup_summary AS "summary",
+          catchup.catchup_summary_status AS "status",
+          catchup.catchup_summary_created_at AS "createdAt"
+        FROM requested_threads AS requested
+        LEFT JOIN ranked_catchup AS catchup
+          ON catchup.thread_id = requested.thread_id
+          AND catchup.catchup_rank = 1
+        ORDER BY requested.thread_id ASC
+      `,
+  });
+
+  // T3-CUSTOM(expbkt3): Bound Plannotator startup to one newest active plan per thread.
+  const listLatestProposedPlanRowsForActiveThreads = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadProposedPlanDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          plans.plan_id AS "planId",
+          plans.thread_id AS "threadId",
+          plans.turn_id AS "turnId",
+          plans.plan_markdown AS "planMarkdown",
+          plans.implemented_at AS "implementedAt",
+          plans.implementation_thread_id AS "implementationThreadId",
+          plans.created_at AS "createdAt",
+          plans.updated_at AS "updatedAt"
+        FROM projection_thread_proposed_plans AS plans
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = plans.thread_id
+        WHERE threads.deleted_at IS NULL
+          AND threads.archived_at IS NULL
+          AND plans.plan_id = (
+            SELECT latest.plan_id
+            FROM projection_thread_proposed_plans AS latest
+            WHERE latest.thread_id = plans.thread_id
+            ORDER BY latest.updated_at DESC, latest.plan_id DESC
+            LIMIT 1
+          )
+          AND plans.implemented_at IS NULL
+        ORDER BY plans.thread_id ASC
+      `,
+  });
+
   const listCheckpointRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionCheckpointDbRowSchema,
@@ -1710,6 +1804,59 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           }
           return toPersistenceSqlError("ProjectionSnapshotQuery.getSnapshot:query")(error);
         }),
+      );
+
+  // T3-CUSTOM(expbkt3): Never hydrate messages/activities for MCP list catch-up fields.
+  const getSessionListDetails: ProjectionSnapshotQueryShape["getSessionListDetails"] = (
+    threadIds,
+  ) =>
+    threadIds.length === 0
+      ? Effect.succeed([])
+      : listSessionListDetailRows({ threadIds: [...threadIds] }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getSessionListDetails:query",
+              "ProjectionSnapshotQuery.getSessionListDetails:decodeRows",
+            ),
+          ),
+          Effect.map((rows) =>
+            rows.map(
+              (row): ProjectionSessionListDetail => ({
+                threadId: row.threadId,
+                rollingSummary: row.rollingSummary,
+                latestTurnSummary:
+                  row.turnId !== null && row.status !== null && row.createdAt !== null
+                    ? {
+                        turnId: row.turnId,
+                        assistantMessageId: row.assistantMessageId,
+                        summary: row.summary,
+                        status: row.status,
+                        createdAt: row.createdAt,
+                      }
+                    : null,
+              }),
+            ),
+          ),
+        );
+
+  // T3-CUSTOM(expbkt3): Never hydrate activities for Plannotator startup reconciliation.
+  const listLatestProposedPlansForActiveThreads: ProjectionSnapshotQueryShape["listLatestProposedPlansForActiveThreads"] =
+    () =>
+      listLatestProposedPlanRowsForActiveThreads(undefined).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listLatestProposedPlansForActiveThreads:query",
+            "ProjectionSnapshotQuery.listLatestProposedPlansForActiveThreads:decodeRows",
+          ),
+        ),
+        Effect.map((rows) =>
+          rows.map(
+            (row): ProjectionLatestProposedPlan => ({
+              threadId: row.threadId,
+              proposedPlan: mapProposedPlanRow(row),
+            }),
+          ),
+        ),
       );
 
   const getCommandReadModel: ProjectionSnapshotQueryShape["getCommandReadModel"] = () =>
@@ -2873,6 +3020,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   return {
     getCommandReadModel,
     getSnapshot,
+    // T3-CUSTOM(expbkt3): bounded list/startup projection reads.
+    getSessionListDetails,
+    listLatestProposedPlansForActiveThreads,
     getShellSnapshot,
     getArchivedShellSnapshot,
     searchThreads,
