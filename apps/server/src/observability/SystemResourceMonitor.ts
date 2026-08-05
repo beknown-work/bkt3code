@@ -66,6 +66,57 @@ function parseCpuStatUsageUsec(content: string | null): number | null {
   return null;
 }
 
+function parseCgroupKeyValue(content: string | null, key: string): number | null {
+  if (content === null) return null;
+  for (const line of content.split("\n")) {
+    const [entryKey, raw] = line.trim().split(/\s+/);
+    if (entryKey === key && raw !== undefined) return parseCgroupScalar(raw);
+  }
+  return null;
+}
+
+export interface CgroupMemoryFileContents {
+  readonly memoryCurrent: string | null;
+  readonly memoryStat: string | null;
+  readonly memorySwapCurrent: string | null;
+  readonly pidsCurrent: string | null;
+  readonly memoryEvents: string | null;
+}
+
+export function parseCgroupMemoryDetails(
+  contents: CgroupMemoryFileContents,
+): Partial<ServerResourceCgroupSample> {
+  const memoryCurrentBytes = parseCgroupScalar(contents.memoryCurrent);
+  const memoryAnonBytes = parseCgroupKeyValue(contents.memoryStat, "anon");
+  const memoryFileBytes = parseCgroupKeyValue(contents.memoryStat, "file");
+  const memoryInactiveFileBytes = parseCgroupKeyValue(contents.memoryStat, "inactive_file");
+  const memorySlabReclaimableBytes = parseCgroupKeyValue(contents.memoryStat, "slab_reclaimable");
+  const memorySwapCurrentBytes = parseCgroupScalar(contents.memorySwapCurrent);
+  const pidsCurrent = parseCgroupScalar(contents.pidsCurrent);
+  const memoryEventsHigh = parseCgroupKeyValue(contents.memoryEvents, "high");
+  const memoryEventsMax = parseCgroupKeyValue(contents.memoryEvents, "max");
+  const memoryEventsOom = parseCgroupKeyValue(contents.memoryEvents, "oom");
+  const memoryEventsOomKill = parseCgroupKeyValue(contents.memoryEvents, "oom_kill");
+  const memoryWorkingSetBytes =
+    memoryCurrentBytes === null || memoryInactiveFileBytes === null
+      ? null
+      : Math.max(0, memoryCurrentBytes - memoryInactiveFileBytes);
+
+  return {
+    ...(memoryWorkingSetBytes === null ? {} : { memoryWorkingSetBytes }),
+    ...(memoryAnonBytes === null ? {} : { memoryAnonBytes }),
+    ...(memoryFileBytes === null ? {} : { memoryFileBytes }),
+    ...(memoryInactiveFileBytes === null ? {} : { memoryInactiveFileBytes }),
+    ...(memorySlabReclaimableBytes === null ? {} : { memorySlabReclaimableBytes }),
+    ...(memorySwapCurrentBytes === null ? {} : { memorySwapCurrentBytes }),
+    ...(pidsCurrent === null ? {} : { pidsCurrent }),
+    ...(memoryEventsHigh === null ? {} : { memoryEventsHigh }),
+    ...(memoryEventsMax === null ? {} : { memoryEventsMax }),
+    ...(memoryEventsOom === null ? {} : { memoryEventsOom }),
+    ...(memoryEventsOomKill === null ? {} : { memoryEventsOomKill }),
+  };
+}
+
 /**
  * Resolves this process's cgroup v2 directory from /proc/self/cgroup
  * (a "0::<path>" line under the unified hierarchy). Null when the file is
@@ -100,12 +151,26 @@ const readCgroupSample = (
   elapsedMs: number,
 ): Effect.Effect<ServerResourceCgroupSample> =>
   Effect.gen(function* () {
-    const [memoryCurrent, memoryHigh, memoryMax, memoryPeak, cpuStat] = yield* Effect.all(
+    const [
+      memoryCurrent,
+      memoryHigh,
+      memoryMax,
+      memoryPeak,
+      memoryStat,
+      memorySwapCurrent,
+      pidsCurrent,
+      memoryEvents,
+      cpuStat,
+    ] = yield* Effect.all(
       [
         readTextFile(`${directory}/memory.current`),
         readTextFile(`${directory}/memory.high`),
         readTextFile(`${directory}/memory.max`),
         readTextFile(`${directory}/memory.peak`),
+        readTextFile(`${directory}/memory.stat`),
+        readTextFile(`${directory}/memory.swap.current`),
+        readTextFile(`${directory}/pids.current`),
+        readTextFile(`${directory}/memory.events`),
         readTextFile(`${directory}/cpu.stat`),
       ],
       { concurrency: "unbounded" },
@@ -122,6 +187,13 @@ const readCgroupSample = (
       memoryHighBytes: parseCgroupScalar(memoryHigh),
       memoryMaxBytes: parseCgroupScalar(memoryMax),
       memoryPeakBytes: parseCgroupScalar(memoryPeak),
+      ...parseCgroupMemoryDetails({
+        memoryCurrent,
+        memoryStat,
+        memorySwapCurrent,
+        pidsCurrent,
+        memoryEvents,
+      }),
       cpuPercent,
     };
   });

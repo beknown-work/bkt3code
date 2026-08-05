@@ -15,6 +15,13 @@ import {
 } from "./sidebarSessionCounters";
 
 const threadId = ThreadId.make("thread-1");
+const now = "2026-07-26T12:00:00.000Z";
+const futureWake = "2026-07-26T13:00:00.000Z";
+
+const supportedSnoozeOptions = {
+  now,
+  snoozeSupported: () => true,
+};
 
 function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
   return {
@@ -87,23 +94,112 @@ describe("sidebar session counters", () => {
 
   it("keeps running work out of the non-running count", () => {
     expect(
-      summarizeSidebarSessions([
-        makeThread({ hasPendingApprovals: true }),
-        makeThread({
-          id: ThreadId.make("thread-2"),
-          execution: makeExecution("active"),
-        }),
-        makeThread({
-          id: ThreadId.make("thread-3"),
-          hasPendingUserInput: true,
-          archivedAt: "2026-07-26T00:01:00.000Z",
-        }),
-        makeThread({
-          id: ThreadId.make("thread-4"),
-          settledAt: "2026-07-26T00:01:00.000Z",
-          execution: makeExecution("active"),
-        }),
-      ]),
-    ).toEqual({ nonRunning: 1, running: 1 });
+      summarizeSidebarSessions(
+        [
+          makeThread({ hasPendingApprovals: true }),
+          makeThread({
+            id: ThreadId.make("thread-2"),
+            execution: makeExecution("active"),
+          }),
+          makeThread({
+            id: ThreadId.make("thread-3"),
+            hasPendingUserInput: true,
+            archivedAt: "2026-07-26T00:01:00.000Z",
+          }),
+          makeThread({
+            id: ThreadId.make("thread-4"),
+            settledAt: "2026-07-26T00:01:00.000Z",
+            execution: makeExecution("active"),
+          }),
+        ],
+        supportedSnoozeOptions,
+      ),
+    ).toEqual({ nonRunning: 1, running: 1, nextSnoozeWakeAt: null });
+  });
+
+  it("excludes quiet snoozed work from the non-running count", () => {
+    expect(
+      summarizeSidebarSessions(
+        [makeThread({ snoozedAt: "2026-07-26T11:00:00.000Z", snoozedUntil: futureWake })],
+        supportedSnoozeOptions,
+      ),
+    ).toEqual({ nonRunning: 0, running: 0, nextSnoozeWakeAt: futureWake });
+  });
+
+  it("keeps a snoozed running agent in the running count", () => {
+    expect(
+      summarizeSidebarSessions(
+        [
+          makeThread({
+            execution: makeExecution("active"),
+            snoozedAt: "2026-07-26T11:00:00.000Z",
+            snoozedUntil: futureWake,
+          }),
+        ],
+        supportedSnoozeOptions,
+      ),
+    ).toEqual({ nonRunning: 0, running: 1, nextSnoozeWakeAt: null });
+  });
+
+  it("counts snooze fields as active when the server does not support snooze", () => {
+    expect(
+      summarizeSidebarSessions(
+        [makeThread({ snoozedAt: "2026-07-26T11:00:00.000Z", snoozedUntil: futureWake })],
+        { now, snoozeSupported: () => false },
+      ),
+    ).toEqual({ nonRunning: 1, running: 0, nextSnoozeWakeAt: null });
+  });
+
+  it("returns expired and invalid snoozes to the non-running count", () => {
+    expect(
+      summarizeSidebarSessions(
+        [
+          makeThread({
+            snoozedAt: "2026-07-26T10:00:00.000Z",
+            snoozedUntil: "2026-07-26T11:00:00.000Z",
+          }),
+          makeThread({
+            id: ThreadId.make("thread-2"),
+            snoozedAt: "2026-07-26T10:00:00.000Z",
+            snoozedUntil: "not-a-date",
+          }),
+        ],
+        supportedSnoozeOptions,
+      ),
+    ).toEqual({ nonRunning: 2, running: 0, nextSnoozeWakeAt: null });
+  });
+
+  it("counts a snoozed thread again when it raises its hand", () => {
+    expect(
+      summarizeSidebarSessions(
+        [
+          makeThread({
+            hasPendingUserInput: true,
+            snoozedAt: "2026-07-26T11:00:00.000Z",
+            snoozedUntil: futureWake,
+          }),
+        ],
+        supportedSnoozeOptions,
+      ),
+    ).toEqual({ nonRunning: 1, running: 0, nextSnoozeWakeAt: null });
+  });
+
+  it("returns the earliest wake boundary across excluded snoozes", () => {
+    expect(
+      summarizeSidebarSessions(
+        [
+          makeThread({
+            snoozedAt: "2026-07-26T11:00:00.000Z",
+            snoozedUntil: "2026-07-26T14:00:00.000Z",
+          }),
+          makeThread({
+            id: ThreadId.make("thread-2"),
+            snoozedAt: "2026-07-26T11:00:00.000Z",
+            snoozedUntil: futureWake,
+          }),
+        ],
+        supportedSnoozeOptions,
+      ),
+    ).toEqual({ nonRunning: 0, running: 0, nextSnoozeWakeAt: futureWake });
   });
 });

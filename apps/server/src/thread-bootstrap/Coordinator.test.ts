@@ -125,6 +125,7 @@ function testLayer(input: {
   readonly bootstrap?: ProjectionThreadBootstrap;
   readonly onCommand?: (command: OrchestrationCommand) => Effect.Effect<void>;
   readonly stopCommand?: TerminalManager.TerminalManager["Service"]["stopCommand"];
+  readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
 }) {
   return layer.pipe(
     Layer.provideMerge(NodeServices.layer),
@@ -179,6 +180,7 @@ function testLayer(input: {
               refName: "t3code/bootstrap-1",
             },
           }),
+        ...input.gitWorkflow,
       } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
     ),
     Layer.provide(
@@ -525,6 +527,67 @@ describe("ThreadBootstrapCoordinator", () => {
               command.type === "thread.bootstrap.step.update" && command.step === "setup",
           ),
         ).toBe(false);
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
+  it.effect("creates an origin worktree when the configured base is absent from the ref page", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const resolvedRefs: string[] = [];
+      let createdFrom: string | undefined;
+      const request: ResolvedThreadBootstrapRequest = {
+        ...resolvedRequest(),
+        workspace: {
+          mode: "new-worktree",
+          projectCwd: "/repo/project",
+          baseRef: { kind: "branch", source: "origin", branch: "bkmain" },
+          newBranch: "t3code/bootstrap-1",
+          intendedPath: "/tmp/worktrees/project/t3code-bootstrap-1",
+        },
+      };
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        request,
+        setup: () => Effect.succeed({ status: "no-script" as const }),
+        gitWorkflow: {
+          listRefs: () =>
+            Effect.succeed({
+              refs: [],
+              isRepo: true,
+              hasPrimaryRemote: true,
+              nextCursor: 100,
+              totalCount: 934,
+            }),
+          resolveRemoteTrackingCommit: (input) =>
+            Effect.sync(() => {
+              resolvedRefs.push(input.refName);
+              return { commitSha: "abc123", remoteRefName: "origin/bkmain" };
+            }),
+          createWorktree: (input) =>
+            Effect.sync(() => {
+              createdFrom = input.refName;
+              return {
+                worktree: {
+                  path: "/tmp/worktrees/project/t3code-bootstrap-1",
+                  refName: "t3code/bootstrap-1",
+                },
+              };
+            }),
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* coordinator.request(requestCommand());
+        yield* Deferred.await(bootstrapCompleted);
+
+        expect(resolvedRefs).toEqual(["origin/bkmain", "bkmain"]);
+        expect(createdFrom).toBe("abc123");
       }).pipe(Effect.provide(dependencies));
     }),
   );

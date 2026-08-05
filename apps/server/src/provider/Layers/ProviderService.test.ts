@@ -61,6 +61,7 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 import { makeObservableLifecycle } from "../observableLifecycle.ts";
 
@@ -171,7 +172,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   );
 
   const hasSession = vi.fn(
-    (threadId: ThreadId): Effect.Effect<boolean> => Effect.succeed(sessions.has(threadId)),
+    (threadId: ThreadId): Effect.Effect<boolean> => Effect.sync(() => sessions.has(threadId)),
   );
 
   const readThread = vi.fn(
@@ -854,6 +855,101 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("serializes concurrent explicit starts for one thread", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-concurrent-starts");
+      const firstStartEntered = yield* Deferred.make<void>();
+      const releaseFirstStart = yield* Deferred.make<void>();
+      const originalStartSession = routing.codex.startSession.getMockImplementation();
+      assert.isDefined(originalStartSession);
+
+      let invocation = 0;
+      let activeStarts = 0;
+      let maximumActiveStarts = 0;
+      routing.codex.startSession.mockImplementation((input, options) => {
+        invocation += 1;
+        const currentInvocation = invocation;
+        return Effect.gen(function* () {
+          activeStarts += 1;
+          maximumActiveStarts = Math.max(maximumActiveStarts, activeStarts);
+          if (currentInvocation === 1) {
+            yield* Deferred.succeed(firstStartEntered, undefined);
+            yield* Deferred.await(releaseFirstStart);
+          }
+          return yield* originalStartSession(input, options);
+        }).pipe(Effect.ensuring(Effect.sync(() => (activeStarts -= 1))));
+      });
+
+      const start = () =>
+        provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project-concurrent-starts",
+          runtimeMode: "full-access",
+        });
+
+      const firstFiber = yield* start().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(firstStartEntered);
+      const secondFiber = yield* start().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow, {
+        discard: true,
+      });
+      yield* Deferred.succeed(releaseFirstStart, undefined);
+      yield* Fiber.join(firstFiber);
+      yield* Fiber.join(secondFiber);
+
+      assert.equal(maximumActiveStarts, 1);
+      routing.codex.startSession.mockImplementation(originalStartSession);
+    }),
+  );
+
+  it.effect("serializes concurrent recovery and adopts the first resumed runtime", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-concurrent-recovery");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-concurrent-recovery",
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(threadId);
+      routing.codex.startSession.mockClear();
+
+      const recoveryEntered = yield* Deferred.make<void>();
+      const releaseRecovery = yield* Deferred.make<void>();
+      const originalStartSession = routing.codex.startSession.getMockImplementation();
+      assert.isDefined(originalStartSession);
+      routing.codex.startSession.mockImplementationOnce((input, options) =>
+        Deferred.succeed(recoveryEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRecovery)),
+          Effect.andThen(originalStartSession(input, options)),
+        ),
+      );
+
+      const resume = () => provider.sendTurn({ threadId, input: "resume", attachments: [] });
+      const firstFiber = yield* resume().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(recoveryEntered);
+      const secondFiber = yield* resume().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow, {
+        discard: true,
+      });
+      yield* Deferred.succeed(releaseRecovery, undefined);
+      yield* Fiber.join(firstFiber);
+      yield* Fiber.join(secondFiber);
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      assert.equal(
+        (yield* routing.codex.listSessions()).filter((session) => session.threadId === threadId)
+          .length,
+        1,
+      );
+    }),
+  );
+
   it.effect("reads provider history through the persisted thread route", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -879,6 +975,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("exposes and can terminate a session while the adapter is still starting", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const threadId = asThreadId("thread-slow-start");
       const adapterEntered = yield* Deferred.make<void>();
       const releaseAdapter = yield* Deferred.make<ProviderSession>();
@@ -929,6 +1026,130 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       assert.equal(yield* provider.inspectSession(threadId), null);
       assert.equal(Exit.isFailure(yield* Fiber.await(startFiber)), true);
+      assert.equal(yield* routing.codex.hasSession(threadId), false);
+      assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.status, "stopped");
+    }),
+  );
+
+  it.effect("terminates the provider replacement queued after an in-flight start", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-start-replacement-terminate");
+      const adapterEntered = yield* Deferred.make<void>();
+      const releaseAdapter = yield* Deferred.make<ProviderSession>();
+      routing.codex.startSession.mockImplementationOnce(() =>
+        Deferred.succeed(adapterEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseAdapter)),
+        ),
+      );
+
+      const firstStartFiber = yield* provider
+        .startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project-start-replacement-terminate",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(adapterEntered);
+
+      const replacementFiber = yield* provider
+        .startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: claudeAgentInstanceId,
+          threadId,
+          cwd: "/tmp/project-start-replacement-terminate",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.forEach(Array.from({ length: 10 }), () => Effect.yieldNow, {
+        discard: true,
+      });
+      const terminationFiber = yield* provider
+        .terminateSession({ threadId })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* Deferred.succeed(releaseAdapter, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        status: "ready",
+        runtimeMode: "full-access",
+        threadId,
+        cwd: "/tmp/project-start-replacement-terminate",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      assert.equal(Exit.isFailure(yield* Fiber.await(firstStartFiber)), true);
+      yield* Fiber.join(replacementFiber);
+      yield* Fiber.join(terminationFiber);
+
+      assert.equal(yield* routing.codex.hasSession(threadId), false);
+      assert.equal(yield* routing.claude.hasSession(threadId), false);
+      assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.providerInstanceId, claudeAgentInstanceId);
+      assert.equal(binding?.status, "stopped");
+      routing.claude.startSession.mockClear();
+    }),
+  );
+
+  it.effect("keeps the running binding when termination cannot be verified", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-unverified-termination");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-unverified-termination",
+        runtimeMode: "full-access",
+      });
+      const terminateSpy = vi
+        .spyOn(routing.codex.adapter, "terminateSession")
+        .mockImplementationOnce(() =>
+          Effect.succeed({ verified: false, graceful: false, processTreeExited: false }),
+        );
+
+      const failure = yield* Effect.flip(provider.terminateSession({ threadId }));
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.notEqual(binding?.status, "stopped");
+
+      terminateSpy.mockRestore();
+      yield* routing.codex.stopSession(threadId);
+    }),
+  );
+
+  it.effect("marks the binding stopped when a retried termination finds no runtime", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-termination-already-exited");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-termination-already-exited",
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(threadId);
+
+      const termination = yield* provider.terminateSession({ threadId });
+
+      assert.deepEqual(termination, {
+        verified: true,
+        graceful: true,
+        processTreeExited: true,
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.status, "stopped");
+      assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
     }),
   );
 
@@ -1232,7 +1453,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("stops stale sessions in other providers after a successful replacement start", () =>
+  it.effect("terminates stale sessions before starting a provider replacement", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const threadId = asThreadId("thread-provider-replacement");
@@ -1247,6 +1468,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       routing.codex.stopSession.mockClear();
       routing.claude.stopSession.mockClear();
+      const originalClaudeStart = routing.claude.startSession.getMockImplementation();
+      assert.isDefined(originalClaudeStart);
+      let oldRuntimeActiveWhenReplacementStarted: boolean | undefined;
+      routing.claude.startSession.mockImplementationOnce((input, options) =>
+        Effect.gen(function* () {
+          oldRuntimeActiveWhenReplacementStarted = yield* routing.codex.hasSession(threadId);
+          return yield* originalClaudeStart(input, options);
+        }),
+      );
 
       const claudeSession = yield* provider.startSession(threadId, {
         provider: ProviderDriverKind.make("claudeAgent"),
@@ -1258,6 +1488,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       assert.equal(codexSession.provider, "codex");
       assert.equal(claudeSession.provider, "claudeAgent");
+      assert.equal(oldRuntimeActiveWhenReplacementStarted, false);
       assert.deepEqual(routing.codex.stopSession.mock.calls, [[threadId]]);
       assert.equal(routing.claude.stopSession.mock.calls.length, 0);
 
@@ -1268,6 +1499,47 @@ routing.layer("ProviderServiceLive routing", (it) => {
           .map((session) => session.provider),
         ["claudeAgent"],
       );
+    }),
+  );
+
+  it.effect("does not start a replacement when old-runtime termination is unverified", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-provider-replacement-unverified");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-provider-replacement-unverified",
+        runtimeMode: "full-access",
+      });
+      routing.claude.startSession.mockClear();
+      const terminateSpy = vi
+        .spyOn(routing.codex.adapter, "terminateSession")
+        .mockImplementationOnce(() =>
+          Effect.succeed({ verified: false, graceful: false, processTreeExited: false }),
+        );
+
+      const failure = yield* Effect.flip(
+        provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: claudeAgentInstanceId,
+          threadId,
+          cwd: "/tmp/project-provider-replacement-unverified",
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+      assert.equal(yield* routing.codex.hasSession(threadId), true);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.providerInstanceId, codexInstanceId);
+      assert.equal(binding?.status, "running");
+
+      terminateSpy.mockRestore();
+      yield* routing.codex.stopSession(threadId);
     }),
   );
 

@@ -26,6 +26,8 @@ import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyThreadDetailEvent } from "./threadReducer.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
+// T3-CUSTOM(expbkt3): bound missing-thread retries that were saturating the server.
+import { threadSubscriptionRetryDelay } from "./threadSubscriptionRetry.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
@@ -308,10 +310,17 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }),
       {
         onExpectedFailure: setStreamError,
-        retryExpectedFailureAfter: "250 millis",
+        // T3-CUSTOM(expbkt3): transient drafts still recover, while stale
+        // archived/deleted routes cannot retry every 250 ms forever.
+        retryExpectedFailureAfter: threadSubscriptionRetryDelay,
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach(applyItem)),
+    ).pipe(
+      // T3-CUSTOM(expbkt3): deletion is terminal; ending the outer stream also
+      // prevents session changes and foreground wakeups from reopening it.
+      Stream.takeUntil((item) => item.kind === "event" && item.event.type === "thread.deleted"),
+      Stream.runForEach(applyItem),
+    ),
   );
 
   yield* Effect.addFinalizer(() =>
