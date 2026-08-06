@@ -1163,6 +1163,7 @@ const exchangeAccessToken = (
       readonly label?: string;
       readonly deviceType?: string;
       readonly os?: string;
+      readonly appVersion?: string;
     };
   },
 ) =>
@@ -1187,6 +1188,9 @@ const exchangeAccessToken = (
           ? { client_device_type: options.clientMetadata.deviceType }
           : {}),
         ...(options?.clientMetadata?.os ? { client_os: options.clientMetadata.os } : {}),
+        ...(options?.clientMetadata?.appVersion
+          ? { client_version: options.clientMetadata.appVersion }
+          : {}),
       }).toString(),
     });
     const body = yield* responseJsonEffect<{
@@ -1821,6 +1825,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           label: "T3 Code Mobile",
           deviceType: "mobile",
           os: "iOS",
+          appVersion: "0.0.31-nightly.20260806.1",
         },
       });
 
@@ -1837,6 +1842,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           readonly ipAddress?: string;
           readonly os?: string;
           readonly userAgent?: string;
+          readonly appVersion?: string;
         };
       }>;
       const mobileClient = clients.find((client) => !client.current);
@@ -1850,6 +1856,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         os: "iOS",
         ipAddress: "127.0.0.1",
         userAgent: "undici",
+        appVersion: "0.0.31-nightly.20260806.1",
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

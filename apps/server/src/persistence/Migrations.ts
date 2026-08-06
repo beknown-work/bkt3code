@@ -72,6 +72,8 @@ import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.
 import Migration1003 from "./Migrations/1003_DurableExecutionIntents.ts";
 // T3-CUSTOM(expbkt3): durable manual Linear issue tags.
 import Migration1004 from "./Migrations/1004_ProjectionThreadsLinearIssue.ts";
+// T3-CUSTOM(expbkt3): connected-client build identity for stale-bundle diagnosis.
+import Migration1006 from "./Migrations/1006_AuthSessionClientVersion.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -156,6 +158,7 @@ const migrationEntries = [
   [1003, "DurableExecutionIntents", Migration1003],
   [1004, "ProjectionThreadsLinearIssue", Migration1004],
   [1005, "ProjectionThreadsPinned", Migration1005],
+  [1006, "AuthSessionClientVersion", Migration1006],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

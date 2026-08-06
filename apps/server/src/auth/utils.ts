@@ -180,5 +180,7 @@ export function deriveAuthClientMetadata(input: {
     deviceType: input.presented?.deviceType ?? inferDeviceType(userAgent),
     ...(os ? { os } : {}),
     ...(browser ? { browser } : {}),
+    // T3-CUSTOM(expbkt3): retain the presented build without trusting it for auth.
+    ...(input.presented?.appVersion ? { appVersion: input.presented.appVersion } : {}),
   };
 }

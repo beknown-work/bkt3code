@@ -8,6 +8,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import desktopPackageJson from "../../package.json" with { type: "json" };
 
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
 
@@ -73,6 +74,8 @@ export const make = Effect.gen(function* () {
           clientMetadata: {
             label: "T3 Code Desktop",
             deviceType: "desktop",
+            // T3-CUSTOM(expbkt3): attach the packaged build to the local session.
+            appVersion: desktopPackageJson.version,
           },
         }).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),

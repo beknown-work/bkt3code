@@ -913,6 +913,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
       : null,
     clientSession.client.os ?? null,
     clientSession.client.browser ?? null,
+    clientSession.client.appVersion ? `T3 Code ${clientSession.client.appVersion}` : null,
     clientSession.client.ipAddress ?? null,
   ].filter((value): value is string => value !== null);
   const primaryLabel =

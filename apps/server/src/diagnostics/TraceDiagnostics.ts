@@ -14,8 +14,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 interface TraceRecordLike {
   readonly name?: unknown;
@@ -79,6 +81,7 @@ interface TraceDiagnosticsErrorSummary {
 }
 
 const DEFAULT_SLOW_SPAN_THRESHOLD_MS = 1_000;
+const READ_CACHE_TTL_MS = 5_000;
 const TOP_LIMIT = 10;
 const RECENT_LIMIT = 20;
 function toRotatedTracePaths(traceFilePath: string, maxFiles: number): ReadonlyArray<string> {
@@ -206,137 +209,195 @@ export function aggregateTraceDiagnostics(
     });
   }
 
-  let parseErrorCount = 0;
-  let recordCount = 0;
-  let failureCount = 0;
-  let interruptionCount = 0;
-  let slowSpanCount = 0;
-  let firstSpanAt: DateTime.Utc | null = null;
-  let lastSpanAt: DateTime.Utc | null = null;
-
-  const spansByName = new Map<
-    string,
-    { count: number; failureCount: number; totalDurationMs: number; maxDurationMs: number }
-  >();
-  const failuresByKey = new Map<string, ServerTraceDiagnosticsFailureSummary>();
-  const latestFailures: ServerTraceDiagnosticsRecentFailure[] = [];
-  const slowestSpans: ServerTraceDiagnosticsSpanOccurrence[] = [];
-  const latestWarningAndErrorLogs: ServerTraceDiagnosticsLogEvent[] = [];
-  const logLevelCounts: Record<string, number> = {};
-
+  const accumulator = makeAccumulator();
   for (const file of input.files) {
-    const lines = file.text.split(/\r?\n/);
-    for (const line of lines) {
-      if (line.trim().length === 0) continue;
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        parseErrorCount += 1;
-        continue;
-      }
-
-      if (!isRecordObject(parsed)) {
-        parseErrorCount += 1;
-        continue;
-      }
-
-      const name = toStringValue(parsed.name);
-      const traceId = toStringValue(parsed.traceId);
-      const spanId = toStringValue(parsed.spanId);
-      const durationMs = toNumberValue(parsed.durationMs);
-      const endedAt = unixNanoToDateTime(parsed.endTimeUnixNano);
-      const startedAt = unixNanoToDateTime(parsed.startTimeUnixNano);
-
-      if (!name || !traceId || !spanId || durationMs === null || !endedAt) {
-        parseErrorCount += 1;
-        continue;
-      }
-
-      recordCount += 1;
-      firstSpanAt =
-        startedAt && (firstSpanAt === null || DateTime.isLessThan(startedAt, firstSpanAt))
-          ? startedAt
-          : firstSpanAt;
-      lastSpanAt =
-        lastSpanAt === null || DateTime.isGreaterThan(endedAt, lastSpanAt) ? endedAt : lastSpanAt;
-
-      const exitTag = readExitTag(parsed.exit);
-      const isFailure = exitTag === "Failure";
-      const isInterrupted = exitTag === "Interrupted";
-      if (isFailure) failureCount += 1;
-      if (isInterrupted) interruptionCount += 1;
-
-      const spanSummary = spansByName.get(name) ?? {
-        count: 0,
-        failureCount: 0,
-        totalDurationMs: 0,
-        maxDurationMs: 0,
-      };
-      spanSummary.count += 1;
-      spanSummary.totalDurationMs += durationMs;
-      spanSummary.maxDurationMs = Math.max(spanSummary.maxDurationMs, durationMs);
-      if (isFailure) spanSummary.failureCount += 1;
-      spansByName.set(name, spanSummary);
-
-      const spanItem = { name, durationMs, endedAt, traceId, spanId };
-      if (durationMs >= slowSpanThresholdMs) {
-        slowSpanCount += 1;
-      }
-      insertBoundedSlowestSpan(slowestSpans, spanItem);
-
-      if (isFailure) {
-        const cause = readExitCause(parsed.exit);
-        latestFailures.push({ ...spanItem, cause });
-
-        const failureKey = `${name}\0${cause}`;
-        const existing = failuresByKey.get(failureKey);
-        const isLatestFailure = !existing || DateTime.isGreaterThan(endedAt, existing.lastSeenAt);
-        failuresByKey.set(failureKey, {
-          name,
-          cause,
-          count: (existing?.count ?? 0) + 1,
-          lastSeenAt: isLatestFailure ? endedAt : existing!.lastSeenAt,
-          traceId: isLatestFailure ? traceId : existing!.traceId,
-          spanId: isLatestFailure ? spanId : existing!.spanId,
-        });
-      }
-
-      if (Array.isArray(parsed.events)) {
-        for (const rawEvent of parsed.events) {
-          if (!isTraceEvent(rawEvent)) continue;
-          const attributes = readEventAttributes(rawEvent);
-          const level = toStringValue(attributes["effect.logLevel"]);
-          if (!level) continue;
-
-          logLevelCounts[level] = (logLevelCounts[level] ?? 0) + 1;
-          const normalizedLevel = level.toLowerCase();
-          if (
-            normalizedLevel !== "warning" &&
-            normalizedLevel !== "warn" &&
-            normalizedLevel !== "error" &&
-            normalizedLevel !== "fatal"
-          ) {
-            continue;
-          }
-
-          const seenAt = unixNanoToDateTime(rawEvent.timeUnixNano) ?? endedAt;
-          const message = toStringValue(rawEvent.name)?.trim() ?? "Log event";
-          latestWarningAndErrorLogs.push({
-            spanName: name,
-            level,
-            message,
-            seenAt,
-            traceId,
-            spanId,
-          });
-        }
-      }
-    }
+    accumulateTraceText(accumulator, file.text, slowSpanThresholdMs);
   }
 
-  const topSpansByCount: ServerTraceDiagnosticsSpanSummary[] = [...spansByName.entries()]
+  return finishDiagnostics({
+    traceFilePath: input.traceFilePath,
+    scannedFilePaths,
+    readAt,
+    slowSpanThresholdMs,
+    accumulator,
+    ...(input.error ? { error: input.error } : {}),
+    ...(input.partialFailure ? { partialFailure: true } : {}),
+  });
+}
+
+interface TraceDiagnosticsAccumulator {
+  parseErrorCount: number;
+  recordCount: number;
+  failureCount: number;
+  interruptionCount: number;
+  slowSpanCount: number;
+  firstSpanAt: DateTime.Utc | null;
+  lastSpanAt: DateTime.Utc | null;
+  readonly spansByName: Map<
+    string,
+    { count: number; failureCount: number; totalDurationMs: number; maxDurationMs: number }
+  >;
+  readonly failuresByKey: Map<string, ServerTraceDiagnosticsFailureSummary>;
+  readonly latestFailures: ServerTraceDiagnosticsRecentFailure[];
+  readonly slowestSpans: ServerTraceDiagnosticsSpanOccurrence[];
+  readonly latestWarningAndErrorLogs: ServerTraceDiagnosticsLogEvent[];
+  readonly logLevelCounts: Record<string, number>;
+}
+
+function makeAccumulator(): TraceDiagnosticsAccumulator {
+  return {
+    parseErrorCount: 0,
+    recordCount: 0,
+    failureCount: 0,
+    interruptionCount: 0,
+    slowSpanCount: 0,
+    firstSpanAt: null,
+    lastSpanAt: null,
+    spansByName: new Map(),
+    failuresByKey: new Map(),
+    latestFailures: [],
+    slowestSpans: [],
+    latestWarningAndErrorLogs: [],
+    logLevelCounts: {},
+  };
+}
+
+function resolveLogMessage(
+  rawName: unknown,
+  attributes: Readonly<Record<string, unknown>>,
+): string {
+  const message = toStringValue(rawName)?.trim();
+  const cause = toStringValue(attributes["effect.cause"])?.trim();
+  return !message || message === "[]" ? (cause ?? "Log event") : message;
+}
+
+function accumulateTraceText(
+  accumulator: TraceDiagnosticsAccumulator,
+  text: string,
+  slowSpanThresholdMs: number,
+): void {
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      accumulator.parseErrorCount += 1;
+      continue;
+    }
+
+    if (!isRecordObject(parsed)) {
+      accumulator.parseErrorCount += 1;
+      continue;
+    }
+
+    const name = toStringValue(parsed.name);
+    const traceId = toStringValue(parsed.traceId);
+    const spanId = toStringValue(parsed.spanId);
+    const durationMs = toNumberValue(parsed.durationMs);
+    const endedAt = unixNanoToDateTime(parsed.endTimeUnixNano);
+    const startedAt = unixNanoToDateTime(parsed.startTimeUnixNano);
+
+    if (!name || !traceId || !spanId || durationMs === null || !endedAt) {
+      accumulator.parseErrorCount += 1;
+      continue;
+    }
+
+    accumulator.recordCount += 1;
+    accumulator.firstSpanAt =
+      startedAt &&
+      (accumulator.firstSpanAt === null || DateTime.isLessThan(startedAt, accumulator.firstSpanAt))
+        ? startedAt
+        : accumulator.firstSpanAt;
+    accumulator.lastSpanAt =
+      accumulator.lastSpanAt === null || DateTime.isGreaterThan(endedAt, accumulator.lastSpanAt)
+        ? endedAt
+        : accumulator.lastSpanAt;
+
+    const exitTag = readExitTag(parsed.exit);
+    const isFailure = exitTag === "Failure";
+    const isInterrupted = exitTag === "Interrupted";
+    if (isFailure) accumulator.failureCount += 1;
+    if (isInterrupted) accumulator.interruptionCount += 1;
+
+    const spanSummary = accumulator.spansByName.get(name) ?? {
+      count: 0,
+      failureCount: 0,
+      totalDurationMs: 0,
+      maxDurationMs: 0,
+    };
+    spanSummary.count += 1;
+    spanSummary.totalDurationMs += durationMs;
+    spanSummary.maxDurationMs = Math.max(spanSummary.maxDurationMs, durationMs);
+    if (isFailure) spanSummary.failureCount += 1;
+    accumulator.spansByName.set(name, spanSummary);
+
+    const spanItem = { name, durationMs, endedAt, traceId, spanId };
+    if (durationMs >= slowSpanThresholdMs) accumulator.slowSpanCount += 1;
+    insertBoundedSlowestSpan(accumulator.slowestSpans, spanItem);
+
+    if (isFailure) {
+      const cause = readExitCause(parsed.exit);
+      accumulator.latestFailures.push({ ...spanItem, cause });
+      const failureKey = `${name}\0${cause}`;
+      const existing = accumulator.failuresByKey.get(failureKey);
+      const isLatestFailure = !existing || DateTime.isGreaterThan(endedAt, existing.lastSeenAt);
+      accumulator.failuresByKey.set(failureKey, {
+        name,
+        cause,
+        count: (existing?.count ?? 0) + 1,
+        lastSeenAt: isLatestFailure ? endedAt : existing!.lastSeenAt,
+        traceId: isLatestFailure ? traceId : existing!.traceId,
+        spanId: isLatestFailure ? spanId : existing!.spanId,
+      });
+    }
+
+    if (!Array.isArray(parsed.events)) continue;
+    for (const rawEvent of parsed.events) {
+      if (!isTraceEvent(rawEvent)) continue;
+      const attributes = readEventAttributes(rawEvent);
+      const level = toStringValue(attributes["effect.logLevel"]);
+      if (!level) continue;
+
+      accumulator.logLevelCounts[level] = (accumulator.logLevelCounts[level] ?? 0) + 1;
+      const normalizedLevel = level.toLowerCase();
+      if (
+        normalizedLevel !== "warning" &&
+        normalizedLevel !== "warn" &&
+        normalizedLevel !== "error" &&
+        normalizedLevel !== "fatal"
+      ) {
+        continue;
+      }
+
+      accumulator.latestWarningAndErrorLogs.push({
+        spanName: name,
+        level,
+        message: resolveLogMessage(rawEvent.name, attributes),
+        seenAt: unixNanoToDateTime(rawEvent.timeUnixNano) ?? endedAt,
+        traceId,
+        spanId,
+      });
+    }
+  }
+}
+
+function finishDiagnostics(input: {
+  readonly traceFilePath: string;
+  readonly scannedFilePaths: ReadonlyArray<string>;
+  readonly readAt: DateTime.Utc;
+  readonly slowSpanThresholdMs: number;
+  readonly accumulator: TraceDiagnosticsAccumulator;
+  readonly error?: TraceDiagnosticsErrorSummary;
+  readonly partialFailure?: boolean;
+}): ServerTraceDiagnosticsResult {
+  const accumulator = input.accumulator;
+
+  const topSpansByCount: ServerTraceDiagnosticsSpanSummary[] = [
+    ...accumulator.spansByName.entries(),
+  ]
     .map(([name, span]) => ({
       name,
       count: span.count,
@@ -350,33 +411,33 @@ export function aggregateTraceDiagnostics(
 
   return {
     traceFilePath: input.traceFilePath,
-    scannedFilePaths,
-    readAt,
-    recordCount,
-    parseErrorCount,
-    firstSpanAt: Option.fromNullishOr(firstSpanAt),
-    lastSpanAt: Option.fromNullishOr(lastSpanAt),
-    failureCount,
-    interruptionCount,
-    slowSpanThresholdMs,
-    slowSpanCount,
-    logLevelCounts,
+    scannedFilePaths: [...input.scannedFilePaths],
+    readAt: input.readAt,
+    recordCount: accumulator.recordCount,
+    parseErrorCount: accumulator.parseErrorCount,
+    firstSpanAt: Option.fromNullishOr(accumulator.firstSpanAt),
+    lastSpanAt: Option.fromNullishOr(accumulator.lastSpanAt),
+    failureCount: accumulator.failureCount,
+    interruptionCount: accumulator.interruptionCount,
+    slowSpanThresholdMs: input.slowSpanThresholdMs,
+    slowSpanCount: accumulator.slowSpanCount,
+    logLevelCounts: accumulator.logLevelCounts,
     topSpansByCount,
-    slowestSpans,
-    commonFailures: [...failuresByKey.values()]
+    slowestSpans: accumulator.slowestSpans,
+    commonFailures: [...accumulator.failuresByKey.values()]
       .toSorted(
         (left, right) =>
           right.count - left.count ||
           DateTime.toEpochMillis(right.lastSeenAt) - DateTime.toEpochMillis(left.lastSeenAt),
       )
       .slice(0, TOP_LIMIT),
-    latestFailures: latestFailures
+    latestFailures: accumulator.latestFailures
       .toSorted(
         (left, right) =>
           DateTime.toEpochMillis(right.endedAt) - DateTime.toEpochMillis(left.endedAt),
       )
       .slice(0, RECENT_LIMIT),
-    latestWarningAndErrorLogs: latestWarningAndErrorLogs
+    latestWarningAndErrorLogs: accumulator.latestWarningAndErrorLogs
       .toSorted(
         (left, right) => DateTime.toEpochMillis(right.seenAt) - DateTime.toEpochMillis(left.seenAt),
       )
@@ -413,67 +474,103 @@ function readTraceFile(
 
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
+  const readLock = yield* Semaphore.make(1);
+  const cache = yield* Ref.make<
+    | {
+        readonly key: string;
+        readonly cachedAtMs: number;
+        readonly diagnostics: ServerTraceDiagnosticsResult;
+      }
+    | undefined
+  >(undefined);
 
-  const read: TraceDiagnostics["Service"]["read"] = Effect.fn("TraceDiagnostics.read")(
-    function* (options) {
-      const readAt = options.readAt ?? (yield* DateTime.now);
-      const slowSpanThresholdMs = options.slowSpanThresholdMs ?? DEFAULT_SLOW_SPAN_THRESHOLD_MS;
-      const paths = toRotatedTracePaths(options.traceFilePath, options.maxFiles);
-      const results = yield* Effect.all(
-        paths.map((path) =>
-          readTraceFile(fileSystem, path).pipe(
-            Effect.tapError((cause) =>
-              Effect.logWarning("Failed to read local trace file.").pipe(
-                Effect.annotateLogs({
-                  traceFilePath: cause.traceFilePath,
-                  errorTag: cause._tag,
-                  causeTag: cause.causeTag,
-                }),
-              ),
-            ),
-            Effect.result,
+  const readUncached = Effect.fn("TraceDiagnostics.readUncached")(function* (
+    options: TraceDiagnosticsOptions,
+  ) {
+    const readAt = options.readAt ?? (yield* DateTime.now);
+    const slowSpanThresholdMs = options.slowSpanThresholdMs ?? DEFAULT_SLOW_SPAN_THRESHOLD_MS;
+    const paths = toRotatedTracePaths(options.traceFilePath, options.maxFiles);
+    const accumulator = makeAccumulator();
+    let loadedFileCount = 0;
+    let readFailure: TraceFileReadError | undefined;
+    for (const path of paths) {
+      const result = yield* readTraceFile(fileSystem, path).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Failed to read local trace file.").pipe(
+            Effect.annotateLogs({
+              traceFilePath: cause.traceFilePath,
+              errorTag: cause._tag,
+              causeTag: cause.causeTag,
+            }),
           ),
         ),
-        {
-          concurrency: 1,
-        },
+        Effect.result,
       );
-      const files = results.flatMap((result) =>
-        Result.isSuccess(result) && result.success._tag === "Loaded"
-          ? [{ path: result.success.path, text: result.success.text }]
-          : [],
-      );
-      const readFailure = results.find(Result.isFailure);
-      const readFailureError = readFailure
-        ? ({
-            kind: "trace-file-read-failed",
-            message: readFailure.failure.message,
-          } satisfies TraceDiagnosticsErrorSummary)
-        : undefined;
-
-      if (files.length === 0) {
-        return makeEmptyDiagnostics({
-          traceFilePath: options.traceFilePath,
-          scannedFilePaths: paths,
-          readAt,
-          slowSpanThresholdMs,
-          error:
-            readFailureError ??
-            ({
-              kind: "trace-file-not-found",
-              message: "No local trace files were found.",
-            } satisfies TraceDiagnosticsErrorSummary),
-        });
+      if (Result.isFailure(result)) {
+        readFailure ??= result.failure;
+      } else if (result.success._tag === "Loaded") {
+        loadedFileCount += 1;
+        accumulateTraceText(accumulator, result.success.text, slowSpanThresholdMs);
       }
+    }
+    const readFailureError = readFailure
+      ? ({
+          kind: "trace-file-read-failed",
+          message: readFailure.message,
+        } satisfies TraceDiagnosticsErrorSummary)
+      : undefined;
 
-      return aggregateTraceDiagnostics({
+    if (loadedFileCount === 0) {
+      return makeEmptyDiagnostics({
         traceFilePath: options.traceFilePath,
-        files,
         scannedFilePaths: paths,
         readAt,
         slowSpanThresholdMs,
-        ...(readFailureError ? { partialFailure: true, error: readFailureError } : {}),
+        error:
+          readFailureError ??
+          ({
+            kind: "trace-file-not-found",
+            message: "No local trace files were found.",
+          } satisfies TraceDiagnosticsErrorSummary),
       });
+    }
+
+    return finishDiagnostics({
+      traceFilePath: options.traceFilePath,
+      scannedFilePaths: paths,
+      readAt,
+      slowSpanThresholdMs,
+      accumulator,
+      ...(readFailureError ? { partialFailure: true, error: readFailureError } : {}),
+    });
+  });
+
+  const read: TraceDiagnostics["Service"]["read"] = Effect.fn("TraceDiagnostics.read")(
+    function* (options) {
+      if (options.readAt !== undefined) return yield* readUncached(options);
+
+      const key = `${options.traceFilePath}\0${options.maxFiles}\0${options.slowSpanThresholdMs ?? ""}`;
+      return yield* readLock.withPermits(1)(
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const cached = yield* Ref.get(cache);
+          if (
+            cached !== undefined &&
+            cached.key === key &&
+            DateTime.toEpochMillis(now) - cached.cachedAtMs < READ_CACHE_TTL_MS
+          ) {
+            return cached.diagnostics;
+          }
+
+          const diagnostics = yield* readUncached({ ...options, readAt: now });
+          yield* Ref.set(cache, {
+            key,
+            cachedAtMs: DateTime.toEpochMillis(now),
+            diagnostics,
+          });
+          return diagnostics;
+        }),
+      );
     },
   );
 

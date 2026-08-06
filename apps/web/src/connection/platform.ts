@@ -43,6 +43,8 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
+// T3-CUSTOM(expbkt3): attach the built client version to connection metadata.
+import { APP_VERSION } from "../branding";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentTarget,
@@ -138,6 +140,7 @@ function clientMetadata() {
   return {
     label: desktop ? "T3 Code Desktop" : "T3 Code Web",
     deviceType: "desktop" as const,
+    appVersion: APP_VERSION,
     ...(platform === "" ? {} : { os: platform }),
   };
 }

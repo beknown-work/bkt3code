@@ -22,6 +22,8 @@ import {
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 import { runPrimaryHttp } from "../../lib/runtime";
 import { readManagedClerkIdentityToken } from "../../cloud/managedIdentity";
+// T3-CUSTOM(expbkt3): identify the direct hosted build in server diagnostics.
+import { APP_VERSION } from "../../branding";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
@@ -264,6 +266,7 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
             client.auth.browserSession({
               payload: {
                 credential,
+                client_version: APP_VERSION,
                 ...(identityToken ? { identityToken } : {}),
               },
             }),
@@ -308,7 +311,9 @@ async function exchangeClerkSession(token: string): Promise<AuthBrowserSessionRe
   try {
     return await runPrimaryHttp(
       PrimaryEnvironmentHttpClient.pipe(
-        Effect.flatMap((client) => client.auth.clerkSession({ payload: { token } })),
+        Effect.flatMap((client) =>
+          client.auth.clerkSession({ payload: { token, client_version: APP_VERSION } }),
+        ),
       ),
     );
   } catch (error) {

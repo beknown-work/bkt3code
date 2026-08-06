@@ -335,7 +335,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             const identity = yield* resolveIdentity(args.payload.identityToken);
             const result = yield* serverAuth.createBrowserSession(
               args.payload.credential,
-              deriveAuthClientMetadata({ request }),
+              deriveAuthClientMetadata({
+                request,
+                ...(args.payload.client_version
+                  ? { presented: { appVersion: args.payload.client_version } }
+                  : {}),
+              }),
               identity ? { userId: identity.userId } : undefined,
             );
             yield* persistIdentity(
@@ -384,7 +389,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             yield* persistIdentity(verified.identity, verified.administrativeGrant);
             const result = yield* serverAuth.createClerkBrowserSession(
               { subject: verified.subject, userId: verified.identity.userId },
-              deriveAuthClientMetadata({ request }),
+              deriveAuthClientMetadata({
+                request,
+                ...(args.payload.client_version
+                  ? { presented: { appVersion: args.payload.client_version } }
+                  : {}),
+              }),
             );
             const sessionCookies = yield* Effect.fromResult(
               Cookies.set(Cookies.empty, sessions.cookieName, result.sessionToken, {
@@ -494,6 +504,10 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                     ? { deviceType: args.payload.client_device_type }
                     : {}),
                   ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
+                  // T3-CUSTOM(expbkt3): persist client build identity for diagnostics.
+                  ...(args.payload.client_version
+                    ? { appVersion: args.payload.client_version }
+                    : {}),
                 },
               }),
               proofKeyThumbprint || identity

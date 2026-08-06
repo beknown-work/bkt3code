@@ -166,6 +166,8 @@ export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
 
 export const AuthClerkSessionRequest = Schema.Struct({
   token: TrimmedNonEmptyString,
+  // T3-CUSTOM(expbkt3): direct hosted clients also report their build.
+  client_version: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClerkSessionRequest = typeof AuthClerkSessionRequest.Type;
 
@@ -188,6 +190,8 @@ export const userIdFromSubject = (subject: string): UserId | null => {
 export const AuthBrowserSessionRequest = Schema.Struct({
   credential: TrimmedNonEmptyString,
   identityToken: Schema.optionalKey(TrimmedNonEmptyString),
+  // T3-CUSTOM(expbkt3): direct hosted clients also report their build.
+  client_version: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthBrowserSessionRequest = typeof AuthBrowserSessionRequest.Type;
 
@@ -222,6 +226,8 @@ export const AuthClientPresentationMetadata = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   deviceType: Schema.optionalKey(AuthClientMetadataDeviceType),
   os: Schema.optionalKey(TrimmedNonEmptyString),
+  // T3-CUSTOM(expbkt3): identify stale client bundles in connection diagnostics.
+  appVersion: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientPresentationMetadata = typeof AuthClientPresentationMetadata.Type;
 
@@ -234,6 +240,8 @@ export const AuthTokenExchangeRequest = Schema.Struct({
   client_label: Schema.optionalKey(TrimmedNonEmptyString),
   client_device_type: Schema.optionalKey(AuthClientMetadataDeviceType),
   client_os: Schema.optionalKey(TrimmedNonEmptyString),
+  // T3-CUSTOM(expbkt3): identify stale client bundles in connection diagnostics.
+  client_version: Schema.optionalKey(TrimmedNonEmptyString),
   identity_token: Schema.optionalKey(TrimmedNonEmptyString),
 }).pipe(HttpApiSchema.asFormUrlEncoded());
 export type AuthTokenExchangeRequest = typeof AuthTokenExchangeRequest.Type;
@@ -279,6 +287,8 @@ export const AuthClientMetadata = Schema.Struct({
   deviceType: AuthClientMetadataDeviceType,
   os: Schema.optionalKey(TrimmedNonEmptyString),
   browser: Schema.optionalKey(TrimmedNonEmptyString),
+  // T3-CUSTOM(expbkt3): persisted build identity for connected-client diagnostics.
+  appVersion: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientMetadata = typeof AuthClientMetadata.Type;
 

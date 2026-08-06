@@ -15,6 +15,7 @@ function formatClientMetadata(metadata: AuthClientMetadata): string {
     metadata.deviceType !== "unknown" ? metadata.deviceType : undefined,
     metadata.os,
     metadata.browser,
+    metadata.appVersion ? `T3 Code ${metadata.appVersion}` : undefined,
     metadata.ipAddress,
   ]);
   return details.length > 0 ? details.join(" | ") : "unlabeled client";
