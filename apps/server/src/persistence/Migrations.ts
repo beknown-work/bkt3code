@@ -9,8 +9,8 @@
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -61,6 +61,9 @@ import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
 import Migration0043 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0044 from "./Migrations/044_ProjectionThreadSourceControlProfile.ts";
 import Migration0045 from "./Migrations/045_EnvironmentUsers.ts";
+// T3-CUSTOM(expbkt3): upstream migration 36 is allocated after the frozen
+// legacy fork block so it keeps one durable applied-migration identity.
+import Migration0046 from "./Migrations/036_ProjectionThreadsPinned.ts";
 // T3-CUSTOM(expbkt3): fork migrations, numbered 1000+.
 import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
 import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
@@ -145,6 +148,7 @@ const migrationEntries = [
   [43, "ProjectionThreadTitleRegeneration", Migration0043],
   [44, "ProjectionThreadSourceControlProfile", Migration0044],
   [45, "EnvironmentUsers", Migration0045],
+  [46, "ProjectionThreadsPinned", Migration0046],
   // T3-CUSTOM(expbkt3): fork migrations live at 1000+ (see the rule above).
   [1000, "ProjectionThreadsPriority", Migration1000],
   [1001, "SessionRecoveryState", Migration1001],
@@ -152,6 +156,8 @@ const migrationEntries = [
   [1003, "DurableExecutionIntents", Migration1003],
   [1004, "ProjectionThreadsLinearIssue", Migration1004],
 ] as const;
+
+export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
 export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(

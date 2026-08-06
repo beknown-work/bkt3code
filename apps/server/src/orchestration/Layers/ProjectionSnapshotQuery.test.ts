@@ -18,6 +18,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
@@ -28,6 +29,7 @@ const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(val
 
 const projectionSnapshotLayer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provide(ThreadBackgroundLiveness.layer),
     Layer.provideMerge(RepositoryIdentityResolver.layer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(NodeServices.layer),
@@ -329,6 +331,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           priority: null,
           // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
           linearIssueUrl: null,
+          pinnedAt: null,
           titleRegeneration: null,
           deletedAt: null,
           messages: [
@@ -464,6 +467,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           priority: null,
           // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
           linearIssueUrl: null,
+          pinnedAt: null,
           titleRegeneration: null,
           session: {
             threadId: ThreadId.make("thread-1"),
@@ -481,6 +485,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasActionableProposedPlan: false,
           ownerUserId: null,
           memberUserIds: [],
+          backgroundLiveness: null,
         },
       ]);
 
@@ -1897,6 +1902,7 @@ it.effect(
   () => {
     const resolveCalls: string[] = [];
     const layer = OrchestrationProjectionSnapshotQueryLive.pipe(
+      Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(
         Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
           resolve: (cwd: string) =>

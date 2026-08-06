@@ -80,6 +80,7 @@ export function mergeEnvironmentThread(
     settledAt: shell.settledAt,
     snoozedUntil: shell.snoozedUntil,
     snoozedAt: shell.snoozedAt,
+    pinnedAt: shell.pinnedAt,
     session: shell.session,
     // T3-CUSTOM(expbkt3): Keep chat and sidebar on the newest execution frame.
     ...(execution === undefined ? {} : { execution }),
