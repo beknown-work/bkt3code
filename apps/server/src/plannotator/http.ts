@@ -100,6 +100,39 @@ function proxyResponseHeaders(
   return output;
 }
 
+interface ForwardedRequestOptions {
+  readonly url: string;
+  readonly host: string;
+  readonly origin: string;
+}
+
+const makeForwardedRequest = Effect.fn("PlannotatorHttp.makeForwardedRequest")(function* (
+  incoming: Request,
+  options: ForwardedRequestOptions,
+) {
+  const withTarget = HttpClientRequest.fromWeb(incoming).pipe(
+    HttpClientRequest.setUrl(options.url),
+  );
+  let outgoing = HttpClientRequest.makeWith(
+    withTarget.method,
+    withTarget.url,
+    withTarget.urlParams,
+    withTarget.hash,
+    Headers.removeMany(withTarget.headers, REQUEST_HEADERS_NOT_FORWARDED),
+    withTarget.body,
+  );
+  if (incoming.body !== null) {
+    const body = new Uint8Array(yield* Effect.promise(() => incoming.arrayBuffer()));
+    outgoing = outgoing.pipe(
+      HttpClientRequest.bodyUint8Array(body, incoming.headers.get("content-type") ?? undefined),
+    );
+  }
+  return outgoing.pipe(
+    HttpClientRequest.setHeader("host", options.host),
+    HttpClientRequest.setHeader("origin", options.origin),
+  );
+});
+
 export const plannotatorProxyRouteLayer = HttpRouter.add(
   "*",
   "/plannotator/*",
@@ -182,15 +215,9 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
     const incoming = yield* HttpServerRequest.toWeb(request);
     const targetOrigin = `http://127.0.0.1:${session.port}`;
     const targetUrl = `${targetOrigin}${proxyPath}${parsedUrl.value.search}`;
-    const withTarget = HttpClientRequest.fromWeb(incoming).pipe(
-      HttpClientRequest.setUrl(targetUrl),
-    );
-    let requestBody: Uint8Array | undefined;
-    if (incoming.body !== null) {
-      requestBody = new Uint8Array(yield* Effect.promise(() => incoming.arrayBuffer()));
-    }
-    if (request.method !== "GET" && requestBody !== undefined) {
-      const submission = parsePlannotatorSubmission(proxyPath, requestBody);
+    if (request.method !== "GET" && incoming.body !== null) {
+      const body = new Uint8Array(yield* Effect.promise(() => incoming.clone().arrayBuffer()));
+      const submission = parsePlannotatorSubmission(proxyPath, body);
       if (submission.decision) {
         return yield* manager
           .applyDecision(token, submission.decision, submission.annotations)
@@ -231,25 +258,11 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
       }
     }
 
-    let outgoing = HttpClientRequest.makeWith(
-      withTarget.method,
-      withTarget.url,
-      withTarget.urlParams,
-      withTarget.hash,
-      Headers.removeMany(withTarget.headers, REQUEST_HEADERS_NOT_FORWARDED),
-      withTarget.body,
-    ).pipe(
-      HttpClientRequest.setHeader("host", `127.0.0.1:${session.port}`),
-      HttpClientRequest.setHeader("origin", targetOrigin),
-    );
-    if (requestBody !== undefined) {
-      outgoing = outgoing.pipe(
-        HttpClientRequest.bodyUint8Array(
-          requestBody,
-          incoming.headers.get("content-type") ?? undefined,
-        ),
-      );
-    }
+    const outgoing = yield* makeForwardedRequest(incoming, {
+      url: targetUrl,
+      host: `127.0.0.1:${session.port}`,
+      origin: targetOrigin,
+    });
     const httpClient = yield* HttpClient.HttpClient;
     return yield* httpClient.execute(outgoing).pipe(
       Effect.flatMap((response) => {
@@ -285,3 +298,8 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
     );
   }),
 );
+
+/** Exposed for tests. */
+export const __testing = {
+  makeForwardedRequest,
+};
