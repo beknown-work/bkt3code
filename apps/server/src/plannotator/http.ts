@@ -179,9 +179,18 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
       });
     }
 
-    if (request.method !== "GET") {
-      const body = new Uint8Array(yield* request.arrayBuffer);
-      const submission = parsePlannotatorSubmission(proxyPath, body);
+    const incoming = yield* HttpServerRequest.toWeb(request);
+    const targetOrigin = `http://127.0.0.1:${session.port}`;
+    const targetUrl = `${targetOrigin}${proxyPath}${parsedUrl.value.search}`;
+    const withTarget = HttpClientRequest.fromWeb(incoming).pipe(
+      HttpClientRequest.setUrl(targetUrl),
+    );
+    let requestBody: Uint8Array | undefined;
+    if (incoming.body !== null) {
+      requestBody = new Uint8Array(yield* Effect.promise(() => incoming.arrayBuffer()));
+    }
+    if (request.method !== "GET" && requestBody !== undefined) {
+      const submission = parsePlannotatorSubmission(proxyPath, requestBody);
       if (submission.decision) {
         return yield* manager
           .applyDecision(token, submission.decision, submission.annotations)
@@ -222,13 +231,7 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
       }
     }
 
-    const incoming = yield* HttpServerRequest.toWeb(request);
-    const targetOrigin = `http://127.0.0.1:${session.port}`;
-    const targetUrl = `${targetOrigin}${proxyPath}${parsedUrl.value.search}`;
-    const withTarget = HttpClientRequest.fromWeb(incoming).pipe(
-      HttpClientRequest.setUrl(targetUrl),
-    );
-    const outgoing = HttpClientRequest.makeWith(
+    let outgoing = HttpClientRequest.makeWith(
       withTarget.method,
       withTarget.url,
       withTarget.urlParams,
@@ -239,6 +242,14 @@ export const plannotatorProxyRouteLayer = HttpRouter.add(
       HttpClientRequest.setHeader("host", `127.0.0.1:${session.port}`),
       HttpClientRequest.setHeader("origin", targetOrigin),
     );
+    if (requestBody !== undefined) {
+      outgoing = outgoing.pipe(
+        HttpClientRequest.bodyUint8Array(
+          requestBody,
+          incoming.headers.get("content-type") ?? undefined,
+        ),
+      );
+    }
     const httpClient = yield* HttpClient.HttpClient;
     return yield* httpClient.execute(outgoing).pipe(
       Effect.flatMap((response) => {
