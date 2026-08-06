@@ -111,7 +111,43 @@ export interface TraceSinkOptions {
   readonly maxFiles: number;
   readonly batchWindowMs: number;
   readonly onFlush?: (stats: TraceSinkFlushStats) => Effect.Effect<void>;
+  // T3-CUSTOM(expbkt3): BEGIN
+  /**
+   * Decides whether a record is worth persisting. Records rejected here never
+   * reach the buffer, so a high-volume span kind can be dropped without raising
+   * the tracer's minimum level and blinding every other span.
+   */
+  readonly retain?: (record: TraceRecord) => boolean;
+  // T3-CUSTOM(expbkt3): END
 }
+
+// T3-CUSTOM(expbkt3): BEGIN
+/** Span name the Effect SQL client uses for every executed statement. */
+export const SQL_EXECUTE_SPAN_NAME = "sql.execute";
+
+function isFailedTraceRecord(record: TraceRecord): boolean {
+  return record.type === "effect-span"
+    ? record.exit._tag !== "Success"
+    : record.status?.code !== undefined && record.status.code !== "Ok";
+}
+
+/**
+ * Retains everything except fast, successful `sql.execute` spans.
+ *
+ * One statement per span at Info level is the single largest source of trace
+ * bytes in a server, but the slow ones are exactly how a pathological query is
+ * found, so anything at or above `slowMs` is kept — as are failures, which the
+ * diagnostics dashboard counts. A non-positive `slowMs` disables the filter.
+ */
+export const retainSlowSqlSpans =
+  (slowMs: number) =>
+  (record: TraceRecord): boolean => {
+    if (slowMs <= 0 || record.name !== SQL_EXECUTE_SPAN_NAME) {
+      return true;
+    }
+    return record.durationMs >= slowMs || isFailedTraceRecord(record);
+  };
+// T3-CUSTOM(expbkt3): END
 
 export interface TraceSinkFlushStats {
   readonly logicalWriteBytes: number;
@@ -359,6 +395,11 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
   return {
     filePath: options.filePath,
     push(record) {
+      // T3-CUSTOM(expbkt3): BEGIN - drop low-value spans before they reach the buffer.
+      if (options.retain !== undefined && !options.retain(record)) {
+        return;
+      }
+      // T3-CUSTOM(expbkt3): END
       try {
         buffer.push(`${JSON.stringify(record)}\n`);
         if (buffer.length >= FLUSH_BUFFER_THRESHOLD) {

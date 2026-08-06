@@ -4,7 +4,11 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { backfillProjectionOwnership } from "./ownershipBackfill.ts";
+import {
+  ADMIN_REASSIGNMENT_MARKER,
+  backfillProjectionOwnership,
+  planOwnershipBackfill,
+} from "./ownershipBackfill.ts";
 
 const DEFAULT_OWNER = UserId.make("user_default_owner");
 const HISTORICAL_ASSIGNEE = UserId.make("user_historical_assignee");
@@ -196,6 +200,97 @@ it.layer(SqlitePersistenceMemory)("ownership backfill", (it) => {
       `;
       assert.deepEqual(threads, [{ ownerUserId: DEFAULT_OWNER }]);
       assert.deepEqual(projects, [{ ownerUserId: DEFAULT_OWNER }]);
+    }),
+  );
+});
+
+it.layer(SqlitePersistenceMemory)("ownership backfill planning", (it) => {
+  /** Each case owns the whole table set, so state never leaks between them. */
+  const seed = Effect.fn(function* (options: {
+    readonly ownerUserId: string | null;
+    readonly repairRecorded: boolean;
+  }) {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`DELETE FROM projection_threads`;
+    yield* sql`DELETE FROM projection_projects`;
+    yield* sql`DELETE FROM maintenance_markers`;
+    yield* sql`
+      INSERT INTO projection_projects (
+        project_id, title, workspace_root, scripts_json, created_at, updated_at, owner_user_id
+      ) VALUES (
+        'project-plan', 'Planned project', '/tmp/plan', '[]', ${NOW}, ${NOW},
+        ${options.ownerUserId}
+      )
+    `;
+    yield* sql`
+      INSERT INTO projection_threads (
+        thread_id, project_id, title, created_at, updated_at, owner_user_id
+      ) VALUES (
+        'thread-plan', 'project-plan', 'Planned thread', ${NOW}, ${NOW}, ${options.ownerUserId}
+      )
+    `;
+    if (options.repairRecorded) {
+      yield* sql`
+        INSERT INTO maintenance_markers (marker, completed_at)
+        VALUES (${ADMIN_REASSIGNMENT_MARKER}, ${NOW})
+      `;
+    }
+  });
+
+  it.effect("skips every scan once the repair is recorded and no row is ownerless", () =>
+    Effect.gen(function* () {
+      yield* seed({ ownerUserId: DEFAULT_OWNER, repairRecorded: true });
+
+      assert.deepEqual(yield* planOwnershipBackfill(), {
+        skip: true,
+        repairAdminAssignments: false,
+      });
+    }),
+  );
+
+  it.effect("still converges ownerless rows after the repair is recorded", () =>
+    Effect.gen(function* () {
+      yield* seed({ ownerUserId: null, repairRecorded: true });
+
+      assert.deepEqual(yield* planOwnershipBackfill(), {
+        skip: false,
+        repairAdminAssignments: false,
+      });
+    }),
+  );
+
+  it.effect("runs the admin repair exactly while its marker is missing", () =>
+    Effect.gen(function* () {
+      yield* seed({ ownerUserId: DEFAULT_OWNER, repairRecorded: false });
+
+      assert.deepEqual(yield* planOwnershipBackfill(), {
+        skip: false,
+        repairAdminAssignments: true,
+      });
+    }),
+  );
+
+  it.effect("leaves administrator-owned rows alone when the repair is disabled", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seed({ ownerUserId: DEFAULT_OWNER, repairRecorded: true });
+      // A historical member that the repair pass would have promoted.
+      yield* sql`
+        INSERT INTO projection_thread_members (
+          thread_id, user_id, added_by_user_id, added_at
+        ) VALUES (
+          'thread-plan', ${HISTORICAL_ASSIGNEE}, NULL, ${NOW}
+        )
+      `;
+
+      yield* backfillProjectionOwnership(DEFAULT_OWNER, { repairAdminAssignments: false });
+
+      const threads = yield* sql<{ readonly ownerUserId: string | null }>`
+        SELECT owner_user_id AS "ownerUserId"
+        FROM projection_threads
+        WHERE thread_id = 'thread-plan'
+      `;
+      assert.deepEqual(threads, [{ ownerUserId: DEFAULT_OWNER }]);
     }),
   );
 });

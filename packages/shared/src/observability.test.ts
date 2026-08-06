@@ -19,6 +19,9 @@ import {
   errorTag,
   makeLocalFileTracer,
   makeTraceSink,
+  retainSlowSqlSpans,
+  SQL_EXECUTE_SPAN_NAME,
+  type EffectTraceRecord,
   type TraceRecord,
   type TraceSinkFlushStats,
 } from "./observability.ts";
@@ -83,6 +86,34 @@ const makeRecord = (name: string, suffix = ""): TraceRecord => ({
   exit: {
     _tag: "Success",
   },
+});
+
+const makeSqlRecord = (
+  durationMs: number,
+  exit: EffectTraceRecord["exit"] = { _tag: "Success" },
+): TraceRecord => ({
+  ...(makeRecord(SQL_EXECUTE_SPAN_NAME, `${durationMs}`) as EffectTraceRecord),
+  durationMs,
+  exit,
+});
+
+describe("retainSlowSqlSpans", () => {
+  const retain = retainSlowSqlSpans(250);
+
+  it("drops fast successful statements and keeps slow or failed ones", () => {
+    assert.equal(retain(makeSqlRecord(4)), false);
+    assert.equal(retain(makeSqlRecord(250)), true);
+    assert.equal(retain(makeSqlRecord(97_900)), true);
+    assert.equal(retain(makeSqlRecord(4, { _tag: "Failure", cause: "boom" })), true);
+  });
+
+  it("never touches spans that are not SQL statements", () => {
+    assert.equal(retain(makeRecord("server.startup.ownership.backfill")), true);
+  });
+
+  it("retains everything when the threshold is disabled", () => {
+    assert.equal(retainSlowSqlSpans(0)(makeSqlRecord(4)), true);
+  });
 });
 
 const readTraceRecords = Effect.fn("readTraceRecords")(function* (tracePath: string) {
@@ -174,6 +205,37 @@ describe("observability", () => {
           assert.equal(lines.length, 2);
           assert.equal(lines[0]?.name, "alpha");
           assert.equal(lines[1]?.name, "beta");
+        }),
+      ),
+    );
+
+    it.effect("never buffers records the retain predicate rejects", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const tempDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-trace-sink-" });
+          const tracePath = path.join(tempDir, "shared.trace.ndjson");
+
+          const sink = yield* makeTraceSink({
+            filePath: tracePath,
+            maxBytes: 1024,
+            maxFiles: 2,
+            batchWindowMs: 10_000,
+            retain: retainSlowSqlSpans(250),
+          });
+
+          sink.push(makeSqlRecord(4));
+          sink.push(makeSqlRecord(400));
+          sink.push(makeRecord("server.startup"));
+          yield* sink.close();
+
+          const lines = yield* readTraceRecords(tracePath);
+
+          assert.deepEqual(
+            lines.map((line) => line.name),
+            [SQL_EXECUTE_SPAN_NAME, "server.startup"],
+          );
         }),
       ),
     );

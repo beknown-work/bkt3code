@@ -1,5 +1,11 @@
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
-import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
+// T3-CUSTOM(expbkt3): BEGIN - pull in the sink-level SQL span filter.
+import {
+  makeLocalFileTracer,
+  makeTraceSink,
+  retainSlowSqlSpans,
+} from "@t3tools/shared/observability";
+// T3-CUSTOM(expbkt3): END
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
@@ -34,6 +40,9 @@ export const ObservabilityLive = Layer.unwrap(
           maxBytes: config.traceMaxBytes,
           maxFiles: config.traceMaxFiles,
           batchWindowMs: config.traceBatchWindowMs,
+          // T3-CUSTOM(expbkt3): BEGIN - one span per SQL statement dominated trace volume.
+          retain: retainSlowSqlSpans(config.traceSqlSlowMs),
+          // T3-CUSTOM(expbkt3): END
           onFlush: (stats) =>
             attribution.record({
               component: "server-trace",
