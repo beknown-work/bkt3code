@@ -13,6 +13,7 @@ import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/u
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { installEnvironmentHttpTest } from "../test/environmentHttpTest";
+import { APP_VERSION } from "./branding";
 import { setManagedClerkIdentityTokenProvider } from "./cloud/managedIdentity";
 import { __setPrimaryHttpRunnerForTests, type PrimaryHttpEffectRunner } from "./lib/runtime";
 
@@ -177,7 +178,7 @@ describe("resolveInitialServerAuthGateState", () => {
 
     expect(testApi.calls.session).toBe(2);
     expect(testApi.calls.browserSession).toEqual([
-      { credential: "desktop-bootstrap-token", client_version: "0.0.0" },
+      { credential: "desktop-bootstrap-token", client_version: APP_VERSION },
     ]);
   });
 
@@ -321,7 +322,7 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     expect(testApi.calls.browserSession).toEqual([
-      { credential: "retry-token", client_version: "0.0.0" },
+      { credential: "retry-token", client_version: APP_VERSION },
     ]);
     expect(testApi.calls.session).toBe(2);
   });
@@ -376,7 +377,7 @@ describe("resolveInitialServerAuthGateState", () => {
       traceId: "trace-invalid-credential",
     });
     expect(testApi.calls.browserSession).toEqual([
-      { credential: "bad-token", client_version: "0.0.0" },
+      { credential: "bad-token", client_version: APP_VERSION },
     ]);
   });
 
@@ -450,7 +451,7 @@ describe("resolveInitialServerAuthGateState", () => {
       errorMessage: "Timed out waiting for authenticated session after bootstrap.",
     });
     expect(testApi.calls.browserSession).toEqual([
-      { credential: "desktop-bootstrap-token", client_version: "0.0.0" },
+      { credential: "desktop-bootstrap-token", client_version: APP_VERSION },
     ]);
   });
 
