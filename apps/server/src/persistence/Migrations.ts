@@ -61,9 +61,9 @@ import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
 import Migration0043 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0044 from "./Migrations/044_ProjectionThreadSourceControlProfile.ts";
 import Migration0045 from "./Migrations/045_EnvironmentUsers.ts";
-// T3-CUSTOM(expbkt3): upstream migration 36 is allocated after the frozen
-// legacy fork block so it keeps one durable applied-migration identity.
-import Migration0046 from "./Migrations/036_ProjectionThreadsPinned.ts";
+// T3-CUSTOM(expbkt3): upstream migration 36 arrived after fork migration 1004
+// had shipped, so the monotonic migrator requires the next free applied ID.
+import Migration1005 from "./Migrations/036_ProjectionThreadsPinned.ts";
 // T3-CUSTOM(expbkt3): fork migrations, numbered 1000+.
 import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
 import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
@@ -91,17 +91,18 @@ export // T3-CUSTOM(expbkt3): migration index allocation rule. Do not re-decide 
 //               production databases (effect_sql_migrations keys on
 //               `${id}_${name}`), so renumbering one makes it run a second time
 //               on live data. Never touch them.
-//   * 43-999    upstream migrations. Keep upstream's own index whenever it is
-//               free; when it collides with the legacy block, take the next
-//               free index here and leave the file named after upstream's
-//               number. Once upstream's counter passes 42 these align by
-//               themselves and no remapping is needed again.
-//   * 1000+     ALL new fork migrations. Never allocate a fork migration below
-//               1000 again; that is what keeps upstream's numbering free.
+//   * 43-45     LEGACY upstream remaps applied before the first 1000+ migration.
+//               Frozen for the same durable-identity reason as 33-42.
+//   * 46-999    reserved. Do not append migrations here: Effect only executes
+//               IDs greater than the highest applied ID, and live databases
+//               have already applied 1000+ migrations.
+//   * 1000+     monotonic shared allocation lane for every new migration. Fork
+//               files use the allocated ID; upstream files keep their upstream
+//               filename but register at the next free ID in this lane.
 //
-// Adding a fork migration: name the file `1000_Thing.ts` and register
-// `[1000, "Thing", Migration1000]`. Adding an upstream one during a merge: keep
-// its filename, register at its own index if free, else the next free < 1000.
+// Always allocate an ID greater than the current maximum registry ID. This is
+// required by Migrator.make, which only runs migrations newer than the highest
+// row already present in effect_sql_migrations.
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -148,13 +149,13 @@ const migrationEntries = [
   [43, "ProjectionThreadTitleRegeneration", Migration0043],
   [44, "ProjectionThreadSourceControlProfile", Migration0044],
   [45, "EnvironmentUsers", Migration0045],
-  [46, "ProjectionThreadsPinned", Migration0046],
-  // T3-CUSTOM(expbkt3): fork migrations live at 1000+ (see the rule above).
+  // T3-CUSTOM(expbkt3): 46-999 stay empty once the 1000+ lane has started.
   [1000, "ProjectionThreadsPriority", Migration1000],
   [1001, "SessionRecoveryState", Migration1001],
   [1002, "ThreadBootstrapAndCreationDefaults", Migration1002],
   [1003, "DurableExecutionIntents", Migration1003],
   [1004, "ProjectionThreadsLinearIssue", Migration1004],
+  [1005, "ProjectionThreadsPinned", Migration1005],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
