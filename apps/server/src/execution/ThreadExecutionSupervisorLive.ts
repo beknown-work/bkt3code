@@ -681,9 +681,13 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
 
   const observeProviderEvent = (event: ProviderRuntimeEvent) => {
     const currentSnapshot = state.get(event.threadId);
+    // T3-CUSTOM(expbkt3): Credential handoff can replace a ready provider while
+    // the admitted turn is starting, so adopt the replacement's newer generation.
     const mayAdoptStartingGeneration =
-      currentSnapshot?.providerSession.state === "starting" &&
-      currentSnapshot.turn?.state === "starting" &&
+      currentSnapshot?.turn?.state === "starting" &&
+      (currentSnapshot.providerSession.state === "starting" ||
+        (event.sessionGeneration !== undefined &&
+          event.sessionGeneration > currentSnapshot.providerSession.generation)) &&
       (event.type === "session.started" ||
         event.type === "session.state.changed" ||
         event.type === "turn.started") &&
