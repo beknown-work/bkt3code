@@ -35,11 +35,16 @@ committed to `t3main`.
 
 ## Branch maintenance
 
-`main` tracks upstream and is never deployed. Publishing upstream changes to
-`t3.dev` is a two-step, fast-forward-friendly merge:
+`main` tracks upstream and is never deployed. Upstream syncs target a released
+nightly commit so the source SHA and displayed version move together. Refuse to
+sync an upstream tip until it has a matching nightly tag:
 
 ```bash
-git -C /home/ubuntu/repos/t3code fetch upstream
+git -C /home/ubuntu/repos/t3code fetch upstream main --tags
+nightly_tag="$(git -C /home/ubuntu/repos/t3code tag \
+  --points-at upstream/main --list 'v*-nightly.*' --sort=-version:refname | head -1)"
+test -n "$nightly_tag" || { echo "upstream/main has no nightly release yet"; exit 1; }
+echo "Syncing $nightly_tag at $(git -C /home/ubuntu/repos/t3code rev-parse upstream/main)"
 git push origin upstream/main:refs/heads/main          # refresh the pure mirror
 git -C /home/ubuntu/repos/t3code checkout t3main
 git -C /home/ubuntu/repos/t3code merge origin/main     # never force-push t3main
@@ -47,6 +52,9 @@ git -C /home/ubuntu/repos/t3code push origin t3main
 ```
 
 A push to `main` alone deploys nothing. `t3.dev` moves only when `t3main` moves.
+The t3 and expbkt3 workflows independently resolve the nightly tag at the
+integrated upstream tip and align package versions in the CI workspace before
+building. They fail rather than publish an artifact with a stale stable version.
 
 ## First installation
 

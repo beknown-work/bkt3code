@@ -86,6 +86,14 @@ code.
 forbids repo-wide installs, builds, and test suites here; they have OOM-crashed
 the box. CI builds the artifact, the host only installs it.
 
+For `t3main` and `expbkmain`, CI also resolves the upstream nightly tag that
+points at the integrated upstream tip and temporarily aligns the web, server,
+desktop, and contracts package versions before validation and build. This keeps
+the byte-pure `main` mirror unchanged while the deployed UI and server report
+the matching nightly version. If the integrated upstream tip has no nightly
+release tag, CI fails closed instead of publishing an artifact labeled with the
+previous stable version.
+
 ### Restarting a service kills its agent sessions
 
 Agent sessions run as children of the service whose state directory holds their
