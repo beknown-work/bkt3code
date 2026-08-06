@@ -110,26 +110,32 @@ describe("phase sidebar group headers", () => {
 });
 
 describe("phase sidebar work badge", () => {
-  it("replaces Running with a steady Monitoring badge", () => {
+  it("keeps a foreground Running label even when subagents are live", () => {
     expect(
       resolvePhaseSidebarWorkBadge({
         phaseId: "implementing",
-        backgroundLiveness: null,
+        backgroundLiveness: "working",
         executionPresentation: { active: true, label: "Running" },
       }),
-    ).toEqual({ label: "Monitoring", monitoring: true });
+    ).toEqual({ label: "Running", monitoring: false });
   });
 
-  it("keeps settled background agents and watch loops visible as monitoring", () => {
-    for (const backgroundLiveness of ["working", "monitoring"] as const) {
-      expect(
-        resolvePhaseSidebarWorkBadge({
-          phaseId: "implementing",
-          backgroundLiveness,
-          executionPresentation: { active: false, label: null },
-        }),
-      ).toEqual({ label: "Monitoring", monitoring: true });
-    }
+  it("distinguishes background agent work from monitor loops after the turn settles", () => {
+    expect(
+      resolvePhaseSidebarWorkBadge({
+        phaseId: "implementing",
+        backgroundLiveness: "working",
+        executionPresentation: { active: false, label: null },
+      }),
+    ).toEqual({ label: "Working", monitoring: false });
+
+    expect(
+      resolvePhaseSidebarWorkBadge({
+        phaseId: "implementing",
+        backgroundLiveness: "monitoring",
+        executionPresentation: { active: false, label: null },
+      }),
+    ).toEqual({ label: "Monitoring", monitoring: true });
   });
 
   it("lets actionable Plan Ready suppress lingering background status", () => {

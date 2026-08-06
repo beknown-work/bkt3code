@@ -103,12 +103,12 @@ export interface PhaseSidebarWorkBadge {
 }
 
 /**
- * Convert provider execution into the experimental sidebar's user-facing
- * vocabulary. A RUNNING provider or any projected background liveness is a
- * monitoring responsibility for the user. Unlike active transitions such as
- * Queued or Stopping, monitoring is steady and must not trigger row shimmer.
- * Plan Ready remains actionable and therefore outranks lingering background
- * liveness, matching Sidebar V2.
+ * Mirror Sidebar V2's execution precedence in the experimental sidebar.
+ * Foreground execution keeps its provider label (for example, Running),
+ * background agent fleets read as Working, and only watch loops read as
+ * Monitoring. Monitoring is steady and therefore does not trigger row
+ * shimmer. Plan Ready remains actionable and outranks lingering background
+ * liveness.
  */
 export function resolvePhaseSidebarWorkBadge(input: {
   readonly phaseId: PhaseSidebarPhaseId;
@@ -118,21 +118,21 @@ export function resolvePhaseSidebarWorkBadge(input: {
     readonly label: string | null;
   };
 }): PhaseSidebarWorkBadge | null {
+  if (input.executionPresentation.active && input.executionPresentation.label !== null) {
+    return { label: input.executionPresentation.label, monitoring: false };
+  }
+
   if (input.phaseId === "plan_ready") return null;
 
-  if (
-    input.backgroundLiveness === "working" ||
-    input.backgroundLiveness === "monitoring" ||
-    (input.executionPresentation.active && input.executionPresentation.label === "Running")
-  ) {
+  if (input.backgroundLiveness === "working") {
+    return { label: "Working", monitoring: false };
+  }
+
+  if (input.backgroundLiveness === "monitoring") {
     return { label: "Monitoring", monitoring: true };
   }
 
-  if (!input.executionPresentation.active || input.executionPresentation.label === null) {
-    return null;
-  }
-
-  return { label: input.executionPresentation.label, monitoring: false };
+  return null;
 }
 
 const PHASE_ID_SET = new Set<string>(PHASE_SIDEBAR_PHASE_IDS);
