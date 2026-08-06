@@ -691,6 +691,15 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(
         THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.length + 1,
       );
+
+      yield* Queue.offer(harness.wakeups, "application-active");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(
+        THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.length + 1,
+      );
     }),
   );
 

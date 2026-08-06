@@ -6607,6 +6607,49 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  // T3-CUSTOM(expbkt3): stale clients receive a terminal tombstone and cannot
+  // turn a deleted thread id into an unbounded projection-query loop.
+  it.effect("terminalizes and caches a missing thread subscription per connection", () =>
+    Effect.gen(function* () {
+      let snapshotReads = 0;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              Effect.sync(() => {
+                snapshotReads += 1;
+                return Option.none();
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.all(
+            [
+              client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+                threadId: defaultThreadId,
+              }).pipe(Stream.runHead),
+              client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+                threadId: defaultThreadId,
+              }).pipe(Stream.runHead),
+            ],
+            { concurrency: 1 },
+          ),
+        ),
+      );
+
+      assert.equal(snapshotReads, 1);
+      for (const item of items) {
+        const tombstone = Option.getOrThrow(item);
+        assert.equal(tombstone.kind, "event");
+        assert.equal(tombstone.kind === "event" ? tombstone.event.type : null, "thread.deleted");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("buffers shell events published while the fallback snapshot loads", () =>
     Effect.gen(function* () {
       const liveEvents = yield* PubSub.unbounded<OrchestrationEvent>();

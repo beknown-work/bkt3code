@@ -159,6 +159,8 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { isThreadDetailEvent } from "./orchestration/threadDetailEvent.ts";
+// T3-CUSTOM(expbkt3): terminalize unavailable subscriptions for legacy clients.
+import { makeMissingThreadSubscriptions } from "./orchestration/MissingThreadSubscriptions.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isOrchestrationGetTurnDiffError = Schema.is(OrchestrationGetTurnDiffError);
 const isOrchestrationGetFullThreadDiffError = Schema.is(OrchestrationGetFullThreadDiffError);
@@ -368,6 +370,8 @@ const makeWsRpcLayer = (
       // Stable for the connection's identity, so resolve once.
       const actorIsAdmin =
         actorUserId === null ? false : yield* clerkDirectory.isOrgAdmin(actorUserId);
+      // T3-CUSTOM(expbkt3): avoid re-querying stale ids for this connection.
+      const missingThreadSubscriptions = makeMissingThreadSubscriptions();
       // T3-CUSTOM(expbkt3): BEGIN per-connection access control (wsVisibility.ts)
       const {
         visibleAggregateIdsForActor,
@@ -1635,6 +1639,13 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              // T3-CUSTOM(expbkt3): a terminal event stops old clients from
+              // retrying, while the connection-local cache avoids repeat reads.
+              const knownMissing = missingThreadSubscriptions.get(input.threadId);
+              if (knownMissing !== undefined) {
+                return Stream.make(knownMissing);
+              }
+
               // Team mode: reject a thread the operator can't access (as
               // not-found — no existence leak).
               if (actorUserId !== null) {
@@ -1642,10 +1653,7 @@ const makeWsRpcLayer = (
                   .canAccessThread(actorUserId, input.threadId)
                   .pipe(Effect.orElseSucceed(() => false));
                 if (!accessible) {
-                  return yield* new OrchestrationGetSnapshotError({
-                    message: `Thread ${input.threadId} was not found`,
-                    cause: input.threadId,
-                  });
+                  return Stream.make(yield* missingThreadSubscriptions.mark(input));
                 }
               }
 
@@ -1766,10 +1774,7 @@ const makeWsRpcLayer = (
                 );
 
               if (Option.isNone(loadedSnapshot)) {
-                return yield* new OrchestrationGetSnapshotError({
-                  message: `Thread ${input.threadId} was not found`,
-                  cause: input.threadId,
-                });
+                return Stream.make(yield* missingThreadSubscriptions.mark(input));
               }
               const snapshot = {
                 ...loadedSnapshot.value,
