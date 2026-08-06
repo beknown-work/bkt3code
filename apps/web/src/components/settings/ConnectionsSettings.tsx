@@ -913,8 +913,9 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
       : null,
     clientSession.client.os ?? null,
     clientSession.client.browser ?? null,
-    // T3-CUSTOM(expbkt3): expose build identity for stale-client diagnosis.
+    // T3-CUSTOM(expbkt3): BEGIN - expose build identity for stale-client diagnosis.
     clientSession.client.appVersion ? `T3 Code ${clientSession.client.appVersion}` : null,
+    // T3-CUSTOM(expbkt3): END
     clientSession.client.ipAddress ?? null,
   ].filter((value): value is string => value !== null);
   const primaryLabel =
@@ -2241,8 +2242,8 @@ export function ConnectionsSettings() {
     [retryEnvironment],
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
   const handleRemoveSavedBackend = useCallback(
-    // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
     async (environmentId: EnvironmentId) => {
       if (
         !window.confirm(
