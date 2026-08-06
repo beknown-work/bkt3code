@@ -176,10 +176,12 @@ function persistenceError(operation: string, cause: unknown, threadId?: ThreadId
 }
 
 function parseJson(value: string | null): unknown | null {
-  return value === null ? null : Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(value);
+  return value === null
+    ? null
+    : Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(value);
 }
 
-const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function fromRow(row: DurableExecutionIntentRow): DurableExecutionIntent {
   const attachments = parseJson(row.attachmentsJson);

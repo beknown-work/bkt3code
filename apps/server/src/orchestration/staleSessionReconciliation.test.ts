@@ -22,6 +22,7 @@ import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "./ThreadBackgroundLiveness.ts";
 import { runStaleSessionReconciliation } from "./staleSessionReconciliation.ts";
 import { ServerConfig } from "../config.ts";
 
@@ -38,6 +39,7 @@ const reconciliationLayer = it.layer(
     ),
     OrchestrationProjectionSnapshotQueryLive,
   ).pipe(
+    Layer.provide(ThreadBackgroundLiveness.layer),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     Layer.provideMerge(RepositoryIdentityResolver.layer),

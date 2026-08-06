@@ -520,10 +520,6 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provide(NetService.layer),
 );
 
-const RuntimeBaseServicesLive = ServerRuntimeStartup.layer.pipe(
-  Layer.provideMerge(RuntimeDependenciesLive),
-);
-
 const commandReadinessLayer = HttpRouter.middleware(
   (httpEffect) =>
     Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
@@ -531,15 +527,6 @@ const commandReadinessLayer = HttpRouter.middleware(
     ),
   { global: true },
 );
-// T3-CUSTOM(expbkt3): BEGIN — layer Plannotator beside upstream runtime services.
-const RuntimeServicesWithoutPlannotatorLive = Layer.mergeAll(
-  RuntimeBaseServicesLive,
-  OrchestrationCommandDispatcher.layer.pipe(Layer.provide(RuntimeBaseServicesLive)),
-);
-const RuntimeServicesLive = PlannotatorManager.layer.pipe(
-  Layer.provideMerge(RuntimeServicesWithoutPlannotatorLive),
-);
-
 // T3-CUSTOM(expbkt3): Build one memoized user profile + credential registry
 // pair and provide both to the native T3 MCP transport and upstream proxy.
 const PersonalMcpRouteServicesLive = McpSessionRegistry.layer;
@@ -753,7 +740,7 @@ export const makeServerLayer = Layer.unwrap(
       }),
     );
 
-    const runtimeServicesLive = ServerRuntimeStartup.layerWithOptions({
+    const runtimeBaseServicesLive = ServerRuntimeStartup.layerWithOptions({
       activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
       abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
       awaitAuxiliaryParked: Effect.all(
@@ -766,6 +753,15 @@ export const makeServerLayer = Layer.unwrap(
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+    // T3-CUSTOM(expbkt3): Layer the durable dispatcher and Plannotator beside
+    // upstream's activation-aware runtime services.
+    const runtimeServicesWithoutPlannotatorLive = Layer.mergeAll(
+      runtimeBaseServicesLive,
+      OrchestrationCommandDispatcher.layer.pipe(Layer.provide(runtimeBaseServicesLive)),
+    );
+    const runtimeServicesLive = PlannotatorManager.layer.pipe(
+      Layer.provideMerge(runtimeServicesWithoutPlannotatorLive),
+    );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,

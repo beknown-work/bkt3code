@@ -37,6 +37,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { CatchupSummaryReactor } from "../Services/CatchupSummaryReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 
 const THREAD_ID = ThreadId.make("thread-catchup");
 const PROJECT_ID = ProjectId.make("project-catchup");
@@ -89,6 +90,7 @@ const makeHarness = (options: {
 
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
