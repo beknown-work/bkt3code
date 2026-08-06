@@ -176,7 +176,9 @@ describe("resolveInitialServerAuthGateState", () => {
     await Promise.all([resolveInitialServerAuthGateState(), resolveInitialServerAuthGateState()]);
 
     expect(testApi.calls.session).toBe(2);
-    expect(testApi.calls.browserSession).toEqual([{ credential: "desktop-bootstrap-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "desktop-bootstrap-token", client_version: "0.0.0" },
+    ]);
   });
 
   it("uses https urls when the primary environment uses wss", async () => {
@@ -318,7 +320,9 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
     });
-    expect(testApi.calls.browserSession).toEqual([{ credential: "retry-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "retry-token", client_version: "0.0.0" },
+    ]);
     expect(testApi.calls.session).toBe(2);
   });
 
@@ -371,7 +375,9 @@ describe("resolveInitialServerAuthGateState", () => {
       reason: "invalid_credential",
       traceId: "trace-invalid-credential",
     });
-    expect(testApi.calls.browserSession).toEqual([{ credential: "bad-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "bad-token", client_version: "0.0.0" },
+    ]);
   });
 
   it("derives primary request messages from structural request context", async () => {
@@ -443,7 +449,9 @@ describe("resolveInitialServerAuthGateState", () => {
       auth: DESKTOP_AUTH,
       errorMessage: "Timed out waiting for authenticated session after bootstrap.",
     });
-    expect(testApi.calls.browserSession).toEqual([{ credential: "desktop-bootstrap-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "desktop-bootstrap-token", client_version: "0.0.0" },
+    ]);
   });
 
   it("memoizes the authenticated gate state after the first successful read", async () => {

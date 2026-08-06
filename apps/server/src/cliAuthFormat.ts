@@ -15,6 +15,7 @@ function formatClientMetadata(metadata: AuthClientMetadata): string {
     metadata.deviceType !== "unknown" ? metadata.deviceType : undefined,
     metadata.os,
     metadata.browser,
+    // T3-CUSTOM(expbkt3): expose build identity in operator-facing client listings.
     metadata.appVersion ? `T3 Code ${metadata.appVersion}` : undefined,
     metadata.ipAddress,
   ]);

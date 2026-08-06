@@ -913,6 +913,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
       : null,
     clientSession.client.os ?? null,
     clientSession.client.browser ?? null,
+    // T3-CUSTOM(expbkt3): expose build identity for stale-client diagnosis.
     clientSession.client.appVersion ? `T3 Code ${clientSession.client.appVersion}` : null,
     clientSession.client.ipAddress ?? null,
   ].filter((value): value is string => value !== null);
@@ -2241,8 +2242,8 @@ export function ConnectionsSettings() {
   );
 
   const handleRemoveSavedBackend = useCallback(
+    // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
     async (environmentId: EnvironmentId) => {
-      // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
       if (
         !window.confirm(
           "Remove this backend? Any unsent messages saved for it will also be removed.",

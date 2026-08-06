@@ -14,10 +14,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+// T3-CUSTOM(expbkt3): BEGIN - coordinate bounded diagnostic reads.
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+// T3-CUSTOM(expbkt3): END
 
 interface TraceRecordLike {
   readonly name?: unknown;
@@ -75,6 +77,7 @@ interface TraceDiagnosticsInput {
   readonly partialFailure?: boolean;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN - coalesce repeated operator reads for a short window.
 interface TraceDiagnosticsErrorSummary {
   readonly kind: ServerTraceDiagnosticsErrorKind;
   readonly message: string;
@@ -82,6 +85,7 @@ interface TraceDiagnosticsErrorSummary {
 
 const DEFAULT_SLOW_SPAN_THRESHOLD_MS = 1_000;
 const READ_CACHE_TTL_MS = 5_000;
+// T3-CUSTOM(expbkt3): END
 const TOP_LIMIT = 10;
 const RECENT_LIMIT = 20;
 function toRotatedTracePaths(traceFilePath: string, maxFiles: number): ReadonlyArray<string> {
@@ -192,6 +196,7 @@ function insertBoundedSlowestSpan(
 export function aggregateTraceDiagnostics(
   input: TraceDiagnosticsInput,
 ): ServerTraceDiagnosticsResult {
+  // T3-CUSTOM(expbkt3): BEGIN - stream aggregation, useful causes, and single-flight reads.
   const readAt = input.readAt;
   const slowSpanThresholdMs = input.slowSpanThresholdMs ?? DEFAULT_SLOW_SPAN_THRESHOLD_MS;
   const scannedFilePaths = input.scannedFilePaths ?? input.files.map((file) => file.path);
@@ -587,3 +592,4 @@ export function readTraceDiagnostics(
     return yield* diagnostics.read(options);
   });
 }
+// T3-CUSTOM(expbkt3): END

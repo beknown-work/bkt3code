@@ -173,6 +173,7 @@ export function deriveAuthClientMetadata(input: {
   const ipAddress = readRemoteAddressFromSource(input.request.source);
   const os = input.presented?.os ?? inferOs(userAgent);
   const browser = inferBrowser(userAgent);
+  // T3-CUSTOM(expbkt3): BEGIN - preserve client build identity alongside inferred metadata.
   return {
     ...(input.presented?.label ? { label: input.presented.label } : {}),
     ...(ipAddress ? { ipAddress } : {}),
@@ -180,7 +181,7 @@ export function deriveAuthClientMetadata(input: {
     deviceType: input.presented?.deviceType ?? inferDeviceType(userAgent),
     ...(os ? { os } : {}),
     ...(browser ? { browser } : {}),
-    // T3-CUSTOM(expbkt3): retain the presented build without trusting it for auth.
     ...(input.presented?.appVersion ? { appVersion: input.presented.appVersion } : {}),
   };
+  // T3-CUSTOM(expbkt3): END
 }
