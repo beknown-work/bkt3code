@@ -20,6 +20,7 @@ import {
 } from "./SidebarProviderRateLimits.cache";
 import {
   buildProviderRateLimitRows,
+  formatCompactMinutes,
   providerRateLimitBoundaryTimes,
   selectProviderRateLimitEnvironmentId,
   summarizeProviderRateLimitRows,
@@ -74,6 +75,46 @@ function ProviderRateLimitIcon({ row }: { row: ProviderRateLimitRowView }) {
   return <Icon aria-hidden="true" className="size-2.5 shrink-0" />;
 }
 
+/**
+ * The rolling-window companion, e.g. `5h 40% · 1h 8m`: how much of the short
+ * window is left and when it refills. Shown only while it is the tighter limit.
+ */
+function ProviderRateLimitRollingChip({
+  rolling,
+  onBackdrop,
+}: {
+  rolling: NonNullable<ProviderRateLimitRowView["rolling"]>;
+  onBackdrop: boolean;
+}) {
+  const countdown =
+    rolling.minutesUntilReset === null
+      ? null
+      : rolling.minutesUntilReset === 0
+        ? "now"
+        : formatCompactMinutes(rolling.minutesUntilReset);
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-baseline gap-1 whitespace-nowrap text-[9px] font-semibold leading-none tabular-nums",
+        onBackdrop ? "text-white/75" : rollingToneClass[rolling.tone],
+      )}
+      data-rolling-window="true"
+      title={`${rolling.windowLabel ?? "Rolling"} window: ${rolling.remainingPercent}% remaining${
+        countdown === null ? "" : `, resets in ${countdown}`
+      }`}
+    >
+      <span>{`${rolling.windowLabel === null ? "" : `${rolling.windowLabel} `}${
+        rolling.remainingPercent
+      }%`}</span>
+      {countdown === null ? null : (
+        <span className={cn("font-medium", onBackdrop ? "text-white/50" : "text-muted-foreground")}>
+          {`· ${countdown}`}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ProviderRateLimitProgressRow({
   row,
   onBackdrop,
@@ -113,22 +154,7 @@ function ProviderRateLimitProgressRow({
         {remaining === null ? "—" : `${remaining}%`}
       </span>
       {row.rolling === null ? null : (
-        <span
-          className={cn(
-            "shrink-0 text-[9px] font-semibold leading-none tabular-nums",
-            onBackdrop ? "text-white/75" : rollingToneClass[row.rolling.tone],
-          )}
-          data-rolling-window="true"
-          title={`Rolling window: ${row.rolling.remainingPercent}% remaining${
-            row.rolling.minutesUntilReset === null
-              ? ""
-              : `, resets in ${row.rolling.minutesUntilReset}m`
-          }`}
-        >
-          {`(${row.rolling.remainingPercent}%${
-            row.rolling.minutesUntilReset === null ? "" : `, ${row.rolling.minutesUntilReset}m`
-          })`}
-        </span>
+        <ProviderRateLimitRollingChip onBackdrop={onBackdrop} rolling={row.rolling} />
       )}
     </span>
   );

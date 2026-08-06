@@ -56,6 +56,19 @@ export interface ProviderRateLimitRollingView {
   readonly minutesUntilReset: number | null;
   readonly resetsAtMs: number | null;
   readonly tone: ProviderRateLimitTone;
+  /** Compact window length, e.g. `5h`. Null when the provider omits a duration. */
+  readonly windowLabel: string | null;
+}
+
+/**
+ * Minutes as the shortest readable unit: `47m`, `1h 8m`, `5h`. Used for both the
+ * window length and its reset countdown so the chip reads consistently.
+ */
+export function formatCompactMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
 export interface ProviderRateLimitRowView {
@@ -187,6 +200,10 @@ function projectRow(
               ? null
               : DateTime.toEpochMillis(rollingLowest.window.resetsAt),
           tone: providerRateLimitTone(rollingRemaining),
+          windowLabel:
+            rollingLowest?.window.windowDurationMinutes === undefined
+              ? null
+              : formatCompactMinutes(rollingLowest.window.windowDurationMinutes),
         }
       : null;
   const hasOnlyExpiredWindows =
@@ -269,10 +286,12 @@ export function summarizeProviderRateLimitRows(
     const rolling =
       row.rolling === null
         ? ""
-        : `, rolling window ${row.rolling.remainingPercent}% remaining${
+        : `, ${row.rolling.windowLabel ?? "rolling"} window ${
+            row.rolling.remainingPercent
+          }% remaining${
             row.rolling.minutesUntilReset === null
               ? ""
-              : ` and resets in ${row.rolling.minutesUntilReset} minutes`
+              : ` and resets in ${formatCompactMinutes(row.rolling.minutesUntilReset)}`
           }`;
     return row.remainingPercent === null
       ? `${row.displayName} unavailable${rolling}`

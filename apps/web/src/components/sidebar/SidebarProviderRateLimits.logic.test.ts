@@ -45,11 +45,13 @@ const limitWindow = (
   category: "rolling" | "weekly",
   usedPercent: number,
   resetsAt = "2026-08-02T00:00:00.000Z",
+  windowDurationMinutes?: number,
 ) => ({
   windowId: `codex:${category}`,
   label: category === "weekly" ? "Weekly" : "Rolling",
   usedPercent,
   resetsAt: at(resetsAt),
+  ...(windowDurationMinutes === undefined ? {} : { windowDurationMinutes }),
   category,
 });
 
@@ -76,7 +78,7 @@ describe("weekly headline and rolling companion", () => {
     expect(weeklyRow([limitWindow("rolling", 50), limitWindow("weekly", 6)]).rolling).toBeNull();
 
     const row = weeklyRow([
-      limitWindow("rolling", 60, "2026-08-01T11:08:00.000Z"),
+      limitWindow("rolling", 60, "2026-08-01T11:08:00.000Z", 300),
       limitWindow("weekly", 6),
     ]);
     expect(row.remainingPercent).toBe(94);
@@ -84,9 +86,22 @@ describe("weekly headline and rolling companion", () => {
       remainingPercent: 40,
       minutesUntilReset: 68,
       tone: "warning",
+      windowLabel: "5h",
     });
     expect(summarizeProviderRateLimitRows([row])).toBe(
-      "Provider usage limits: Codex 94% weekly remaining, rolling window 40% remaining and resets in 68 minutes",
+      "Provider usage limits: Codex 94% weekly remaining, 5h window 40% remaining and resets in 1h 8m",
+    );
+  });
+
+  it("labels the rolling companion generically when the provider omits a duration", () => {
+    const row = weeklyRow([
+      limitWindow("rolling", 60, "2026-08-01T10:47:00.000Z"),
+      limitWindow("weekly", 6),
+    ]);
+
+    expect(row.rolling?.windowLabel).toBe(null);
+    expect(summarizeProviderRateLimitRows([row])).toBe(
+      "Provider usage limits: Codex 94% weekly remaining, rolling window 40% remaining and resets in 47m",
     );
   });
 

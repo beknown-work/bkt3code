@@ -124,6 +124,7 @@ describe("SidebarProviderRateLimits", () => {
               label: "Primary",
               usedPercent: 60,
               resetsAt: DateTime.makeUnsafe("2026-08-01T11:08:00.000Z"),
+              windowDurationMinutes: 300,
               category: "rolling",
             },
             {
@@ -148,8 +149,10 @@ describe("SidebarProviderRateLimits", () => {
     );
 
     expect(markup).toContain("94%");
-    expect(markup).toContain("(40%, 68m)");
+    expect(markup).toContain("5h 40%");
+    expect(markup).toContain("· 1h 8m");
     expect(markup).toContain('data-rolling-window="true"');
+    expect(markup).toContain('title="5h window: 40% remaining, resets in 1h 8m"');
   });
 
   it("renders complete read-only details and API-key degradation copy", () => {
