@@ -1,6 +1,6 @@
 # Source of truth for the ONLY file that `t3main` adds to upstream `main`.
 #
-# `t3main` is committed to as: upstream main + .github/workflows/deploy-t3.yml.
+# `t3main` is upstream main plus this workflow and a `.gitmodules` entry.
 # Edit this copy on `bkmain`, then copy it onto `t3main`:
 #
 #   git -C /home/ubuntu/repos/t3code checkout t3main
@@ -33,6 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up pnpm
@@ -48,6 +49,39 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Resolve upstream nightly version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags https://github.com/pingdotgg/t3code.git \
+            main:refs/remotes/upstream/main \
+            '+refs/tags/v*:refs/tags/upstream-v*'
+
+          upstream_sha="$(git merge-base HEAD refs/remotes/upstream/main)"
+          mapfile -t nightly_tags < <(
+            git tag --points-at "$upstream_sha" \
+              --list 'upstream-v*-nightly.*' \
+              --sort=-version:refname
+          )
+          nightly_tag="${nightly_tags[0]:-}"
+          if [[ -z "$nightly_tag" ]]; then
+            echo "No upstream nightly release tags integrated upstream commit $upstream_sha." >&2
+            exit 1
+          fi
+
+          nightly_version="${nightly_tag#upstream-v}"
+          if [[ ! "$nightly_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            echo "Invalid upstream nightly version: $nightly_version" >&2
+            exit 1
+          fi
+
+          echo "Resolved upstream nightly $nightly_version at $upstream_sha"
+          echo "APP_VERSION=$nightly_version" >> "$GITHUB_ENV"
+          echo "UPSTREAM_NIGHTLY_SHA=$upstream_sha" >> "$GITHUB_ENV"
+
+      - name: Align package versions to upstream nightly
+        run: node scripts/update-release-package-versions.ts "$APP_VERSION"
 
       - name: Check formatting and lint
         run: pnpm exec vp check
@@ -76,6 +110,7 @@ jobs:
           cp -a apps/web/dist deployment-artifact/apps/web/
           cp -a apps/server/dist deployment-artifact/apps/server/
           printf '%s\n' "$GITHUB_SHA" > deployment-artifact/SHA
+          printf '%s\n' "$APP_VERSION" > deployment-artifact/VERSION
 
       - name: Publish deployment artifact
         uses: actions/upload-artifact@v7
