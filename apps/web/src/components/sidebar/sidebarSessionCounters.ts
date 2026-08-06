@@ -35,7 +35,9 @@ export function threadIsRunning(thread: ThreadShell): boolean {
     thread.execution?.activity === "blocked" ||
     thread.execution?.activity === "stopping" ||
     thread.session?.status === "starting" ||
-    thread.session?.status === "running"
+    thread.session?.status === "running" ||
+    thread.backgroundLiveness === "working" ||
+    thread.backgroundLiveness === "monitoring"
   );
 }
 

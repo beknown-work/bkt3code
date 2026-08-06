@@ -115,6 +115,7 @@ import {
   flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   partitionPhaseSidebarRows,
+  phaseSidebarGroupHeaderClassName,
   // T3-CUSTOM(expbkt3): Session priority badge tone.
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
@@ -126,6 +127,7 @@ import {
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
+  resolvePhaseSidebarWorkBadge,
   phaseSidebarRowClassName,
   formatThreadPriority,
   PHASE_SIDEBAR_PRIORITY_CHOICES,
@@ -736,6 +738,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     intent: row.thread.execution?.intent ?? null,
     providerActivity: row.thread.execution?.activity ?? "idle",
   });
+  const workBadge = resolvePhaseSidebarWorkBadge({
+    phaseId: row.phaseId,
+    backgroundLiveness: row.thread.backgroundLiveness ?? null,
+    executionPresentation,
+  });
   // T3-CUSTOM(expbkt3): END
   const selected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const toggleThread = useThreadSelectionStore((state) => state.toggleThread);
@@ -964,7 +971,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         onDoubleClick={() => onStartRename(row)}
         onContextMenu={(event) => void handleContextMenu(event)}
       >
-        {executionPresentation.active || shouldShowRunningSessionGlint(row.phaseId, section) ? (
+        {workBadge?.monitoring !== true &&
+        (executionPresentation.active || shouldShowRunningSessionGlint(row.phaseId, section)) ? (
           <RunningSessionGlint />
         ) : null}
         {active ? (
@@ -1079,12 +1087,15 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         </span>
         {/* T3-CUSTOM(expbkt3): status/time own a fixed top-right lane. */}
         <span className="absolute top-2 right-2 flex max-w-[55%] shrink-0 items-center gap-1">
-          {executionPresentation.active && executionPresentation.label && attentionKind === null ? (
+          {workBadge && attentionKind === null ? (
             <span
               role="status"
-              className="rounded-sm bg-sky-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:text-sky-300"
+              className={cn(
+                "rounded-sm px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:text-sky-300",
+                workBadge.monitoring ? "bg-sky-500/10" : "bg-sky-500/15",
+              )}
             >
-              {executionPresentation.label.toUpperCase()}
+              {workBadge.label.toUpperCase()}
             </span>
           ) : null}
           {attentionKind === "input" ? (
@@ -2226,19 +2237,14 @@ export function PhaseGroupedSidebar() {
             <section key={group.id} className="mb-3" data-phase-id={group.id}>
               {/* T3-CUSTOM(expbkt3): A quiet boundary before live agent work. */}
               {group.id === runningDividerPhaseId ? <RunningSessionDivider /> : null}
-              <header className="mb-1 flex items-center gap-2 px-2">
-                <span
-                  className={cn(
-                    "text-[10px] font-semibold uppercase tracking-wider text-foreground/80",
-                    group.id === "needs_input" && "text-red-600 dark:text-red-400",
-                  )}
-                >
+              <header className={phaseSidebarGroupHeaderClassName(group.id)}>
+                <span className="text-[11px] font-bold uppercase tracking-[0.1em]">
                   {group.label}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[9px] text-muted-foreground/50">
+                <span className="min-w-0 flex-1 truncate text-[9px] text-current/55">
                   {group.helperText}
                 </span>
-                <span className="text-[9px] tabular-nums text-muted-foreground/55">
+                <span className="min-w-4 rounded-full bg-background/45 px-1.5 py-0.5 text-center text-[9px] font-semibold tabular-nums text-current/70">
                   {group.rows.length}
                 </span>
               </header>

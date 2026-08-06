@@ -72,6 +72,69 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
   { id: "implementing", label: "Implementing", helperText: "Agent is changing code" },
 ];
 
+/**
+ * Theme-aware lifecycle header surfaces. The hue is intentionally restrained:
+ * headers should make the groups scannable without competing with urgent row
+ * badges or the selected-thread treatment.
+ */
+export function phaseSidebarGroupHeaderClassName(phaseId: PhaseSidebarPhaseId): string {
+  const tone = {
+    needs_input:
+      "border-red-500/20 bg-red-500/8 text-red-700 dark:border-red-400/20 dark:bg-red-400/8 dark:text-red-300",
+    plan_ready:
+      "border-violet-500/20 bg-violet-500/9 text-violet-700 dark:border-violet-400/20 dark:bg-violet-400/9 dark:text-violet-300",
+    ready:
+      "border-emerald-500/16 bg-emerald-500/7 text-emerald-700 dark:border-emerald-400/16 dark:bg-emerald-400/7 dark:text-emerald-300",
+    planning:
+      "border-indigo-500/18 bg-indigo-500/8 text-indigo-700 dark:border-indigo-400/18 dark:bg-indigo-400/8 dark:text-indigo-300",
+    implementing:
+      "border-sky-500/18 bg-sky-500/8 text-sky-700 dark:border-sky-400/18 dark:bg-sky-400/8 dark:text-sky-300",
+  } satisfies Record<PhaseSidebarPhaseId, string>;
+
+  return cn(
+    "mb-1.5 flex min-h-7 items-center gap-2 rounded-md border px-2 py-1 shadow-[inset_0_1px_0_rgb(255_255_255/0.025)]",
+    tone[phaseId],
+  );
+}
+
+export interface PhaseSidebarWorkBadge {
+  readonly label: string;
+  readonly monitoring: boolean;
+}
+
+/**
+ * Convert provider execution into the experimental sidebar's user-facing
+ * vocabulary. A RUNNING provider or any projected background liveness is a
+ * monitoring responsibility for the user. Unlike active transitions such as
+ * Queued or Stopping, monitoring is steady and must not trigger row shimmer.
+ * Plan Ready remains actionable and therefore outranks lingering background
+ * liveness, matching Sidebar V2.
+ */
+export function resolvePhaseSidebarWorkBadge(input: {
+  readonly phaseId: PhaseSidebarPhaseId;
+  readonly backgroundLiveness?: "working" | "monitoring" | null;
+  readonly executionPresentation: {
+    readonly active: boolean;
+    readonly label: string | null;
+  };
+}): PhaseSidebarWorkBadge | null {
+  if (input.phaseId === "plan_ready") return null;
+
+  if (
+    input.backgroundLiveness === "working" ||
+    input.backgroundLiveness === "monitoring" ||
+    (input.executionPresentation.active && input.executionPresentation.label === "Running")
+  ) {
+    return { label: "Monitoring", monitoring: true };
+  }
+
+  if (!input.executionPresentation.active || input.executionPresentation.label === null) {
+    return null;
+  }
+
+  return { label: input.executionPresentation.label, monitoring: false };
+}
+
 const PHASE_ID_SET = new Set<string>(PHASE_SIDEBAR_PHASE_IDS);
 const LINEAR_BRANCH_PATTERN = /^linear\/([a-z][a-z0-9]*-\d+)(?:-|$)/i;
 const LINEAR_ISSUE_URL_PATTERN =
@@ -403,6 +466,13 @@ export function resolvePhaseSidebarPhase(
 ): PhaseSidebarPhaseId {
   if (phaseSidebarNeedsUserInput(thread)) return "needs_input";
 
+  // A failed provider is actionable even if a stale durable intent or
+  // background-liveness projection has not cleared yet.
+  const hasFailure = thread.execution?.activity === "failed" || thread.session?.status === "error";
+  if (hasFailure) {
+    return thread.interactionMode === "plan" ? "plan_ready" : "ready";
+  }
+
   // T3-CUSTOM(expbkt3): BEGIN — group from the same durable intent as the badge.
   const isActive =
     (thread.execution?.intent !== undefined &&
@@ -414,6 +484,20 @@ export function resolvePhaseSidebarPhase(
     thread.session?.status === "running";
   // T3-CUSTOM(expbkt3): END
   if (isActive) {
+    return thread.interactionMode === "plan" ? "planning" : "implementing";
+  }
+
+  // Sidebar V2's reliability ordering: a failure or an actionable plan must
+  // not be hidden by liveness that can linger while background work winds
+  // down. Those states keep their ordinary group and attention treatment.
+  if (thread.interactionMode === "plan" && thread.hasActionableProposedPlan) {
+    return "plan_ready";
+  }
+
+  // A settled foreground turn can still own native subagents, workflows, or
+  // watch scripts. Keep it among agent-work rows until the authoritative
+  // server projection clears instead of prematurely dropping it into Ready.
+  if (thread.backgroundLiveness === "working" || thread.backgroundLiveness === "monitoring") {
     return thread.interactionMode === "plan" ? "planning" : "implementing";
   }
 

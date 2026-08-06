@@ -92,6 +92,11 @@ describe("sidebar session counters", () => {
     expect(threadIsRunning(makeThread({ execution: makeExecution("idle") }))).toBe(false);
   });
 
+  it("keeps projected background agents and monitors out of the attention count", () => {
+    expect(threadIsRunning(makeThread({ backgroundLiveness: "working" }))).toBe(true);
+    expect(threadIsRunning(makeThread({ backgroundLiveness: "monitoring" }))).toBe(true);
+  });
+
   it("keeps running work out of the non-running count", () => {
     expect(
       summarizeSidebarSessions(

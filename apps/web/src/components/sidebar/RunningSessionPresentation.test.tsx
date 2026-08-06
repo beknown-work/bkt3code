@@ -16,7 +16,8 @@ describe("running session presentation", () => {
     const markup = renderToStaticMarkup(<RunningSessionDivider />);
 
     expect(markup).toContain('role="separator"');
-    expect(markup).toContain('aria-label="Running agents"');
-    expect(markup).toContain("Running");
+    expect(markup).toContain('aria-label="Monitoring agent work"');
+    expect(markup).toContain("Monitoring");
+    expect(markup).not.toContain(">Running<");
   });
 });

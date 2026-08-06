@@ -24,6 +24,7 @@ import {
   filterVisiblePhaseSidebarRows,
   matchesPhaseSidebarFilters,
   partitionPhaseSidebarRows,
+  phaseSidebarGroupHeaderClassName,
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
   phaseSidebarRowClassName,
@@ -39,6 +40,7 @@ import {
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
+  resolvePhaseSidebarWorkBadge,
   sanitizePhaseSidebarFilters,
   type PhaseSidebarRow,
 } from "./PhaseGroupedSidebar.logic";
@@ -92,6 +94,62 @@ describe("phaseSidebarRowClassName", () => {
 
     expect(className).toContain("items-center");
     expect(className).not.toContain("items-start");
+  });
+});
+
+describe("phase sidebar group headers", () => {
+  it("gives ready states distinct, theme-aware surfaces and larger labels", () => {
+    const planReady = phaseSidebarGroupHeaderClassName("plan_ready");
+    const ready = phaseSidebarGroupHeaderClassName("ready");
+
+    expect(planReady).toContain("bg-violet-500/9");
+    expect(planReady).toContain("dark:bg-violet-400/9");
+    expect(ready).toContain("bg-emerald-500/7");
+    expect(planReady).not.toBe(ready);
+  });
+});
+
+describe("phase sidebar work badge", () => {
+  it("replaces Running with a steady Monitoring badge", () => {
+    expect(
+      resolvePhaseSidebarWorkBadge({
+        phaseId: "implementing",
+        backgroundLiveness: null,
+        executionPresentation: { active: true, label: "Running" },
+      }),
+    ).toEqual({ label: "Monitoring", monitoring: true });
+  });
+
+  it("keeps settled background agents and watch loops visible as monitoring", () => {
+    for (const backgroundLiveness of ["working", "monitoring"] as const) {
+      expect(
+        resolvePhaseSidebarWorkBadge({
+          phaseId: "implementing",
+          backgroundLiveness,
+          executionPresentation: { active: false, label: null },
+        }),
+      ).toEqual({ label: "Monitoring", monitoring: true });
+    }
+  });
+
+  it("lets actionable Plan Ready suppress lingering background status", () => {
+    expect(
+      resolvePhaseSidebarWorkBadge({
+        phaseId: "plan_ready",
+        backgroundLiveness: "working",
+        executionPresentation: { active: false, label: null },
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves transitional labels without calling them monitoring", () => {
+    expect(
+      resolvePhaseSidebarWorkBadge({
+        phaseId: "implementing",
+        backgroundLiveness: null,
+        executionPresentation: { active: true, label: "Stopping" },
+      }),
+    ).toEqual({ label: "Stopping", monitoring: false });
   });
 });
 
@@ -335,6 +393,43 @@ describe("phase sidebar lifecycle", () => {
         }),
       ),
     ).toBe("implementing");
+  });
+
+  it("keeps server-projected background work in agent-work groups after the turn settles", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({ execution: makeExecution(), backgroundLiveness: "working" }),
+      ),
+    ).toBe("implementing");
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          execution: makeExecution(),
+          backgroundLiveness: "monitoring",
+        }),
+      ),
+    ).toBe("planning");
+  });
+
+  it("lets failures and actionable plans outrank lingering background liveness", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          execution: makeExecution({ activity: "failed" }),
+          backgroundLiveness: "working",
+        }),
+      ),
+    ).toBe("ready");
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          backgroundLiveness: "working",
+        }),
+      ),
+    ).toBe("plan_ready");
   });
 
   it("promotes durable and live pending questions to the first lifecycle group", () => {
