@@ -4681,9 +4681,10 @@ function ChatViewContent(props: ChatViewProps) {
   const handleStopBackgroundWork = useCallback(async () => {
     if (!activeThread) return;
     setIsStoppingBackgroundWork(true);
-    const result = await interruptThreadTurn({
+    // T3-CUSTOM(expbkt3): background stops share the durable execution path.
+    const result = await stopThreadExecution({
       environmentId,
-      input: buildThreadTurnInterruptInput(activeThread),
+      input: buildStopExecutionInput(activeThread),
     });
     if (result._tag === "Failure") {
       // Every failure clears the pending state — an interrupted command
@@ -4698,7 +4699,7 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
     }
-  }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  }, [activeThread, environmentId, setThreadError, stopThreadExecution]);
   const backgroundLivenessBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (activeBackgroundLiveness === null || !activeThread) {
       return null;
