@@ -151,6 +151,7 @@ describe("remote environment authorization", () => {
           label: "T3 Code Mobile",
           deviceType: "mobile",
           os: "iOS",
+          appVersion: "0.0.31-nightly.20260806.1",
         },
       }).pipe(provideRemoteHttp(fetch.fetchFn));
       yield* issueRemoteDpopWebSocketTicket({
@@ -163,7 +164,7 @@ describe("remote environment authorization", () => {
         url: "https://remote.example.com/oauth/token",
         method: "POST",
         headers: { dpop: "token-proof", "content-type": "application/x-www-form-urlencoded" },
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=one-time-credential&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS&identity_token=clerk-session-token",
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=one-time-credential&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS&client_version=0.0.31-nightly.20260806.1&identity_token=clerk-session-token",
       });
       expectFetchCall(fetch.calls, 2, {
         url: "https://remote.example.com/api/auth/websocket-ticket",
@@ -199,13 +200,14 @@ describe("remote environment authorization", () => {
           label: "T3 Code Mobile",
           deviceType: "mobile",
           os: "iOS",
+          appVersion: "0.0.31-nightly.20260806.1",
         },
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       expectFetchCall(fetch.calls, 1, {
         url: "https://remote.example.com/oauth/token",
         method: "POST",
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS",
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS&client_version=0.0.31-nightly.20260806.1",
       });
     }),
   );

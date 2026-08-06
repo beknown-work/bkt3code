@@ -186,6 +186,42 @@ describe("TraceDiagnostics", () => {
     }),
   );
 
+  it.effect("uses the structured Effect cause when a tool-call log message is empty", () =>
+    Effect.sync(() => {
+      const diagnostics = TraceDiagnostics.aggregateTraceDiagnostics({
+        traceFilePath: "/tmp/server.trace.ndjson",
+        readAt: DateTime.makeUnsafe("2026-05-05T10:00:00.000Z"),
+        files: [
+          {
+            path: "/tmp/server.trace.ndjson",
+            text: record({
+              name: "McpServer.tools/call",
+              traceId: "trace-tool",
+              spanId: "span-tool",
+              startMs: 1_000,
+              durationMs: 25,
+              events: [
+                {
+                  name: "[]",
+                  timeUnixNano: ns(1_010),
+                  attributes: {
+                    "effect.logLevel": "Error",
+                    "effect.cause": "PreviewAutomationUnavailable: No preview host is attached",
+                  },
+                },
+              ],
+            }),
+          },
+        ],
+      });
+
+      assert.equal(
+        diagnostics.latestWarningAndErrorLogs[0]?.message,
+        "PreviewAutomationUnavailable: No preview host is attached",
+      );
+    }),
+  );
+
   it.effect("keeps loaded trace data when one rotated trace file fails to read", () =>
     Effect.gen(function* () {
       const traceFilePath = "/tmp/server.trace.ndjson";
@@ -248,6 +284,34 @@ describe("TraceDiagnostics", () => {
         errorTag: "TraceFileReadError",
         causeTag: "PermissionDenied",
       });
+    }),
+  );
+
+  it.effect("coalesces concurrent trace reads into the short-lived cache", () =>
+    Effect.gen(function* () {
+      const traceFilePath = "/tmp/server.trace.ndjson";
+      let readCount = 0;
+      const fileSystemLayer = FileSystem.layerNoop({
+        readFileString: () =>
+          Effect.sync(() => {
+            readCount += 1;
+            return record({
+              name: "server.getConfig",
+              traceId: "trace-cache",
+              spanId: "span-cache",
+              startMs: 1_000,
+              durationMs: 50,
+            });
+          }),
+      });
+      const read = TraceDiagnostics.readTraceDiagnostics({ traceFilePath, maxFiles: 0 });
+
+      const diagnostics = yield* Effect.all([read, read], { concurrency: "unbounded" }).pipe(
+        Effect.provide(TraceDiagnostics.layer.pipe(Layer.provide(fileSystemLayer))),
+      );
+
+      assert.equal(readCount, 1);
+      assert.strictEqual(diagnostics[0], diagnostics[1]);
     }),
   );
 

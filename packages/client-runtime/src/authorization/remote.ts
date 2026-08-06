@@ -30,6 +30,8 @@ const clientMetadataTokenExchangeFields = (
   ...(clientMetadata?.label ? { client_label: clientMetadata.label } : {}),
   ...(clientMetadata?.deviceType ? { client_device_type: clientMetadata.deviceType } : {}),
   ...(clientMetadata?.os ? { client_os: clientMetadata.os } : {}),
+  // T3-CUSTOM(expbkt3): preserve the client build across token exchange.
+  ...(clientMetadata?.appVersion ? { client_version: clientMetadata.appVersion } : {}),
 });
 
 export const exchangeRemoteDpopAccessToken = Effect.fn(

@@ -28,6 +28,8 @@ export const AuthSessionClientMetadataRecord = Schema.Struct({
   deviceType: AuthClientMetadataDeviceType,
   os: Schema.NullOr(Schema.String),
   browser: Schema.NullOr(Schema.String),
+  // T3-CUSTOM(expbkt3): persisted client build identity.
+  appVersion: Schema.NullOr(Schema.String),
 });
 export type AuthSessionClientMetadataRecord = typeof AuthSessionClientMetadataRecord.Type;
 
@@ -139,6 +141,7 @@ const AuthSessionDbRow = Schema.Struct({
   clientDeviceType: Schema.Literals(["desktop", "mobile", "tablet", "bot", "unknown"]),
   clientOs: Schema.NullOr(Schema.String),
   clientBrowser: Schema.NullOr(Schema.String),
+  clientAppVersion: Schema.NullOr(Schema.String),
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -157,6 +160,7 @@ const AuthSessionRawDbRow = Schema.Struct({
   clientDeviceType: Schema.Unknown,
   clientOs: Schema.Unknown,
   clientBrowser: Schema.Unknown,
+  clientAppVersion: Schema.Unknown,
   issuedAt: Schema.Unknown,
   expiresAt: Schema.Unknown,
   lastConnectedAt: Schema.Unknown,
@@ -179,6 +183,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
       deviceType: row.clientDeviceType,
       os: row.clientOs,
       browser: row.clientBrowser,
+      appVersion: row.clientAppVersion,
     },
     issuedAt: row.issuedAt,
     expiresAt: row.expiresAt,
@@ -221,6 +226,7 @@ export const make = Effect.gen(function* () {
           client_device_type,
           client_os,
           client_browser,
+          client_app_version,
           issued_at,
           expires_at,
           revoked_at
@@ -237,6 +243,7 @@ export const make = Effect.gen(function* () {
           ${input.client.deviceType},
           ${input.client.os},
           ${input.client.browser},
+          ${input.client.appVersion},
           ${input.issuedAt},
           ${input.expiresAt},
           NULL
@@ -261,6 +268,7 @@ export const make = Effect.gen(function* () {
           client_device_type AS "clientDeviceType",
           client_os AS "clientOs",
           client_browser AS "clientBrowser",
+          client_app_version AS "clientAppVersion",
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
@@ -287,6 +295,7 @@ export const make = Effect.gen(function* () {
           client_device_type AS "clientDeviceType",
           client_os AS "clientOs",
           client_browser AS "clientBrowser",
+          client_app_version AS "clientAppVersion",
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",

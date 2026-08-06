@@ -13,6 +13,7 @@ import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/u
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { installEnvironmentHttpTest } from "../test/environmentHttpTest";
+import { APP_VERSION } from "./branding";
 import { setManagedClerkIdentityTokenProvider } from "./cloud/managedIdentity";
 import { __setPrimaryHttpRunnerForTests, type PrimaryHttpEffectRunner } from "./lib/runtime";
 
@@ -176,7 +177,9 @@ describe("resolveInitialServerAuthGateState", () => {
     await Promise.all([resolveInitialServerAuthGateState(), resolveInitialServerAuthGateState()]);
 
     expect(testApi.calls.session).toBe(2);
-    expect(testApi.calls.browserSession).toEqual([{ credential: "desktop-bootstrap-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "desktop-bootstrap-token", client_version: APP_VERSION },
+    ]);
   });
 
   it("uses https urls when the primary environment uses wss", async () => {
@@ -318,7 +321,9 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
       status: "authenticated",
     });
-    expect(testApi.calls.browserSession).toEqual([{ credential: "retry-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "retry-token", client_version: APP_VERSION },
+    ]);
     expect(testApi.calls.session).toBe(2);
   });
 
@@ -371,7 +376,9 @@ describe("resolveInitialServerAuthGateState", () => {
       reason: "invalid_credential",
       traceId: "trace-invalid-credential",
     });
-    expect(testApi.calls.browserSession).toEqual([{ credential: "bad-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "bad-token", client_version: APP_VERSION },
+    ]);
   });
 
   it("derives primary request messages from structural request context", async () => {
@@ -443,7 +450,9 @@ describe("resolveInitialServerAuthGateState", () => {
       auth: DESKTOP_AUTH,
       errorMessage: "Timed out waiting for authenticated session after bootstrap.",
     });
-    expect(testApi.calls.browserSession).toEqual([{ credential: "desktop-bootstrap-token" }]);
+    expect(testApi.calls.browserSession).toEqual([
+      { credential: "desktop-bootstrap-token", client_version: APP_VERSION },
+    ]);
   });
 
   it("memoizes the authenticated gate state after the first successful read", async () => {

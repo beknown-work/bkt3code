@@ -25,6 +25,7 @@ describe("mobile remote connection records", () => {
     expect(authClientMetadata()).toEqual({
       label: "T3 Code Mobile",
       deviceType: "mobile",
+      appVersion: "1.0.1",
       os: "iOS",
     });
   });
