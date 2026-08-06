@@ -37,7 +37,7 @@ const invocation = (
 });
 
 it("generates one unique virtual tool and complete schemas for every web RPC", () => {
-  expect(WEB_UI_VIRTUAL_TOOL_COUNT).toBe(100);
+  expect(WEB_UI_VIRTUAL_TOOL_COUNT).toBe(102);
   expect(WEB_UI_STREAM_TOOL_COUNT).toBe(19);
   expect(WEB_UI_VIRTUAL_TOOL_COUNT).toBe(WsRpcGroup.requests.size);
   expect(new Set(WEB_UI_VIRTUAL_TOOLS.map((tool) => tool.name)).size).toBe(

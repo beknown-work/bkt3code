@@ -1123,6 +1123,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // T3-CUSTOM(expbkt3): Keep the bounded project-thread query aligned with
+  // upstream's shell schema additions.
   const listActiveThreadRowsByProjectId = SqlSchema.findAll({
     Request: Schema.Struct({ projectId: ProjectId }),
     Result: ProjectionThreadDbRowSchema,
@@ -1149,6 +1151,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
