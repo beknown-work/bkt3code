@@ -74,6 +74,9 @@ import Migration1003 from "./Migrations/1003_DurableExecutionIntents.ts";
 import Migration1004 from "./Migrations/1004_ProjectionThreadsLinearIssue.ts";
 // T3-CUSTOM(expbkt3): connected-client build identity for stale-bundle diagnosis.
 import Migration1006 from "./Migrations/1006_AuthSessionClientVersion.ts";
+// T3-CUSTOM(expbkt3): event-type index plus one-time maintenance markers so the
+// ownership backfill stops re-scanning the event log on every boot.
+import Migration1007 from "./Migrations/1007_OwnershipBackfillFastPath.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -159,6 +162,7 @@ const migrationEntries = [
   [1004, "ProjectionThreadsLinearIssue", Migration1004],
   [1005, "ProjectionThreadsPinned", Migration1005],
   [1006, "AuthSessionClientVersion", Migration1006],
+  [1007, "OwnershipBackfillFastPath", Migration1007],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
