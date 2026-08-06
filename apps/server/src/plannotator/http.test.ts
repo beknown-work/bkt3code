@@ -1,9 +1,19 @@
 /**
- * T3-CUSTOM(expbkt3): Focused coverage for the token-scoped review status API.
+ * T3-CUSTOM(expbkt3): Focused coverage for the token-scoped review HTTP boundary.
  */
-import { describe, expect, it } from "vite-plus/test";
+import { NodeHttpServer } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import {
+  HttpClient,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 
 import {
+  __testing,
   parsePlannotatorClientIdHeader,
   PLANNOTATOR_CLIENT_ID_HEADER,
   PLANNOTATOR_IFRAME_CORS_HEADERS,
@@ -66,4 +76,57 @@ describe("Plannotator HTTP status endpoint", () => {
       PLANNOTATOR_CLIENT_ID_HEADER,
     );
   });
+});
+
+describe("Plannotator HTTP proxy", () => {
+  it.effect("forwards a streamed POST body without surfacing the 502 fallback", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let upstreamBody = "";
+        yield* HttpRouter.serve(
+          HttpRouter.add(
+            "POST",
+            "/upstream",
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              upstreamBody = new TextDecoder().decode(new Uint8Array(yield* request.arrayBuffer));
+              return HttpServerResponse.text(upstreamBody);
+            }),
+          ),
+          {
+            disableListenLog: true,
+            disableLogger: true,
+          },
+        ).pipe(Layer.build);
+
+        const payload = '{"prompt":"streamed Plannotator request"}';
+        const encoded = new TextEncoder().encode(payload);
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoded.subarray(0, 12));
+            controller.enqueue(encoded.subarray(12));
+            controller.close();
+          },
+        });
+        const incoming = new Request("http://127.0.0.1/plannotator/test/api/echo", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          duplex: "half",
+        } as RequestInit);
+        const outgoing = yield* __testing.makeForwardedRequest(incoming, {
+          url: "/upstream",
+          host: "127.0.0.1",
+          origin: "http://127.0.0.1",
+        });
+        const client = yield* HttpClient.HttpClient;
+        const response = yield* client.execute(outgoing);
+
+        expect(response.status).toBe(200);
+        expect(response.status).not.toBe(502);
+        expect(yield* response.text).toBe(payload);
+        expect(upstreamBody).toBe(payload);
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
 });
