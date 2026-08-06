@@ -9,9 +9,21 @@ import {
 import * as DateTime from "effect/DateTime";
 
 const STALE_AFTER_MS = 10 * 60 * 1_000;
+const MINUTE_MS = 60 * 1_000;
 const CODEX = ProviderDriverKind.make("codex");
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 const DISPLAY_ORDER = [CODEX, CLAUDE] as const;
+
+/**
+ * T3-CUSTOM(expbkt3): the headline reading is the weekly window only.
+ *
+ * It used to be `min()` across every window, which meant the short rolling
+ * window (Claude's five-hour, Codex's primary) almost always won and the
+ * sidebar silently reported a five-hour number under a weekly-looking meter.
+ * The rolling window is now surfaced separately, and only once it actually
+ * constrains you -- see ROLLING_CHIP_VISIBLE_BELOW_PERCENT.
+ */
+const ROLLING_CHIP_VISIBLE_BELOW_PERCENT = 50;
 
 export function selectProviderRateLimitEnvironmentId(
   activeEnvironmentId: EnvironmentId | null,
@@ -35,12 +47,25 @@ export interface ProviderRateLimitWindowView {
   readonly status: "active" | "stale" | "awaiting-refresh";
 }
 
+/**
+ * The short rolling window (five-hour on Claude, primary on Codex), shown beside
+ * the weekly meter only while it is the tighter constraint.
+ */
+export interface ProviderRateLimitRollingView {
+  readonly remainingPercent: number;
+  readonly minutesUntilReset: number | null;
+  readonly resetsAtMs: number | null;
+  readonly tone: ProviderRateLimitTone;
+}
+
 export interface ProviderRateLimitRowView {
   readonly driverKind: ProviderDriverKind;
   readonly providerInstanceId: ProviderInstanceId;
   readonly displayName: "Codex" | "Claude";
   readonly availability: ProviderRateLimitSnapshot["availability"];
+  /** Weekly window only. Null when the provider reports no weekly quota. */
   readonly remainingPercent: number | null;
+  readonly rolling: ProviderRateLimitRollingView | null;
   readonly tone: ProviderRateLimitTone;
   readonly freshness: ProviderRateLimitFreshness;
   readonly observedAt: DateTime.Utc | null;
@@ -85,6 +110,11 @@ function windowView(
   return { window, remainingPercent: roundedRemaining(window.usedPercent), status: "active" };
 }
 
+function minutesUntilReset(resetsAt: DateTime.Utc | null, now: number): number | null {
+  if (resetsAt === null) return null;
+  return Math.max(0, Math.ceil((DateTime.toEpochMillis(resetsAt) - now) / MINUTE_MS));
+}
+
 function displayName(driver: ProviderDriverKind): "Codex" | "Claude" {
   return driver === CODEX ? "Codex" : "Claude";
 }
@@ -99,6 +129,7 @@ function unknownRow(
     displayName: displayName(driverKind),
     availability: "unknown",
     remainingPercent: null,
+    rolling: null,
     tone: "unknown",
     freshness: "unknown",
     observedAt: null,
@@ -126,17 +157,37 @@ function projectRow(
   const activeRemainingValues = windows.flatMap((window) =>
     window.status !== "active" || window.remainingPercent === null ? [] : [window.remainingPercent],
   );
-  const lastKnownRemainingValues = windows.flatMap((window) =>
-    window.remainingPercent === null ? [] : [window.remainingPercent],
-  );
-  const remainingValues = stale
-    ? lastKnownRemainingValues
-    : activeRemainingValues.length > 0
-      ? activeRemainingValues
-      : lastKnownRemainingValues;
+  // `windows` is already sorted ascending by remaining, so the head of a pool is
+  // its lowest reading.
+  const lowestOf = (
+    views: ReadonlyArray<ProviderRateLimitWindowView>,
+  ): ProviderRateLimitWindowView | null => {
+    const known = views.filter((view) => view.remainingPercent !== null);
+    const active = known.filter((view) => view.status === "active");
+    const pool = stale ? known : active.length > 0 ? active : known;
+    return pool[0] ?? null;
+  };
+  const weeklyWindows = windows.filter(({ window }) => window.category === "weekly");
+  // Providers that report no weekly quota keep the previous all-window reading
+  // rather than degrading the meter to an em dash.
+  const headline = lowestOf(weeklyWindows.length > 0 ? weeklyWindows : windows);
   const remainingPercent =
-    snapshot.availability === "available" && remainingValues.length > 0
-      ? Math.min(...remainingValues)
+    snapshot.availability === "available" ? (headline?.remainingPercent ?? null) : null;
+  const rollingLowest = lowestOf(windows.filter(({ window }) => window.category === "rolling"));
+  const rollingRemaining = rollingLowest?.remainingPercent ?? null;
+  const rolling: ProviderRateLimitRollingView | null =
+    snapshot.availability === "available" &&
+    rollingRemaining !== null &&
+    rollingRemaining < ROLLING_CHIP_VISIBLE_BELOW_PERCENT
+      ? {
+          remainingPercent: rollingRemaining,
+          minutesUntilReset: minutesUntilReset(rollingLowest?.window.resetsAt ?? null, now),
+          resetsAtMs:
+            rollingLowest?.window.resetsAt == null
+              ? null
+              : DateTime.toEpochMillis(rollingLowest.window.resetsAt),
+          tone: providerRateLimitTone(rollingRemaining),
+        }
       : null;
   const hasOnlyExpiredWindows =
     snapshot.availability === "available" &&
@@ -159,6 +210,8 @@ function projectRow(
     displayName: displayName(snapshot.driverKind),
     availability: snapshot.availability,
     remainingPercent,
+    rolling:
+      rolling === null ? null : freshness === "fresh" ? rolling : { ...rolling, tone: "unknown" },
     tone: freshness === "fresh" ? providerRateLimitTone(remainingPercent) : "unknown",
     freshness,
     observedAt: snapshot.observedAt,
@@ -212,13 +265,21 @@ export function buildProviderRateLimitRows(input: {
 export function summarizeProviderRateLimitRows(
   rows: ReadonlyArray<ProviderRateLimitRowView>,
 ): string {
-  const readings = rows.map((row) =>
-    row.remainingPercent === null
-      ? `${row.displayName} unavailable`
-      : `${row.displayName} ${row.remainingPercent}% remaining${
+  const readings = rows.map((row) => {
+    const rolling =
+      row.rolling === null
+        ? ""
+        : `, rolling window ${row.rolling.remainingPercent}% remaining${
+            row.rolling.minutesUntilReset === null
+              ? ""
+              : ` and resets in ${row.rolling.minutesUntilReset} minutes`
+          }`;
+    return row.remainingPercent === null
+      ? `${row.displayName} unavailable${rolling}`
+      : `${row.displayName} ${row.remainingPercent}% weekly remaining${
           row.source === "cache" ? ", cached" : row.freshness === "stale" ? ", stale" : ""
-        }`,
-  );
+        }${rolling}`;
+  });
   return `Provider usage limits: ${readings.join("; ")}`;
 }
 
@@ -232,5 +293,19 @@ export function providerRateLimitBoundaryTimes(
     ...row.windows.flatMap(({ window }) =>
       window.resetsAt === null ? [] : [DateTime.toEpochMillis(window.resetsAt)],
     ),
+    ...rollingMinuteBoundaries(row.rolling),
   ]);
+}
+
+/**
+ * While the rolling countdown is on screen it has to re-render every minute, so
+ * emit each remaining minute boundary before its reset.
+ */
+function rollingMinuteBoundaries(
+  rolling: ProviderRateLimitRollingView | null,
+): ReadonlyArray<number> {
+  const resetsAtMs = rolling?.resetsAtMs;
+  const minutes = rolling?.minutesUntilReset;
+  if (resetsAtMs == null || minutes == null) return [];
+  return Array.from({ length: minutes }, (_, index) => resetsAtMs - (index + 1) * MINUTE_MS);
 }

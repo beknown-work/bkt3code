@@ -67,7 +67,7 @@ describe("SidebarProviderRateLimits", () => {
     );
 
     expect(markup).toContain(
-      'aria-label="Provider usage limits: Codex 74% remaining; Claude unavailable"',
+      'aria-label="Provider usage limits: Codex 74% weekly remaining; Claude unavailable"',
     );
     expect(markup.match(/w-8/g)?.length).toBe(2);
     expect(markup.match(/bg-neutral-500\/20/g)?.length).toBe(2);
@@ -103,7 +103,53 @@ describe("SidebarProviderRateLimits", () => {
     expect(markup).toContain('data-freshness="stale"');
     expect(markup).toContain("bg-muted-foreground/35");
     expect(markup).toContain("opacity-60");
-    expect(markup).toContain("Codex 74% remaining, cached");
+    expect(markup).toContain("Codex 74% weekly remaining, cached");
+  });
+
+  it("renders the rolling window beside the weekly meter once it dips below 50%", () => {
+    const rollingRows = buildProviderRateLimitRows({
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      ],
+      entries: [
+        {
+          ...codexSnapshot,
+          windows: [
+            {
+              windowId: "codex:primary",
+              label: "Primary",
+              usedPercent: 60,
+              resetsAt: DateTime.makeUnsafe("2026-08-01T11:08:00.000Z"),
+              category: "rolling",
+            },
+            {
+              windowId: "codex:secondary",
+              label: "Weekly",
+              usedPercent: 6,
+              resetsAt: DateTime.makeUnsafe("2026-08-06T00:00:00.000Z"),
+              category: "weekly",
+            },
+          ],
+        },
+      ],
+      now,
+    });
+    const markup = renderToStaticMarkup(
+      <SidebarProviderRateLimitsView
+        environmentLabel="Workstation"
+        now={now}
+        onBackdrop={false}
+        rows={rollingRows}
+      />,
+    );
+
+    expect(markup).toContain("94%");
+    expect(markup).toContain("(40%, 68m)");
+    expect(markup).toContain('data-rolling-window="true"');
   });
 
   it("renders complete read-only details and API-key degradation copy", () => {

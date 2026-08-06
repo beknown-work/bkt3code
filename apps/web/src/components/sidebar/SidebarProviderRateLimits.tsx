@@ -34,6 +34,13 @@ const toneClass: Record<ProviderRateLimitTone, string> = {
   unknown: "bg-muted-foreground/35",
 };
 
+const rollingToneClass: Record<ProviderRateLimitTone, string> = {
+  healthy: "text-emerald-500",
+  warning: "text-amber-500",
+  danger: "text-red-500",
+  unknown: "text-muted-foreground",
+};
+
 function formatLocalDateTime(value: DateTime.Utc): string {
   return new Date(DateTime.toEpochMillis(value)).toLocaleString([], {
     dateStyle: "medium",
@@ -105,6 +112,24 @@ function ProviderRateLimitProgressRow({
       >
         {remaining === null ? "—" : `${remaining}%`}
       </span>
+      {row.rolling === null ? null : (
+        <span
+          className={cn(
+            "shrink-0 text-[9px] font-semibold leading-none tabular-nums",
+            onBackdrop ? "text-white/75" : rollingToneClass[row.rolling.tone],
+          )}
+          data-rolling-window="true"
+          title={`Rolling window: ${row.rolling.remainingPercent}% remaining${
+            row.rolling.minutesUntilReset === null
+              ? ""
+              : `, resets in ${row.rolling.minutesUntilReset}m`
+          }`}
+        >
+          {`(${row.rolling.remainingPercent}%${
+            row.rolling.minutesUntilReset === null ? "" : `, ${row.rolling.minutesUntilReset}m`
+          })`}
+        </span>
+      )}
     </span>
   );
 }
@@ -129,7 +154,7 @@ export function ProviderRateLimitsDetails({
             <ProviderRateLimitIcon row={row} />
             <span className="font-medium text-foreground">{row.displayName}</span>
             <span className="ml-auto font-semibold tabular-nums text-foreground">
-              {row.remainingPercent === null ? "—" : `${row.remainingPercent}% remaining`}
+              {row.remainingPercent === null ? "—" : `${row.remainingPercent}% weekly remaining`}
             </span>
           </div>
           {row.freshness === "not-applicable" ? (
