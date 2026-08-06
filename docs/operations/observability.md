@@ -544,6 +544,10 @@ Local trace file:
 - `T3CODE_TRACE_BATCH_WINDOW_MS`: flush window, default `200`
 - `T3CODE_TRACE_MIN_LEVEL`: minimum trace level, default `Info`
 - `T3CODE_TRACE_TIMING_ENABLED`: enable timing metadata, default `true`
+- `T3CODE_TRACE_SQL_SLOW_MS`: keep `sql.execute` spans at or above this duration
+  and drop the faster successful ones, default `250`. Set `0` to record every
+  statement — useful for a short profiling window, but one span per statement is
+  the largest single source of trace bytes, so do not leave it on.
 
 OTLP export:
 
