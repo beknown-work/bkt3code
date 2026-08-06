@@ -152,8 +152,8 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
               "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
               counts.nonRunning >= 2
                 ? onBackdrop
-                  ? "border-white/70 bg-white text-orange-600 shadow-[0_0_18px_rgba(255,255,255,0.9)]"
-                  : "border-orange-500 bg-orange-500 text-black shadow-[0_0_18px_rgba(249,115,22,0.55)]"
+                  ? "border-orange-400/50 bg-orange-500/15 text-orange-400"
+                  : "border-orange-500/45 bg-orange-500/12 text-orange-600 dark:text-orange-300"
                 : onBackdrop
                   ? "border-emerald-200/60 bg-emerald-400/30 text-white"
                   : "border-emerald-500/35 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
