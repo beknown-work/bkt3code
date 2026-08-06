@@ -78,3 +78,27 @@ it.effect("provides the shared observable lifecycle contract used by every built
     assert.strictEqual(yield* lifecycle.inspectSession(threadId), null);
   }),
 );
+
+it.effect("observes session liveness after stopSession completes", () =>
+  Effect.gen(function* () {
+    let sessionActive = true;
+    const source = {
+      hasSession: (_threadId: ThreadId) => Effect.succeed(sessionActive),
+      listSessions: () => Effect.succeed([]),
+      interruptTurn: (_threadId: ThreadId, _turnId?: TurnId) => Effect.void,
+      stopSession: (_threadId: ThreadId) =>
+        Effect.sync(() => {
+          sessionActive = false;
+        }),
+      streamEvents: Stream.empty,
+    };
+
+    const termination = yield* makeObservableLifecycle(source).terminateSession(threadId);
+
+    assert.deepStrictEqual(termination, {
+      verified: true,
+      graceful: true,
+      processTreeExited: true,
+    });
+  }),
+);

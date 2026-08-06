@@ -59,7 +59,7 @@ export function makeObservableLifecycle<TError>(
       ),
     terminateSession: (threadId) =>
       source.stopSession(threadId).pipe(
-        Effect.andThen(source.hasSession(threadId)),
+        Effect.andThen(Effect.suspend(() => source.hasSession(threadId))),
         Effect.map((runtimeAlive) => ({
           verified: !runtimeAlive,
           graceful: !runtimeAlive,
