@@ -19,64 +19,111 @@ import {
   H4Plugin,
   H5Plugin,
   H6Plugin,
+  HighlightPlugin,
   HorizontalRulePlugin,
   ItalicPlugin,
+  KbdPlugin,
   StrikethroughPlugin,
   UnderlinePlugin,
 } from "@platejs/basic-nodes/react";
 import { CodeBlockPlugin, CodeLinePlugin } from "@platejs/code-block/react";
 import { LinkPlugin } from "@platejs/link/react";
-import { ListPlugin } from "@platejs/list/react";
+import {
+  BulletedListPlugin,
+  ListItemContentPlugin,
+  ListItemPlugin,
+  ListPlugin,
+  NumberedListPlugin,
+  TaskListPlugin,
+} from "@platejs/list-classic/react";
 import {
   TableCellHeaderPlugin,
   TableCellPlugin,
   TablePlugin,
   TableRowPlugin,
 } from "@platejs/table/react";
+import { ParagraphPlugin, Plate, PlateContent, usePlateEditor } from "platejs/react";
 import remarkGfm from "remark-gfm";
-import { MessageSquarePlusIcon } from "lucide-react";
-import { Plate, PlateContent, usePlateEditor } from "platejs/react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
+import { PlanReviewFloatingToolbar } from "./plate/PlanReviewFloatingToolbar";
+import {
+  BlockquoteElement,
+  BulletedListElement,
+  CodeBlockElement,
+  CodeLeaf,
+  CodeLineElement,
+  H1Element,
+  H2Element,
+  H3Element,
+  H4Element,
+  H5Element,
+  H6Element,
+  HighlightLeaf,
+  HorizontalRuleElement,
+  KbdLeaf,
+  LinkElement,
+  ListItemElement,
+  NumberedListElement,
+  ParagraphElement,
+  TableCellElement,
+  TableCellHeaderElement,
+  TableElement,
+  TableRowElement,
+  TaskListElement,
+} from "./plate/PlanReviewNodes";
+import { CommentLeaf, SuggestionLeaf } from "./plate/PlanReviewReviewMarks";
+import { normalizeQuotedText } from "./planReviewMarkdown";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
-import { normalizeQuotedText } from "./planReviewMarkdown";
 
 /**
- * Scoped deliberately to what agent plans actually contain — headings, marks,
- * lists, code, tables, links, quotes — plus comments and suggestions. Every
- * extra node type is bundle weight on a lazily loaded panel and one more
- * markdown round trip to keep honest. Kept module-local and unexported: an
- * exported plugin array would force TypeScript to name Plate's internal option
- * types across package boundaries.
+ * Scoped to what agent plans actually contain — headings, marks, lists, code,
+ * tables, links, quotes — plus comments and suggestions. Every plugin carries
+ * its component: a registered node type with no component renders as an
+ * unstyled block, which is what makes an editor look like a textarea.
+ *
+ * Kept module-local and unexported: an exported plugin array would force
+ * TypeScript to name Plate's internal option types across package boundaries.
  */
 const PLAN_REVIEW_PLUGINS = [
-  // Blocks
-  H1Plugin,
-  H2Plugin,
-  H3Plugin,
-  H4Plugin,
-  H5Plugin,
-  H6Plugin,
-  BlockquotePlugin,
-  HorizontalRulePlugin,
+  ParagraphPlugin.withComponent(ParagraphElement),
+  H1Plugin.withComponent(H1Element),
+  H2Plugin.withComponent(H2Element),
+  H3Plugin.withComponent(H3Element),
+  H4Plugin.withComponent(H4Element),
+  H5Plugin.withComponent(H5Element),
+  H6Plugin.withComponent(H6Element),
+  BlockquotePlugin.withComponent(BlockquoteElement),
+  HorizontalRulePlugin.withComponent(HorizontalRuleElement),
+  CodeBlockPlugin.withComponent(CodeBlockElement),
+  CodeLinePlugin.withComponent(CodeLineElement),
+  LinkPlugin.withComponent(LinkElement),
+
+  // Classic ul/ol/li lists map straight from markdown, and carry task lists.
   ListPlugin,
-  CodeBlockPlugin,
-  CodeLinePlugin,
-  TablePlugin,
-  TableRowPlugin,
-  TableCellPlugin,
-  TableCellHeaderPlugin,
-  LinkPlugin,
-  // Marks
+  ListItemContentPlugin,
+  ListItemPlugin.withComponent(ListItemElement),
+  BulletedListPlugin.withComponent(BulletedListElement),
+  NumberedListPlugin.withComponent(NumberedListElement),
+  TaskListPlugin.withComponent(TaskListElement),
+
+  TablePlugin.withComponent(TableElement),
+  TableRowPlugin.withComponent(TableRowElement),
+  TableCellPlugin.withComponent(TableCellElement),
+  TableCellHeaderPlugin.withComponent(TableCellHeaderElement),
+
   BoldPlugin,
   ItalicPlugin,
   UnderlinePlugin,
   StrikethroughPlugin,
-  CodePlugin,
-  // Review
-  CommentPlugin,
-  SuggestionPlugin,
+  HighlightPlugin.withComponent(HighlightLeaf),
+  CodePlugin.withComponent(CodeLeaf),
+  KbdPlugin.withComponent(KbdLeaf),
+
+  CommentPlugin.withComponent(CommentLeaf),
+  SuggestionPlugin.withComponent(SuggestionLeaf),
+
   // Markdown last: it reads the node types the plugins above registered.
   MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
 ];
@@ -107,6 +154,7 @@ function PlanReviewEditorImpl({
   const [commentBody, setCommentBody] = useState("");
   const loadedMarkdownRef = useRef<string | null>(null);
   const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
 
   // Load canonical markdown into the editor whenever the reviewed version
   // changes. Guarded by the last-loaded value so our own edits do not reload.
@@ -146,8 +194,7 @@ function PlanReviewEditorImpl({
   }, [editor, onMarkdownChange]);
 
   const startComment = useCallback(() => {
-    const selected = window.getSelection()?.toString() ?? "";
-    const quote = normalizeQuotedText(selected);
+    const quote = normalizeQuotedText(window.getSelection()?.toString() ?? "");
     if (quote.length === 0) return;
     setPendingQuote(quote);
     setCommentBody("");
@@ -165,34 +212,32 @@ function PlanReviewEditorImpl({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-1.5">
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={startComment}
-          aria-label="Comment on the selected text"
-        >
-          <MessageSquarePlusIcon className="size-3.5" aria-hidden /> Comment on selection
-        </Button>
-        {suggestionMode && !readOnly ? (
-          <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-700 text-xs dark:text-amber-400">
-            Suggesting — edits are tracked
+      {suggestionMode && !readOnly ? (
+        <div className="flex items-center gap-2 border-b px-3 py-1.5">
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-700 text-xs dark:text-amber-400">
+            Suggesting — your edits are tracked
           </span>
-        ) : null}
-      </div>
+          <span className="text-muted-foreground text-xs">Select text to format or comment</span>
+        </div>
+      ) : null}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={surfaceRef} className="relative min-h-0 flex-1 overflow-auto">
         <Plate editor={editor} onChange={handleChange}>
           <PlateContent
             className={cn(
-              "prose prose-sm dark:prose-invert max-w-none px-4 py-3 outline-none",
-              readOnly && "opacity-90",
+              "min-h-full px-5 py-4 text-[15px] text-foreground leading-relaxed outline-none",
+              "[&_::selection]:bg-primary/25",
             )}
             readOnly={readOnly}
             placeholder="This plan is empty."
             aria-label="Plan document"
           />
         </Plate>
+        <PlanReviewFloatingToolbar
+          containerRef={surfaceRef}
+          onComment={startComment}
+          readOnly={readOnly}
+        />
       </div>
 
       {pendingQuote !== null ? (
