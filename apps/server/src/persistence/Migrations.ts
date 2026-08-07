@@ -81,6 +81,8 @@ import Migration1007 from "./Migrations/1007_OwnershipBackfillFastPath.ts";
 // block already occupies (ThreadExecutions). It registers at the next free ID in
 // the 1000+ lane instead; the file keeps its upstream name.
 import Migration1008 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+// T3-CUSTOM(expbkt3): native plan review documents, versions and discussions.
+import Migration1009 from "./Migrations/1009_PlanReviewDocuments.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -168,6 +170,7 @@ const migrationEntries = [
   [1006, "AuthSessionClientVersion", Migration1006],
   [1007, "OwnershipBackfillFastPath", Migration1007],
   [1008, "ProjectionTurnsKeysetIndex", Migration1008],
+  [1009, "PlanReviewDocuments", Migration1009],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
