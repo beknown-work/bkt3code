@@ -93,6 +93,13 @@ export default function PlanReviewPanel({
 
   const handleMarkdownChange = useCallback(
     (markdown: string) => {
+      // Loading a version into the editor fires Plate's onChange too. Treating
+      // that as an edit would write a draft nobody typed and churn the
+      // revision token on every open.
+      if (markdown.trim() === canonicalMarkdown.trim()) {
+        setEditedMarkdown(null);
+        return;
+      }
       setEditedMarkdown(markdown);
       if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
       draftTimerRef.current = setTimeout(() => {
@@ -118,7 +125,7 @@ export default function PlanReviewPanel({
         });
       }, DRAFT_SAVE_DEBOUNCE_MS);
     },
-    [documentId, environmentId, saveDraft],
+    [canonicalMarkdown, documentId, environmentId, saveDraft],
   );
 
   useEffect(
