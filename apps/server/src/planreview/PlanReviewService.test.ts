@@ -38,6 +38,13 @@ const PLAN = [
 interface ThreadStub {
   readonly sessionStatus: string | null;
   readonly compactionAt: string | null;
+  /** Plans already on the thread, as the projection would report them. */
+  readonly proposedPlans?: ReadonlyArray<{
+    readonly id: string;
+    readonly planMarkdown: string;
+    readonly implementedAt: string | null;
+    readonly updatedAt: string;
+  }>;
 }
 
 /**
@@ -68,6 +75,7 @@ const makeHarness = (thread: ThreadStub) =>
               projectId: "project-1",
               modelSelection: undefined,
               runtimeMode: "local",
+              proposedPlans: thread.proposedPlans ?? [],
               session: thread.sessionStatus === null ? null : { status: thread.sessionStatus },
               activities:
                 thread.compactionAt === null
@@ -195,6 +203,93 @@ describe("PlanReviewService capture", () => {
 
         expect(snapshot.versions).toHaveLength(1);
       }),
+    ),
+  );
+});
+
+describe("PlanReviewService listForThread", () => {
+  it.effect("captures a plan that startup reconciliation never reached", () =>
+    runWithService(
+      {
+        sessionStatus: "running",
+        compactionAt: null,
+        proposedPlans: [
+          {
+            id: "plan:pre-existing",
+            planMarkdown: PLAN,
+            implementedAt: null,
+            updatedAt: "2026-08-07T10:00:00.000Z",
+          },
+        ],
+      },
+      ({ service }) =>
+        Effect.gen(function* () {
+          // Nothing captured this plan, so without a backfill the UI would
+          // offer no way into it.
+          const documents = yield* service.listForThread(threadId);
+          expect(documents).toHaveLength(1);
+          expect(documents[0]?.status).toBe("open");
+          expect(documents[0]?.title).toBe("Auth rewrite");
+
+          // Idempotent: a second read must not create a second lineage.
+          expect(yield* service.listForThread(threadId)).toHaveLength(1);
+        }),
+    ),
+  );
+
+  it.effect("ignores an already-implemented plan", () =>
+    runWithService(
+      {
+        sessionStatus: "running",
+        compactionAt: null,
+        proposedPlans: [
+          {
+            id: "plan:done",
+            planMarkdown: PLAN,
+            implementedAt: "2026-08-07T11:00:00.000Z",
+            updatedAt: "2026-08-07T10:00:00.000Z",
+          },
+        ],
+      },
+      ({ service }) =>
+        Effect.gen(function* () {
+          expect(yield* service.listForThread(threadId)).toHaveLength(0);
+        }),
+    ),
+  );
+
+  it.effect("does not backfill over a review that is already resolved", () =>
+    runWithService(
+      {
+        sessionStatus: "running",
+        compactionAt: null,
+        proposedPlans: [
+          {
+            id: "plan:a",
+            planMarkdown: PLAN,
+            implementedAt: null,
+            updatedAt: "2026-08-07T10:00:00.000Z",
+          },
+        ],
+      },
+      ({ service }) =>
+        Effect.gen(function* () {
+          const document = yield* capturePlan(service, "plan:a");
+          yield* service.submit({
+            documentId: document.documentId,
+            decision: "approved",
+            globalComment: "",
+            editedMarkdown: null,
+            actorUserId: reviewerId,
+            actorLabel: "Tushar",
+          });
+
+          // The plan is approved; re-listing must not resurrect it as a new
+          // open review.
+          const documents = yield* service.listForThread(threadId);
+          expect(documents).toHaveLength(1);
+          expect(documents[0]?.status).toBe("approved");
+        }),
     ),
   );
 });

@@ -30,7 +30,7 @@
     "@platejs/code-block": "53.0.0",
     "@platejs/comment": "53.0.0",
     "@platejs/link": "53.3.1",
-    "@platejs/list": "53.1.3",
+    "@platejs/list-classic": "53.0.0",
     "@platejs/markdown": "53.3.3",
     "@platejs/suggestion": "53.2.3",
     "@platejs/table": "53.0.9",
