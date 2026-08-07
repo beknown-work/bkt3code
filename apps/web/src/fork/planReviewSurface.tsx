@@ -8,6 +8,7 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { lazy } from "react";
 
+import { useClientSettings } from "../hooks/useSettings";
 import { planReviewEnvironment } from "../state/planReview";
 import { useEnvironmentQuery } from "../state/query";
 
@@ -25,8 +26,9 @@ export function useOpenPlanReviewDocumentId(
   environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
 ): string | null {
+  const enabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
   const { data } = useEnvironmentQuery(
-    environmentId === null || threadId === null
+    !enabled || environmentId === null || threadId === null
       ? null
       : planReviewEnvironment.list({ environmentId, input: { threadId } }),
   );

@@ -61,6 +61,8 @@ export function BetaSettingsPanel() {
     (settings) => settings.sidebarAutoSettleAfterDays,
   );
   const planModeEnabled = useClientSettings((settings) => settings.planModeEnabled);
+  // T3-CUSTOM(expbkt3): native plan review.
+  const nativePlanReviewEnabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
   const updateSettings = useUpdateClientSettings();
 
   return (
@@ -126,6 +128,21 @@ export function BetaSettingsPanel() {
             />
           }
         />
+        {/* T3-CUSTOM(expbkt3): BEGIN — native plan review. */}
+        <SettingsRow
+          {...searchableSetting("native-plan-review")}
+          description="Review proposed plans in a side panel: comment on exact lines, edit the plan with tracked changes, and step through every version with its author. Approving sends a short acknowledgement instead of repeating the whole plan. While off, plan review goes through Plannotator only."
+          control={
+            <Switch
+              checked={nativePlanReviewEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ nativePlanReviewEnabled: Boolean(checked) })
+              }
+              aria-label="Native plan review"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
       </SettingsSection>
     </SettingsPageContainer>
   );
