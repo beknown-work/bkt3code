@@ -40,11 +40,11 @@ describe("buildUnifiedDiff", () => {
     expect(result.diff.match(/^@@ /gm)).toHaveLength(2);
   });
 
-  it("reports a change ratio that reflects how much of the document moved", () => {
+  it("counts a modified line once, not as an add plus a remove", () => {
     const before = ["a", "b", "c", "d"].join("\n");
     const after = ["a", "B", "C", "D"].join("\n");
-    // 3 removals + 3 additions over 4 lines saturates at 1.
-    expect(buildUnifiedDiff(before, after).stats.changeRatio).toBe(1);
+    // 3 of 4 lines changed — not 6 of 4.
+    expect(buildUnifiedDiff(before, after).stats.changeRatio).toBeCloseTo(0.75);
 
     const light = buildUnifiedDiff(
       Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n"),
@@ -52,7 +52,16 @@ describe("buildUnifiedDiff", () => {
         "\n",
       ),
     );
-    expect(light.stats.changeRatio).toBeCloseTo(0.1);
+    expect(light.stats.changeRatio).toBeCloseTo(0.05);
+  });
+
+  it("keeps a half-rewritten document under the full-document threshold", () => {
+    const before = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+    const after = Array.from({ length: 40 }, (_, index) =>
+      index < 15 ? `rewritten ${index}` : `line ${index}`,
+    ).join("\n");
+    // 15 of 40 lines reworded is a diff worth sending, not a rewrite.
+    expect(buildUnifiedDiff(before, after).stats.changeRatio).toBeCloseTo(0.375);
   });
 
   it("handles an empty document on either side", () => {

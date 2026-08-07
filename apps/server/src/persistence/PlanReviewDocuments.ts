@@ -209,6 +209,7 @@ export interface UpsertDiscussionInput {
 export interface AddDiscussionCommentInput {
   readonly commentId: string;
   readonly discussionId: string;
+  readonly documentId: string;
   readonly authorUserId: UserId | null;
   readonly bodyMarkdown: string;
   readonly createdAt: string;
@@ -216,6 +217,7 @@ export interface AddDiscussionCommentInput {
 
 export interface ResolveDiscussionInput {
   readonly discussionId: string;
+  readonly documentId: string;
   readonly isResolved: boolean;
   readonly resolvedByUserId: UserId | null;
   readonly resolvedAt: string | null;
@@ -247,9 +249,10 @@ export class PlanReviewRepository extends Context.Service<
     readonly listVersions: (
       documentId: string,
     ) => Effect.Effect<ReadonlyArray<PlanVersionRecord>, PlanReviewRepositoryError>;
-    readonly getVersion: (
-      versionId: string,
-    ) => Effect.Effect<Option.Option<PlanVersionRecord>, PlanReviewRepositoryError>;
+    readonly getVersion: (input: {
+      readonly documentId: string;
+      readonly versionId: string;
+    }) => Effect.Effect<Option.Option<PlanVersionRecord>, PlanReviewRepositoryError>;
     readonly getLatestVersion: (
       documentId: string,
     ) => Effect.Effect<Option.Option<PlanVersionRecord>, PlanReviewRepositoryError>;
@@ -445,10 +448,11 @@ export const make = Effect.gen(function* () {
   });
 
   const getVersionRow = SqlSchema.findOneOption({
-    Request: Schema.Struct({ versionId: Schema.String }),
+    Request: Schema.Struct({ versionId: Schema.String, documentId: Schema.String }),
     Result: PlanVersionRawRow,
-    execute: ({ versionId }) => sql`
-      SELECT ${versionColumns} FROM plan_document_versions WHERE version_id = ${versionId}
+    execute: ({ versionId, documentId }) => sql`
+      SELECT ${versionColumns} FROM plan_document_versions
+      WHERE version_id = ${versionId} AND document_id = ${documentId}
     `,
   });
 
@@ -498,7 +502,12 @@ export const make = Effect.gen(function* () {
       SELECT
         ${input.documentId}, ${input.baseVersionId}, ${input.contentValueJson},
         ${input.updatedByUserId}, ${input.updatedAt}, ${input.nextRevisionToken}
-      WHERE NOT EXISTS (SELECT 1 FROM plan_document_drafts WHERE document_id = ${input.documentId})
+      WHERE (
+              ${input.expectedRevisionToken} IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM plan_document_drafts WHERE document_id = ${input.documentId}
+              )
+            )
          OR ${input.expectedRevisionToken} = (
               SELECT revision_token FROM plan_document_drafts WHERE document_id = ${input.documentId}
             )
@@ -519,7 +528,8 @@ export const make = Effect.gen(function* () {
     `,
   });
 
-  const upsertDiscussionRow = SqlSchema.void({
+  const upsertDiscussionRow = SqlSchema.findAll({
+    Result: Schema.Struct({ discussionId: Schema.String }),
     Request: Schema.Struct({
       discussionId: Schema.String,
       documentId: Schema.String,
@@ -539,6 +549,8 @@ export const make = Effect.gen(function* () {
       ON CONFLICT(discussion_id) DO UPDATE SET
         anchor_version_id = excluded.anchor_version_id,
         quoted_text = excluded.quoted_text
+      WHERE plan_discussions.document_id = excluded.document_id
+      RETURNING discussion_id AS "discussionId"
     `,
   });
 
@@ -552,42 +564,56 @@ export const make = Effect.gen(function* () {
     `,
   });
 
-  const resolveDiscussionRow = SqlSchema.void({
+  // Every discussion statement is scoped by document_id as well as by its own
+  // id. Callers authorize the document, so an id that belongs to a different
+  // document must not be reachable through it.
+  const resolveDiscussionRow = SqlSchema.findAll({
     Request: Schema.Struct({
       discussionId: Schema.String,
+      documentId: Schema.String,
       isResolved: Schema.Boolean,
       resolvedByUserId: Schema.NullOr(UserId),
       resolvedAt: Schema.NullOr(Schema.String),
     }),
+    Result: Schema.Struct({ discussionId: Schema.String }),
     execute: (input) => sql`
       UPDATE plan_discussions
       SET is_resolved = ${input.isResolved ? 1 : 0},
           resolved_by_user_id = ${input.resolvedByUserId},
           resolved_at = ${input.resolvedAt}
       WHERE discussion_id = ${input.discussionId}
+        AND document_id = ${input.documentId}
+      RETURNING discussion_id AS "discussionId"
     `,
   });
 
-  const addDiscussionCommentRow = SqlSchema.void({
+  const addDiscussionCommentRow = SqlSchema.findAll({
     Request: Schema.Struct({
       commentId: Schema.String,
       discussionId: Schema.String,
+      documentId: Schema.String,
       authorUserId: Schema.NullOr(UserId),
       bodyMarkdown: Schema.String,
       createdAt: Schema.String,
     }),
+    Result: Schema.Struct({ commentId: Schema.String }),
     execute: (input) => sql`
       INSERT INTO plan_discussion_comments (
         comment_id, discussion_id, author_user_id, body_markdown,
         is_edited, created_at, updated_at
-      ) VALUES (
+      )
+      SELECT
         ${input.commentId}, ${input.discussionId}, ${input.authorUserId},
         ${input.bodyMarkdown}, 0, ${input.createdAt}, ${input.createdAt}
+      WHERE EXISTS (
+        SELECT 1 FROM plan_discussions
+        WHERE discussion_id = ${input.discussionId} AND document_id = ${input.documentId}
       )
       ON CONFLICT(comment_id) DO UPDATE SET
         body_markdown = excluded.body_markdown,
         is_edited = 1,
         updated_at = excluded.updated_at
+      RETURNING comment_id AS "commentId"
     `,
   });
 
@@ -683,8 +709,8 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((rows) => decodeMany(rows, decodeVersion, "PlanReview.listVersions")),
       ),
 
-    getVersion: (versionId) =>
-      getVersionRow({ versionId }).pipe(
+    getVersion: (input) =>
+      getVersionRow(input).pipe(
         Effect.mapError(mapError("PlanReview.getVersion")),
         Effect.flatMap(
           Option.match({
@@ -742,7 +768,10 @@ export const make = Effect.gen(function* () {
       clearDraftRow({ documentId }).pipe(Effect.mapError(mapError("PlanReview.clearDraft"))),
 
     upsertDiscussion: (input) =>
-      upsertDiscussionRow(input).pipe(Effect.mapError(mapError("PlanReview.upsertDiscussion"))),
+      upsertDiscussionRow(input).pipe(
+        Effect.mapError(mapError("PlanReview.upsertDiscussion")),
+        Effect.asVoid,
+      ),
 
     listDiscussions: (documentId) =>
       listDiscussionRows({ documentId }).pipe(
@@ -757,11 +786,15 @@ export const make = Effect.gen(function* () {
       ),
 
     resolveDiscussion: (input) =>
-      resolveDiscussionRow(input).pipe(Effect.mapError(mapError("PlanReview.resolveDiscussion"))),
+      resolveDiscussionRow(input).pipe(
+        Effect.mapError(mapError("PlanReview.resolveDiscussion")),
+        Effect.asVoid,
+      ),
 
     addDiscussionComment: (input) =>
       addDiscussionCommentRow(input).pipe(
         Effect.mapError(mapError("PlanReview.addDiscussionComment")),
+        Effect.asVoid,
       ),
 
     listDiscussionComments: (documentId) =>

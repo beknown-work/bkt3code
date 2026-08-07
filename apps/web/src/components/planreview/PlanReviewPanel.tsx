@@ -81,15 +81,46 @@ export default function PlanReviewPanel({
 
   const latestVersion = useMemo(() => snapshot?.versions.at(-1) ?? null, [snapshot?.versions]);
 
+  // Adopt a token only from our own save. Taking whatever the last writer
+  // produced would make the next save look valid and silently overwrite them.
   useEffect(() => {
-    if (snapshot?.draft) revisionTokenRef.current = snapshot.draft.revisionToken;
+    if (revisionTokenRef.current === null && snapshot?.draft) {
+      revisionTokenRef.current = snapshot.draft.revisionToken;
+    }
   }, [snapshot?.draft]);
 
   // A resolved review is history: it stays readable, but nothing can be sent
   // from it twice.
   const isResolved = snapshot !== null && snapshot.document.status !== "open";
-  const canonicalMarkdown = latestVersion?.contentMarkdown ?? "";
-  const isDirty = editedMarkdown !== null && editedMarkdown.trim() !== canonicalMarkdown.trim();
+  const versionMarkdown = latestVersion?.contentMarkdown ?? "";
+
+  // A saved draft is what this reviewer was last working on, so it — not the
+  // committed version — is what the editor should reopen with. Without this the
+  // panel silently discards unsaved edits on every close or tab switch.
+  const draftMarkdown = useMemo(() => {
+    if (!snapshot?.draft || snapshot.draft.baseVersionId !== latestVersion?.versionId) return null;
+    try {
+      const parsed: unknown = JSON.parse(snapshot.draft.contentValueJson);
+      const markdown = (parsed as { markdown?: unknown }).markdown;
+      return typeof markdown === "string" && markdown.trim().length > 0 ? markdown : null;
+    } catch {
+      return null;
+    }
+  }, [snapshot?.draft, latestVersion?.versionId]);
+
+  // Seeded once per version: re-seeding from the live draft on every frame
+  // would fight the reviewer's cursor.
+  const [seededDraft, setSeededDraft] = useState<string | null>(null);
+  const seededForVersionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const versionId = latestVersion?.versionId ?? null;
+    if (seededForVersionRef.current === versionId) return;
+    seededForVersionRef.current = versionId;
+    setSeededDraft(draftMarkdown);
+  }, [draftMarkdown, latestVersion?.versionId]);
+
+  const canonicalMarkdown = seededDraft ?? versionMarkdown;
+  const isDirty = (editedMarkdown ?? canonicalMarkdown).trim() !== versionMarkdown.trim();
 
   const handleMarkdownChange = useCallback(
     (markdown: string) => {
@@ -161,12 +192,13 @@ export default function PlanReviewPanel({
   );
 
   const handleSaveVersion = useCallback(() => {
-    if (editedMarkdown === null) return;
+    const contentMarkdown = editedMarkdown ?? canonicalMarkdown;
+    if (!isDirty) return;
     void cutVersion({
       environmentId,
       input: {
         documentId,
-        contentMarkdown: editedMarkdown,
+        contentMarkdown,
         contentValueJson: null,
         summary: null,
       },
@@ -176,7 +208,7 @@ export default function PlanReviewPanel({
         toastManager.add({ type: "success", title: "Saved a new version of the plan" });
       }
     });
-  }, [cutVersion, documentId, editedMarkdown, environmentId]);
+  }, [canonicalMarkdown, cutVersion, documentId, editedMarkdown, environmentId, isDirty]);
 
   const handleRestore = useCallback(
     (version: PlanReviewVersion) => {
@@ -207,7 +239,7 @@ export default function PlanReviewPanel({
           documentId,
           decision,
           globalComment,
-          editedMarkdown: isDirty ? editedMarkdown : null,
+          editedMarkdown: isDirty ? (editedMarkdown ?? canonicalMarkdown) : null,
         },
       }).then((result) => {
         if (result._tag !== "Success") return;

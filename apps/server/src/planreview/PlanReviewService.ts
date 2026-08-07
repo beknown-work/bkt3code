@@ -260,10 +260,16 @@ export const make = Effect.gen(function* () {
       if (Option.isSome(existingForPlan)) return existingForPlan.value;
 
       // An open document on the same thread is the lineage this plan revises.
+      // A lineage awaiting a revision is still the lineage this plan belongs
+      // to. Only approved and discarded documents are closed for good — without
+      // "changes-requested" here, the agent's answer to feedback would start a
+      // brand-new history and orphan the comments that asked for it.
       const threadDocuments = yield* repository
         .listDocumentsForThread(input.threadId)
         .pipe(asInvariant("capturePlan.listForThread"));
-      const openDocument = threadDocuments.find((document) => document.status === "open");
+      const openDocument = threadDocuments.find(
+        (document) => document.status === "open" || document.status === "changes-requested",
+      );
 
       const createdAt = yield* nowIso;
 
@@ -338,6 +344,8 @@ export const make = Effect.gen(function* () {
         ...openDocument,
         title: input.title,
         currentRevision: nextRevision,
+        // The revision answers the feedback, so the review is live again.
+        status: "open",
         updatedAt: createdAt,
       };
       yield* repository.upsertDocument(updated).pipe(asInvariant("capturePlan.updateDocument"));
@@ -384,6 +392,12 @@ export const make = Effect.gen(function* () {
   const saveDraft: PlanReviewService["Service"]["saveDraft"] = (input) =>
     Effect.gen(function* () {
       const document = yield* requireDocument(input.documentId);
+      if (document.status !== "open") {
+        return yield* new PlanReviewInvariantError({
+          operation: "saveDraft",
+          detail: `This review is ${document.status} and can no longer be edited.`,
+        });
+      }
       const latest = yield* repository
         .getLatestVersion(document.documentId)
         .pipe(asInvariant("saveDraft.getLatestVersion"));
@@ -409,7 +423,8 @@ export const make = Effect.gen(function* () {
         })
         .pipe(asInvariant("saveDraft"));
 
-      yield* announce(document.documentId);
+      // Deliberately not announced: a draft is one reviewer's working copy, and
+      // broadcasting it would push the whole version history on every keystroke.
       return { revisionToken: nextRevisionToken };
     });
 
@@ -481,6 +496,7 @@ export const make = Effect.gen(function* () {
         .addDiscussionComment({
           commentId: `plan-comment:${commentUuid}`,
           discussionId: input.discussionId,
+          documentId: document.documentId,
           authorUserId: input.actorUserId,
           bodyMarkdown: input.bodyMarkdown,
           createdAt,
@@ -497,6 +513,7 @@ export const make = Effect.gen(function* () {
       yield* repository
         .resolveDiscussion({
           discussionId: input.discussionId,
+          documentId: input.documentId,
           isResolved: input.isResolved,
           resolvedByUserId: input.isResolved ? input.actorUserId : null,
           resolvedAt: input.isResolved ? resolvedAt : null,
@@ -510,8 +527,12 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const document = yield* requireDocument(input.documentId);
       const [fromOption, toOption] = yield* Effect.all([
-        repository.getVersion(input.fromVersionId).pipe(asInvariant("getVersionDiff.from")),
-        repository.getVersion(input.toVersionId).pipe(asInvariant("getVersionDiff.to")),
+        repository
+          .getVersion({ documentId: document.documentId, versionId: input.fromVersionId })
+          .pipe(asInvariant("getVersionDiff.from")),
+        repository
+          .getVersion({ documentId: document.documentId, versionId: input.toVersionId })
+          .pipe(asInvariant("getVersionDiff.to")),
       ]);
       if (Option.isNone(fromOption) || Option.isNone(toOption)) {
         return yield* new PlanReviewInvariantError({
@@ -533,7 +554,10 @@ export const make = Effect.gen(function* () {
     discussions: ReadonlyArray<PlanDiscussionRecord>,
     comments: ReadonlyArray<PlanDiscussionCommentRecord>,
     resolveLabel: (userId: UserId | null) => string | null,
-  ): ReadonlyArray<PlanReviewAnchoredComment> => {
+  ): {
+    readonly comments: ReadonlyArray<PlanReviewAnchoredComment>;
+    readonly discussionIds: ReadonlyArray<string>;
+  } => {
     const byDiscussion = new Map<string, PlanDiscussionCommentRecord[]>();
     for (const comment of comments) {
       const bucket = byDiscussion.get(comment.discussionId);
@@ -542,29 +566,40 @@ export const make = Effect.gen(function* () {
     }
 
     const anchored: PlanReviewAnchoredComment[] = [];
+    const discussionIds: string[] = [];
     for (const discussion of discussions) {
       if (discussion.isResolved) continue;
       const bucket = byDiscussion.get(discussion.discussionId) ?? [];
       const body = bucket.map((comment) => comment.bodyMarkdown.trim()).join("\n\n");
       if (body.length === 0) continue;
 
+      // A quote we cannot find still carries its text, just without a range.
       const located = locateQuotedLineRange(baseMarkdown, discussion.quotedText);
       anchored.push({
-        // A quote we cannot find still carries its text, just without a range.
-        startIndex: located?.startIndex ?? 0,
-        endIndex: located?.endIndex ?? 0,
+        startIndex: located?.startIndex ?? null,
+        endIndex: located?.endIndex ?? null,
         quotedText: discussion.quotedText,
         body,
         authorLabel: resolveLabel(bucket[0]?.authorUserId ?? discussion.createdByUserId),
       });
+      discussionIds.push(discussion.discussionId);
     }
-    return anchored;
+    return { comments: anchored, discussionIds };
   };
 
   const submit: PlanReviewService["Service"]["submit"] = (input) =>
     Effect.gen(function* () {
       const snapshot = yield* getReview(input.documentId);
       const document = snapshot.document;
+
+      // Two tabs, or a replayed request, must not start implementation twice.
+      if (document.status !== "open") {
+        return yield* new PlanReviewInvariantError({
+          operation: "submit",
+          detail: `This review was already ${document.status}.`,
+        });
+      }
+
       const latestVersion = snapshot.versions.at(-1);
       if (latestVersion === undefined) {
         return yield* new PlanReviewInvariantError({
@@ -639,6 +674,7 @@ export const make = Effect.gen(function* () {
 
       let prompt: string;
       let resentPlan = false;
+      let sentDiscussionIds: ReadonlyArray<string> = [];
 
       if (input.decision === "approved") {
         const latestCompactionAt =
@@ -670,13 +706,14 @@ export const make = Effect.gen(function* () {
           snapshot.comments,
           resolveLabel,
         );
+        sentDiscussionIds = anchored.discussionIds;
         const sendFullDocument = shouldSendFullDocumentInsteadOfDiff(editResult.stats.changeRatio);
 
         prompt = buildPlanReviewFeedbackPrompt({
           documentId: document.documentId,
           planTitle: document.title,
           globalComment: input.globalComment,
-          comments: anchored,
+          comments: anchored.comments,
           editDiff: editResult.diff,
           fromRevision: agentBaseline.revision,
           toRevision: approvedVersion.revision,
@@ -750,6 +787,26 @@ export const make = Effect.gen(function* () {
         })
         .pipe(asInvariant("submit.setStatus"));
       yield* repository.clearDraft(document.documentId).pipe(asInvariant("submit.clearDraft"));
+
+      // Anything already handed to the agent is spent. Leaving it open would
+      // re-send the same comments on every later round.
+      if (input.decision === "changes-requested") {
+        yield* Effect.forEach(
+          sentDiscussionIds,
+          (discussionId) =>
+            repository
+              .resolveDiscussion({
+                discussionId,
+                documentId: document.documentId,
+                isResolved: true,
+                resolvedByUserId: input.actorUserId,
+                resolvedAt: createdAt,
+              })
+              .pipe(asInvariant("submit.consumeDiscussions")),
+          { discard: true },
+        );
+      }
+
       yield* announce(document.documentId);
 
       yield* appendActivity({

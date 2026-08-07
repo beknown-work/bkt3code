@@ -22,6 +22,7 @@ import * as PlanReviewServiceModule from "./PlanReviewService.ts";
 import { derivePlanTitle, PlanReviewService } from "./PlanReviewService.ts";
 
 const threadId = ThreadId.make("thread-plan-review");
+const otherThreadId = ThreadId.make("thread-other");
 const reviewerId = UserId.make("user_reviewer");
 
 const PLAN = [
@@ -104,9 +105,14 @@ const runWithService = <A, E>(
     }).pipe(Effect.provide(layer));
   });
 
-const capturePlan = (service: PlanReviewService["Service"], planId: string, markdown = PLAN) =>
+const capturePlan = (
+  service: PlanReviewService["Service"],
+  planId: string,
+  markdown = PLAN,
+  onThread: ThreadId = threadId,
+) =>
   service.capturePlan({
-    threadId,
+    threadId: onThread,
     projectId: "project-1",
     planId: planId as never,
     planMarkdown: markdown,
@@ -407,6 +413,193 @@ describe("PlanReviewService feedback", () => {
   );
 });
 
+describe("PlanReviewService regressions", () => {
+  it.effect("keeps the lineage when the agent answers feedback", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.upsertDiscussion({
+          documentId: document.documentId,
+          discussionId: "discussion-1",
+          quotedText: "2. Backfill the rows",
+          bodyMarkdown: "Split this.",
+          actorUserId: reviewerId,
+        });
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "changes-requested",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        // The agent's answer must append to the same document, not start a new
+        // history that orphans the comments that asked for it.
+        const revised = yield* capturePlan(service, "plan:b", `${PLAN}\n4. Announce it`);
+        expect(revised.documentId).toBe(document.documentId);
+        expect(revised.status).toBe("open");
+
+        const snapshot = yield* service.getReview(document.documentId);
+        expect(snapshot.versions).toHaveLength(2);
+        expect(snapshot.versions[1]?.origin).toBe("agent-revision");
+      }),
+    ),
+  );
+
+  it.effect("does not re-send comments that already reached the agent", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.upsertDiscussion({
+          documentId: document.documentId,
+          discussionId: "discussion-1",
+          quotedText: "2. Backfill the rows",
+          bodyMarkdown: "Split this.",
+          actorUserId: reviewerId,
+        });
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "changes-requested",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+        yield* capturePlan(service, "plan:b", `${PLAN}\n4. Announce it`);
+
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "changes-requested",
+          globalComment: "Second round.",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const turns = (yield* Ref.get(dispatched)).filter(
+          (command) => command.type === "thread.turn.start",
+        );
+        expect(turns).toHaveLength(2);
+        const second = turns[1];
+        const secondText = second?.type === "thread.turn.start" ? second.message.text : "";
+        expect(secondText).toContain("Second round.");
+        expect(secondText).not.toContain("Split this.");
+      }),
+    ),
+  );
+
+  it.effect("refuses a second decision on the same review", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        const approve = {
+          documentId: document.documentId,
+          decision: "approved" as const,
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        };
+
+        yield* service.submit(approve);
+        const second = yield* service.submit(approve).pipe(Effect.exit);
+        expect(second._tag).toBe("Failure");
+
+        // The agent must not be told to implement the plan twice.
+        const turns = (yield* Ref.get(dispatched)).filter(
+          (command) => command.type === "thread.turn.start",
+        );
+        expect(turns).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("refuses to edit a review that is no longer open", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "discarded",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const saved = yield* service
+          .saveDraft({
+            documentId: document.documentId,
+            contentValueJson: '{"markdown":"late"}',
+            expectedRevisionToken: null,
+            actorUserId: reviewerId,
+          })
+          .pipe(Effect.exit);
+        expect(saved._tag).toBe("Failure");
+      }),
+    ),
+  );
+
+  it.effect("does not reach a discussion through a document the caller owns", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const victim = yield* capturePlan(service, "plan:victim");
+        yield* service.upsertDiscussion({
+          documentId: victim.documentId,
+          discussionId: "discussion-victim",
+          quotedText: "2. Backfill the rows",
+          bodyMarkdown: "Split this.",
+          actorUserId: reviewerId,
+        });
+        const attacker = yield* capturePlan(service, "plan:attacker", PLAN, otherThreadId);
+
+        // The caller authorizes their own document, then names a discussion id
+        // from a thread they cannot read. Both writes must miss.
+        yield* service.resolveDiscussion({
+          documentId: attacker.documentId,
+          discussionId: "discussion-victim",
+          isResolved: true,
+          actorUserId: reviewerId,
+        });
+        yield* service.upsertDiscussion({
+          documentId: attacker.documentId,
+          discussionId: "discussion-victim",
+          quotedText: "injected quote",
+          bodyMarkdown: "injected body",
+          actorUserId: reviewerId,
+        });
+
+        const snapshot = yield* service.getReview(victim.documentId);
+        expect(snapshot.discussions).toHaveLength(1);
+        expect(snapshot.discussions[0]?.isResolved).toBe(false);
+        expect(snapshot.discussions[0]?.quotedText).toBe("2. Backfill the rows");
+        expect(snapshot.comments.map((comment) => comment.bodyMarkdown)).toEqual(["Split this."]);
+      }),
+    ),
+  );
+
+  it.effect("does not diff versions belonging to another document", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const victim = yield* capturePlan(service, "plan:victim");
+        const attacker = yield* capturePlan(service, "plan:attacker", PLAN, otherThreadId);
+        const victimVersions = yield* service.getReview(victim.documentId);
+        const versionId = victimVersions.versions[0]!.versionId;
+
+        const result = yield* service
+          .getVersionDiff({
+            documentId: attacker.documentId,
+            fromVersionId: versionId,
+            toVersionId: versionId,
+          })
+          .pipe(Effect.exit);
+        expect(result._tag).toBe("Failure");
+      }),
+    ),
+  );
+});
+
 describe("PlanReviewService drafts", () => {
   it.effect("rejects a save that carried a stale revision token", () =>
     runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
@@ -439,6 +632,35 @@ describe("PlanReviewService drafts", () => {
           actorUserId: reviewerId,
         });
         expect(accepted.revisionToken).not.toBe(first.revisionToken);
+      }),
+    ),
+  );
+
+  it.effect("rejects a stale token even after the draft was cleared", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        const first = yield* service.saveDraft({
+          documentId: document.documentId,
+          contentValueJson: '{"markdown":"one"}',
+          expectedRevisionToken: null,
+          actorUserId: reviewerId,
+        });
+
+        // An agent revision invalidates the draft it was based on.
+        yield* capturePlan(service, "plan:b", `${PLAN}\n4. Announce it`);
+
+        // Resurrecting it with the pre-revision token would record content
+        // against a version it was never derived from.
+        const stale = yield* service
+          .saveDraft({
+            documentId: document.documentId,
+            contentValueJson: '{"markdown":"one"}',
+            expectedRevisionToken: first.revisionToken,
+            actorUserId: reviewerId,
+          })
+          .pipe(Effect.exit);
+        expect(stale._tag).toBe("Failure");
       }),
     ),
   );

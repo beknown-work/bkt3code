@@ -153,7 +153,10 @@ export function buildUnifiedDiff(before: string, after: string): UnifiedDiffResu
   const stats: UnifiedDiffStats = {
     added,
     removed,
-    changeRatio: Math.min(1, (added + removed) / denominator),
+    // A modified line shows up as one add and one remove, so summing them would
+    // report twice the fraction of the document that actually moved — and fire
+    // the "send the whole document" guard at half its stated threshold.
+    changeRatio: Math.min(1, Math.max(added, removed) / denominator),
   };
 
   const hunks = buildHunks(ops);

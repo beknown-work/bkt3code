@@ -89,6 +89,20 @@ describe("formatPlanReviewComment", () => {
     expect(block).not.toContain("—");
   });
 
+  it("omits the range when the quote could not be located", () => {
+    const block = formatPlanReviewComment("doc-1", "Plan", {
+      startIndex: null,
+      endIndex: null,
+      quotedText: "a line that moved",
+      body: "Reword this.",
+      authorLabel: null,
+    });
+    expect(block).not.toContain("startIndex=");
+    expect(block).not.toContain("endIndex=");
+    expect(block).toContain('rangeLabel="quoted text"');
+    expect(block).toContain("a line that moved");
+  });
+
   it("escapes quotes in the plan title", () => {
     const block = formatPlanReviewComment("doc-1", 'The "big" rewrite', {
       startIndex: 0,

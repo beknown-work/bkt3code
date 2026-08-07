@@ -9,10 +9,13 @@
  */
 
 export interface PlanReviewAnchoredComment {
-  /** 0-based inclusive line index into the reviewed markdown. */
-  readonly startIndex: number;
-  /** 0-based inclusive line index into the reviewed markdown. */
-  readonly endIndex: number;
+  /**
+   * 0-based inclusive line indices into the reviewed markdown, or null when the
+   * quote could not be located. Null omits the range attributes entirely rather
+   * than claiming line 1, which would point the model at the wrong place.
+   */
+  readonly startIndex: number | null;
+  readonly endIndex: number | null;
   /** The lines the reviewer selected, quoted back for the model. */
   readonly quotedText: string;
   /** The reviewer's note. */
@@ -78,13 +81,18 @@ export function formatPlanReviewComment(
   planTitle: string,
   comment: PlanReviewAnchoredComment,
 ): string {
+  const located = comment.startIndex !== null && comment.endIndex !== null;
   const attributes = [
     `sectionId="${escapeAttribute(`plan:${documentId}`)}"`,
     `sectionTitle="${escapeAttribute("Plan review")}"`,
     `filePath="${escapeAttribute(`${planTitle}.md`)}"`,
-    `startIndex="${comment.startIndex}"`,
-    `endIndex="${comment.endIndex}"`,
-    `rangeLabel="${escapeAttribute(rangeLabel(comment.startIndex, comment.endIndex))}"`,
+    ...(located
+      ? [
+          `startIndex="${comment.startIndex}"`,
+          `endIndex="${comment.endIndex}"`,
+          `rangeLabel="${escapeAttribute(rangeLabel(comment.startIndex!, comment.endIndex!))}"`,
+        ]
+      : [`rangeLabel="${escapeAttribute("quoted text")}"`]),
   ].join(" ");
 
   const body = comment.authorLabel
