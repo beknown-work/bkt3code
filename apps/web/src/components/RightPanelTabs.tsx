@@ -1,6 +1,8 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+// T3-CUSTOM(expbkt3): BEGIN — ClipboardList is used by the fork's plannotator tab.
 import { Bot, ClipboardList, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+// T3-CUSTOM(expbkt3): END
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,

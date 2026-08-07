@@ -5,7 +5,9 @@ import { EllipsisIcon, RotateCcwIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
+  // T3-CUSTOM(expbkt3): BEGIN — MenuItem renders the creation-defaults reset.
   MenuItem,
+  // T3-CUSTOM(expbkt3): END
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
