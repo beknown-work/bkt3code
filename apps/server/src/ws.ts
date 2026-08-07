@@ -1524,6 +1524,37 @@ const makeWsRpcLayer = (
                 coalesceShellLiveStream(Stream.fromQueue(liveBuffer)),
               );
 
+              // T3-CUSTOM(expbkt3): BEGIN — current execution for every visible
+              // thread, as ordinary execution frames. Reads the supervisor's
+              // in-memory state (no event replay, no per-thread DB round trip)
+              // and reuses the live path's visibility filter, so a resuming
+              // client converges on execution exactly like a fresh snapshot.
+              const currentShellExecutionStream = applyShellItemVisibility(
+                Stream.unwrap(
+                  projectionSnapshotQuery.getShellSnapshot().pipe(
+                    Effect.flatMap((shell) =>
+                      executionSupervisor.getSnapshots(shell.threads.map((thread) => thread.id)),
+                    ),
+                    Effect.map((executions) =>
+                      Stream.fromIterable(
+                        [...executions.values()].map((execution) => ({
+                          kind: "execution" as const,
+                          execution,
+                        })),
+                      ),
+                    ),
+                    // A failed reconciliation must not fail the subscription:
+                    // the client is no worse off than before this stream existed.
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("shell execution resync failed", { cause }).pipe(
+                        Effect.as(Stream.empty),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+              // T3-CUSTOM(expbkt3): END
+
               const loadSnapshot = Effect.gen(function* () {
                 const rawSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
                 const visibleSnapshot =
@@ -1602,7 +1633,18 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
-                return Stream.concat(catchUpStream, synchronizedThenLive);
+                return Stream.concat(
+                  // T3-CUSTOM(expbkt3): BEGIN — reconcile execution on resume.
+                  // Execution is a live-only PubSub frame: it is never written
+                  // to the event log, so this replay cannot carry it. A client
+                  // that was away when a turn ended therefore resumes holding
+                  // the last execution it saw — "Running" forever, because no
+                  // further frame is due for an idle thread. Re-send the current
+                  // execution for every visible thread so a resume converges.
+                  Stream.concat(catchUpStream, currentShellExecutionStream),
+                  // T3-CUSTOM(expbkt3): END
+                  synchronizedThenLive,
+                );
               }
 
               const snapshot = yield* loadSnapshot;
@@ -1755,7 +1797,29 @@ const makeWsRpcLayer = (
                           bufferedLiveStream,
                         )
                       : bufferedLiveStream;
-                  return takeUntilSelfRemoved(Stream.concat(catchUpStream, afterCatchUp));
+                  return takeUntilSelfRemoved(
+                    Stream.concat(
+                      // T3-CUSTOM(expbkt3): BEGIN — same live-only execution gap
+                      // as subscribeShell: the replay carries no execution, so a
+                      // chat resumed after a turn ended would keep rendering
+                      // "Running". Emit the current execution once.
+                      Stream.concat(
+                        catchUpStream,
+                        Stream.fromEffect(
+                          executionSupervisor
+                            .getSnapshot(input.threadId)
+                            .pipe(
+                              Effect.map((execution) => ({
+                                kind: "execution" as const,
+                                execution,
+                              })),
+                            ),
+                        ),
+                      ),
+                      // T3-CUSTOM(expbkt3): END
+                      afterCatchUp,
+                    ),
+                  );
                 }
                 // Gap too large (or cursor ahead of authoritative state): fall
                 // through to the snapshot path so the client converges from a

@@ -73,6 +73,8 @@ import {
 } from "../../project/ProjectSetupScriptRunner.ts";
 // T3-CUSTOM(expbkt3): exact durable-bootstrap bases bypass ref-list pagination.
 import { resolveAvailableWorktreeBase } from "../../thread-bootstrap/WorktreeBaseResolver.ts";
+// T3-CUSTOM(expbkt3): periodic title refresh cadence.
+import { shouldRefreshThreadTitle } from "../../thread-title/titleRefreshCadence.ts";
 // T3-CUSTOM(expbkt3): durable dispatch control plane; provider mechanics stay here.
 import {
   DurableExecutionDispatchError,
@@ -1268,8 +1270,39 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const isFirstUserMessageTurn =
-      thread.messages.filter((entry) => entry.role === "user").length === 1;
+    const userMessageCount = thread.messages.filter((entry) => entry.role === "user").length;
+    const isFirstUserMessageTurn = userMessageCount === 1;
+    // T3-CUSTOM(expbkt3): BEGIN — re-derive the title as a long session drifts
+    // from its opening prompt. Reuses the durable regeneration flow (request
+    // ids, supersede checks, interrupted-run recovery) rather than renaming
+    // directly, so a refresh behaves exactly like the manual action.
+    if (!isFirstUserMessageTurn) {
+      const { experimental } = yield* serverSettingsService.getSettings;
+      if (
+        shouldRefreshThreadTitle({
+          userMessageCount,
+          settings: experimental.threadTitleMaintenance,
+        })
+      ) {
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: yield* serverCommandId("thread-title-refresh"),
+            threadId: event.payload.threadId,
+            regenerateTitle: true,
+          })
+          .pipe(
+            // A title is cosmetic; never let it interfere with starting the turn.
+            Effect.catchCause((cause) =>
+              Effect.logWarning("scheduled thread title refresh failed to dispatch", {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
+      }
+    }
+    // T3-CUSTOM(expbkt3): END
     if (isFirstUserMessageTurn) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =

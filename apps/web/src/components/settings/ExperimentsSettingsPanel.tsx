@@ -5,6 +5,8 @@ import { Switch } from "../ui/switch";
 import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
 import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
 import { T3ConductorSettingsSection } from "./T3ConductorSettingsSection";
+// T3-CUSTOM(expbkt3): session title maintenance.
+import { ThreadTitleMaintenanceSettingsSection } from "./ThreadTitleMaintenanceSettingsSection";
 import {
   EXPERIMENTAL_CONTROL_CENTER_ENABLED,
   T3_CONDUCTOR_ENABLED,
@@ -116,6 +118,9 @@ export function ExperimentsSettingsPanel() {
       ) : null}
       {/* T3-CUSTOM(expbkt3): END */}
       <SessionSummarySettingsSection />
+      {/* T3-CUSTOM(expbkt3): BEGIN — session title maintenance. */}
+      <ThreadTitleMaintenanceSettingsSection />
+      {/* T3-CUSTOM(expbkt3): END */}
     </SettingsPageContainer>
   );
 }

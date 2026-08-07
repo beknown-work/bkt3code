@@ -9,6 +9,37 @@ import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "
  * Returns the original snapshot reference unchanged if the event is not
  * recognized (forward-compatible).
  */
+type ShellThread = OrchestrationShellSnapshot["threads"][number];
+
+/**
+ * T3-CUSTOM(expbkt3): merge a projection upsert over the live execution overlay.
+ *
+ * Execution arrives on its own backend-authoritative stream and projection
+ * upserts omit it, so a plain replacement (upstream's behaviour) would erase a
+ * fresher overlay on every title or message update and send the sidebar back to
+ * Checking. Carrying the overlay forward fixes that but introduces the opposite
+ * failure: execution frames are live-only and are not replayed, so a client that
+ * was away when a turn ended pins "Running" forever.
+ *
+ * The upsert itself resolves the conflict. It carries `latestTurn` straight from
+ * the turn projection, so when it reports the overlay's own turn as finished,
+ * the overlay is provably stale and is dropped rather than preserved.
+ */
+export function mergeUpsertedThread(previous: ShellThread, next: ShellThread): ShellThread {
+  if (next.execution !== undefined || previous.execution === undefined) return next;
+
+  const overlayTurnId = previous.execution?.turn?.providerTurnId;
+  const latestTurn = next.latestTurn;
+  const overlayContradicted =
+    overlayTurnId !== undefined &&
+    overlayTurnId !== null &&
+    latestTurn !== null &&
+    latestTurn.turnId === overlayTurnId &&
+    latestTurn.state !== "running";
+
+  return overlayContradicted ? next : { ...next, execution: previous.execution };
+}
+
 export function applyShellStreamEvent(
   snapshot: OrchestrationShellSnapshot,
   event: OrchestrationShellStreamEvent,
@@ -35,15 +66,7 @@ export function applyShellStreamEvent(
     case "thread-upserted": {
       const threads = snapshot.threads.some((t) => t.id === event.thread.id)
         ? Arr.map(snapshot.threads, (t) =>
-            t.id === event.thread.id
-              ? // Execution is delivered on its own backend-authoritative
-                // stream. Projection upserts intentionally omit it, so a
-                // normal title/message update must not erase the fresher
-                // execution overlay and send the sidebar back to Checking.
-                event.thread.execution !== undefined || t.execution === undefined
-                ? event.thread
-                : { ...event.thread, execution: t.execution }
-              : t,
+            t.id === event.thread.id ? mergeUpsertedThread(t, event.thread) : t,
           )
         : Arr.append(snapshot.threads, event.thread);
       return { ...snapshot, threads, snapshotSequence: event.sequence };
