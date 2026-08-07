@@ -331,53 +331,21 @@ export function phaseSidebarRowClassName(
   isActive: boolean,
   isSelected: boolean,
   needsUserInput: boolean,
-  priority: number | null = null,
 ): string {
   return cn(
     // T3-CUSTOM(expbkt3): Center the adaptive title/metadata content lane.
     "group/phase-row relative flex min-h-14 w-full cursor-pointer select-none items-center gap-2 rounded-md px-2 py-2 text-left outline-hidden transition-[background-color,color,box-shadow] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+    // T3-CUSTOM(expbkt3): Row surfaces carry routing state only. Priority is
+    // read off the P0..P4 badge, so a prioritised row keeps the same background
+    // as everything else and the routed row stays the one tinted surface in
+    // the list — see phaseSidebarPriorityBadgeClassName.
     isActive && isSelected
-      ? "bg-primary/18 text-foreground font-semibold ring-1 ring-inset ring-primary/40 hover:bg-primary/22 dark:bg-primary/24"
+      ? "bg-primary/26 text-foreground font-semibold ring-1 ring-inset ring-primary/55 hover:bg-primary/30 dark:bg-primary/32"
       : isSelected
-        ? "bg-primary/15 text-foreground dark:bg-primary/22"
+        ? "bg-primary/18 text-foreground dark:bg-primary/26"
         : isActive
-          ? "bg-primary/10 text-foreground font-semibold ring-1 ring-inset ring-primary/30 hover:bg-primary/15 dark:bg-primary/16"
+          ? "bg-primary/18 text-foreground font-semibold ring-1 ring-inset ring-primary/45 hover:bg-primary/22 dark:bg-primary/24"
           : "text-muted-foreground hover:bg-accent hover:text-foreground",
-    // T3-CUSTOM(expbkt3): Priority uses the Linear-attention orange; reserve
-    // bright red for the user-input branch below.
-    !needsUserInput &&
-      priority === 0 &&
-      cn(
-        "bg-orange-500/40 text-foreground ring-1 ring-inset hover:bg-orange-500/50 dark:bg-orange-500/35",
-        isActive
-          ? cn(
-              isSelected ? "ring-primary/80" : "ring-primary/70",
-              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
-            )
-          : "ring-orange-500/80 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
-      ),
-    !needsUserInput &&
-      priority === 1 &&
-      cn(
-        "bg-orange-500/20 text-foreground ring-1 ring-inset hover:bg-orange-500/25 dark:bg-orange-500/18",
-        isActive
-          ? cn(
-              isSelected ? "ring-primary/80" : "ring-primary/70",
-              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
-            )
-          : "ring-orange-500/40 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
-      ),
-    !needsUserInput &&
-      priority === 2 &&
-      cn(
-        "bg-orange-500/10 text-foreground ring-1 ring-inset hover:bg-orange-500/15 dark:bg-orange-500/9",
-        isActive
-          ? cn(
-              isSelected ? "ring-primary/80" : "ring-primary/70",
-              "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
-            )
-          : "ring-orange-500/20 shadow-[inset_3px_0_0_0_var(--color-orange-500)]",
-      ),
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
@@ -634,11 +602,30 @@ export function formatThreadPriority(priority: number): string {
   return `P${priority}`;
 }
 
-/** T3-CUSTOM(expbkt3): Keep the priority pill aligned with the row's orange tone. */
+/**
+ * T3-CUSTOM(expbkt3): The badge is now the only place priority is expressed, so
+ * it carries the whole scale on its own.
+ *
+ * P0 keeps the full Linear-attention orange. Each step down mixes ~20% more
+ * neutral into it, landing on plain grey at P4. The mix runs in oklab against a
+ * neutral of the same lightness, so the ladder reads as "less urgent" through
+ * falling saturation while every rung keeps identical contrast against the black
+ * label — dropping actual lightness instead would make P3/P4 unreadable in the
+ * light theme.
+ */
+const PHASE_SIDEBAR_PRIORITY_BADGE_CLASS_NAMES = [
+  "bg-orange-500 text-black shadow-sm",
+  "bg-[color-mix(in_oklab,var(--color-orange-500)_80%,var(--color-neutral-400))] text-black shadow-sm",
+  "bg-[color-mix(in_oklab,var(--color-orange-500)_60%,var(--color-neutral-400))] text-black shadow-sm",
+  "bg-[color-mix(in_oklab,var(--color-orange-500)_40%,var(--color-neutral-400))] text-black shadow-sm",
+  "bg-neutral-400 text-black shadow-sm",
+] as const;
+
 export function phaseSidebarPriorityBadgeClassName(priority: number): string {
-  return priority <= 2
-    ? "bg-orange-500 text-black shadow-sm"
-    : "bg-muted-foreground/15 text-muted-foreground";
+  return (
+    PHASE_SIDEBAR_PRIORITY_BADGE_CLASS_NAMES[priority] ??
+    PHASE_SIDEBAR_PRIORITY_BADGE_CLASS_NAMES.at(-1)!
+  );
 }
 
 /** T3-CUSTOM(expbkt3): the priority values offered in the row context menu. */
@@ -650,30 +637,82 @@ export const PHASE_SIDEBAR_PRIORITY_CHOICES = [
   { value: 4, label: "P4 — Lowest" },
 ] as const satisfies ReadonlyArray<{ readonly value: 0 | 1 | 2 | 3 | 4; readonly label: string }>;
 
+/** T3-CUSTOM(expbkt3): Which end of the time axis leads inside a lifecycle group. */
+export type PhaseSidebarSortDirection = "newest_first" | "oldest_first";
+
+export interface PhaseSidebarSortPreferences {
+  readonly direction: PhaseSidebarSortDirection;
+  /** When true, P0 outranks every lower priority; ties fall through to time. */
+  readonly priorityFirst: boolean;
+}
+
+export const DEFAULT_PHASE_SIDEBAR_SORT: PhaseSidebarSortPreferences = {
+  direction: "newest_first",
+  priorityFirst: true,
+};
+
+export const PHASE_SIDEBAR_SORT_DIRECTION_LABELS: Record<PhaseSidebarSortDirection, string> = {
+  newest_first: "Most recent on top",
+  oldest_first: "Oldest on top",
+};
+
+export function sanitizePhaseSidebarSort(value: unknown): PhaseSidebarSortPreferences {
+  if (!value || typeof value !== "object") return DEFAULT_PHASE_SIDEBAR_SORT;
+  const candidate = value as Partial<Record<keyof PhaseSidebarSortPreferences, unknown>>;
+  return {
+    direction:
+      candidate.direction === "oldest_first" || candidate.direction === "newest_first"
+        ? candidate.direction
+        : DEFAULT_PHASE_SIDEBAR_SORT.direction,
+    priorityFirst:
+      typeof candidate.priorityFirst === "boolean"
+        ? candidate.priorityFirst
+        : DEFAULT_PHASE_SIDEBAR_SORT.priorityFirst,
+  };
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Ordering inside a lifecycle group is deliberately STRICT —
+ * it reads only the thread's priority, its sort timestamp, and stable tiebreaks.
+ *
+ * It used to also fold in `attentionPriority` and `isUnreadCompletion`. Both flip
+ * the moment you open a row, so simply reading a thread reordered the group under
+ * the pointer. Those states are already visible on the row (glint, unread dot) and
+ * hoisted into their own groups upstream, so ordering does not need to repeat them
+ * at the cost of a list that moves while you use it.
+ */
+export function comparePhaseSidebarRows(
+  left: PhaseSidebarRow,
+  right: PhaseSidebarRow,
+  sortOrder: SidebarThreadSortOrder,
+  sort: PhaseSidebarSortPreferences,
+): number {
+  const priorityDelta = sort.priorityFirst
+    ? phaseSidebarPriorityRank(left.thread) - phaseSidebarPriorityRank(right.thread)
+    : 0;
+  const leftTime = getThreadSortTimestamp(left.thread, sortOrder);
+  const rightTime = getThreadSortTimestamp(right.thread, sortOrder);
+  const timeDelta = sort.direction === "oldest_first" ? leftTime - rightTime : rightTime - leftTime;
+  return (
+    priorityDelta ||
+    timeDelta ||
+    left.thread.title.localeCompare(right.thread.title) ||
+    String(left.thread.id).localeCompare(String(right.thread.id))
+  );
+}
+
 export function buildPhaseSidebarGroups(
   rows: ReadonlyArray<PhaseSidebarRow>,
   filters: PhaseSidebarFilters,
   sortOrder: SidebarThreadSortOrder,
+  sort: PhaseSidebarSortPreferences = DEFAULT_PHASE_SIDEBAR_SORT,
 ): ReadonlyArray<PhaseSidebarGroup> {
   const visibleRows = filterVisiblePhaseSidebarRows(rows, filters);
 
   return PHASE_SIDEBAR_PHASES.flatMap((phase) => {
     const phaseRows = visibleRows
       .filter((row) => row.phaseId === phase.id)
-      .toSorted(
-        (left, right) =>
-          // T3-CUSTOM(expbkt3): priority leads the ordering inside every
-          // lifecycle group. Rows that need input are already hoisted into
-          // their own group upstream of this comparator, so attention states
-          // still surface — they just no longer outrank an explicit P0.
-          phaseSidebarPriorityRank(left.thread) - phaseSidebarPriorityRank(right.thread) ||
-          left.attentionPriority - right.attentionPriority ||
-          Number(right.isUnreadCompletion) - Number(left.isUnreadCompletion) ||
-          getThreadSortTimestamp(right.thread, sortOrder) -
-            getThreadSortTimestamp(left.thread, sortOrder) ||
-          left.thread.title.localeCompare(right.thread.title) ||
-          String(left.thread.id).localeCompare(String(right.thread.id)),
-      );
+      .toSorted((left, right) => comparePhaseSidebarRows(left, right, sortOrder, sort));
     return phaseRows.length > 0 ? [{ ...phase, rows: phaseRows }] : [];
   });
 }
