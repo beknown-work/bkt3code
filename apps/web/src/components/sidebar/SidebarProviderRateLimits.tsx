@@ -21,6 +21,7 @@ import {
 import {
   buildProviderRateLimitRows,
   formatCompactMinutes,
+  formatSingleUnitMinutes,
   providerRateLimitBoundaryTimes,
   selectProviderRateLimitEnvironmentId,
   summarizeProviderRateLimitRows,
@@ -123,6 +124,14 @@ function ProviderRateLimitProgressRow({
   onBackdrop: boolean;
 }) {
   const remaining = row.remainingPercent;
+  // Always on, so it is deliberately one unit wide (`6d`, `18h`) rather than the
+  // rolling chip's compound form: the sidebar header has no width to spare.
+  const weeklyCountdown =
+    row.headlineMinutesUntilReset === null
+      ? null
+      : row.headlineMinutesUntilReset === 0
+        ? "now"
+        : formatSingleUnitMinutes(row.headlineMinutesUntilReset);
   return (
     <span
       className={cn("flex h-3 items-center gap-1", row.freshness === "stale" && "opacity-60")}
@@ -153,6 +162,18 @@ function ProviderRateLimitProgressRow({
       >
         {remaining === null ? "—" : `${remaining}%`}
       </span>
+      {weeklyCountdown === null ? null : (
+        <span
+          className={cn(
+            "w-6 shrink-0 text-right text-[9px] font-medium leading-none tabular-nums",
+            onBackdrop ? "text-white/45" : "text-muted-foreground/70",
+          )}
+          data-weekly-reset="true"
+          title={`Usage resets in ${weeklyCountdown}`}
+        >
+          {weeklyCountdown}
+        </span>
+      )}
       {row.rolling === null ? null : (
         <ProviderRateLimitRollingChip onBackdrop={onBackdrop} rolling={row.rolling} />
       )}

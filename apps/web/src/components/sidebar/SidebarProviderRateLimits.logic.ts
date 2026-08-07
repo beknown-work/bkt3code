@@ -10,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 
 const STALE_AFTER_MS = 10 * 60 * 1_000;
 const MINUTE_MS = 60 * 1_000;
+const MINUTES_PER_DAY = 24 * 60;
 const CODEX = ProviderDriverKind.make("codex");
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
 const DISPLAY_ORDER = [CODEX, CLAUDE] as const;
@@ -71,6 +72,30 @@ export function formatCompactMinutes(minutes: number): string {
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
+/**
+ * A single unit, rounded up: `6d`, `18h`, `45m`. The weekly countdown sits in the
+ * sidebar permanently, so it trades the compound form's precision for a label
+ * that never grows past three characters.
+ */
+export function formatSingleUnitMinutes(minutes: number): string {
+  if (minutes >= MINUTES_PER_DAY) return `${Math.ceil(minutes / MINUTES_PER_DAY)}d`;
+  if (minutes >= 60) return `${Math.ceil(minutes / 60)}h`;
+  return `${Math.max(1, minutes)}m`;
+}
+
+/**
+ * When {@link formatSingleUnitMinutes} would next print something different.
+ * Rounding up means the label changes as the remaining time crosses each whole
+ * unit, so the sidebar can wake exactly then instead of ticking every minute for
+ * a week.
+ */
+export function singleUnitBoundaryMs(resetsAtMs: number, minutesUntilReset: number): number {
+  const unitMinutes =
+    minutesUntilReset >= MINUTES_PER_DAY ? MINUTES_PER_DAY : minutesUntilReset >= 60 ? 60 : 1;
+  const wholeUnits = Math.ceil(minutesUntilReset / unitMinutes);
+  return resetsAtMs - (wholeUnits - 1) * unitMinutes * MINUTE_MS;
+}
+
 export interface ProviderRateLimitRowView {
   readonly driverKind: ProviderDriverKind;
   readonly providerInstanceId: ProviderInstanceId;
@@ -78,6 +103,12 @@ export interface ProviderRateLimitRowView {
   readonly availability: ProviderRateLimitSnapshot["availability"];
   /** Weekly window only. Null when the provider reports no weekly quota. */
   readonly remainingPercent: number | null;
+  /**
+   * When the window behind {@link remainingPercent} refills. Always rendered, so
+   * the headline percentage is never read without knowing how long it has to last.
+   */
+  readonly headlineMinutesUntilReset: number | null;
+  readonly headlineResetsAtMs: number | null;
   readonly rolling: ProviderRateLimitRollingView | null;
   readonly tone: ProviderRateLimitTone;
   readonly freshness: ProviderRateLimitFreshness;
@@ -142,6 +173,8 @@ function unknownRow(
     displayName: displayName(driverKind),
     availability: "unknown",
     remainingPercent: null,
+    headlineMinutesUntilReset: null,
+    headlineResetsAtMs: null,
     rolling: null,
     tone: "unknown",
     freshness: "unknown",
@@ -186,6 +219,7 @@ function projectRow(
   const headline = lowestOf(weeklyWindows.length > 0 ? weeklyWindows : windows);
   const remainingPercent =
     snapshot.availability === "available" ? (headline?.remainingPercent ?? null) : null;
+  const headlineResetsAt = remainingPercent === null ? null : (headline?.window.resetsAt ?? null);
   const rollingLowest = lowestOf(windows.filter(({ window }) => window.category === "rolling"));
   const rollingRemaining = rollingLowest?.remainingPercent ?? null;
   const rolling: ProviderRateLimitRollingView | null =
@@ -227,6 +261,8 @@ function projectRow(
     displayName: displayName(snapshot.driverKind),
     availability: snapshot.availability,
     remainingPercent,
+    headlineMinutesUntilReset: minutesUntilReset(headlineResetsAt, now),
+    headlineResetsAtMs: headlineResetsAt === null ? null : DateTime.toEpochMillis(headlineResetsAt),
     rolling:
       rolling === null ? null : freshness === "fresh" ? rolling : { ...rolling, tone: "unknown" },
     tone: freshness === "fresh" ? providerRateLimitTone(remainingPercent) : "unknown",
@@ -293,9 +329,13 @@ export function summarizeProviderRateLimitRows(
               ? ""
               : ` and resets in ${formatCompactMinutes(row.rolling.minutesUntilReset)}`
           }`;
+    const headlineReset =
+      row.headlineMinutesUntilReset === null
+        ? ""
+        : `, resets in ${formatSingleUnitMinutes(row.headlineMinutesUntilReset)}`;
     return row.remainingPercent === null
       ? `${row.displayName} unavailable${rolling}`
-      : `${row.displayName} ${row.remainingPercent}% weekly remaining${
+      : `${row.displayName} ${row.remainingPercent}% weekly remaining${headlineReset}${
           row.source === "cache" ? ", cached" : row.freshness === "stale" ? ", stale" : ""
         }${rolling}`;
   });
@@ -313,6 +353,11 @@ export function providerRateLimitBoundaryTimes(
       window.resetsAt === null ? [] : [DateTime.toEpochMillis(window.resetsAt)],
     ),
     ...rollingMinuteBoundaries(row.rolling),
+    // The always-on weekly countdown moves a unit at a time, so one wake-up per
+    // unit is enough — a per-minute schedule would be ~10k timers for a week.
+    ...(row.headlineResetsAtMs === null || row.headlineMinutesUntilReset === null
+      ? []
+      : [singleUnitBoundaryMs(row.headlineResetsAtMs, row.headlineMinutesUntilReset)]),
   ]);
 }
 
