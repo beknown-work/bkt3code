@@ -147,6 +147,8 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
+// T3-CUSTOM(expbkt3): native plan review surface.
+import { PlanReviewPanel, useOpenPlanReviewDocumentId } from "../fork/planReviewSurface";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -439,6 +441,7 @@ const PreviewPanel = lazy(() =>
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+// T3-CUSTOM(expbkt3): native plan review surface (lazy: Plate is ~200 kB gzip).
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -3553,6 +3556,17 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThreadRef],
   );
+  const openPlanReviewSurface = useCallback(
+    (documentId: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openPlanReview(activeThreadRef, documentId);
+    },
+    [activeThreadRef],
+  );
+  const planReviewDocumentId = useOpenPlanReviewDocumentId(
+    activeThreadRef?.environmentId ?? null,
+    activeThreadRef?.threadId ?? null,
+  );
   // T3-CUSTOM(expbkt3): END
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
@@ -6621,7 +6635,20 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
-    ) : activeRightPanelSurface?.kind === "agents" ? (
+    ) : /* T3-CUSTOM(expbkt3): BEGIN — native plan review panel. */
+    activeRightPanelSurface?.kind === "planReview" ? (
+      <Suspense fallback={null}>
+        <PlanReviewPanel
+          key={activeRightPanelSurface.documentId}
+          environmentId={activeThreadRef.environmentId}
+          documentId={activeRightPanelSurface.documentId}
+          onClose={() =>
+            useRightPanelStore.getState().closeSurface(activeThreadRef, activeRightPanelSurface.id)
+          }
+        />
+      </Suspense>
+    ) : /* T3-CUSTOM(expbkt3): END */
+    activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
@@ -6770,6 +6797,8 @@ function ChatViewContent(props: ChatViewProps) {
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 onOpenPlannotator={openPlannotatorSurface}
+                onOpenPlanReview={openPlanReviewSurface}
+                planReviewDocumentId={planReviewDocumentId}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}

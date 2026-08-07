@@ -216,6 +216,8 @@ function surfaceTitle(
     // T3-CUSTOM(expbkt3): BEGIN — label the experimental review surface.
     case "plannotator":
       return "Plannotator";
+    case "planReview":
+      return "Plan review";
     // T3-CUSTOM(expbkt3): END
     case "agents":
       return "Agents";
@@ -281,6 +283,8 @@ function SurfaceIcon({
     // T3-CUSTOM(expbkt3): BEGIN — icon for the experimental review surface.
     case "plannotator":
       return <ClipboardList className="size-3.5 shrink-0 text-violet-500" />;
+    case "planReview":
+      return <ClipboardList className="size-3.5 shrink-0 text-sky-500" />;
     // T3-CUSTOM(expbkt3): END
     case "agents":
       return <Bot className="size-3 shrink-0" />;
