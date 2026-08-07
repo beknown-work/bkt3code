@@ -341,7 +341,13 @@ describe("environment shell synchronization", () => {
       expect(yield* Ref.get(loaderCalls)).toBe(1);
       const synchronizing = yield* SubscriptionRef.get(shellState);
       expect(synchronizing.status).toBe("synchronizing");
-      expect(Option.getOrThrow(synchronizing.snapshot)).toEqual(cachedSnapshot);
+      // T3-CUSTOM(expbkt3): the shell normalizes every thread with an
+      // `execution` overlay as it loads, so the surfaced snapshot carries one
+      // field more than the cached payload it came from.
+      expect(Option.getOrThrow(synchronizing.snapshot)).toEqual({
+        ...cachedSnapshot,
+        threads: [{ id: "cached-thread", execution: null }],
+      });
 
       yield* Queue.offer(events, { kind: "snapshot", snapshot: resetSnapshot });
       yield* Queue.offer(events, { kind: "synchronized" });
