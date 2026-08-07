@@ -1564,6 +1564,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          -- T3-CUSTOM(expbkt3): BEGIN
+          -- This fork's ProjectionThreadMessage requires sentByUserId, so every
+          -- query decoding ProjectionThreadMessageDbRowSchema must select it —
+          -- including upstream's windowed variants. Keep in sync with
+          -- listThreadMessageRowsByThread.
+          sent_by_user_id AS "sentByUserId",
+          -- T3-CUSTOM(expbkt3): END
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
