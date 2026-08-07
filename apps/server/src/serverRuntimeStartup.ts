@@ -378,11 +378,16 @@ export const make = (options?: StartupOptions) =>
         ),
       );
 
-      // Team mode only: converge pre-ownership records before commands open.
+      // Team mode only: converge pre-ownership records. This is idempotent and
+      // fail-soft, so it is parked alongside the other auxiliary roots rather
+      // than holding readiness — a full pass once cost bkt3.dev ~146 s of
+      // blocked startup on every restart.
       yield* Effect.logDebug("startup phase: ownership backfill");
-      yield* runStartupPhase(
-        "ownership.backfill",
-        runOwnershipBackfill.pipe(Effect.provide(ClerkDirectoryLive)),
+      yield* forkParked(
+        runStartupPhase(
+          "ownership.backfill",
+          runOwnershipBackfill.pipe(Effect.provide(ClerkDirectoryLive)),
+        ),
       );
 
       const welcomeBase = yield* resolveWelcomeBase;

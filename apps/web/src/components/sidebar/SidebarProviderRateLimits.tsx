@@ -20,6 +20,8 @@ import {
 } from "./SidebarProviderRateLimits.cache";
 import {
   buildProviderRateLimitRows,
+  formatCompactMinutes,
+  formatSingleUnitMinutes,
   providerRateLimitBoundaryTimes,
   selectProviderRateLimitEnvironmentId,
   summarizeProviderRateLimitRows,
@@ -32,6 +34,13 @@ const toneClass: Record<ProviderRateLimitTone, string> = {
   warning: "bg-amber-500",
   danger: "bg-red-500",
   unknown: "bg-muted-foreground/35",
+};
+
+const rollingToneClass: Record<ProviderRateLimitTone, string> = {
+  healthy: "text-emerald-500",
+  warning: "text-amber-500",
+  danger: "text-red-500",
+  unknown: "text-muted-foreground",
 };
 
 function formatLocalDateTime(value: DateTime.Utc): string {
@@ -67,6 +76,46 @@ function ProviderRateLimitIcon({ row }: { row: ProviderRateLimitRowView }) {
   return <Icon aria-hidden="true" className="size-2.5 shrink-0" />;
 }
 
+/**
+ * The rolling-window companion, e.g. `5h 40% · 1h 8m`: how much of the short
+ * window is left and when it refills. Shown only while it is the tighter limit.
+ */
+function ProviderRateLimitRollingChip({
+  rolling,
+  onBackdrop,
+}: {
+  rolling: NonNullable<ProviderRateLimitRowView["rolling"]>;
+  onBackdrop: boolean;
+}) {
+  const countdown =
+    rolling.minutesUntilReset === null
+      ? null
+      : rolling.minutesUntilReset === 0
+        ? "now"
+        : formatCompactMinutes(rolling.minutesUntilReset);
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-baseline gap-1 whitespace-nowrap text-[9px] font-semibold leading-none tabular-nums",
+        onBackdrop ? "text-white/75" : rollingToneClass[rolling.tone],
+      )}
+      data-rolling-window="true"
+      title={`${rolling.windowLabel ?? "Rolling"} window: ${rolling.remainingPercent}% remaining${
+        countdown === null ? "" : `, resets in ${countdown}`
+      }`}
+    >
+      <span>{`${rolling.windowLabel === null ? "" : `${rolling.windowLabel} `}${
+        rolling.remainingPercent
+      }%`}</span>
+      {countdown === null ? null : (
+        <span className={cn("font-medium", onBackdrop ? "text-white/50" : "text-muted-foreground")}>
+          {`· ${countdown}`}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ProviderRateLimitProgressRow({
   row,
   onBackdrop,
@@ -75,6 +124,14 @@ function ProviderRateLimitProgressRow({
   onBackdrop: boolean;
 }) {
   const remaining = row.remainingPercent;
+  // Always on, so it is deliberately one unit wide (`6d`, `18h`) rather than the
+  // rolling chip's compound form: the sidebar header has no width to spare.
+  const weeklyCountdown =
+    row.headlineMinutesUntilReset === null
+      ? null
+      : row.headlineMinutesUntilReset === 0
+        ? "now"
+        : formatSingleUnitMinutes(row.headlineMinutesUntilReset);
   return (
     <span
       className={cn("flex h-3 items-center gap-1", row.freshness === "stale" && "opacity-60")}
@@ -105,6 +162,23 @@ function ProviderRateLimitProgressRow({
       >
         {remaining === null ? "—" : `${remaining}%`}
       </span>
+      {weeklyCountdown === null ? null : (
+        <span
+          className={cn(
+            // Sized to its own text rather than a fixed box: a right-aligned
+            // fixed width leaves a visible gap after short labels like `6d`.
+            "shrink-0 text-[9px] font-medium leading-none tabular-nums",
+            onBackdrop ? "text-white/45" : "text-muted-foreground/70",
+          )}
+          data-weekly-reset="true"
+          title={`Usage resets in ${weeklyCountdown}`}
+        >
+          {weeklyCountdown}
+        </span>
+      )}
+      {row.rolling === null ? null : (
+        <ProviderRateLimitRollingChip onBackdrop={onBackdrop} rolling={row.rolling} />
+      )}
     </span>
   );
 }
@@ -129,7 +203,7 @@ export function ProviderRateLimitsDetails({
             <ProviderRateLimitIcon row={row} />
             <span className="font-medium text-foreground">{row.displayName}</span>
             <span className="ml-auto font-semibold tabular-nums text-foreground">
-              {row.remainingPercent === null ? "—" : `${row.remainingPercent}% remaining`}
+              {row.remainingPercent === null ? "—" : `${row.remainingPercent}% weekly remaining`}
             </span>
           </div>
           {row.freshness === "not-applicable" ? (

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { Project, ThreadShell } from "../../types";
 import {
+  DEFAULT_PHASE_SIDEBAR_SORT,
   EMPTY_PHASE_SIDEBAR_FILTERS,
   PHASE_SIDEBAR_PHASE_IDS,
   buildPhaseSidebarFilterChips,
@@ -42,6 +43,7 @@ import {
   resolvePhaseSidebarTraversalTarget,
   resolvePhaseSidebarWorkBadge,
   sanitizePhaseSidebarFilters,
+  sanitizePhaseSidebarSort,
   type PhaseSidebarRow,
 } from "./PhaseGroupedSidebar.logic";
 
@@ -51,11 +53,11 @@ const threadId = ThreadId.make("thread-1");
 const now = "2026-07-16T10:00:00.000Z";
 
 describe("phaseSidebarRowClassName", () => {
-  it("gives the routed row a restrained primary surface and focus ring", () => {
+  it("gives the routed row a primary surface strong enough to spot at a glance", () => {
     const className = phaseSidebarRowClassName(true, false, false);
 
-    expect(className).toContain("bg-primary/10");
-    expect(className).toContain("ring-primary/30");
+    expect(className).toContain("bg-primary/18");
+    expect(className).toContain("ring-primary/45");
     expect(className).toContain("font-semibold");
   });
 
@@ -63,10 +65,10 @@ describe("phaseSidebarRowClassName", () => {
     const selected = phaseSidebarRowClassName(false, true, false);
     const activeSelected = phaseSidebarRowClassName(true, true, false);
 
-    expect(selected).toContain("bg-primary/15");
-    expect(selected).not.toContain("ring-primary/40");
-    expect(activeSelected).toContain("bg-primary/18");
-    expect(activeSelected).toContain("ring-primary/40");
+    expect(selected).toContain("bg-primary/18");
+    expect(selected).not.toContain("ring-primary/55");
+    expect(activeSelected).toContain("bg-primary/26");
+    expect(activeSelected).toContain("ring-primary/55");
   });
 
   it("preserves the urgent input treatment on an active row", () => {
@@ -77,16 +79,16 @@ describe("phaseSidebarRowClassName", () => {
     expect(className).toContain("motion-reduce:animate-none");
   });
 
-  it("keeps the active border blue while preserving the P0 orange surface", () => {
-    const className = phaseSidebarRowClassName(true, false, false, 0);
+  it("tints only the routed row, and never by priority", () => {
+    const active = phaseSidebarRowClassName(true, false, false);
+    const idle = phaseSidebarRowClassName(false, false, false);
 
-    expect(className).toContain("bg-orange-500/40");
-    expect(className).toContain("ring-primary/70");
-    expect(className).toContain(
-      "shadow-[inset_3px_0_0_0_var(--color-primary),0_0_10px_color-mix(in_oklab,var(--color-primary)_24%,transparent)]",
-    );
-    expect(className).not.toContain("ring-orange-500/80");
-    expect(className).not.toContain("inset_3px_0_0_0_var(--color-orange-500)");
+    expect(active).toContain("bg-primary/18");
+    expect(active).toContain("ring-primary/45");
+    // Priority is the badge's job now: no row surface reads as orange.
+    expect(active).not.toContain("orange");
+    expect(idle).not.toContain("orange");
+    expect(idle).not.toContain("bg-primary");
   });
 
   it("vertically centers the adaptive content lane", () => {
@@ -1044,45 +1046,108 @@ describe("phase sidebar priority", () => {
     ]);
   });
 
-  it("falls back to attention order when priorities tie", () => {
+  it("ignores attention and unread state so reading a row cannot reorder its group", () => {
+    const older = "2026-07-16T09:00:00.000Z";
     const rows = [
       makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-late"), priority: 1 }),
+        thread: makeThread({
+          id: ThreadId.make("thread-older"),
+          priority: 1,
+          updatedAt: older,
+        }),
         phaseId: "ready",
-        attentionPriority: 4,
+        // The worst attention rank and an unread completion: neither may hoist
+        // this row above the more recent one, and clearing them must not move it.
+        attentionPriority: 1,
+        isUnreadCompletion: true,
       }),
       makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-early"), priority: 1 }),
+        thread: makeThread({ id: ThreadId.make("thread-newer"), priority: 1, updatedAt: now }),
         phaseId: "ready",
-        attentionPriority: 2,
+        attentionPriority: 5,
+      }),
+    ];
+    const order = (input: ReadonlyArray<PhaseSidebarRow>) =>
+      buildPhaseSidebarGroups(input, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at").flatMap((group) =>
+        group.rows.map((row) => row.thread.id),
+      );
+
+    expect(order(rows)).toEqual([ThreadId.make("thread-newer"), ThreadId.make("thread-older")]);
+    // Opening the unread row clears both volatile flags; the order must hold.
+    expect(
+      order([{ ...rows[0]!, attentionPriority: 5, isUnreadCompletion: false }, rows[1]!]),
+    ).toEqual([ThreadId.make("thread-newer"), ThreadId.make("thread-older")]);
+  });
+
+  it("flips the time axis for oldest-first without touching the priority lead", () => {
+    const rows = [
+      makeRow({
+        thread: makeThread({ id: ThreadId.make("thread-newer"), updatedAt: now }),
+        phaseId: "ready",
+      }),
+      makeRow({
+        thread: makeThread({
+          id: ThreadId.make("thread-older"),
+          updatedAt: "2026-07-16T09:00:00.000Z",
+        }),
+        phaseId: "ready",
+      }),
+      makeRow({
+        thread: makeThread({
+          id: ThreadId.make("thread-p0"),
+          priority: 0,
+          updatedAt: "2026-07-16T08:00:00.000Z",
+        }),
+        phaseId: "ready",
       }),
     ];
 
-    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at", {
+      direction: "oldest_first",
+      priorityFirst: true,
+    });
     expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
-      ThreadId.make("thread-early"),
-      ThreadId.make("thread-late"),
+      ThreadId.make("thread-p0"),
+      ThreadId.make("thread-older"),
+      ThreadId.make("thread-newer"),
     ]);
   });
 
-  it("sorts unread sessions before equivalent read sessions", () => {
+  it("drops the priority lead when the override is switched off", () => {
     const rows = [
       makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-read"), title: "Same title" }),
+        thread: makeThread({
+          id: ThreadId.make("thread-p0"),
+          priority: 0,
+          updatedAt: "2026-07-16T08:00:00.000Z",
+        }),
         phaseId: "ready",
       }),
       makeRow({
-        thread: makeThread({ id: ThreadId.make("thread-unread"), title: "Same title" }),
+        thread: makeThread({ id: ThreadId.make("thread-newer"), updatedAt: now }),
         phaseId: "ready",
-        isUnreadCompletion: true,
       }),
     ];
 
-    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+    const groups = buildPhaseSidebarGroups(rows, EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at", {
+      direction: "newest_first",
+      priorityFirst: false,
+    });
     expect(groups.flatMap((group) => group.rows.map((row) => row.thread.id))).toEqual([
-      ThreadId.make("thread-unread"),
-      ThreadId.make("thread-read"),
+      ThreadId.make("thread-newer"),
+      ThreadId.make("thread-p0"),
     ]);
+  });
+
+  it("defaults unreadable persisted sort preferences back to the shipped ordering", () => {
+    expect(sanitizePhaseSidebarSort(undefined)).toEqual(DEFAULT_PHASE_SIDEBAR_SORT);
+    expect(sanitizePhaseSidebarSort({ direction: "sideways", priorityFirst: "yes" })).toEqual(
+      DEFAULT_PHASE_SIDEBAR_SORT,
+    );
+    expect(sanitizePhaseSidebarSort({ direction: "oldest_first", priorityFirst: false })).toEqual({
+      direction: "oldest_first",
+      priorityFirst: false,
+    });
   });
 
   it("keeps explicit priority ahead of unread status", () => {
@@ -1109,15 +1174,24 @@ describe("phase sidebar priority", () => {
     ]);
   });
 
-  it("colors priority rows orange while reserving red for input-needed alerts", () => {
-    expect(phaseSidebarRowClassName(false, false, false, 0)).toContain("bg-orange-500/40");
-    expect(phaseSidebarRowClassName(false, false, false, 1)).toContain("bg-orange-500/20");
-    expect(phaseSidebarRowClassName(false, false, false, 2)).toContain("bg-orange-500/10");
-    expect(phaseSidebarRowClassName(false, false, false, 0)).not.toContain("bg-red-500/");
-    expect(phaseSidebarRowClassName(false, false, true, 0)).toContain("bg-red-500/20");
-    expect(phaseSidebarRowClassName(false, false, false, 3)).not.toContain("bg-orange-500/");
+  it("fades the badge from full orange at P0 to grey at P4", () => {
     expect(phaseSidebarPriorityBadgeClassName(0)).toContain("bg-orange-500");
+    expect(phaseSidebarPriorityBadgeClassName(1)).toContain(
+      "bg-[color-mix(in_oklab,var(--color-orange-500)_80%,var(--color-neutral-400))]",
+    );
+    expect(phaseSidebarPriorityBadgeClassName(2)).toContain("var(--color-orange-500)_60%");
+    expect(phaseSidebarPriorityBadgeClassName(3)).toContain("var(--color-orange-500)_40%");
+    expect(phaseSidebarPriorityBadgeClassName(4)).toBe("bg-neutral-400 text-black shadow-sm");
+    // Every rung keeps the same label treatment, so contrast never drifts.
+    for (const priority of [0, 1, 2, 3, 4]) {
+      expect(phaseSidebarPriorityBadgeClassName(priority)).toContain("text-black");
+    }
+    // An out-of-range value must not render an unstyled badge.
+    expect(phaseSidebarPriorityBadgeClassName(9)).toBe("bg-neutral-400 text-black shadow-sm");
+  });
+
+  it("keeps the red input-needed alert independent of priority", () => {
+    expect(phaseSidebarRowClassName(false, false, true)).toContain("bg-red-500/20");
     expect(phaseSidebarPriorityBadgeClassName(0)).not.toContain("bg-red-500");
-    expect(phaseSidebarPriorityBadgeClassName(3)).toContain("bg-muted-foreground/15");
   });
 });

@@ -35,6 +35,25 @@ const setup = Layer.effectDiscard(
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    // T3-CUSTOM(expbkt3): BEGIN
+    // SQLite's defaults are tuned for a small database on a private disk. Ours
+    // is multi-gigabyte and shared, so the defaults cost roughly two orders of
+    // magnitude more physical IO than the logical data written.
+    //
+    // NORMAL cannot corrupt a WAL database: recovery replays the WAL on open.
+    // The only exposure is losing the last few committed transactions to a
+    // power cut or kernel panic; a clean process restart or crash loses
+    // nothing. FULL instead fsyncs on every COMMIT.
+    yield* sql`PRAGMA synchronous = NORMAL;`;
+    // The default 1000-page (~4 MB) autocheckpoint copies WAL frames back into
+    // the main database constantly, so every byte is written at least twice.
+    yield* sql`PRAGMA wal_autocheckpoint = 10000;`;
+    // 64 MB of page cache keeps the hot projection and event pages resident.
+    yield* sql`PRAGMA cache_size = -65536;`;
+    // Truncate the WAL back to 64 MB after a checkpoint instead of letting it
+    // grow to whatever the largest transaction needed.
+    yield* sql`PRAGMA journal_size_limit = 67108864;`;
+    // T3-CUSTOM(expbkt3): END
     yield* runMigrations();
   }),
 );

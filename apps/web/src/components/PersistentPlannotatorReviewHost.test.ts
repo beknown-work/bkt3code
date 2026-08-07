@@ -46,7 +46,7 @@ describe("hidePlannotatorReview", () => {
   });
 
   it("removes a terminal surface and recreates it on an intentional reopen", () => {
-    useRightPanelStore.getState().open(threadRef, "plan");
+    useRightPanelStore.getState().open(threadRef, "diff");
     useRightPanelStore.getState().openPlannotator(threadRef, reviewUrl);
 
     removePlannotatorReview(threadRef, `plannotator:${reviewUrl}`);
@@ -55,8 +55,8 @@ describe("hidePlannotatorReview", () => {
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef),
     ).toEqual({
       isOpen: true,
-      activeSurfaceId: "plan",
-      surfaces: [{ id: "plan", kind: "plan" }],
+      activeSurfaceId: "diff",
+      surfaces: [{ id: "diff", kind: "diff" }],
     });
 
     useRightPanelStore.getState().openPlannotator(threadRef, reviewUrl);
@@ -64,7 +64,7 @@ describe("hidePlannotatorReview", () => {
     expect(
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces,
     ).toEqual([
-      { id: "plan", kind: "plan" },
+      { id: "diff", kind: "diff" },
       { id: `plannotator:${reviewUrl}`, kind: "plannotator", url: reviewUrl },
     ]);
     expect(

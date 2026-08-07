@@ -114,7 +114,6 @@
     "apps/web/src/components/DiffPanel.tsx",
     "apps/web/src/components/GitActionsControl.tsx",
     "apps/web/src/components/Icons.tsx",
-    "apps/web/src/components/PlanSidebar.tsx",
     "apps/web/src/components/PullRequestThreadDialog.tsx",
     "apps/web/src/components/Sidebar.logic.ts",
     "apps/web/src/components/Sidebar.tsx",

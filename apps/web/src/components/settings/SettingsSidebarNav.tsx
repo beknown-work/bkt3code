@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  BellIcon,
   FolderCogIcon,
   UsersIcon,
   ArrowLeftIcon,
@@ -59,6 +60,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/users": UsersIcon,
   "/settings/connections": Link2Icon,
   // T3-CUSTOM(expbkt3): fork-only settings sections.
+  "/settings/notifications": BellIcon,
   "/settings/projects": FolderCogIcon,
   "/settings/project-access": UsersIcon,
   "/settings/experiments": FlaskConicalIcon,

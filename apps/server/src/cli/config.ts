@@ -86,6 +86,9 @@ const EnvServerConfig = Config.all({
   traceMaxBytes: Config.int("T3CODE_TRACE_MAX_BYTES").pipe(Config.withDefault(10 * 1024 * 1024)),
   traceMaxFiles: Config.int("T3CODE_TRACE_MAX_FILES").pipe(Config.withDefault(10)),
   traceBatchWindowMs: Config.int("T3CODE_TRACE_BATCH_WINDOW_MS").pipe(Config.withDefault(1_000)),
+  // One span per SQL statement dominates trace volume. Keep the slow ones,
+  // which is how a pathological query is actually found, and drop the rest.
+  traceSqlSlowMs: Config.int("T3CODE_TRACE_SQL_SLOW_MS").pipe(Config.withDefault(250)),
   otlpTracesUrl: Config.string("T3CODE_OTLP_TRACES_URL").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -394,6 +397,7 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
+      traceSqlSlowMs: env.traceSqlSlowMs,
       otlpTracesUrl:
         env.otlpTracesUrl ??
         bootstrap?.otlpTracesUrl ??

@@ -124,7 +124,6 @@ export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200))
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
-  autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -186,6 +185,10 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   providerRateLimitsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   resourceMonitorEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Legacy plan mode. The composer's Build/Plan toggle was removed from the
+  // default UI; this beta flag restores it (plus the /plan and /default slash
+  // commands) for users who still rely on the old workflow.
+  planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -580,10 +583,30 @@ export const T3ConductorSettings = Schema.Struct({
 });
 export type T3ConductorSettings = typeof T3ConductorSettings.Type;
 
+/**
+ * T3-CUSTOM(expbkt3): Keep a session's title describing what it actually became.
+ *
+ * Upstream titles a thread once, from the first prompt. A long session drifts
+ * away from that opening line, so the title stops being a useful way to find it.
+ * `refreshEveryUserPrompts` re-runs the existing regeneration flow every N user
+ * prompts (0 disables it) using the configured text-generation model.
+ */
+export const ThreadTitleMaintenanceSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  refreshEveryUserPrompts: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 20 })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(3)),
+  ),
+});
+export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettings.Type;
+
 export const ExperimentalSettings = Schema.Struct({
   sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   t3Conductor: T3ConductorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // T3-CUSTOM(expbkt3): periodic title refresh.
+  threadTitleMaintenance: ThreadTitleMaintenanceSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type ExperimentalSettings = typeof ExperimentalSettings.Type;
 
@@ -886,6 +909,15 @@ export const ServerSettingsPatch = Schema.Struct({
           publicUrl: Schema.optionalKey(TrimmedString),
         }),
       ),
+      // T3-CUSTOM(expbkt3): periodic title refresh.
+      threadTitleMaintenance: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          refreshEveryUserPrompts: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 20 })),
+          ),
+        }),
+      ),
       // T3-CUSTOM(expbkt3): Keep the permanent Conductor independently patchable.
       t3Conductor: Schema.optionalKey(
         Schema.Struct({
@@ -928,7 +960,6 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
-  autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -967,6 +998,7 @@ export const ClientSettingsPatch = Schema.Struct({
   phaseGroupedSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   providerRateLimitsEnabled: Schema.optionalKey(Schema.Boolean),
   resourceMonitorEnabled: Schema.optionalKey(Schema.Boolean),
+  planModeEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

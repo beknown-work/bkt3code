@@ -9,8 +9,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildProviderRateLimitRows,
+  formatSingleUnitMinutes,
+  providerRateLimitBoundaryTimes,
   providerRateLimitTone,
   selectProviderRateLimitEnvironmentId,
+  singleUnitBoundaryMs,
   summarizeProviderRateLimitRows,
 } from "./SidebarProviderRateLimits.logic.ts";
 
@@ -39,6 +42,128 @@ const snapshot = (
   observedAt: at("2026-08-01T09:55:00.000Z"),
   lastRefreshFailed: false,
   ...overrides,
+});
+const limitWindow = (
+  category: "rolling" | "weekly",
+  usedPercent: number,
+  resetsAt = "2026-08-02T00:00:00.000Z",
+  windowDurationMinutes?: number,
+) => ({
+  windowId: `codex:${category}`,
+  label: category === "weekly" ? "Weekly" : "Rolling",
+  usedPercent,
+  resetsAt: at(resetsAt),
+  ...(windowDurationMinutes === undefined ? {} : { windowDurationMinutes }),
+  category,
+});
+
+describe("weekly headline and rolling companion", () => {
+  const weeklyRow = (windows: ReadonlyArray<ReturnType<typeof limitWindow>>) => {
+    const [row] = buildProviderRateLimitRows({
+      providers: [provider("codex")],
+      entries: [snapshot("codex", [], { windows })],
+      now,
+    });
+    if (row === undefined) throw new Error("expected a Codex row");
+    return row;
+  };
+
+  it("reports the weekly window and ignores a healthier-looking rolling window", () => {
+    const row = weeklyRow([limitWindow("rolling", 33), limitWindow("weekly", 6)]);
+
+    expect(row.remainingPercent).toBe(94);
+    expect(row.tone).toBe("healthy");
+    expect(row.rolling).toBeNull();
+  });
+
+  it("surfaces the rolling window only once it drops below 50% remaining", () => {
+    expect(weeklyRow([limitWindow("rolling", 50), limitWindow("weekly", 6)]).rolling).toBeNull();
+
+    const row = weeklyRow([
+      limitWindow("rolling", 60, "2026-08-01T11:08:00.000Z", 300),
+      limitWindow("weekly", 6),
+    ]);
+    expect(row.remainingPercent).toBe(94);
+    expect(row.rolling).toMatchObject({
+      remainingPercent: 40,
+      minutesUntilReset: 68,
+      tone: "warning",
+      windowLabel: "5h",
+    });
+    expect(summarizeProviderRateLimitRows([row])).toBe(
+      "Provider usage limits: Codex 94% weekly remaining, resets in 14h, 5h window 40% remaining and resets in 1h 8m",
+    );
+  });
+
+  it("labels the rolling companion generically when the provider omits a duration", () => {
+    const row = weeklyRow([
+      limitWindow("rolling", 60, "2026-08-01T10:47:00.000Z"),
+      limitWindow("weekly", 6),
+    ]);
+
+    expect(row.rolling?.windowLabel).toBe(null);
+    expect(summarizeProviderRateLimitRows([row])).toBe(
+      "Provider usage limits: Codex 94% weekly remaining, resets in 14h, rolling window 40% remaining and resets in 47m",
+    );
+  });
+
+  it("keeps the rolling countdown ticking by emitting per-minute boundaries", () => {
+    const row = weeklyRow([
+      limitWindow("rolling", 60, "2026-08-01T10:03:00.000Z"),
+      limitWindow("weekly", 6),
+    ]);
+    const boundaries = providerRateLimitBoundaryTimes([row]);
+
+    expect(boundaries).toContain(Date.parse("2026-08-01T10:02:00.000Z"));
+    expect(boundaries).toContain(Date.parse("2026-08-01T10:01:00.000Z"));
+    expect(boundaries).toContain(Date.parse("2026-08-01T10:00:00.000Z"));
+  });
+
+  it("falls back to the lowest window when the provider reports no weekly quota", () => {
+    const row = weeklyRow([limitWindow("rolling", 26)]);
+
+    expect(row.remainingPercent).toBe(74);
+    expect(row.rolling).toBeNull();
+  });
+
+  it("reports the headline reset in one rounded-up unit", () => {
+    expect(formatSingleUnitMinutes(10_080)).toBe("7d");
+    expect(formatSingleUnitMinutes(1_441)).toBe("2d");
+    expect(formatSingleUnitMinutes(1_440)).toBe("1d");
+    expect(formatSingleUnitMinutes(1_439)).toBe("24h");
+    expect(formatSingleUnitMinutes(61)).toBe("2h");
+    expect(formatSingleUnitMinutes(60)).toBe("1h");
+    expect(formatSingleUnitMinutes(47)).toBe("47m");
+    expect(formatSingleUnitMinutes(0)).toBe("1m");
+  });
+
+  it("carries the headline countdown on every row, not just the tight ones", () => {
+    const row = weeklyRow([limitWindow("weekly", 6, "2026-08-05T22:00:00.000Z", 10_080)]);
+
+    // Four and a half days out, rounded up for display.
+    expect(row.headlineMinutesUntilReset).toBe(6_480);
+    expect(row.headlineResetsAtMs).toBe(Date.parse("2026-08-05T22:00:00.000Z"));
+    expect(row.rolling).toBeNull();
+    expect(summarizeProviderRateLimitRows([row])).toBe(
+      "Provider usage limits: Codex 94% weekly remaining, resets in 5d",
+    );
+  });
+
+  it("wakes once per display unit instead of every minute for a week", () => {
+    const row = weeklyRow([limitWindow("weekly", 6, "2026-08-05T22:00:00.000Z", 10_080)]);
+    const boundaries = providerRateLimitBoundaryTimes([row]);
+
+    // `5d` becomes `4d` when the remaining time crosses four whole days —
+    // twelve hours from now, not sixty seconds from now.
+    expect(boundaries).toContain(Date.parse("2026-08-01T22:00:00.000Z"));
+    expect(boundaries.length).toBeLessThan(10);
+    expect(singleUnitBoundaryMs(Date.parse("2026-08-01T11:00:00.000Z"), 60)).toBe(
+      Date.parse("2026-08-01T11:00:00.000Z"),
+    );
+    expect(singleUnitBoundaryMs(Date.parse("2026-08-01T12:30:00.000Z"), 150)).toBe(
+      Date.parse("2026-08-01T10:30:00.000Z"),
+    );
+  });
 });
 
 describe("buildProviderRateLimitRows", () => {
@@ -135,7 +260,7 @@ describe("buildProviderRateLimitRows", () => {
       source: "cache",
     });
     expect(summarizeProviderRateLimitRows(rows)).toBe(
-      "Provider usage limits: Codex 74% remaining, cached",
+      "Provider usage limits: Codex 74% weekly remaining, resets in 14h, cached",
     );
 
     const failedRows = buildProviderRateLimitRows({

@@ -19,8 +19,12 @@ import {
   errorTag,
   makeLocalFileTracer,
   makeTraceSink,
+  retainSlowSqlSpans,
+  SQL_EXECUTE_SPAN_NAME,
+  type EffectTraceRecord,
   type TraceRecord,
   type TraceSinkFlushStats,
+  truncateTraceAttributes,
 } from "./observability.ts";
 
 describe("errorTag", () => {
@@ -85,6 +89,34 @@ const makeRecord = (name: string, suffix = ""): TraceRecord => ({
   },
 });
 
+const makeSqlRecord = (
+  durationMs: number,
+  exit: EffectTraceRecord["exit"] = { _tag: "Success" },
+): TraceRecord => ({
+  ...(makeRecord(SQL_EXECUTE_SPAN_NAME, `${durationMs}`) as EffectTraceRecord),
+  durationMs,
+  exit,
+});
+
+describe("retainSlowSqlSpans", () => {
+  const retain = retainSlowSqlSpans(250);
+
+  it("drops fast successful statements and keeps slow or failed ones", () => {
+    assert.equal(retain(makeSqlRecord(4)), false);
+    assert.equal(retain(makeSqlRecord(250)), true);
+    assert.equal(retain(makeSqlRecord(97_900)), true);
+    assert.equal(retain(makeSqlRecord(4, { _tag: "Failure", cause: "boom" })), true);
+  });
+
+  it("never touches spans that are not SQL statements", () => {
+    assert.equal(retain(makeRecord("server.startup.ownership.backfill")), true);
+  });
+
+  it("retains everything when the threshold is disabled", () => {
+    assert.equal(retainSlowSqlSpans(0)(makeSqlRecord(4)), true);
+  });
+});
+
 const readTraceRecords = Effect.fn("readTraceRecords")(function* (tracePath: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   return (yield* fileSystem.readFileString(tracePath))
@@ -110,6 +142,31 @@ const makeTestLayer = (tracePath: string) =>
   );
 
 const nodeServicesIt = it.layer(NodeServices.layer);
+
+describe("truncateTraceAttributes", () => {
+  it("clamps oversized strings at any depth without mutating the input", () => {
+    const stack = "s".repeat(2_000);
+    const attributes = {
+      "db.query.text": "q".repeat(2_000),
+      short: "ok",
+      error: { name: "Error", stack, nested: ["a".repeat(2_000)] },
+    };
+    const truncated = truncateTraceAttributes(attributes);
+
+    assert.equal((truncated["db.query.text"] as string).length, 200 + "…[truncated]".length);
+    assert.equal(truncated["short"], "ok");
+    const error = truncated["error"] as { stack: string; nested: Array<string> };
+    assert.equal(error.stack.length, 500 + "…[truncated]".length);
+    assert.equal(error.nested[0]?.length, 500 + "…[truncated]".length);
+    // Input is untouched: the live span's attributes are shared.
+    assert.equal(attributes.error.stack, stack);
+  });
+
+  it("returns the same reference when nothing exceeds the limits", () => {
+    const attributes = { short: "ok", nested: { fine: "also ok" } };
+    assert.equal(truncateTraceAttributes(attributes), attributes);
+  });
+});
 
 describe("observability", () => {
   it("normalizes circular arrays, maps, and sets without recursing forever", () => {
@@ -174,6 +231,37 @@ describe("observability", () => {
           assert.equal(lines.length, 2);
           assert.equal(lines[0]?.name, "alpha");
           assert.equal(lines[1]?.name, "beta");
+        }),
+      ),
+    );
+
+    it.effect("never buffers records the retain predicate rejects", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const tempDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-trace-sink-" });
+          const tracePath = path.join(tempDir, "shared.trace.ndjson");
+
+          const sink = yield* makeTraceSink({
+            filePath: tracePath,
+            maxBytes: 1024,
+            maxFiles: 2,
+            batchWindowMs: 10_000,
+            retain: retainSlowSqlSpans(250),
+          });
+
+          sink.push(makeSqlRecord(4));
+          sink.push(makeSqlRecord(400));
+          sink.push(makeRecord("server.startup"));
+          yield* sink.close();
+
+          const lines = yield* readTraceRecords(tracePath);
+
+          assert.deepEqual(
+            lines.map((line) => line.name),
+            [SQL_EXECUTE_SPAN_NAME, "server.startup"],
+          );
         }),
       ),
     );

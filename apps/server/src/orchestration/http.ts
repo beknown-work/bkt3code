@@ -159,7 +159,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             }
           }
           const snapshot = yield* projectionSnapshotQuery
-            .getThreadDetailSnapshot(args.params.threadId)
+            .getThreadDetailSnapshot(
+              args.params.threadId,
+              args.payload.turnLimit === undefined
+                ? undefined
+                : {
+                    turnLimit: args.payload.turnLimit,
+                    ...(args.payload.beforeCursor !== undefined
+                      ? { beforeCursor: args.payload.beforeCursor }
+                      : {}),
+                  },
+            )
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),

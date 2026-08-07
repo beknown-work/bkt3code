@@ -87,6 +87,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatRelativeTimeLabel } from "../timestampFormat";
+import type { TimestampFormat } from "@t3tools/contracts";
 import type { Project } from "../types";
 import { useUiStateStore } from "../uiStateStore";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -131,10 +132,13 @@ import {
   phaseSidebarRowClassName,
   formatThreadPriority,
   PHASE_SIDEBAR_PRIORITY_CHOICES,
+  // T3-CUSTOM(expbkt3): strict in-group ordering.
+  PHASE_SIDEBAR_SORT_DIRECTION_LABELS,
   compactPhaseSidebarTimeLabel,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
   type PhaseSidebarSection,
+  type PhaseSidebarSortDirection,
 } from "./sidebar/PhaseGroupedSidebar.logic";
 // T3-CUSTOM(expbkt3): BEGIN — adaptive fork-owned phase-row layout.
 import {
@@ -293,20 +297,26 @@ function PhaseFilterPopover({
     phaseIds,
     providerKinds,
     assignedToMe,
+    sort,
     toggleRepository,
     togglePhase,
     toggleProvider,
     toggleAssignedToMe,
+    setSortDirection,
+    togglePriorityFirst,
   } = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
       assignedToMe: state.assignedToMe,
+      sort: state.sort,
       toggleRepository: state.toggleRepository,
       togglePhase: state.togglePhase,
       toggleProvider: state.toggleProvider,
       toggleAssignedToMe: state.toggleAssignedToMe,
+      setSortDirection: state.setSortDirection,
+      togglePriorityFirst: state.togglePriorityFirst,
     })),
   );
   const selectionCount =
@@ -324,6 +334,11 @@ function PhaseFilterPopover({
   const visibleProviders = providers.filter((option) =>
     `${option.code} ${option.name} ${option.kind}`.toLowerCase().includes(needle),
   );
+  // T3-CUSTOM(expbkt3): sort controls answer to the same search box as the facets.
+  const sortSearchText = `sort order priority ${Object.values(
+    PHASE_SIDEBAR_SORT_DIRECTION_LABELS,
+  ).join(" ")}`.toLowerCase();
+  const sortVisible = sortSearchText.includes(needle);
 
   return (
     <Popover>
@@ -359,6 +374,30 @@ function PhaseFilterPopover({
           </div>
         </div>
         <div className="max-h-[min(28rem,var(--available-height))] space-y-3 overflow-y-auto p-2">
+          {/* T3-CUSTOM(expbkt3): ordering inside each lifecycle group. */}
+          {sortVisible ? (
+            <FacetSection label="Sort within each group">
+              <div role="radiogroup" aria-label="Sort within each group" className="space-y-0.5">
+                {(
+                  Object.entries(PHASE_SIDEBAR_SORT_DIRECTION_LABELS) as ReadonlyArray<
+                    [PhaseSidebarSortDirection, string]
+                  >
+                ).map(([direction, label]) => (
+                  <SortDirectionOption
+                    key={direction}
+                    checked={sort.direction === direction}
+                    label={label}
+                    onSelect={() => setSortDirection(direction)}
+                  />
+                ))}
+              </div>
+              <FacetOption
+                checked={sort.priorityFirst}
+                label="Priority first (P0 above lower priorities)"
+                onCheckedChange={() => togglePriorityFirst()}
+              />
+            </FacetSection>
+          ) : null}
           <FacetSection label="Repository">
             {visibleRepositories.map((option) => (
               <FacetOption
@@ -414,6 +453,7 @@ function PhaseFilterPopover({
             </FacetSection>
           ) : null}
           {visibleRepositories.length + visiblePhases.length + visibleProviders.length === 0 &&
+          !sortVisible &&
           !(assignmentAvailable && "assigned to me".includes(needle)) ? (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">
               No filter options match.
@@ -439,6 +479,44 @@ function FacetSection({
       </h3>
       <div className="space-y-0.5">{children}</div>
     </section>
+  );
+}
+
+/**
+ * T3-CUSTOM(expbkt3): single-select row for the sort direction. Checkboxes would
+ * imply the two directions can both be on.
+ */
+function SortDirectionOption({
+  checked,
+  label,
+  onSelect,
+}: {
+  readonly checked: boolean;
+  readonly label: string;
+  readonly onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      onClick={onSelect}
+      className={cn(
+        "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-xs hover:bg-accent",
+        checked ? "text-foreground" : "text-muted-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-3.5 shrink-0 items-center justify-center rounded-full border",
+          checked ? "border-primary" : "border-muted-foreground/40",
+        )}
+      >
+        {checked ? <span className="size-1.5 rounded-full bg-primary" /> : null}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+    </button>
   );
 }
 
@@ -560,16 +638,21 @@ function PhaseSnoozePopoverButton({
   testId,
   onOpenChange,
   onSnooze,
+  timestampFormat,
 }: {
   readonly open: boolean;
   readonly label: string;
   readonly testId?: string;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSnooze: (preset: SnoozePreset) => void;
+  readonly timestampFormat: TimestampFormat;
 }) {
   // Presets resolve at open time so "In 1 hour" is relative to the click,
   // not to when the row mounted.
-  const presets = useMemo(() => (open ? resolveSnoozePresets(new Date()) : []), [open]);
+  const presets = useMemo(
+    () => (open ? resolveSnoozePresets(new Date(), timestampFormat) : []),
+    [open, timestampFormat],
+  );
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       {/* Plain title instead of a Tooltip wrapper: composing a tooltip
@@ -694,6 +777,7 @@ interface PhaseThreadRowProps {
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const {
     row,
     section,
@@ -840,7 +924,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (!api) return;
     // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking items, capability-gated
     // so an old server shows none of them rather than failing on click.
-    const snoozePresets = resolveSnoozePresets(new Date());
+    const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
     const settlementItems = row.settlementSupported
       ? [
           section === "settled"
@@ -963,7 +1047,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     <li data-thread-item>
       <button
         type="button"
-        className={phaseSidebarRowClassName(active, selected, needsUserInput, row.thread.priority)}
+        className={phaseSidebarRowClassName(active, selected, needsUserInput)}
         aria-current={active ? "page" : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
@@ -1208,6 +1292,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   testId={`phase-thread-snooze-${row.thread.id}`}
                   onOpenChange={setSnoozeMenuOpen}
                   onSnooze={(preset) => onSnooze(row, preset)}
+                  timestampFormat={timestampFormat}
                 />
               ) : null}
               {row.settlementSupported ? (
@@ -1335,6 +1420,7 @@ export function PhaseGroupedSidebar() {
   });
   const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
@@ -1363,6 +1449,8 @@ export function PhaseGroupedSidebar() {
   );
   const clearFilters = usePhaseSidebarFilterStore((state) => state.clearAll);
   const reconcileFilters = usePhaseSidebarFilterStore((state) => state.reconcile);
+  // T3-CUSTOM(expbkt3): in-group ordering, set from the filter popover.
+  const rowSort = usePhaseSidebarFilterStore((state) => state.sort);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   // T3-CUSTOM(expbkt3): attach-to-external-session.
   const [attachSessionOpen, setAttachSessionOpen] = useState(false);
@@ -1564,8 +1652,8 @@ export function PhaseGroupedSidebar() {
   }, [snoozedRows]);
 
   const groups = useMemo(
-    () => buildPhaseSidebarGroups(activeRows, filters, sortOrder),
-    [activeRows, filters, sortOrder],
+    () => buildPhaseSidebarGroups(activeRows, filters, sortOrder, rowSort),
+    [activeRows, filters, rowSort, sortOrder],
   );
   // T3-CUSTOM(expbkt3): Separate idle lifecycle groups from live agent work.
   const runningDividerPhaseId = runningSessionDividerPhase(groups.map((group) => group.id));
@@ -2044,7 +2132,7 @@ export function PhaseGroupedSidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
+              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`,
               timeout: 5_000,
               actionProps: {
                 children: "Undo",

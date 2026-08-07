@@ -78,6 +78,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       traceBatchWindowMs: 200,
       traceMaxBytes: 10 * 1024 * 1024,
       traceMaxFiles: 10,
+      traceSqlSlowMs: 250,
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpExportIntervalMs: 10_000,

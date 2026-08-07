@@ -45,6 +45,26 @@ describe("phase sidebar filter store", () => {
     expect(state.toggleRepository).toBeTypeOf("function");
   });
 
+  // T3-CUSTOM(expbkt3): in-group ordering rides in the same store as the filters.
+  it("keeps sort preferences out of the filter reset", () => {
+    usePhaseSidebarFilterStore.setState({ repositoryKeys: ["repo-1"] });
+    usePhaseSidebarFilterStore.getState().setSortDirection("oldest_first");
+    usePhaseSidebarFilterStore.getState().togglePriorityFirst();
+    expect(usePhaseSidebarFilterStore.getState().sort).toEqual({
+      direction: "oldest_first",
+      priorityFirst: false,
+    });
+
+    usePhaseSidebarFilterStore.getState().clearAll();
+    expect(usePhaseSidebarFilterStore.getState().repositoryKeys).toEqual([]);
+    expect(usePhaseSidebarFilterStore.getState().sort).toEqual({
+      direction: "oldest_first",
+      priorityFirst: false,
+    });
+    usePhaseSidebarFilterStore.getState().setSortDirection("newest_first");
+    usePhaseSidebarFilterStore.getState().togglePriorityFirst();
+  });
+
   it("removes stale repository and provider values only when explicitly reconciled", () => {
     usePhaseSidebarFilterStore.setState({
       repositoryKeys: ["repo-1", "stale-repo"],

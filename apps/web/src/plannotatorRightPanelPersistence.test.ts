@@ -10,7 +10,7 @@ describe("Plannotator right-panel persistence", () => {
         isOpen: true,
         activeSurfaceId: "diff",
         surfaces: [
-          { id: "plan", kind: "plan" },
+          { id: "files", kind: "files" },
           {
             id: "plannotator:/plannotator/review_token/",
             kind: "plannotator",
@@ -26,7 +26,7 @@ describe("Plannotator right-panel persistence", () => {
         isOpen: true,
         activeSurfaceId: "diff",
         surfaces: [
-          { id: "plan", kind: "plan" },
+          { id: "files", kind: "files" },
           { id: "diff", kind: "diff" },
         ],
       },
@@ -41,7 +41,7 @@ describe("Plannotator right-panel persistence", () => {
           isOpen: true,
           activeSurfaceId: "plannotator:/plannotator/review_token/",
           surfaces: [
-            { id: "plan", kind: "plan" },
+            { id: "files", kind: "files" },
             {
               id: "plannotator:/plannotator/review_token/",
               kind: "plannotator",
@@ -56,7 +56,7 @@ describe("Plannotator right-panel persistence", () => {
         isOpen: true,
         activeSurfaceId: "diff",
         surfaces: [
-          { id: "plan", kind: "plan" },
+          { id: "files", kind: "files" },
           { id: "diff", kind: "diff" },
         ],
       },
@@ -89,7 +89,7 @@ describe("Plannotator right-panel persistence", () => {
             isOpen: true,
             activeSurfaceId: "plannotator:/plannotator/review_token/",
             surfaces: [
-              { id: "plan", kind: "plan" },
+              { id: "files", kind: "files" },
               {
                 id: "plannotator:/plannotator/review_token/",
                 kind: "plannotator",
@@ -103,8 +103,8 @@ describe("Plannotator right-panel persistence", () => {
       byThreadKey: {
         thread: {
           isOpen: true,
-          activeSurfaceId: "plan",
-          surfaces: [{ id: "plan", kind: "plan" }],
+          activeSurfaceId: "files",
+          surfaces: [{ id: "files", kind: "files" }],
         },
       },
     });

@@ -1,11 +1,13 @@
 // T3-CUSTOM(expbkt3): fresh-thread controls include an inherited-defaults reverse action.
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon, ListTodoIcon, RotateCcwIcon } from "lucide-react";
+import { EllipsisIcon, RotateCcwIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
+  // T3-CUSTOM(expbkt3): BEGIN — MenuItem renders the creation-defaults reset.
   MenuItem,
+  // T3-CUSTOM(expbkt3): END
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -14,17 +16,13 @@ import {
 } from "../ui/menu";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
-  activePlan: boolean;
   interactionMode: ProviderInteractionMode;
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   // T3-CUSTOM(expbkt3): BEGIN — fresh threads can return to inherited defaults.
   showCreationDefaultsReset: boolean;
   traitsMenuContent?: ReactNode;
   onToggleInteractionMode: () => void;
-  onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onResetCreationDefaults: () => void;
   // T3-CUSTOM(expbkt3): END
@@ -90,17 +88,6 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           </>
         ) : null}
         {/* T3-CUSTOM(expbkt3): END */}
-        {props.activePlan ? (
-          <>
-            <MenuDivider />
-            <MenuItem onClick={props.onTogglePlanSidebar}>
-              <ListTodoIcon className="size-4 shrink-0" />
-              {props.planSidebarOpen
-                ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
-                : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`}
-            </MenuItem>
-          </>
-        ) : null}
       </MenuPopup>
     </Menu>
   );

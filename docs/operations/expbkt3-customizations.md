@@ -103,6 +103,9 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Thread Linear tags        | `LinearIssueResolver.ts`, `LinearIssueTagDialog.tsx`, `linearIssue.ts`, migration 1004                          | orchestration/contracts projections, `ws.ts`, `PhaseGroupedSidebar.tsx`                         |
 | T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorLinearIssueControl.tsx`, `T3ConductorSettingsSection.tsx` | experimental settings schema, `PhaseGroupedSidebar.tsx`, and one `ChatHeader.tsx` mount         |
 | Durable thread bootstrap  | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                 | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams |
+| Notification alerts       | `apps/web/src/notifications/`, `NotificationsSettingsPanel.tsx`, `settings.notifications.tsx`                   | `__root.tsx` mount, `settingsSearch.ts` path/label, `SettingsSidebarNav.tsx` icon               |
+| Session title maintenance | `apps/server/src/thread-title/`, `ThreadTitleMaintenanceSettingsSection.tsx`                                    | `ProviderCommandReactor.ts` turn-start seam, experimental settings schema, Experiments panel    |
+| Execution resume resync   | none — two marked seams only                                                                                    | `ws.ts` shell/thread resume, `client-runtime/state/shellReducer.ts` overlay merge               |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                       | none                                                                                            |
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
@@ -179,6 +182,106 @@ hidden surfaces remain mounted; a full browser restart therefore requires an
 intentional **Review →** reopen instead of resurrecting ghost ownership from
 localStorage. Terminal `exited` and `error` responses stop the single recursive
 poll loop and remove only the stale panel surface.
+
+## Notification alerts
+
+Alert tones and native notifications live entirely in the browser, in
+`apps/web/src/notifications/`. Nothing about them reaches the server, the
+contracts package, or the relay.
+
+That is a deliberate boundary rather than an omission. The signal the pile-up
+threshold counts is `hasUnseenCompletion`, which compares a turn's `completedAt`
+against `threadLastVisitedAtById` — localStorage state the server cannot see. A
+server-side preference would therefore describe a number the server cannot
+compute. Preferences, uploaded tones, and the alert baseline are all per-browser
+for the same reason.
+
+Structure:
+
+| File                          | Responsibility                                                              |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `notificationEvents.logic.ts` | Every alert decision, pure and DOM-free. The only file worth unit-testing.  |
+| `notificationTones.ts`        | Built-in tones as oscillator specs — no binary assets enter the repository. |
+| `notificationSound.ts`        | Web Audio playback and the autoplay unlock.                                 |
+| `customToneStorage.ts`        | IndexedDB CRUD for uploaded tones.                                          |
+| `browserNotifications.ts`     | Notification API wrapper: permission, delivery, click-to-open.              |
+| `alertDedupe.ts`              | Cross-tab claim so three open tabs play one tone.                           |
+| `NotificationRunner.tsx`      | Wiring only. Mounted once from `__root.tsx`.                                |
+
+Four runtime constraints are load-bearing; a future edit that drops one will
+look harmless and behave badly:
+
+- **Alerts fire on transitions, never on state.** A client with no baseline
+  (first render, reconnect) adopts the snapshot silently. A thread appearing
+  already in a waiting state counts as pre-existing — reconnects repopulate the
+  projection thread by thread, so the alternative turns every reconnect into an
+  alarm.
+- **Audio needs a user gesture.** The AudioContext is created lazily and resumed
+  from the settings panel's Test button; the panel tells the user when audio is
+  still locked instead of failing silently.
+- **Native notifications only when the tab is hidden.** The visible tab already
+  shows the row highlight and badge.
+- **The pile-up alert is edge-triggered.** It fires on crossing the threshold and
+  re-arms only after the count drops back below it.
+
+Upstream-facing seams are three marked one-line additions — the `__root.tsx`
+mount, the `settingsSearch.ts` path plus label, and the `SettingsSidebarNav.tsx`
+icon — inside blocks the fork already owns. The whole feature is gated on
+`EXPERIMENTAL_CONTROL_CENTER_ENABLED`, so `bkmain` can carry the code with the
+runner unmounted.
+
+Escalation to Mattermost deliberately does **not** live here. It belongs to
+`t3-linear-bridge`, which already polls `/api/orchestration/shell` for every
+thread and owns Mattermost delivery, mention resolution, and idempotency keys.
+
+## Execution state is live-only — keep the resume seams
+
+Execution (`activity`, `turn.state`, the durable intent overlay) is published by
+`ThreadExecutionSupervisor` over PubSub. It is **never written to the event log**,
+so no replay can carry it. Only `withShellExecutions` / `withThreadExecution` —
+the full-snapshot paths — attach it.
+
+That is fine upstream, because `applyShellStreamEvent` replaces the thread
+wholesale on every projection upsert: a stale overlay survives at most until the
+next title or message update, then falls back to "Checking". The fork changed
+that (`fix: preserve optional shell execution`) so a routine upsert stops wiping
+the fresher overlay — which turned a one-second flicker into a permanent lie.
+A client that missed the terminal frame (server restart, network blip, resumed
+tab) rendered **Running forever**, in the sidebar and the chat, while the server
+had long recorded `activity: idle` and `turn_state: completed`.
+
+Two seams close it, and both must survive a merge together:
+
+- `ws.ts`, both resume paths (`subscribeShell` and `subscribeThread` with
+  `afterSequence`): after the event catch-up, emit the supervisor's current
+  execution frames. Reads in-memory supervisor state and reuses the live
+  visibility filter, so a resume converges exactly like a fresh snapshot.
+- `client-runtime/state/shellReducer.ts` `mergeUpsertedThread`: preserve the
+  overlay across upserts **except** when the upsert's own `latestTurn` reports
+  the overlay's turn as finished. The upsert carries the contradiction, so the
+  client can drop a provably stale overlay without waiting for a frame.
+
+If a future merge reverts either one, the symptom is a session that has clearly
+finished still showing Running. Check `projection_thread_executions` first: when
+the row says `idle`/`completed` and the UI disagrees, it is this.
+
+## Session title maintenance
+
+Upstream titles a thread once, on its first user turn, from the first prompt
+(`maybeGenerateThreadTitleForFirstTurn`). The fork adds a cadence: every N user
+prompts, `ProviderCommandReactor`'s turn-start path dispatches an ordinary
+`thread.meta.update` with `regenerateTitle: true`, so the refresh reuses the
+durable regeneration flow — request ids, supersede checks, and
+interrupted-run recovery — rather than renaming behind its back.
+
+`experimental.threadTitleMaintenance` holds `enabled` (default on) and
+`refreshEveryUserPrompts` (default 3, 0 disables). The decision itself is a pure
+function in `apps/server/src/thread-title/titleRefreshCadence.ts`, so the reactor
+seam stays one marked block.
+
+Known trade-off: a refresh replaces a title you set by hand, because nothing
+distinguishes a user-authored title from a generated one. The setting's own copy
+says so, and turning the cadence off is the escape hatch.
 
 ## Upstream merge workflow
 
