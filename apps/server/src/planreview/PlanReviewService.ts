@@ -17,6 +17,7 @@ import {
   type OrchestrationProposedPlanId,
   type UserId,
 } from "@t3tools/contracts";
+import { withoutPlannotatorPlanMarker } from "@t3tools/shared/plannotator";
 import {
   buildPlanReviewApprovalPrompt,
   buildPlanReviewFeedbackPrompt,
@@ -386,8 +387,57 @@ export const make = Effect.gen(function* () {
       } satisfies PlanReviewSnapshot;
     });
 
+  /**
+   * Lists a thread's plan documents, capturing the thread's reviewable plan
+   * first if nothing covers it yet.
+   *
+   * Startup reconciliation only walks the newest plan per active thread, so
+   * plans that predate the feature — or that it skipped — would otherwise have
+   * no document, and the UI would offer no way in. Capturing here means the
+   * entry point appears wherever a reviewable plan exists. `capturePlan`
+   * dedupes on the source plan id, so repeating this is a no-op.
+   */
   const listForThread: PlanReviewService["Service"]["listForThread"] = (threadId) =>
-    repository.listDocumentsForThread(threadId).pipe(asInvariant("listForThread"));
+    Effect.gen(function* () {
+      const existing = yield* repository
+        .listDocumentsForThread(threadId)
+        .pipe(asInvariant("listForThread"));
+      if (
+        existing.some(
+          (document) => document.status === "open" || document.status === "changes-requested",
+        )
+      ) {
+        return existing;
+      }
+
+      const threadOption = yield* query
+        .getThreadDetailById(threadId)
+        .pipe(asInvariant("listForThread.getThread"));
+      if (Option.isNone(threadOption)) return existing;
+      const thread = threadOption.value;
+
+      const reviewable = [...thread.proposedPlans]
+        .filter((plan) => plan.implementedAt === null)
+        .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+        .at(-1);
+      if (reviewable === undefined) return existing;
+
+      const planMarkdown = withoutPlannotatorPlanMarker(reviewable.planMarkdown).trim();
+      if (planMarkdown.length === 0) return existing;
+
+      yield* capturePlan({
+        threadId,
+        projectId: thread.projectId,
+        planId: reviewable.id,
+        planMarkdown,
+        title: derivePlanTitle(planMarkdown),
+        authorUserId: null,
+      });
+
+      return yield* repository
+        .listDocumentsForThread(threadId)
+        .pipe(asInvariant("listForThread.reload"));
+    });
 
   const saveDraft: PlanReviewService["Service"]["saveDraft"] = (input) =>
     Effect.gen(function* () {
