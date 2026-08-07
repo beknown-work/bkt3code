@@ -1806,14 +1806,12 @@ const makeWsRpcLayer = (
                       Stream.concat(
                         catchUpStream,
                         Stream.fromEffect(
-                          executionSupervisor
-                            .getSnapshot(input.threadId)
-                            .pipe(
-                              Effect.map((execution) => ({
-                                kind: "execution" as const,
-                                execution,
-                              })),
-                            ),
+                          executionSupervisor.getSnapshot(input.threadId).pipe(
+                            Effect.map((execution) => ({
+                              kind: "execution" as const,
+                              execution,
+                            })),
+                          ),
                         ),
                       ),
                       // T3-CUSTOM(expbkt3): END
