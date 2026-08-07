@@ -179,6 +179,8 @@ import {
   AlarmClockIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  // T3-CUSTOM(expbkt3): icon for the native plan review pill.
+  ClipboardListIcon,
   GitBranchIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -6838,6 +6840,28 @@ function ChatViewContent(props: ChatViewProps) {
                   </button>
                 </div>
               )}
+              {/* T3-CUSTOM(expbkt3): BEGIN — floating entry point for a plan awaiting review. */}
+              {planReviewDocumentId !== null &&
+              !showScrollToBottom &&
+              activeRightPanelSurface?.kind !== "planReview" ? (
+                <div
+                  className="pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5"
+                  style={{ bottom: composerOverlayHeight + 4 }}
+                >
+                  <button
+                    type="button"
+                    aria-label="Open the plan in preview"
+                    title="Open the plan in preview"
+                    data-plan-review-pill
+                    onClick={() => openPlanReviewSurface(planReviewDocumentId)}
+                    className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:cursor-pointer hover:border-border hover:text-foreground"
+                  >
+                    <ClipboardListIcon className="size-3.5" />
+                    Open the plan in preview
+                  </button>
+                </div>
+              ) : null}
+              {/* T3-CUSTOM(expbkt3): END */}
             </div>
 
             {/* Input bar — centered hero while a draft has no messages, docked at the bottom otherwise */}
