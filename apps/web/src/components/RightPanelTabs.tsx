@@ -213,8 +213,6 @@ function surfaceTitle(
         terminalLabelsById.get(surface.activeTerminalId) ??
         getTerminalLabel(surface.activeTerminalId)
       );
-    case "plan":
-      return "Plan";
     // T3-CUSTOM(expbkt3): BEGIN — label the experimental review surface.
     case "plannotator":
       return "Plannotator";
@@ -280,8 +278,6 @@ function SurfaceIcon({
       );
     case "terminal":
       return <TerminalSquare className="size-3 shrink-0" />;
-    case "plan":
-      return <ClipboardList className="size-3 shrink-0" />;
     // T3-CUSTOM(expbkt3): BEGIN — icon for the experimental review surface.
     case "plannotator":
       return <ClipboardList className="size-3.5 shrink-0 text-violet-500" />;

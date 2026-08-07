@@ -344,6 +344,7 @@ describe("environment entity projections", () => {
         data: Option.some(detail),
         status: "live",
         error: Option.none(),
+        page: Option.none(),
       }),
     );
 
@@ -372,6 +373,7 @@ describe("environment entity projections", () => {
         }),
         status: "live",
         error: Option.none(),
+        page: Option.none(),
       }),
     );
 

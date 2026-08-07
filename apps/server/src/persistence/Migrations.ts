@@ -77,6 +77,10 @@ import Migration1006 from "./Migrations/1006_AuthSessionClientVersion.ts";
 // T3-CUSTOM(expbkt3): event-type index plus one-time maintenance markers so the
 // ownership backfill stops re-scanning the event log on every boot.
 import Migration1007 from "./Migrations/1007_OwnershipBackfillFastPath.ts";
+// T3-CUSTOM(expbkt3): upstream ships this as migration 37, which the legacy fork
+// block already occupies (ThreadExecutions). It registers at the next free ID in
+// the 1000+ lane instead; the file keeps its upstream name.
+import Migration1008 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -163,6 +167,7 @@ const migrationEntries = [
   [1005, "ProjectionThreadsPinned", Migration1005],
   [1006, "AuthSessionClientVersion", Migration1006],
   [1007, "OwnershipBackfillFastPath", Migration1007],
+  [1008, "ProjectionTurnsKeysetIndex", Migration1008],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

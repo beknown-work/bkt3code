@@ -48,9 +48,19 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
  */
 export const SETTINGS_SEARCH_ITEMS = [
   {
-    id: "theme",
-    title: "Theme",
+    id: "color-scheme",
+    title: "Color scheme",
     to: "/settings/appearance",
+    // The scheme tiles sit at the top of the Appearance section.
+    targetId: "appearance",
+  },
+  {
+    id: "theme",
+    title: "Themes",
+    to: "/settings/appearance",
+    // Theme cards live directly under the scheme tiles; the section is the
+    // stable scroll destination for both.
+    targetId: "appearance",
   },
   {
     // Prefixed because the slider control already owns the `glass-opacity` id.
@@ -118,11 +128,6 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-update-checks",
     title: "Provider update checks",
-    to: "/settings/general",
-  },
-  {
-    id: "auto-open-task-panel",
-    title: "Auto-open task panel",
     to: "/settings/general",
   },
   {
@@ -196,6 +201,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Auto-settle inactive threads",
     to: "/settings/beta",
     targetId: "sidebar-v2",
+  },
+  {
+    id: "restore-plan-mode",
+    title: "Restore plan mode (legacy)",
+    to: "/settings/beta",
   },
   {
     id: "archive",

@@ -87,6 +87,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatRelativeTimeLabel } from "../timestampFormat";
+import type { TimestampFormat } from "@t3tools/contracts";
 import type { Project } from "../types";
 import { useUiStateStore } from "../uiStateStore";
 import { ProjectFavicon } from "./ProjectFavicon";
@@ -637,16 +638,21 @@ function PhaseSnoozePopoverButton({
   testId,
   onOpenChange,
   onSnooze,
+  timestampFormat,
 }: {
   readonly open: boolean;
   readonly label: string;
   readonly testId?: string;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSnooze: (preset: SnoozePreset) => void;
+  readonly timestampFormat: TimestampFormat;
 }) {
   // Presets resolve at open time so "In 1 hour" is relative to the click,
   // not to when the row mounted.
-  const presets = useMemo(() => (open ? resolveSnoozePresets(new Date()) : []), [open]);
+  const presets = useMemo(
+    () => (open ? resolveSnoozePresets(new Date(), timestampFormat) : []),
+    [open, timestampFormat],
+  );
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       {/* Plain title instead of a Tooltip wrapper: composing a tooltip
@@ -771,6 +777,7 @@ interface PhaseThreadRowProps {
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const {
     row,
     section,
@@ -917,7 +924,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (!api) return;
     // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking items, capability-gated
     // so an old server shows none of them rather than failing on click.
-    const snoozePresets = resolveSnoozePresets(new Date());
+    const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
     const settlementItems = row.settlementSupported
       ? [
           section === "settled"
@@ -1285,6 +1292,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   testId={`phase-thread-snooze-${row.thread.id}`}
                   onOpenChange={setSnoozeMenuOpen}
                   onSnooze={(preset) => onSnooze(row, preset)}
+                  timestampFormat={timestampFormat}
                 />
               ) : null}
               {row.settlementSupported ? (
@@ -1412,6 +1420,7 @@ export function PhaseGroupedSidebar() {
   });
   const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
@@ -2123,7 +2132,7 @@ export function PhaseGroupedSidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
+              title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`,
               timeout: 5_000,
               actionProps: {
                 children: "Undo",
