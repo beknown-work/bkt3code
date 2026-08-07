@@ -6960,14 +6960,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             threadId: defaultThreadId,
             afterSequence: 0,
             requestCompletionMarker: true,
-          }).pipe(Stream.take(2), Stream.runCollect),
+          }).pipe(Stream.take(3), Stream.runCollect),
         ),
       );
 
-      const [first, second] = Array.from(items);
+      const [first, second, third] = Array.from(items);
       assert.equal(first?.kind, "event");
       assert.equal(first?.kind === "event" ? first.event.sequence : null, 3);
-      assert.equal(second?.kind, "synchronized");
+      // T3-CUSTOM(expbkt3): execution is a live-only frame that no replay can
+      // carry, so a resume re-sends it before declaring itself synchronized.
+      // Without this the client keeps whatever execution it held when it left —
+      // a finished turn stays "Running" forever.
+      assert.equal(second?.kind, "execution");
+      assert.equal(third?.kind, "synchronized");
       // The replay is bounded to the head captured before the read, not
       // Number.MAX_SAFE_INTEGER.
       assert.equal(replayLimit, 50);
