@@ -36,6 +36,10 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { useUiStateStore } from "../uiStateStore";
+// T3-CUSTOM(expbkt3): BEGIN — experimental notification alerts.
+import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../experimentalFeatures";
+import { NotificationRunner } from "../notifications/NotificationRunner";
+// T3-CUSTOM(expbkt3): END
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
@@ -138,6 +142,11 @@ function RootRouteView() {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+        {/* T3-CUSTOM(expbkt3): BEGIN — alert tones and native notifications. */}
+        {primaryEnvironmentAuthenticated && EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
+          <NotificationRunner />
+        ) : null}
+        {/* T3-CUSTOM(expbkt3): END */}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the

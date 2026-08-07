@@ -7,6 +7,7 @@ export type SettingsPath =
   | "/settings/users"
   | "/settings/connections"
   // T3-CUSTOM(expbkt3): fork-only settings sections.
+  | "/settings/notifications"
   | "/settings/projects"
   | "/settings/project-access"
   | "/settings/experiments"
@@ -33,6 +34,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/users": "Users",
   "/settings/connections": "Connections",
   // T3-CUSTOM(expbkt3): fork-only settings sections.
+  "/settings/notifications": "Notifications",
   "/settings/projects": "Projects",
   "/settings/project-access": "Project Access",
   "/settings/experiments": "Experiments",

@@ -19,6 +19,7 @@ import { Route as SettingsSourceControlRouteImport } from './routes/settings.sou
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsProjectAccessRouteImport } from './routes/settings.project-access'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsExperimentsRouteImport } from './routes/settings.experiments'
@@ -78,6 +79,11 @@ const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
 const SettingsProjectAccessRoute = SettingsProjectAccessRouteImport.update({
   id: '/project-access',
   path: '/project-access',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/settings/experiments': typeof SettingsExperimentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/project-access': typeof SettingsProjectAccessRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
@@ -172,6 +179,7 @@ export interface FileRoutesByTo {
   '/settings/experiments': typeof SettingsExperimentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/project-access': typeof SettingsProjectAccessRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
@@ -196,6 +204,7 @@ export interface FileRoutesById {
   '/settings/experiments': typeof SettingsExperimentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/project-access': typeof SettingsProjectAccessRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
@@ -221,6 +230,7 @@ export interface FileRouteTypes {
     | '/settings/experiments'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/notifications'
     | '/settings/project-access'
     | '/settings/projects'
     | '/settings/providers'
@@ -242,6 +252,7 @@ export interface FileRouteTypes {
     | '/settings/experiments'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/notifications'
     | '/settings/project-access'
     | '/settings/projects'
     | '/settings/providers'
@@ -265,6 +276,7 @@ export interface FileRouteTypes {
     | '/settings/experiments'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/notifications'
     | '/settings/project-access'
     | '/settings/projects'
     | '/settings/providers'
@@ -353,6 +365,13 @@ declare module '@tanstack/react-router' {
       path: '/project-access'
       fullPath: '/settings/project-access'
       preLoaderRoute: typeof SettingsProjectAccessRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/keybindings': {
@@ -458,6 +477,7 @@ interface SettingsRouteChildren {
   SettingsExperimentsRoute: typeof SettingsExperimentsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
   SettingsProjectAccessRoute: typeof SettingsProjectAccessRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
@@ -474,6 +494,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsExperimentsRoute: SettingsExperimentsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsProjectAccessRoute: SettingsProjectAccessRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,

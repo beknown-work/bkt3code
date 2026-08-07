@@ -165,7 +165,9 @@ function ProviderRateLimitProgressRow({
       {weeklyCountdown === null ? null : (
         <span
           className={cn(
-            "w-6 shrink-0 text-right text-[9px] font-medium leading-none tabular-nums",
+            // Sized to its own text rather than a fixed box: a right-aligned
+            // fixed width leaves a visible gap after short labels like `6d`.
+            "shrink-0 text-[9px] font-medium leading-none tabular-nums",
             onBackdrop ? "text-white/45" : "text-muted-foreground/70",
           )}
           data-weekly-reset="true"

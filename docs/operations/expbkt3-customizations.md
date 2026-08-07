@@ -103,6 +103,7 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Thread Linear tags        | `LinearIssueResolver.ts`, `LinearIssueTagDialog.tsx`, `linearIssue.ts`, migration 1004                          | orchestration/contracts projections, `ws.ts`, `PhaseGroupedSidebar.tsx`                         |
 | T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorLinearIssueControl.tsx`, `T3ConductorSettingsSection.tsx` | experimental settings schema, `PhaseGroupedSidebar.tsx`, and one `ChatHeader.tsx` mount         |
 | Durable thread bootstrap  | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                 | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams |
+| Notification alerts       | `apps/web/src/notifications/`, `NotificationsSettingsPanel.tsx`, `settings.notifications.tsx`                   | `__root.tsx` mount, `settingsSearch.ts` path/label, `SettingsSidebarNav.tsx` icon               |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                       | none                                                                                            |
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
@@ -179,6 +180,57 @@ hidden surfaces remain mounted; a full browser restart therefore requires an
 intentional **Review →** reopen instead of resurrecting ghost ownership from
 localStorage. Terminal `exited` and `error` responses stop the single recursive
 poll loop and remove only the stale panel surface.
+
+## Notification alerts
+
+Alert tones and native notifications live entirely in the browser, in
+`apps/web/src/notifications/`. Nothing about them reaches the server, the
+contracts package, or the relay.
+
+That is a deliberate boundary rather than an omission. The signal the pile-up
+threshold counts is `hasUnseenCompletion`, which compares a turn's `completedAt`
+against `threadLastVisitedAtById` — localStorage state the server cannot see. A
+server-side preference would therefore describe a number the server cannot
+compute. Preferences, uploaded tones, and the alert baseline are all per-browser
+for the same reason.
+
+Structure:
+
+| File                          | Responsibility                                                              |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `notificationEvents.logic.ts` | Every alert decision, pure and DOM-free. The only file worth unit-testing.  |
+| `notificationTones.ts`        | Built-in tones as oscillator specs — no binary assets enter the repository. |
+| `notificationSound.ts`        | Web Audio playback and the autoplay unlock.                                 |
+| `customToneStorage.ts`        | IndexedDB CRUD for uploaded tones.                                          |
+| `browserNotifications.ts`     | Notification API wrapper: permission, delivery, click-to-open.              |
+| `alertDedupe.ts`              | Cross-tab claim so three open tabs play one tone.                           |
+| `NotificationRunner.tsx`      | Wiring only. Mounted once from `__root.tsx`.                                |
+
+Four runtime constraints are load-bearing; a future edit that drops one will
+look harmless and behave badly:
+
+- **Alerts fire on transitions, never on state.** A client with no baseline
+  (first render, reconnect) adopts the snapshot silently. A thread appearing
+  already in a waiting state counts as pre-existing — reconnects repopulate the
+  projection thread by thread, so the alternative turns every reconnect into an
+  alarm.
+- **Audio needs a user gesture.** The AudioContext is created lazily and resumed
+  from the settings panel's Test button; the panel tells the user when audio is
+  still locked instead of failing silently.
+- **Native notifications only when the tab is hidden.** The visible tab already
+  shows the row highlight and badge.
+- **The pile-up alert is edge-triggered.** It fires on crossing the threshold and
+  re-arms only after the count drops back below it.
+
+Upstream-facing seams are three marked one-line additions — the `__root.tsx`
+mount, the `settingsSearch.ts` path plus label, and the `SettingsSidebarNav.tsx`
+icon — inside blocks the fork already owns. The whole feature is gated on
+`EXPERIMENTAL_CONTROL_CENTER_ENABLED`, so `bkmain` can carry the code with the
+runner unmounted.
+
+Escalation to Mattermost deliberately does **not** live here. It belongs to
+`t3-linear-bridge`, which already polls `/api/orchestration/shell` for every
+thread and owns Mattermost delivery, mention resolution, and idempotency keys.
 
 ## Upstream merge workflow
 
