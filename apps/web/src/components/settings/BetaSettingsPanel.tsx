@@ -61,8 +61,9 @@ export function BetaSettingsPanel() {
     (settings) => settings.sidebarAutoSettleAfterDays,
   );
   const planModeEnabled = useClientSettings((settings) => settings.planModeEnabled);
-  // T3-CUSTOM(expbkt3): native plan review.
+  // T3-CUSTOM(expbkt3): BEGIN — native plan review.
   const nativePlanReviewEnabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
+  // T3-CUSTOM(expbkt3): END
   const updateSettings = useUpdateClientSettings();
 
   return (
