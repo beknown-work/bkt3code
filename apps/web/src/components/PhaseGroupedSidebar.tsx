@@ -142,6 +142,7 @@ import {
   // T3-CUSTOM(expbkt3): ownership and co-participant facets.
   phaseSidebarThreadParticipantIds,
   compactPhaseSidebarTimeLabel,
+  type PhaseSidebarAttentionKind,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
   type PhaseSidebarSection,
@@ -849,6 +850,7 @@ interface PhaseThreadRowProps {
   readonly treeDepth?: number;
   readonly treeDescendantCount?: number;
   readonly treeHasBusyDescendant?: boolean;
+  readonly treeDescendantAttention?: PhaseSidebarAttentionKind | null;
   readonly treeExpanded?: boolean;
   readonly treeParentKey?: string | null;
   readonly treeParentTitle?: string | null;
@@ -865,6 +867,7 @@ type PhaseThreadRowTreeProps = Pick<
   | "treeDepth"
   | "treeDescendantCount"
   | "treeHasBusyDescendant"
+  | "treeDescendantAttention"
   | "treeExpanded"
   | "treeParentKey"
   | "treeParentTitle"
@@ -910,6 +913,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     treeDepth,
     treeDescendantCount,
     treeHasBusyDescendant,
+    treeDescendantAttention,
     treeExpanded,
     treeParentKey,
     treeParentTitle,
@@ -955,6 +959,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const hasChildren = (treeDescendantCount ?? 0) > 0;
   const hasCollapsedBusyDescendant =
     hasChildren && treeHasBusyDescendant === true && treeExpanded !== true;
+  // Attention outranks work: a parent hoisted into Needs Input has to say which
+  // of its descendants is stuck, or the group placement reads as a glitch.
+  const collapsedDescendantAttention =
+    hasChildren && treeExpanded !== true ? (treeDescendantAttention ?? null) : null;
   // T3-CUSTOM(expbkt3): END
   const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
@@ -1256,7 +1264,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               aria-label={`${treeDescendantCount} child sessions`}
               className={cn(
                 "text-[10px] font-semibold tabular-nums leading-none",
-                hasCollapsedBusyDescendant ? "text-sky-600 dark:text-sky-300" : "text-current",
+                collapsedDescendantAttention !== null
+                  ? "text-red-600 dark:text-red-300"
+                  : hasCollapsedBusyDescendant
+                    ? "text-sky-600 dark:text-sky-300"
+                    : "text-current",
               )}
             >
               {treeDescendantCount}
@@ -1412,10 +1424,33 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               {workBadge.label.toUpperCase()}
             </span>
           ) : null}
+          {/* T3-CUSTOM(expbkt3): A descendant is waiting on a human. Outlined
+              with a ↳ glyph, same grammar as the derived work badge: solid is
+              this row, outlined is somewhere beneath it. */}
+          {collapsedDescendantAttention !== null && attentionKind === null ? (
+            <span
+              role="status"
+              aria-label={`A child session needs ${collapsedDescendantAttention}`}
+              data-testid={`phase-thread-subtree-attention-${row.thread.id}`}
+              className={cn(
+                "rounded-sm border px-1 py-0.5 text-[8px] font-black tracking-wide",
+                collapsedDescendantAttention === "input"
+                  ? "border-red-500/50 text-red-600 dark:border-red-400/50 dark:text-red-300"
+                  : collapsedDescendantAttention === "approval"
+                    ? "border-amber-500/50 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
+                    : "border-red-500/40 text-red-700 dark:border-red-400/40 dark:text-red-300",
+              )}
+            >
+              ↳ {collapsedDescendantAttention.toUpperCase()}
+            </span>
+          ) : null}
           {/* T3-CUSTOM(expbkt3): Work happening BELOW this row, not in it.
               Outlined rather than filled, with a ↳ glyph: the same grammar
               distinguishes "mine" from "my subtree's" everywhere on the row. */}
-          {hasCollapsedBusyDescendant && workBadge === null && attentionKind === null ? (
+          {hasCollapsedBusyDescendant &&
+          workBadge === null &&
+          attentionKind === null &&
+          collapsedDescendantAttention === null ? (
             <span
               role="status"
               aria-label="A child session is working"
@@ -2691,6 +2726,7 @@ export function PhaseGroupedSidebar() {
           treeDepth: node.depth,
           treeDescendantCount: node.descendantCount,
           treeHasBusyDescendant: node.hasBusyDescendant,
+          treeDescendantAttention: node.descendantAttention,
           treeExpanded: expanded,
           treeParentKey: node.orphanedFrom?.key ?? null,
           treeParentTitle: node.orphanedFrom?.title ?? null,
