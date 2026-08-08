@@ -105,6 +105,7 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Durable thread bootstrap  | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                                                                                                                                                    | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams                                                         |
 | Notification alerts       | `apps/web/src/notifications/`, `NotificationsSettingsPanel.tsx`, `settings.notifications.tsx`                                                                                                                                                      | `__root.tsx` mount, `settingsSearch.ts` path/label, `SettingsSidebarNav.tsx` icon                                                                       |
 | Session title maintenance | `apps/server/src/thread-title/`, `ThreadTitleMaintenanceSettingsSection.tsx`                                                                                                                                                                       | `ProviderCommandReactor.ts` turn-start seam, experimental settings schema, Experiments panel                                                            |
+| Sidebar people filters    | `PhaseGroupedSidebar.logic.ts` facets, `phaseSidebarFilterStore.ts`                                                                                                                                                                                | `PhaseGroupedSidebar.tsx` popover, chips, row projection                                                                                                |
 | Execution resume resync   | none — two marked seams only                                                                                                                                                                                                                       | `ws.ts` shell/thread resume, `client-runtime/state/shellReducer.ts` overlay merge                                                                       |
 | Native plan review        | `apps/server/src/planreview/`, `persistence/PlanReviewDocuments.ts`, migration 1009, `packages/shared/src/planReview.ts`, `packages/contracts/src/planReview.ts`, `apps/web/src/components/planreview/`, `apps/web/src/fork/planReviewSurface.tsx` | fork RPC group + scopes + handlers, one `ws.ts` dep, right-panel store/tabs, `ChatView.tsx` branch, `ProposedPlanCard.tsx` button, Beta settings toggle |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                                                                                                                                                          | none                                                                                                                                                    |
@@ -234,6 +235,26 @@ runner unmounted.
 Escalation to Mattermost deliberately does **not** live here. It belongs to
 `t3-linear-bridge`, which already polls `/api/orchestration/shell` for every
 thread and owns Mattermost delivery, mention resolution, and idempotency keys.
+
+## Sidebar people filters
+
+Two facets in the experimental sidebar's filter popover, both fork-owned logic
+with the UI in `PhaseGroupedSidebar.tsx`:
+
+- **Started by me** (`ownedByMe`) matches on `ownerUserId`. It replaced an
+  "Assigned to me" facet that tested owner-or-tagged — which is exactly the
+  server's visibility rule in `accessRules.ts`, so every thread the operator
+  could see already satisfied it and the checkbox selected everything. If a
+  future change makes that filter "assigned" again, it is a no-op again.
+- **People on the session** (`participantUserIds`) matches threads that include
+  _all_ selected people, not any: selecting two teammates asks for their shared
+  sessions. The directory comes from `useOrgMembers`, and `reconcile` drops ids
+  that leave it — but only when a directory set is supplied, so an empty list
+  during load cannot wipe a live selection.
+
+Both persist in the existing `t3code:phase-sidebar-filters:v1` blob; the
+sanitizer defaults them off for blobs written before they existed, so the
+storage version stays v1.
 
 ## Execution state is live-only — keep the resume seams
 
