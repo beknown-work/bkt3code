@@ -790,27 +790,42 @@ interface PhaseThreadRowProps {
   // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
   readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
   readonly linearIssueStatus: LinearIssueStatusSummary | null;
-  // T3-CUSTOM(expbkt3): BEGIN — session tree. Absent on shelf rows, which
-  // render as a flat history list.
-  readonly tree?: PhaseThreadRowTree;
+  // T3-CUSTOM(expbkt3): BEGIN — session tree. Deliberately flat primitives plus
+  // one stable actions object rather than a per-row object: this row is memo'd
+  // and the sidebar re-renders on every shell event, so a fresh object per
+  // render would defeat the memo for the entire active list.
+  // `treeActions` absent = shelf row, which renders as flat history.
+  readonly treeActions?: PhaseThreadRowTreeActions;
+  readonly treeDepth?: number;
+  readonly treeDescendantCount?: number;
+  readonly treeHasBusyDescendant?: boolean;
+  readonly treeExpanded?: boolean;
+  readonly treeParentKey?: string | null;
+  readonly treeParentTitle?: string | null;
   // T3-CUSTOM(expbkt3): END
 }
 
 /**
- * T3-CUSTOM(expbkt3): Everything a row needs to render its place in a session
- * tree. Kept as one optional prop so leaf rows and shelf rows are untouched.
+ * T3-CUSTOM(expbkt3): Tree actions, keyed by scoped thread key so one object
+ * instance serves every row.
  */
-interface PhaseThreadRowTree {
-  readonly depth: number;
-  readonly descendantCount: number;
-  readonly hasBusyDescendant: boolean;
-  readonly expanded: boolean;
-  readonly orphanedFrom: { readonly key: string; readonly title: string } | null;
-  readonly onToggle: () => void;
-  readonly onSetSubtreeExpanded: (expanded: boolean) => void;
+type PhaseThreadRowTreeProps = Pick<
+  PhaseThreadRowProps,
+  | "treeActions"
+  | "treeDepth"
+  | "treeDescendantCount"
+  | "treeHasBusyDescendant"
+  | "treeExpanded"
+  | "treeParentKey"
+  | "treeParentTitle"
+>;
+
+interface PhaseThreadRowTreeActions {
+  readonly onToggle: (threadKey: string) => void;
+  readonly onSetSubtreeExpanded: (threadKey: string, expanded: boolean) => void;
   readonly onMoveUnder: (row: PhaseSidebarRow) => void;
   readonly onDetach: (row: PhaseSidebarRow) => void;
-  readonly onJumpToParent: (key: string) => void;
+  readonly onJumpToParent: (parentKey: string) => void;
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
@@ -841,7 +856,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onSetPriority,
     onSetLinearIssueUrl,
     linearIssueStatus,
-    tree,
+    treeActions,
+    treeDepth,
+    treeDescendantCount,
+    treeHasBusyDescendant,
+    treeExpanded,
+    treeParentKey,
+    treeParentTitle,
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -881,9 +902,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   // T3-CUSTOM(expbkt3): BEGIN — session tree derivations. Subtree state only
   // surfaces on the parent while the subtree is closed; once open, the child
   // rows speak for themselves.
-  const hasChildren = (tree?.descendantCount ?? 0) > 0;
+  const hasChildren = (treeDescendantCount ?? 0) > 0;
   const hasCollapsedBusyDescendant =
-    hasChildren && tree?.hasBusyDescendant === true && !tree.expanded;
+    hasChildren && treeHasBusyDescendant === true && treeExpanded !== true;
   // T3-CUSTOM(expbkt3): END
   const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
@@ -1024,7 +1045,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       : [];
     // Session lineage. "Detach" is always offered when a parent exists —
     // nesting must never be a one-way door.
-    const lineageItems = tree
+    const lineageItems = treeActions
       ? [
           { id: "move-under", label: "Move under session…" },
           ...(row.thread.parentThreadId != null
@@ -1033,8 +1054,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           ...(hasChildren
             ? [
                 {
-                  id: tree.expanded ? "collapse-subtree" : "expand-subtree",
-                  label: tree.expanded ? "Collapse all children" : "Expand all children",
+                  id: treeExpanded ? "collapse-subtree" : "expand-subtree",
+                  label: treeExpanded ? "Collapse all children" : "Expand all children",
                 },
               ]
             : []),
@@ -1107,10 +1128,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "archive") onArchive(row);
     if (action === "delete") onDelete(row);
     // T3-CUSTOM(expbkt3): session lineage.
-    if (action === "move-under") tree?.onMoveUnder(row);
-    if (action === "detach-parent") tree?.onDetach(row);
-    if (action === "expand-subtree") tree?.onSetSubtreeExpanded(true);
-    if (action === "collapse-subtree") tree?.onSetSubtreeExpanded(false);
+    if (action === "move-under") treeActions?.onMoveUnder(row);
+    if (action === "detach-parent") treeActions?.onDetach(row);
+    if (action === "expand-subtree") treeActions?.onSetSubtreeExpanded(threadKey, true);
+    if (action === "collapse-subtree") treeActions?.onSetSubtreeExpanded(threadKey, false);
   };
 
   return (
@@ -1118,10 +1139,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       data-thread-item
       // T3-CUSTOM(expbkt3): nested rows indent, capped so a deep chain does not
       // eat the title. Depth 0 emits no style, keeping root rows unchanged.
-      {...(tree && tree.depth > 0
+      {...(treeDepth !== undefined && treeDepth > 0
         ? {
-            "data-thread-depth": tree.depth,
-            style: { paddingLeft: phaseSidebarTreeIndent(tree.depth) },
+            "data-thread-depth": treeDepth,
+            style: { paddingLeft: phaseSidebarTreeIndent(treeDepth) },
           }
         : {})}
     >
@@ -1129,7 +1150,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         type="button"
         className={phaseSidebarRowClassName(active, selected, needsUserInput)}
         aria-current={active ? "page" : undefined}
-        aria-expanded={hasChildren ? tree?.expanded : undefined}
+        aria-expanded={hasChildren ? treeExpanded : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
@@ -1160,25 +1181,25 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           <span
             role="button"
             tabIndex={-1}
-            aria-label={tree?.expanded ? "Collapse child sessions" : "Expand child sessions"}
+            aria-label={treeExpanded ? "Collapse child sessions" : "Expand child sessions"}
             data-testid={`phase-thread-disclosure-${row.thread.id}`}
             className="-my-1 -ml-1 flex shrink-0 cursor-pointer items-center gap-1 self-center rounded py-1 pl-1 text-muted-foreground/70 transition-colors hover:text-foreground"
             onClick={(event) => {
               // The row itself navigates; opening a subtree must not.
               event.stopPropagation();
               event.preventDefault();
-              tree?.onToggle();
+              treeActions?.onToggle(threadKey);
             }}
           >
             <ChevronRightIcon
               aria-hidden
               className={cn(
                 "size-3.5 shrink-0 transition-transform duration-150",
-                tree?.expanded && "rotate-90",
+                treeExpanded && "rotate-90",
               )}
             />
             <span
-              aria-label={`${tree?.descendantCount} child sessions`}
+              aria-label={`${treeDescendantCount} child sessions`}
               className={cn(
                 "min-w-3.5 rounded-full px-1 py-px text-center text-[9px] font-semibold tabular-nums",
                 hasCollapsedBusyDescendant
@@ -1186,7 +1207,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   : "bg-muted-foreground/12 text-muted-foreground",
               )}
             >
-              {tree?.descendantCount}
+              {treeDescendantCount}
             </span>
           </span>
         ) : null}
@@ -1228,7 +1249,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             {/* T3-CUSTOM(expbkt3): This row has a parent that is not rendering
                 here (settled, snoozed, filtered out). Naming it keeps the
                 lineage visible instead of silently flattening the row. */}
-            {tree?.orphanedFrom ? (
+            {treeParentKey && treeParentTitle ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1236,20 +1257,20 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                       role="link"
                       tabIndex={0}
                       data-testid={`phase-thread-parent-crumb-${row.thread.id}`}
-                      aria-label={`Go to parent session ${tree.orphanedFrom.title}`}
+                      aria-label={`Go to parent session ${treeParentTitle}`}
                       className="inline-flex max-w-full shrink-0 cursor-pointer items-center gap-0.5 whitespace-nowrap text-muted-foreground/70 hover:text-foreground hover:underline"
                       onClick={(event) => {
                         event.stopPropagation();
-                        if (tree.orphanedFrom) tree.onJumpToParent(tree.orphanedFrom.key);
+                        treeActions?.onJumpToParent(treeParentKey);
                       }}
                       onDoubleClick={(event) => event.stopPropagation()}
                     />
                   }
                 >
                   <CornerDownRightIcon aria-hidden className="size-2.5 shrink-0" />
-                  <span className="min-w-0 truncate">{tree.orphanedFrom.title}</span>
+                  <span className="min-w-0 truncate">{treeParentTitle}</span>
                 </TooltipTrigger>
-                <TooltipPopup side="top">Started by {tree.orphanedFrom.title}</TooltipPopup>
+                <TooltipPopup side="top">Started by {treeParentTitle}</TooltipPopup>
               </Tooltip>
             ) : null}
             <Tooltip>
@@ -2295,6 +2316,15 @@ export function PhaseGroupedSidebar() {
     [setThreadParent],
   );
   const openMoveUnderDialog = useCallback((row: PhaseSidebarRow) => setMoveUnderRow(row), []);
+  const subtreeKeysByThreadKey = useMemo(() => {
+    const map = new Map<string, ReadonlyArray<string>>();
+    const visit = (node: PhaseSidebarTreeNode) => {
+      map.set(node.key, collectPhaseSidebarSubtreeKeys(node));
+      for (const child of node.children) visit(child);
+    };
+    for (const group of groups) for (const node of group.nodes) visit(node);
+    return map;
+  }, [groups]);
   const jumpToThreadKey = useCallback(
     (key: string) => {
       const target = allRows.find(
@@ -2305,6 +2335,29 @@ export function PhaseGroupedSidebar() {
       if (target) navigateToRow(scopeThreadRef(target.thread.environmentId, target.thread.id));
     },
     [allRows, navigateToRow],
+  );
+  // One object instance shared by every row, so the memo on PhaseThreadRow
+  // survives the sidebar's frequent re-renders.
+  const treeActions = useMemo<PhaseThreadRowTreeActions>(
+    () => ({
+      onToggle: (threadKey) => toggleTreeKey(threadKey),
+      onSetSubtreeExpanded: (threadKey, expanded) =>
+        setTreeKeysExpanded(
+          [threadKey, ...(subtreeKeysByThreadKey.get(threadKey) ?? [])],
+          expanded,
+        ),
+      onMoveUnder: openMoveUnderDialog,
+      onDetach: detachFromParent,
+      onJumpToParent: jumpToThreadKey,
+    }),
+    [
+      detachFromParent,
+      jumpToThreadKey,
+      openMoveUnderDialog,
+      setTreeKeysExpanded,
+      subtreeKeysByThreadKey,
+      toggleTreeKey,
+    ],
   );
   // T3-CUSTOM(expbkt3): END
   const requestArchive = useCallback(
@@ -2498,7 +2551,7 @@ export function PhaseGroupedSidebar() {
     row: PhaseSidebarRow,
     section: PhaseSidebarSection,
     // T3-CUSTOM(expbkt3): omitted on shelf rows, which stay a flat history list.
-    tree?: PhaseThreadRowTree,
+    tree?: PhaseThreadRowTreeProps,
   ) => {
     const key = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
     const project =
@@ -2552,22 +2605,17 @@ export function PhaseGroupedSidebar() {
   // list stays a list for assistive tech, and each level animates on its own.
   const renderTreeNode = (node: PhaseSidebarTreeNode): ReactNode => {
     const expanded = expandedKeys.has(node.key);
-    const rowTree: PhaseThreadRowTree = {
-      depth: node.depth,
-      descendantCount: node.descendantCount,
-      hasBusyDescendant: node.hasBusyDescendant,
-      expanded,
-      orphanedFrom: node.orphanedFrom,
-      onToggle: () => toggleTreeKey(node.key),
-      onSetSubtreeExpanded: (next) =>
-        setTreeKeysExpanded([node.key, ...collectPhaseSidebarSubtreeKeys(node)], next),
-      onMoveUnder: openMoveUnderDialog,
-      onDetach: detachFromParent,
-      onJumpToParent: jumpToThreadKey,
-    };
     return (
       <Fragment key={node.key}>
-        {renderThreadRow(node.row, "active", rowTree)}
+        {renderThreadRow(node.row, "active", {
+          treeActions,
+          treeDepth: node.depth,
+          treeDescendantCount: node.descendantCount,
+          treeHasBusyDescendant: node.hasBusyDescendant,
+          treeExpanded: expanded,
+          treeParentKey: node.orphanedFrom?.key ?? null,
+          treeParentTitle: node.orphanedFrom?.title ?? null,
+        })}
         {expanded && node.children.length > 0 ? (
           <li>
             <ul
