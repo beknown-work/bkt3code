@@ -1793,17 +1793,39 @@ export function PhaseGroupedSidebar() {
   // T3-CUSTOM(expbkt3): BEGIN — split the inbox from the parked shelves.
   // Filtering happens once, before the partition, so a filter chip means the
   // same thing in the lifecycle groups and on both shelves.
-  const { activeRows, snoozedRows, settledRows } = useMemo(() => {
+  const {
+    activeRows: unfilteredActiveRows,
+    snoozedRows: unfilteredSnoozedRows,
+    settledRows: unfilteredSettledRows,
+  } = useMemo(() => {
     // Snooze classification uses a REAL clock, not the quantized minute: a
     // thread whose wake time just passed must leave the shelf immediately.
     // snoozeWakeTick re-runs this at the exact boundary.
     void snoozeWakeTick;
-    return partitionPhaseSidebarRows(filterVisiblePhaseSidebarRows(allRows, filters), {
-      now: nowMinute,
-      preciseNow: new Date().toISOString(),
-      autoSettleAfterDays,
-    });
-  }, [allRows, autoSettleAfterDays, filters, nowMinute, snoozeWakeTick]);
+    // T3-CUSTOM(expbkt3): partition the UNFILTERED set. Classification never
+    // reads the filters, and the lifecycle groups need every row: a session
+    // tree has to be able to keep a parent that does not itself match so a
+    // matching child stays reachable. Each section applies the filter below.
+    return partitionPhaseSidebarRows(
+      allRows.filter((row) => row.thread.archivedAt === null),
+      {
+        now: nowMinute,
+        preciseNow: new Date().toISOString(),
+        autoSettleAfterDays,
+      },
+    );
+  }, [allRows, autoSettleAfterDays, nowMinute, snoozeWakeTick]);
+  // T3-CUSTOM(expbkt3): the shelves are flat history lists, so they filter
+  // row-by-row as before. Only the lifecycle groups nest.
+  const activeRows = unfilteredActiveRows;
+  const snoozedRows = useMemo(
+    () => filterVisiblePhaseSidebarRows(unfilteredSnoozedRows, filters),
+    [filters, unfilteredSnoozedRows],
+  );
+  const settledRows = useMemo(
+    () => filterVisiblePhaseSidebarRows(unfilteredSettledRows, filters),
+    [filters, unfilteredSettledRows],
+  );
 
   // Wake exactly when the soonest snooze expires (the shelf is sorted, so
   // that is the first row). Clamped at 0, and capped so a far-future wake
