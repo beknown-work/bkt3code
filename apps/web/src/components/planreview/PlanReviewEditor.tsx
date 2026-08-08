@@ -10,6 +10,16 @@ import { CommentPlugin } from "@platejs/comment/react";
 import { MarkdownPlugin } from "@platejs/markdown";
 import { SuggestionPlugin } from "@platejs/suggestion/react";
 import {
+  BlockquoteRules,
+  BoldRules,
+  CodeRules,
+  HeadingRules,
+  HighlightRules,
+  HorizontalRuleRules,
+  ItalicRules,
+  StrikethroughRules,
+} from "@platejs/basic-nodes";
+import {
   BlockquotePlugin,
   BoldPlugin,
   CodePlugin,
@@ -26,8 +36,10 @@ import {
   StrikethroughPlugin,
   UnderlinePlugin,
 } from "@platejs/basic-nodes/react";
+import { CodeBlockRules } from "@platejs/code-block";
 import { CodeBlockPlugin, CodeLinePlugin } from "@platejs/code-block/react";
 import { LinkPlugin } from "@platejs/link/react";
+import { BulletedListRules, OrderedListRules, TaskListRules } from "@platejs/list-classic";
 import {
   BulletedListPlugin,
   ListItemContentPlugin,
@@ -44,7 +56,7 @@ import {
 } from "@platejs/table/react";
 import { ParagraphPlugin, Plate, PlateContent, usePlateEditor } from "platejs/react";
 import remarkGfm from "remark-gfm";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { PlanReviewFloatingToolbar } from "./plate/PlanReviewFloatingToolbar";
 import {
@@ -88,20 +100,52 @@ import { cn } from "../../lib/utils";
  */
 const PLAN_REVIEW_PLUGINS = [
   ParagraphPlugin.withComponent(ParagraphElement),
-  H1Plugin.withComponent(H1Element),
-  H2Plugin.withComponent(H2Element),
-  H3Plugin.withComponent(H3Element),
-  H4Plugin.withComponent(H4Element),
+  // `rules.break.empty: "reset"` makes Enter on an empty heading fall back to a
+  // paragraph, which is what every markdown editor does.
+  H1Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H1Element),
+  H2Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H2Element),
+  H3Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H3Element),
+  H4Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H4Element),
   H5Plugin.withComponent(H5Element),
   H6Plugin.withComponent(H6Element),
-  BlockquotePlugin.withComponent(BlockquoteElement),
-  HorizontalRulePlugin.withComponent(HorizontalRuleElement),
-  CodeBlockPlugin.withComponent(CodeBlockElement),
+  BlockquotePlugin.configure({ inputRules: [BlockquoteRules.markdown()] }).withComponent(
+    BlockquoteElement,
+  ),
+  HorizontalRulePlugin.configure({
+    inputRules: [
+      HorizontalRuleRules.markdown({ variant: "-" }),
+      HorizontalRuleRules.markdown({ variant: "_" }),
+    ],
+  }).withComponent(HorizontalRuleElement),
+  CodeBlockPlugin.configure({
+    inputRules: [CodeBlockRules.markdown({ on: "match" })],
+  }).withComponent(CodeBlockElement),
   CodeLinePlugin.withComponent(CodeLineElement),
   LinkPlugin.withComponent(LinkElement),
 
   // Classic ul/ol/li lists map straight from markdown, and carry task lists.
-  ListPlugin,
+  ListPlugin.configure({
+    inputRules: [
+      BulletedListRules.markdown({ variant: "-" }),
+      BulletedListRules.markdown({ variant: "*" }),
+      OrderedListRules.markdown({ variant: "." }),
+      OrderedListRules.markdown({ variant: ")" }),
+      TaskListRules.markdown({ checked: false }),
+      TaskListRules.markdown({ checked: true }),
+    ],
+  }),
   ListItemContentPlugin,
   ListItemPlugin.withComponent(ListItemElement),
   BulletedListPlugin.withComponent(BulletedListElement),
@@ -113,12 +157,18 @@ const PLAN_REVIEW_PLUGINS = [
   TableCellPlugin.withComponent(TableCellElement),
   TableCellHeaderPlugin.withComponent(TableCellHeaderElement),
 
-  BoldPlugin,
-  ItalicPlugin,
+  BoldPlugin.configure({
+    inputRules: [BoldRules.markdown({ variant: "*" }), BoldRules.markdown({ variant: "_" })],
+  }),
+  ItalicPlugin.configure({
+    inputRules: [ItalicRules.markdown({ variant: "*" }), ItalicRules.markdown({ variant: "_" })],
+  }),
   UnderlinePlugin,
-  StrikethroughPlugin,
-  HighlightPlugin.withComponent(HighlightLeaf),
-  CodePlugin.withComponent(CodeLeaf),
+  StrikethroughPlugin.configure({ inputRules: [StrikethroughRules.markdown()] }),
+  HighlightPlugin.configure({
+    inputRules: [HighlightRules.markdown({ variant: "==" })],
+  }).withComponent(HighlightLeaf),
+  CodePlugin.configure({ inputRules: [CodeRules.markdown()] }).withComponent(CodeLeaf),
   KbdPlugin.withComponent(KbdLeaf),
 
   CommentPlugin.withComponent(CommentLeaf),
@@ -128,13 +178,25 @@ const PLAN_REVIEW_PLUGINS = [
   MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
 ];
 
+/**
+ * Pull-based access to the document.
+ *
+ * Serializing the whole tree to markdown costs a full walk plus a
+ * remark-stringify pass, so the panel asks for it when it actually needs it —
+ * on the debounced save and on submit — rather than on every keystroke.
+ */
+export interface PlanReviewEditorHandle {
+  readonly getMarkdown: () => string;
+}
+
 interface PlanReviewEditorProps {
   /** Canonical markdown for the version being reviewed. */
   readonly markdown: string;
   readonly readOnly: boolean;
   readonly suggestionMode: boolean;
-  /** Fires on every change with freshly serialized markdown. */
-  readonly onMarkdownChange: (markdown: string) => void;
+  readonly handleRef: React.RefObject<PlanReviewEditorHandle | null>;
+  /** Cheap notification that the reviewer changed something. */
+  readonly onChanged: () => void;
   /** Fires when the reviewer comments on a selection. */
   readonly onAddComment: (quotedText: string, body: string) => void;
   /** Reports whether Plate's markdown round trip reached a fixed point. */
@@ -145,7 +207,8 @@ function PlanReviewEditorImpl({
   markdown,
   readOnly,
   suggestionMode,
-  onMarkdownChange,
+  handleRef,
+  onChanged,
   onAddComment,
   onRoundTripUnstable,
 }: PlanReviewEditorProps) {
@@ -153,6 +216,8 @@ function PlanReviewEditorImpl({
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
   const loadedMarkdownRef = useRef<string | null>(null);
+  // Loading a version fires Plate's onChange; that is not a reviewer edit.
+  const loadingRef = useRef(false);
   const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
 
@@ -163,8 +228,12 @@ function PlanReviewEditorImpl({
     loadedMarkdownRef.current = markdown;
 
     try {
+      loadingRef.current = true;
       const value = editor.api.markdown.deserialize(markdown);
       editor.tf.setValue(value);
+      requestAnimationFrame(() => {
+        loadingRef.current = false;
+      });
 
       // Round-trip check: an unstable document would make every later diff
       // full of formatting noise the reviewer never typed.
@@ -174,6 +243,7 @@ function PlanReviewEditorImpl({
       });
       if (once !== twice) onRoundTripUnstable();
     } catch {
+      loadingRef.current = false;
       onRoundTripUnstable();
     }
   }, [editor, markdown, onRoundTripUnstable]);
@@ -184,14 +254,26 @@ function PlanReviewEditorImpl({
     editor.setOption(SuggestionPlugin, "isSuggesting", suggestionMode && !readOnly);
   }, [editor, suggestionMode, readOnly]);
 
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      getMarkdown: () => {
+        try {
+          return editor.api.markdown.serialize();
+        } catch {
+          // A tree mid-edit can be transiently invalid; the caller falls back
+          // to the last known good document rather than saving nonsense.
+          return "";
+        }
+      },
+    }),
+    [editor],
+  );
+
   const handleChange = useCallback(() => {
-    try {
-      onMarkdownChange(editor.api.markdown.serialize());
-    } catch {
-      // A transient invalid tree during typing is not worth surfacing; the
-      // next keystroke serializes again.
-    }
-  }, [editor, onMarkdownChange]);
+    if (loadingRef.current) return;
+    onChanged();
+  }, [onChanged]);
 
   const startComment = useCallback(() => {
     const quote = normalizeQuotedText(window.getSelection()?.toString() ?? "");
@@ -212,21 +294,14 @@ function PlanReviewEditorImpl({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {suggestionMode && !readOnly ? (
-        <div className="flex items-center gap-2 border-b px-3 py-1.5">
-          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-700 text-xs dark:text-amber-400">
-            Suggesting — your edits are tracked
-          </span>
-          <span className="text-muted-foreground text-xs">Select text to format or comment</span>
-        </div>
-      ) : null}
-
-      <div ref={surfaceRef} className="relative min-h-0 flex-1 overflow-auto">
+      <div
+        ref={surfaceRef}
+        className="relative min-h-0 flex-1 cursor-text select-text overflow-y-auto caret-primary selection:bg-primary/25"
+      >
         <Plate editor={editor} onChange={handleChange}>
           <PlateContent
             className={cn(
-              "min-h-full px-5 py-4 text-[15px] text-foreground leading-relaxed outline-none",
-              "[&_::selection]:bg-primary/25",
+              "min-h-full px-5 pt-3 pb-24 text-[15px] text-foreground leading-relaxed outline-none",
             )}
             readOnly={readOnly}
             placeholder="This plan is empty."
