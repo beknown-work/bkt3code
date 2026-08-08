@@ -999,6 +999,14 @@ export function SessionManagerPage() {
     visibleKeys.length > 0 && visibleKeys.every((key) => selectedThreadKeys.has(key));
   const someVisibleSelected = visibleKeys.some((key) => selectedThreadKeys.has(key));
 
+  // Everything a row renders that does not live in `rows` itself. Identity has
+  // to change whenever one of these does, or the virtualized rows keep showing
+  // stale checkboxes, spinners and density.
+  const rowRenderExtraData = useMemo(
+    () => ({ selectedThreadKeys, expandedKeys, pendingByKey, dense }),
+    [selectedThreadKeys, expandedKeys, pendingByKey, dense],
+  );
+
   // Rows are live atoms; a session deleted elsewhere must not keep inflating
   // the toolbar's count.
   const liveKeySet = useMemo(() => new Set(allRows.map((row) => row.key)), [allRows]);
@@ -1706,6 +1714,11 @@ export function SessionManagerPage() {
           <LegendList<SessionManagerRow>
             data={rows as SessionManagerRow[]}
             keyExtractor={legendKeyExtractor}
+            // The list only re-invokes renderItem when `data` or `extraData`
+            // changes. Selection, expansion, pending state and density all live
+            // outside `rows`, so without this the header updates ("4 selected")
+            // while the rows keep rendering their stale checkboxes.
+            extraData={rowRenderExtraData}
             estimatedItemSize={dense ? 34 : 52}
             renderItem={({ item }) => (
               <SessionManagerTableRow

@@ -47,6 +47,14 @@ const WORK_SUMMARY_ERROR_FALLBACK =
 const WORK_SUMMARY_DISABLED_MESSAGE =
   "Session work summaries are turned off in Settings → Experiments.";
 const WORK_SUMMARY_EMPTY_SESSION_MESSAGE = "This session has no conversation to summarize yet.";
+/**
+ * An archived session is not in the detail read model and its worktree may be
+ * reclaimed, so there is nothing to summarize. Say so instead of returning
+ * quietly: the projector already wrote a `pending` marker, and only a terminal
+ * update clears the table's "Summarizing…" spinner.
+ */
+const WORK_SUMMARY_NO_CONTEXT_MESSAGE =
+  "This session is archived, so it is no longer available to summarize.";
 const MAX_WORK_SUMMARY_ERROR_CHARS = 500;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
@@ -119,10 +127,10 @@ const make = Effect.gen(function* () {
 
   /**
    * Threads whose generation is currently running. A duplicate request for a
-   * thread already in flight is dropped rather than queued: the second answer
-   * would describe the same state, cost a second model call, and — because the
-   * projector's supersede rule keys on the newest request id — could only
-   * overwrite the first with the same content.
+   * thread already in flight is dropped rather than queued: the worker is
+   * serial, so a bulk double-selection reaches this guard only when the same
+   * thread is already being answered, and the queued newer request resolves the
+   * row when the worker reaches it.
    */
   const inFlightThreadIds = new Set<ThreadId>();
 
@@ -189,8 +197,17 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Archived threads are excluded from the detail read, so this is the path a
+    // request against an archived session takes. The projector has already put a
+    // spinner on the row, so resolve it: returning quietly here left archived
+    // rows spinning on "Summarizing…" forever on expbkt3.
     const threadOption = yield* projectionSnapshotQuery.getThreadDetailById(input.threadId);
     if (Option.isNone(threadOption)) {
+      yield* dispatchUpdate({
+        threadId: input.threadId,
+        requestId: input.requestId,
+        result: { status: "error", error: WORK_SUMMARY_NO_CONTEXT_MESSAGE },
+      });
       return;
     }
     const thread = threadOption.value;
@@ -207,6 +224,11 @@ const make = Effect.gen(function* () {
 
     const contextOption = yield* projectionSnapshotQuery.getThreadCheckpointContext(input.threadId);
     if (Option.isNone(contextOption)) {
+      yield* dispatchUpdate({
+        threadId: input.threadId,
+        requestId: input.requestId,
+        result: { status: "error", error: WORK_SUMMARY_NO_CONTEXT_MESSAGE },
+      });
       return;
     }
     const cwd = contextOption.value.worktreePath ?? contextOption.value.workspaceRoot;

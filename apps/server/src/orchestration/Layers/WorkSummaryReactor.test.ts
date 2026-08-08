@@ -36,6 +36,7 @@ import { WorkSummaryReactorLive } from "./WorkSummaryReactor.ts";
 
 const PROJECT_ID = ProjectId.make("project-work-summary-reactor");
 const THREAD_ID = ThreadId.make("thread-work-summary-reactor");
+const ARCHIVED_THREAD_ID = ThreadId.make("thread-work-summary-archived");
 const TURN_ID = TurnId.make("turn-work-summary-reactor");
 const USER_MESSAGE_ID = MessageId.make("message-user-work-summary");
 const ASSISTANT_MESSAGE_ID = MessageId.make("message-assistant-work-summary");
@@ -264,6 +265,68 @@ layer("WorkSummaryReactor", (it) => {
         const workSummary = yield* readWorkSummary;
         assert.strictEqual(workSummary?.status, "error");
         assert.include(workSummary?.error ?? "", "turned off");
+      }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
+    }),
+  );
+
+  // Regression: on expbkt3 an archived session left the table spinning on
+  // "Summarizing…" forever. Archived threads are absent from the detail read
+  // model, and the reactor returned quietly after the projector had already
+  // written the pending marker.
+  //
+  // Uses its own thread: every test in this layer shares one in-memory database,
+  // so archiving THREAD_ID here would strand the later concurrency test.
+  it.effect("reports an archived session instead of leaving the row spinning", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+
+      yield* Effect.gen(function* () {
+        const reactor = yield* WorkSummaryReactor;
+        yield* reactor.start();
+        yield* seedThread();
+
+        const engine = yield* OrchestrationEngineService;
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-thread-create-work-summary-archived"),
+          threadId: ARCHIVED_THREAD_ID,
+          projectId: PROJECT_ID,
+          title: "Archived work summary thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: process.cwd(),
+          sourceControlProfileId: null,
+          createdAt: CREATED_AT,
+        });
+        yield* engine.dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("cmd-archive-work-summary"),
+          threadId: ARCHIVED_THREAD_ID,
+        });
+
+        yield* engine.dispatch({
+          type: "thread.work-summary.request",
+          commandId: CommandId.make("cmd-work-summary-archived"),
+          threadId: ARCHIVED_THREAD_ID,
+          createdAt: CREATED_AT,
+        });
+        yield* reactor.drain;
+
+        // No tokens spent, but the spinner must still be replaced.
+        assert.strictEqual(yield* Ref.get(harness.generateCalls), 0);
+        // Archived threads only appear in the archived snapshot — which is
+        // exactly the list the manager page reads when "Archived" is toggled on.
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const archived = yield* snapshotQuery.getArchivedShellSnapshot();
+        const workSummary =
+          archived.threads.find((thread) => thread.id === ARCHIVED_THREAD_ID)?.workSummary ?? null;
+        assert.strictEqual(workSummary?.status, "error");
+        assert.include(workSummary?.error ?? "", "archived");
       }).pipe(Effect.provide(harness.reactorLayer), Effect.scoped);
     }),
   );
