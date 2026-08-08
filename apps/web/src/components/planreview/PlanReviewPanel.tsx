@@ -14,7 +14,7 @@ import { CheckIcon, HistoryIcon, MessageSquareIcon, SendIcon, Trash2Icon } from 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PlanReviewDiscussions } from "./PlanReviewDiscussions";
-import { PlanReviewEditor } from "./PlanReviewEditor";
+import { PlanReviewEditor, type PlanReviewEditorHandle } from "./PlanReviewEditor";
 import { PlanReviewVersions } from "./PlanReviewVersions";
 import { nextPlanDiscussionId } from "./planReviewMarkdown";
 import { Button } from "../ui/button";
@@ -42,12 +42,16 @@ export default function PlanReviewPanel({
   const [tab, setTab] = useState<PanelTab>("review");
   const [suggestionMode, setSuggestionMode] = useState(true);
   const [globalComment, setGlobalComment] = useState("");
-  const [editedMarkdown, setEditedMarkdown] = useState<string | null>(null);
+  // A boolean, not the document: keeping the markdown in state would re-render
+  // the panel — and the editor beneath it — on every keystroke.
+  const [hasLocalEdits, setHasLocalEdits] = useState(false);
   const [roundTripWarning, setRoundTripWarning] = useState(false);
   const [comparison, setComparison] = useState<{ from: string; to: string } | null>(null);
 
   const revisionTokenRef = useRef<string | null>(null);
+  const editedMarkdownRef = useRef<string | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorHandleRef = useRef<PlanReviewEditorHandle | null>(null);
 
   const initial = useEnvironmentQuery(
     planReviewEnvironment.review({ environmentId, input: { documentId } }),
@@ -120,43 +124,55 @@ export default function PlanReviewPanel({
   }, [draftMarkdown, latestVersion?.versionId]);
 
   const canonicalMarkdown = seededDraft ?? versionMarkdown;
-  const isDirty = (editedMarkdown ?? canonicalMarkdown).trim() !== versionMarkdown.trim();
+  // A restored draft is already ahead of the committed version, so the panel
+  // opens dirty even before the reviewer types.
+  const isDirty =
+    hasLocalEdits || (seededDraft?.trim() ?? versionMarkdown.trim()) !== versionMarkdown.trim();
 
-  const handleMarkdownChange = useCallback(
-    (markdown: string) => {
-      // Loading a version into the editor fires Plate's onChange too. Treating
-      // that as an edit would write a draft nobody typed and churn the
-      // revision token on every open.
-      if (markdown.trim() === canonicalMarkdown.trim()) {
-        setEditedMarkdown(null);
-        return;
-      }
-      setEditedMarkdown(markdown);
-      if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
-      draftTimerRef.current = setTimeout(() => {
-        void saveDraft({
-          environmentId,
-          input: {
-            documentId,
-            contentValueJson: JSON.stringify({ markdown }),
-            expectedRevisionToken: revisionTokenRef.current,
-          },
-        }).then((result) => {
-          if (result._tag === "Success") {
-            revisionTokenRef.current = result.value.revisionToken;
-            return;
-          }
-          // A stale token means somebody else edited this plan; say so rather
-          // than silently clobbering their work on the next save.
-          toastManager.add({
-            type: "error",
-            title: "Someone else edited this plan",
-            description: "Reload the panel to pick up their changes before saving again.",
-          });
+  /**
+   * Typing must not serialize the document or re-render the panel. It flips one
+   * boolean the first time and schedules the debounced save, which is the only
+   * place the markdown is actually pulled out of the editor.
+   */
+  const handleEditorChanged = useCallback(() => {
+    setHasLocalEdits(true);
+    if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      const markdown = editorHandleRef.current?.getMarkdown() ?? "";
+      if (markdown.trim().length === 0) return;
+      editedMarkdownRef.current = markdown;
+
+      void saveDraft({
+        environmentId,
+        input: {
+          documentId,
+          contentValueJson: JSON.stringify({ markdown }),
+          expectedRevisionToken: revisionTokenRef.current,
+        },
+      }).then((result) => {
+        if (result._tag === "Success") {
+          revisionTokenRef.current = result.value.revisionToken;
+          return;
+        }
+        // A stale token means somebody else edited this plan; say so rather
+        // than silently clobbering their work on the next save.
+        toastManager.add({
+          type: "error",
+          title: "Someone else edited this plan",
+          description: "Reload the panel to pick up their changes before saving again.",
         });
-      }, DRAFT_SAVE_DEBOUNCE_MS);
-    },
-    [canonicalMarkdown, documentId, environmentId, saveDraft],
+      });
+    }, DRAFT_SAVE_DEBOUNCE_MS);
+  }, [documentId, environmentId, saveDraft]);
+
+  // Stable identity: an inline arrow here would defeat the editor's `memo` and
+  // re-render the whole Plate tree on every panel state change.
+  const handleRoundTripUnstable = useCallback(() => setRoundTripWarning(true), []);
+
+  /** The document as it stands, pulled from the editor only when needed. */
+  const readCurrentMarkdown = useCallback(
+    () => editorHandleRef.current?.getMarkdown() || editedMarkdownRef.current || canonicalMarkdown,
+    [canonicalMarkdown],
   );
 
   useEffect(
@@ -192,8 +208,8 @@ export default function PlanReviewPanel({
   );
 
   const handleSaveVersion = useCallback(() => {
-    const contentMarkdown = editedMarkdown ?? canonicalMarkdown;
     if (!isDirty) return;
+    const contentMarkdown = readCurrentMarkdown();
     void cutVersion({
       environmentId,
       input: {
@@ -204,11 +220,12 @@ export default function PlanReviewPanel({
       },
     }).then((result) => {
       if (result._tag === "Success") {
-        setEditedMarkdown(null);
+        setHasLocalEdits(false);
+        editedMarkdownRef.current = null;
         toastManager.add({ type: "success", title: "Saved a new version of the plan" });
       }
     });
-  }, [canonicalMarkdown, cutVersion, documentId, editedMarkdown, environmentId, isDirty]);
+  }, [cutVersion, documentId, environmentId, isDirty, readCurrentMarkdown]);
 
   const handleRestore = useCallback(
     (version: PlanReviewVersion) => {
@@ -223,7 +240,8 @@ export default function PlanReviewPanel({
         },
       }).then((result) => {
         if (result._tag === "Success") {
-          setEditedMarkdown(null);
+          setHasLocalEdits(false);
+          editedMarkdownRef.current = null;
           setTab("review");
         }
       });
@@ -239,12 +257,13 @@ export default function PlanReviewPanel({
           documentId,
           decision,
           globalComment,
-          editedMarkdown: isDirty ? (editedMarkdown ?? canonicalMarkdown) : null,
+          editedMarkdown: isDirty ? readCurrentMarkdown() : null,
         },
       }).then((result) => {
         if (result._tag !== "Success") return;
         setGlobalComment("");
-        setEditedMarkdown(null);
+        setHasLocalEdits(false);
+        editedMarkdownRef.current = null;
         if (decision === "approved") {
           toastManager.add({
             type: "success",
@@ -259,7 +278,7 @@ export default function PlanReviewPanel({
         onClose();
       });
     },
-    [documentId, editedMarkdown, environmentId, globalComment, isDirty, onClose, submit],
+    [documentId, environmentId, globalComment, isDirty, onClose, readCurrentMarkdown, submit],
   );
 
   if (snapshot === null) {
@@ -348,9 +367,10 @@ export default function PlanReviewPanel({
             markdown={canonicalMarkdown}
             readOnly={isResolved}
             suggestionMode={suggestionMode}
-            onMarkdownChange={handleMarkdownChange}
+            handleRef={editorHandleRef}
+            onChanged={handleEditorChanged}
             onAddComment={handleAddComment}
-            onRoundTripUnstable={() => setRoundTripWarning(true)}
+            onRoundTripUnstable={handleRoundTripUnstable}
           />
           <aside
             className={cn(
