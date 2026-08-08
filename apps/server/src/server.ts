@@ -306,7 +306,9 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
-  Layer.provideMerge(ProjectSetupScriptRunner.layer),
+  // T3-CUSTOM(expbkt3): BEGIN — setup falls back to the repository's t3.json.
+  Layer.provideMerge(ProjectSetupScriptRunner.layer.pipe(Layer.provide(T3ProjectFileLoader.layer))),
+  // T3-CUSTOM(expbkt3): END
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(TextGeneration.layer),
