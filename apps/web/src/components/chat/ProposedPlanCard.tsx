@@ -41,6 +41,8 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   cwd,
   workspaceRoot,
   onOpenPlannotator,
+  onOpenPlanReview,
+  planReviewDocumentId,
   reviewable = false,
 }: {
   planMarkdown: string;
@@ -49,6 +51,8 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   cwd: string | undefined;
   workspaceRoot: string | undefined;
   onOpenPlannotator?: ((url: `/plannotator/${string}/`) => void) | undefined;
+  onOpenPlanReview?: ((documentId: string) => void) | undefined;
+  planReviewDocumentId?: string | null | undefined;
   reviewable?: boolean | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -196,7 +200,9 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-card/95 via-card/80 to-transparent" />
           ) : null}
         </div>
-        {canCollapse || (reviewable && onOpenPlannotator) ? (
+        {canCollapse ||
+        (reviewable && onOpenPlannotator) ||
+        (reviewable && onOpenPlanReview && planReviewDocumentId) ? (
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {canCollapse ? (
               <Button
@@ -209,6 +215,18 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               </Button>
             ) : null}
             {/* T3-CUSTOM(expbkt3): BEGIN — native timeline plan review entry point. */}
+            {reviewable && onOpenPlanReview && planReviewDocumentId ? (
+              <Button
+                size="sm"
+                data-scroll-anchor-ignore
+                data-plan-review-trigger
+                aria-label="Open the plan in the review panel"
+                onClick={() => onOpenPlanReview(planReviewDocumentId)}
+              >
+                Preview
+                <ArrowRightIcon className="size-4" />
+              </Button>
+            ) : null}
             {reviewable && onOpenPlannotator ? (
               plannotatorUrl ? (
                 <Button

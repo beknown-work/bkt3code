@@ -141,6 +141,9 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
+// T3-CUSTOM(expbkt3): native plan review.
+import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
+import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -692,6 +695,12 @@ const buildAppUnderTest = (options?: {
       },
     ).pipe(
       Layer.provide(PlannotatorManager.layer),
+      // T3-CUSTOM(expbkt3): native plan review service for the fork RPC handlers.
+      Layer.provide(
+        PlanReviewServiceLayer.layer.pipe(
+          Layer.provide(PlanReviewDocuments.layer.pipe(Layer.provide(SqlitePersistenceMemory))),
+        ),
+      ),
       Layer.provide(
         OrchestrationCommandDispatcher.layerWithBootstrapRepository.pipe(
           Layer.provide(

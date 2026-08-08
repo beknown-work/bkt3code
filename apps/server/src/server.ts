@@ -50,6 +50,10 @@ import { mcpUpstreamProxyRouteLayer } from "./mcp/McpUpstreamProxy.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 // T3-CUSTOM(expbkt3): BEGIN — experimental native-plan review runtime.
 import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
+// T3-CUSTOM(expbkt3): native plan review.
+import * as PlanIngestListener from "./planreview/PlanIngestListener.ts";
+import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
+import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
 import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
 // T3-CUSTOM(expbkt3): END
 import * as PreviewManager from "./preview/Manager.ts";
@@ -794,8 +798,16 @@ export const makeServerLayer = Layer.unwrap(
       runtimeBaseServicesLive,
       OrchestrationCommandDispatcher.layer.pipe(Layer.provide(runtimeBaseServicesLive)),
     );
-    const runtimeServicesLive = PlannotatorManager.layer.pipe(
+    // T3-CUSTOM(expbkt3): native plan review sits beside Plannotator; both read
+    // the same proposed-plan events and neither depends on the other.
+    const planReviewServicesLive = PlanReviewServiceLayer.layer.pipe(
+      Layer.provide(PlanReviewDocuments.layer),
       Layer.provideMerge(runtimeServicesWithoutPlannotatorLive),
+    );
+    const runtimeServicesLive = Layer.mergeAll(
+      PlannotatorManager.layer.pipe(Layer.provideMerge(runtimeServicesWithoutPlannotatorLive)),
+      PlanIngestListener.layer.pipe(Layer.provideMerge(planReviewServicesLive)),
+      planReviewServicesLive,
     );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {

@@ -35,6 +35,15 @@ export const FORK_RPC_REQUIRED_SCOPES = {
   [WS_FORK_METHODS.usersRevokeSessions]: AuthOrchestrationOperateScope,
   [WS_FORK_METHODS.usersSourceControlProfileSet]: AuthOrchestrationOperateScope,
   [WS_FORK_METHODS.linearIssuesResolve]: AuthOrchestrationReadScope,
+  [WS_FORK_METHODS.planReviewGet]: AuthOrchestrationReadScope,
+  [WS_FORK_METHODS.planReviewList]: AuthOrchestrationReadScope,
+  [WS_FORK_METHODS.planReviewVersionDiff]: AuthOrchestrationReadScope,
+  [WS_FORK_METHODS.subscribePlanReview]: AuthOrchestrationReadScope,
+  [WS_FORK_METHODS.planReviewSaveDraft]: AuthOrchestrationOperateScope,
+  [WS_FORK_METHODS.planReviewCutVersion]: AuthOrchestrationOperateScope,
+  [WS_FORK_METHODS.planReviewUpsertDiscussion]: AuthOrchestrationOperateScope,
+  [WS_FORK_METHODS.planReviewResolveDiscussion]: AuthOrchestrationOperateScope,
+  [WS_FORK_METHODS.planReviewSubmit]: AuthOrchestrationOperateScope,
   // T3-CUSTOM(expbkt3): archived-session worktree reclaim. Scanning is a read;
   // exporting writes files and reclaiming deletes them, so both need operate.
   [WS_FORK_METHODS.sessionArchiveScan]: AuthOrchestrationReadScope,

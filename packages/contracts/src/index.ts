@@ -20,6 +20,8 @@ export * from "./settings.ts";
 export * from "./personalMcp.ts";
 // T3-CUSTOM(expbkt3): lifecycle-row Linear issue status schemas
 export * from "./linearIssue.ts";
+// T3-CUSTOM(expbkt3): native plan review contracts.
+export * from "./planReview.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
