@@ -7,6 +7,7 @@
  * history somewhere durable, then give the space back while the thread stays
  * readable.
  */
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
@@ -52,9 +53,39 @@ export const SessionArchiveBlockedReason = Schema.Literals([
 ]);
 export type SessionArchiveBlockedReason = typeof SessionArchiveBlockedReason.Type;
 
+/**
+ * Gates an operator may deliberately override with `force`.
+ *
+ * These protect the operator's *own* uncommitted or unpushed work, so it is
+ * theirs to discard. Everything absent from this list protects something else —
+ * a worktree another live session is using, or one a running process sits in —
+ * and no flag overrides those. Shared between tiers so the panel cannot offer a
+ * force the server will refuse.
+ */
+export const FORCEABLE_BLOCKED_REASONS: ReadonlyArray<SessionArchiveBlockedReason> = [
+  "dirty-worktree",
+  "unpushed-commits",
+];
+
+const forceableReasons = new Set<string>(FORCEABLE_BLOCKED_REASONS);
+
+export function isForceableBlockedReason(
+  reason: SessionArchiveBlockedReason | null,
+): reason is SessionArchiveBlockedReason {
+  return reason !== null && forceableReasons.has(reason);
+}
+
 export const SessionArchiveEntry = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  /**
+   * Display name of the owning project.
+   *
+   * Carried on the entry rather than looked up client-side: the archive can
+   * contain threads whose project the client no longer lists, and "select every
+   * worktree in this project" has to work for those too.
+   */
+  projectName: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   title: Schema.String,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
@@ -64,8 +95,18 @@ export const SessionArchiveEntry = Schema.Struct({
   /** How much of `worktreeBytes` a `slim` would give back. */
   reclaimableBytes: Schema.NullOr(NonNegativeInt),
   reclaimState: SessionArchiveReclaimState,
-  /** Null means eligible for every mode; otherwise the first failing gate. */
+  /** Null means a slim is allowed; otherwise the first failing gate. */
   blockedReason: Schema.NullOr(SessionArchiveBlockedReason),
+  /**
+   * The same evaluation for `remove`, which gates harder than `slim`.
+   *
+   * Reported separately because a worktree with uncommitted work is perfectly
+   * fine to slim and refused for removal — collapsing the two would leave the
+   * panel unable to say which button will actually do anything.
+   */
+  removeBlockedReason: Schema.NullOr(SessionArchiveBlockedReason).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   /** Set once a history export exists on disk. */
   historyPath: Schema.NullOr(Schema.String),
 });

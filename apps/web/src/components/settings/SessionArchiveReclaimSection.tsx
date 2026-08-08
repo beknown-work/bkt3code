@@ -10,7 +10,12 @@
  * The scan is behind a button rather than run on mount because it walks the
  * filesystem — on a busy host that is seconds of IO nobody asked for.
  */
-import type { EnvironmentId, SessionArchiveScanResult } from "@t3tools/contracts";
+import {
+  isForceableBlockedReason,
+  type EnvironmentId,
+  type SessionArchiveEntry,
+  type SessionArchiveScanResult,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -25,13 +30,20 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
+  applySelectionScope,
   describeReclaimResult,
   describeReclaimState,
   describeScanSummary,
   formatBytes,
+  isEntryActionable,
+  projectGroups,
+  selectionTargets,
   sortEntriesForDisplay,
+  stateGroups,
   summarizeSelection,
+  type SelectionScope,
 } from "./SessionArchiveReclaimSection.logic";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 /** Entries rendered before the list is truncated. */
@@ -101,18 +113,27 @@ export function SessionArchiveReclaimSection({
   }, [environmentId, reportFailure, scan]);
 
   const runReclaim = useCallback(
-    async (mode: "slim" | "remove") => {
-      if (environmentId === null || selection.eligibleCount === 0) {
+    async (action: "slim" | "remove" | "force-remove") => {
+      if (environmentId === null) {
         return;
       }
-      const eligibleIds = entries
-        .filter((entry) => selectedThreadIds.has(entry.threadId) && entry.blockedReason === null)
-        .map((entry) => entry.threadId);
+      const targetIds = selectionTargets(entries, selectedThreadIds, action);
+      if (targetIds.length === 0) {
+        return;
+      }
+      const mode = action === "slim" ? "slim" : "remove";
+      const force = action === "force-remove";
 
+      // A forced remove is the only action here that destroys work the operator
+      // cannot get back, so its confirmation names the count and what is lost
+      // rather than describing the action in general terms.
+      const forcedCount = force ? selection.forceableCount : 0;
       const confirmed = globalThis.confirm(
-        mode === "slim"
-          ? `Delete regenerable directories (node_modules, build output, caches) from ${eligibleIds.length} session worktree(s)?\n\nEach session's history is exported first. The checkouts and branches stay intact.`
-          : `Remove ${eligibleIds.length} session worktree(s) entirely?\n\nEach session's history is exported first. Reopening one of these sessions will have to re-create its worktree.`,
+        action === "slim"
+          ? `Delete regenerable directories (node_modules, build output, caches) from ${targetIds.length} session worktree(s)?\n\nEach session's history is exported first. The checkouts and branches stay intact.`
+          : action === "remove"
+            ? `Remove ${targetIds.length} session worktree(s) entirely?\n\nEach session's history is exported first. Reopening one of these sessions will have to re-create its worktree.`
+            : `Force-remove ${targetIds.length} session worktree(s)?\n\n${forcedCount} of them have uncommitted changes, untracked files, or commits that are not on any remote. That work will be PERMANENTLY LOST — only the exported history digest and transcript will remain.\n\nWorktrees in use by a live or active session are never removed, forced or not.`,
       );
       if (!confirmed) {
         return;
@@ -121,7 +142,7 @@ export function SessionArchiveReclaimSection({
       setIsBusy(true);
       const result = await reclaim({
         environmentId,
-        input: { threadIds: eligibleIds, mode, force: false },
+        input: { threadIds: targetIds, mode, force },
       });
       setIsBusy(false);
 
@@ -162,7 +183,7 @@ export function SessionArchiveReclaimSection({
       reportFailure,
       runScan,
       selectedThreadIds,
-      selection.eligibleCount,
+      selection.forceableCount,
     ],
   );
 
@@ -178,16 +199,15 @@ export function SessionArchiveReclaimSection({
     });
   }, []);
 
-  const selectAllEligible = useCallback(() => {
-    setSelectedThreadIds((current) => {
-      const eligible = entries.filter((entry) => entry.blockedReason === null);
-      // Second press clears, so the control works as a toggle.
-      if (eligible.every((entry) => current.has(entry.threadId)) && current.size > 0) {
-        return new Set();
-      }
-      return new Set(eligible.map((entry) => entry.threadId));
-    });
-  }, [entries]);
+  const selectScope = useCallback(
+    (scope: SelectionScope) => {
+      setSelectedThreadIds(applySelectionScope(entries, scope));
+    },
+    [entries],
+  );
+
+  const projectOptions = useMemo(() => projectGroups(entries), [entries]);
+  const stateOptions = useMemo(() => stateGroups(entries), [entries]);
 
   if (environmentId === null) {
     return null;
@@ -233,17 +253,7 @@ export function SessionArchiveReclaimSection({
             description={describeScanSummary(scanResult)}
             status={`History is written to ${scanResult.historyDir}`}
             control={
-              <div className="flex shrink-0 items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 cursor-pointer px-2.5"
-                  onClick={selectAllEligible}
-                  disabled={isBusy || entries.length === 0}
-                >
-                  Select reclaimable
-                </Button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                 <Button
                   type="button"
                   variant="outline"
@@ -264,6 +274,109 @@ export function SessionArchiveReclaimSection({
                 >
                   Remove worktree
                 </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  className="h-7 cursor-pointer px-2.5"
+                  disabled={isBusy || !selection.canForceRemove}
+                  onClick={() => void runReclaim("force-remove")}
+                  title="Remove worktrees even when they hold uncommitted or unpushed work. Live and shared worktrees are still never removed."
+                >
+                  Force remove ({selection.forceRemoveCount})
+                </Button>
+              </div>
+            }
+          />
+
+          {/* Bulk selection lives on its own row: with hundreds of archived
+              sessions, picking a set is a distinct step from acting on it. */}
+          <SettingsRow
+            title="Select"
+            description={
+              selection.selectedCount === 0
+                ? "Nothing selected."
+                : `${selection.selectedCount} selected · ${selection.eligibleCount} slimmable · ${selection.canRemove ? selectionTargets(entries, selectedThreadIds, "remove").length : 0} removable${selection.forceableCount > 0 ? ` · ${selection.forceableCount} need force` : ""}`
+            }
+            control={
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 cursor-pointer px-2.5"
+                  disabled={isBusy || entries.length === 0}
+                  onClick={() => selectScope({ kind: "all" })}
+                >
+                  All ({entries.length})
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 cursor-pointer px-2.5"
+                  disabled={isBusy || selection.selectedCount === 0}
+                  onClick={() => selectScope({ kind: "none" })}
+                >
+                  None
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 cursor-pointer px-2.5"
+                  disabled={isBusy || entries.length === 0}
+                  onClick={() => selectScope({ kind: "reclaimable" })}
+                >
+                  Reclaimable
+                </Button>
+                <Select
+                  aria-label="Select all worktrees in a project"
+                  disabled={isBusy || projectOptions.length === 0}
+                  value=""
+                  onValueChange={(value) => {
+                    if (typeof value === "string" && value.length > 0) {
+                      selectScope({ kind: "project", projectId: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-7 w-40">
+                    <SelectValue placeholder="By project…" />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {projectOptions.map((group) => (
+                      <SelectItem key={group.id} value={group.id}>
+                        {group.label} ({group.count})
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                <Select
+                  aria-label="Select all worktrees in a state"
+                  disabled={isBusy || stateOptions.length === 0}
+                  value=""
+                  onValueChange={(value) => {
+                    if (
+                      value === "present" ||
+                      value === "slimmed" ||
+                      value === "removed" ||
+                      value === "missing"
+                    ) {
+                      selectScope({ kind: "state", state: value });
+                    }
+                  }}
+                >
+                  <SelectTrigger className="h-7 w-40">
+                    <SelectValue placeholder="By state…" />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {stateOptions.map((group) => (
+                      <SelectItem key={group.id} value={group.id}>
+                        {group.label} ({group.count})
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
               </div>
             }
           />
@@ -275,7 +388,10 @@ export function SessionArchiveReclaimSection({
                 <span className="inline-flex items-center gap-2">
                   <Checkbox
                     checked={selectedThreadIds.has(entry.threadId)}
-                    disabled={isBusy || entry.blockedReason !== null}
+                    // Selectable whenever *some* action applies. An entry a
+                    // plain slim refuses may still be force-removable, and a
+                    // checkbox that cannot be ticked would hide that.
+                    disabled={isBusy || !isEntryActionable(entry)}
                     onCheckedChange={() => toggleEntry(entry.threadId)}
                     aria-label={`Select ${entry.title}`}
                   />
@@ -289,21 +405,17 @@ export function SessionArchiveReclaimSection({
                     ? ` · ${formatBytes(entry.reclaimableBytes)} reclaimable`
                     : ""}
                   {entry.branch ? ` · ${entry.branch}` : ""}
+                  {entry.projectName ? ` · ${entry.projectName}` : ""}
                 </>
               }
               status={
-                entry.blockedReason === null
-                  ? describeReclaimState(entry)
-                  : blockedText(entry.blockedReason)
+                entry.blockedReason !== null
+                  ? blockedText(entry.blockedReason)
+                  : isForceableBlockedReason(entry.removeBlockedReason)
+                    ? `${describeReclaimState(entry)} · ${blockedText(entry.removeBlockedReason)} Force remove overrides this.`
+                    : describeReclaimState(entry)
               }
-              control={
-                <Badge
-                  variant={entry.blockedReason === null ? "success" : "warning"}
-                  className="shrink-0"
-                >
-                  {entry.blockedReason === null ? "Reclaimable" : "Held"}
-                </Badge>
-              }
+              control={<Badge {...entryBadge(entry)} />}
             />
           ))}
 
@@ -343,6 +455,27 @@ export function SessionArchiveReclaimSection({
       )}
     </SettingsSection>
   );
+}
+
+/**
+ * Badge for one row.
+ *
+ * Three states, not two: an entry a plain remove refuses but a forced one would
+ * take reads as "Needs force", so the list distinguishes work-at-risk from a
+ * worktree that is genuinely untouchable.
+ */
+function entryBadge(entry: SessionArchiveEntry): {
+  readonly variant: "success" | "warning" | "error";
+  readonly className: string;
+  readonly children: string;
+} {
+  if (entry.blockedReason !== null) {
+    return { variant: "warning", className: "shrink-0", children: "Held" };
+  }
+  if (isForceableBlockedReason(entry.removeBlockedReason)) {
+    return { variant: "error", className: "shrink-0", children: "Needs force" };
+  }
+  return { variant: "success", className: "shrink-0", children: "Reclaimable" };
 }
 
 /** Mirrors the server's `describeBlockedReason`, phrased for this list. */

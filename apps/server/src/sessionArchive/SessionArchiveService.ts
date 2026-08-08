@@ -410,21 +410,25 @@ export const make = Effect.gen(function* () {
             const projectName = context.projectNames.get(thread.projectId) ?? "unknown-project";
             const git = yield* readGitFacts(thread.worktreePath);
 
-            const eligibility = evaluateReclaimEligibility({
+            // Evaluated per mode: `remove` gates harder than `slim`, and the
+            // panel needs to say which of its two buttons will actually run.
+            const gateInput = {
               thread: {
                 threadId: thread.id,
                 worktreePath: thread.worktreePath,
                 archivedAt: thread.archivedAt,
               },
-              // The panel offers both actions, so report the gate that lets the
-              // gentler one through; `remove` re-checks its own gates on use.
-              mode: "slim",
               git,
               liveWorktreePaths: context.liveWorktreePaths,
               activeThreadWorktreePaths: context.activeThreadWorktreePaths,
               minArchivedDays: 0,
               nowMs,
               force: false,
+            } as const;
+            const eligibility = evaluateReclaimEligibility({ ...gateInput, mode: "slim" });
+            const removeEligibility = evaluateReclaimEligibility({
+              ...gateInput,
+              mode: "remove",
             });
 
             const shouldSize =
@@ -471,6 +475,7 @@ export const make = Effect.gen(function* () {
             return {
               threadId: thread.id,
               projectId: thread.projectId,
+              projectName,
               title: thread.title,
               branch: thread.branch,
               worktreePath: thread.worktreePath,
@@ -479,6 +484,7 @@ export const make = Effect.gen(function* () {
               reclaimableBytes: sized?.reclaimableBytes ?? null,
               reclaimState,
               blockedReason: eligibility.blockedReason,
+              removeBlockedReason: removeEligibility.blockedReason,
               historyPath: digestExists ? paths.digestPath : null,
             } satisfies SessionArchiveEntry;
           }),

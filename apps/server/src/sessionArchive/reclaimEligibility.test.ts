@@ -200,3 +200,35 @@ describe("normalizeWorktreePath", () => {
     expect(normalizeWorktreePath(`  ${WORKTREE}  `)).toBe(WORKTREE);
   });
 });
+
+describe("per-mode reporting the scan relies on", () => {
+  // The panel reports `blockedReason` (slim) and `removeBlockedReason` (remove)
+  // separately, and its force affordance keys off the difference. These assert
+  // the two evaluations really do diverge only where they should.
+  it("lets a dirty worktree slim while refusing to remove it", () => {
+    const dirty = { ...CLEAN_GIT, hasUncommittedChanges: true };
+    expect(
+      evaluateReclaimEligibility(input({ mode: "slim", git: dirty })).blockedReason,
+    ).toBeNull();
+    expect(evaluateReclaimEligibility(input({ mode: "remove", git: dirty })).blockedReason).toBe(
+      "dirty-worktree",
+    );
+  });
+
+  it("reports a mode-independent gate identically for both modes", () => {
+    for (const overrides of [
+      { liveWorktreePaths: new Set([WORKTREE]) },
+      { activeThreadWorktreePaths: new Set([WORKTREE]) },
+    ]) {
+      const slim = evaluateReclaimEligibility(input({ ...overrides, mode: "slim" }));
+      const remove = evaluateReclaimEligibility(input({ ...overrides, mode: "remove" }));
+      expect(slim.blockedReason).toBe(remove.blockedReason);
+      expect(slim.blockedReason).not.toBeNull();
+    }
+  });
+
+  it("only ever reports a forceable reason for the remove mode", () => {
+    const bad = { hasUncommittedChanges: true, hasUntrackedFiles: true, hasUnpushedCommits: true };
+    expect(evaluateReclaimEligibility(input({ mode: "slim", git: bad })).blockedReason).toBeNull();
+  });
+});

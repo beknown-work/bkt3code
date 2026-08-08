@@ -5,6 +5,7 @@
  * most attention here — a blocked entry must never make one clickable.
  */
 import {
+  ProjectId,
   ThreadId,
   type SessionArchiveEntry,
   type SessionArchiveScanResult,
@@ -12,18 +13,23 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  applySelectionScope,
   describeReclaimResult,
   describeReclaimState,
   describeScanSummary,
   formatBytes,
+  projectGroups,
+  selectionTargets,
   sortEntriesForDisplay,
+  stateGroups,
   summarizeSelection,
 } from "./SessionArchiveReclaimSection.logic";
 
 const entry = (overrides: Partial<SessionArchiveEntry> = {}): SessionArchiveEntry =>
   ({
     threadId: ThreadId.make("thread_1"),
-    projectId: "project_1",
+    projectId: ProjectId.make("project_1"),
+    projectName: "A project",
     title: "A session",
     branch: "feature",
     worktreePath: "/worktrees/proj/feature",
@@ -32,6 +38,7 @@ const entry = (overrides: Partial<SessionArchiveEntry> = {}): SessionArchiveEntr
     reclaimableBytes: 800_000,
     reclaimState: "present",
     blockedReason: null,
+    removeBlockedReason: null,
     historyPath: null,
     ...overrides,
   }) as SessionArchiveEntry;
@@ -67,7 +74,14 @@ describe("summarizeSelection", () => {
   });
 
   it("never enables an action for a blocked entry", () => {
-    const entries = [entry({ threadId: ThreadId.make("a"), blockedReason: "worktree-live" })];
+    // `worktree-live` is mode-independent, so the server reports it for both.
+    const entries = [
+      entry({
+        threadId: ThreadId.make("a"),
+        blockedReason: "worktree-live",
+        removeBlockedReason: "worktree-live",
+      }),
+    ];
     const summary = summarizeSelection(entries, new Set([ThreadId.make("a")]));
     expect(summary.blockedCount).toBe(1);
     expect(summary.canSlim).toBe(false);
@@ -80,6 +94,7 @@ describe("summarizeSelection", () => {
       entry({
         threadId: ThreadId.make("b"),
         blockedReason: "worktree-shared",
+        removeBlockedReason: "worktree-shared",
         reclaimableBytes: 900,
       }),
     ];
@@ -174,5 +189,201 @@ describe("describeScanSummary", () => {
     expect(summary).toContain("1 reclaimable");
     expect(summary).toContain("1 orphaned worktrees");
     expect(summary).toContain("some sizes not measured");
+  });
+});
+
+describe("summarizeSelection — force remove", () => {
+  it("offers a plain remove only when the remove gate is clear", () => {
+    const entries = [
+      entry({ threadId: ThreadId.make("a"), removeBlockedReason: "dirty-worktree" }),
+    ];
+    const summary = summarizeSelection(entries, new Set([ThreadId.make("a")]));
+    expect(summary.canRemove).toBe(false);
+    expect(summary.canForceRemove).toBe(true);
+    expect(summary.forceableCount).toBe(1);
+  });
+
+  it("counts unpushed commits as forceable too", () => {
+    const entries = [
+      entry({ threadId: ThreadId.make("a"), removeBlockedReason: "unpushed-commits" }),
+    ];
+    expect(summarizeSelection(entries, new Set([ThreadId.make("a")])).canForceRemove).toBe(true);
+  });
+
+  it("never offers force for a live or shared worktree", () => {
+    for (const reason of ["worktree-live", "worktree-shared"] as const) {
+      const entries = [entry({ threadId: ThreadId.make("a"), removeBlockedReason: reason })];
+      const summary = summarizeSelection(entries, new Set([ThreadId.make("a")]));
+      expect(summary.canForceRemove).toBe(false);
+      expect(summary.forceableCount).toBe(0);
+    }
+  });
+
+  it("counts cleanly removable plus forceable in the force total", () => {
+    const entries = [
+      entry({ threadId: ThreadId.make("clean") }),
+      entry({ threadId: ThreadId.make("dirty"), removeBlockedReason: "dirty-worktree" }),
+      entry({
+        threadId: ThreadId.make("live"),
+        blockedReason: "worktree-live",
+        removeBlockedReason: "worktree-live",
+      }),
+    ];
+    const summary = summarizeSelection(
+      entries,
+      new Set([ThreadId.make("clean"), ThreadId.make("dirty"), ThreadId.make("live")]),
+    );
+    expect(summary.forceRemoveCount).toBe(2);
+  });
+});
+
+describe("selectionTargets", () => {
+  const entries = [
+    entry({ threadId: ThreadId.make("clean") }),
+    entry({ threadId: ThreadId.make("dirty"), removeBlockedReason: "dirty-worktree" }),
+    entry({
+      threadId: ThreadId.make("live"),
+      blockedReason: "worktree-live",
+      removeBlockedReason: "worktree-live",
+    }),
+    entry({
+      threadId: ThreadId.make("noslim"),
+      blockedReason: "worktree-shared",
+      removeBlockedReason: "worktree-shared",
+    }),
+  ];
+  const all = new Set(entries.map((e) => e.threadId));
+
+  it("sends only slim-eligible entries for a slim", () => {
+    // `live` and `noslim` are held by mode-independent gates, so a slim skips
+    // them too; `dirty` is fine to slim because slimming touches only
+    // regenerable, git-ignored directories.
+    expect(selectionTargets(entries, all, "slim")).toEqual(["clean", "dirty"]);
+  });
+
+  it("sends only cleanly removable entries for a plain remove", () => {
+    expect(selectionTargets(entries, all, "remove")).toEqual(["clean"]);
+  });
+
+  it("adds forceable entries for a forced remove, never the live one", () => {
+    const targets = selectionTargets(entries, all, "force-remove");
+    expect(targets).toEqual(["clean", "dirty"]);
+    expect(targets).not.toContain("live");
+  });
+
+  it("ignores entries that are not selected", () => {
+    expect(selectionTargets(entries, new Set([ThreadId.make("clean")]), "slim")).toEqual(["clean"]);
+  });
+
+  it("never targets an entry whose worktree is already gone", () => {
+    const gone = [entry({ threadId: ThreadId.make("gone"), worktreePath: null })];
+    expect(selectionTargets(gone, new Set([ThreadId.make("gone")]), "force-remove")).toEqual([]);
+  });
+});
+
+describe("applySelectionScope", () => {
+  const entries = [
+    entry({
+      threadId: ThreadId.make("a"),
+      projectId: ProjectId.make("p1"),
+      reclaimState: "present",
+    }),
+    entry({
+      threadId: ThreadId.make("b"),
+      projectId: ProjectId.make("p2"),
+      reclaimState: "slimmed",
+    }),
+    entry({
+      threadId: ThreadId.make("c"),
+      projectId: ProjectId.make("p1"),
+      reclaimState: "present",
+      blockedReason: "worktree-live",
+    }),
+  ] as ReadonlyArray<SessionArchiveEntry>;
+
+  it("selects everything", () => {
+    expect(applySelectionScope(entries, { kind: "all" }).size).toBe(3);
+  });
+
+  it("deselects everything", () => {
+    expect(applySelectionScope(entries, { kind: "none" }).size).toBe(0);
+  });
+
+  it("selects only reclaimable entries", () => {
+    const selected = applySelectionScope(entries, { kind: "reclaimable" });
+    expect([...selected].sort()).toEqual(["a", "b"]);
+  });
+
+  it("selects by project", () => {
+    const selected = applySelectionScope(entries, {
+      kind: "project",
+      projectId: ProjectId.make("p1"),
+    });
+    expect([...selected].sort()).toEqual(["a", "c"]);
+  });
+
+  it("selects by reclaim state", () => {
+    const selected = applySelectionScope(entries, { kind: "state", state: "slimmed" });
+    expect([...selected]).toEqual(["b"]);
+  });
+
+  it("replaces rather than accumulates", () => {
+    const first = applySelectionScope(entries, {
+      kind: "project",
+      projectId: ProjectId.make("p1"),
+    });
+    const second = applySelectionScope(entries, {
+      kind: "project",
+      projectId: ProjectId.make("p2"),
+    });
+    expect([...second]).toEqual(["b"]);
+    expect(first.has(ThreadId.make("a"))).toBe(true);
+  });
+});
+
+describe("selection groups", () => {
+  const entries = [
+    entry({
+      threadId: ThreadId.make("a"),
+      projectId: ProjectId.make("p1"),
+      reclaimState: "present",
+    }),
+    entry({
+      threadId: ThreadId.make("b"),
+      projectId: ProjectId.make("p1"),
+      reclaimState: "present",
+    }),
+    entry({
+      threadId: ThreadId.make("c"),
+      projectId: ProjectId.make("p2"),
+      reclaimState: "slimmed",
+    }),
+  ] as ReadonlyArray<SessionArchiveEntry>;
+
+  it("groups projects by count, biggest first, using the name on the entry", () => {
+    const named = [
+      entry({
+        threadId: ThreadId.make("a"),
+        projectId: ProjectId.make("p1"),
+        projectName: "t3code",
+      }),
+      entry({
+        threadId: ThreadId.make("b"),
+        projectId: ProjectId.make("p1"),
+        projectName: "t3code",
+      }),
+      // Blank name: an older server that predates the field.
+      entry({ threadId: ThreadId.make("c"), projectId: ProjectId.make("p2"), projectName: "" }),
+    ];
+    const groups = projectGroups(named);
+    expect(groups[0]).toMatchObject({ id: "p1", label: "t3code", count: 2 });
+    // A nameless project falls back to its id rather than disappearing.
+    expect(groups[1]).toMatchObject({ id: "p2", label: "p2", count: 1 });
+  });
+
+  it("groups reclaim states with human labels", () => {
+    const groups = stateGroups(entries);
+    expect(groups[0]).toMatchObject({ id: "present", label: "Worktree on disk", count: 2 });
+    expect(groups[1]).toMatchObject({ id: "slimmed", label: "Already slim", count: 1 });
   });
 });
