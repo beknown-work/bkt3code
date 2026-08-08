@@ -142,6 +142,7 @@ import {
   // T3-CUSTOM(expbkt3): ownership and co-participant facets.
   phaseSidebarThreadParticipantIds,
   compactPhaseSidebarTimeLabel,
+  type PhaseSidebarAttentionKind,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
   type PhaseSidebarSection,
@@ -849,6 +850,7 @@ interface PhaseThreadRowProps {
   readonly treeDepth?: number;
   readonly treeDescendantCount?: number;
   readonly treeHasBusyDescendant?: boolean;
+  readonly treeDescendantAttention?: PhaseSidebarAttentionKind | null;
   readonly treeExpanded?: boolean;
   readonly treeParentKey?: string | null;
   readonly treeParentTitle?: string | null;
@@ -865,6 +867,7 @@ type PhaseThreadRowTreeProps = Pick<
   | "treeDepth"
   | "treeDescendantCount"
   | "treeHasBusyDescendant"
+  | "treeDescendantAttention"
   | "treeExpanded"
   | "treeParentKey"
   | "treeParentTitle"
@@ -910,6 +913,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     treeDepth,
     treeDescendantCount,
     treeHasBusyDescendant,
+    treeDescendantAttention,
     treeExpanded,
     treeParentKey,
     treeParentTitle,
@@ -955,6 +959,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const hasChildren = (treeDescendantCount ?? 0) > 0;
   const hasCollapsedBusyDescendant =
     hasChildren && treeHasBusyDescendant === true && treeExpanded !== true;
+  // Attention outranks work: a parent hoisted into Needs Input has to say which
+  // of its descendants is stuck, or the group placement reads as a glitch.
+  const collapsedDescendantAttention =
+    hasChildren && treeExpanded !== true ? (treeDescendantAttention ?? null) : null;
   // T3-CUSTOM(expbkt3): END
   const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
@@ -1224,16 +1232,20 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             className="pointer-events-none absolute inset-y-1 right-0 w-0.5 rounded-full bg-primary shadow-[0_0_6px_var(--color-primary)]"
           />
         ) : null}
-        {/* T3-CUSTOM(expbkt3): BEGIN — session-tree disclosure. The slot is the
-            same size the unread dot already reserves, so a childless row is
-            pixel-identical to a pre-tree row. */}
+        {/* T3-CUSTOM(expbkt3): BEGIN — session-tree disclosure.
+            This sits in the SAME lane the unread dot reserves rather than
+            adding another one: the row is a flex box with gap-2, so an extra
+            child would cost its own width plus a gap and shove the title ~48px
+            right of every neighbouring row. The count is bare tabular text for
+            the same reason — pill chrome costs another ~10px of horizontal
+            padding for one glyph. */}
         {hasChildren ? (
           <span
             role="button"
             tabIndex={-1}
             aria-label={treeExpanded ? "Collapse child sessions" : "Expand child sessions"}
             data-testid={`phase-thread-disclosure-${row.thread.id}`}
-            className="-my-1 -ml-1 flex shrink-0 cursor-pointer items-center gap-1 self-center rounded py-1 pl-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+            className="-my-1 -ml-0.5 flex shrink-0 cursor-pointer items-center gap-px self-center rounded py-1 text-muted-foreground/70 transition-colors hover:text-foreground"
             onClick={(event) => {
               // The row itself navigates; opening a subtree must not.
               event.stopPropagation();
@@ -1251,10 +1263,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             <span
               aria-label={`${treeDescendantCount} child sessions`}
               className={cn(
-                "min-w-3.5 rounded-full px-1 py-px text-center text-[9px] font-semibold tabular-nums",
-                hasCollapsedBusyDescendant
-                  ? "bg-sky-500/20 text-sky-700 dark:text-sky-300"
-                  : "bg-muted-foreground/12 text-muted-foreground",
+                "text-[10px] font-semibold tabular-nums leading-none",
+                collapsedDescendantAttention !== null
+                  ? "text-red-600 dark:text-red-300"
+                  : hasCollapsedBusyDescendant
+                    ? "text-sky-600 dark:text-sky-300"
+                    : "text-current",
               )}
             >
               {treeDescendantCount}
@@ -1262,7 +1276,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </span>
         ) : null}
         {/* T3-CUSTOM(expbkt3): END */}
-        <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
+        {/* T3-CUSTOM(expbkt3): the empty spacer only earns its width when there
+            is no disclosure in the lane. An unread dot still renders on a
+            parent — that is real state, not reserved space. */}
+        {hasChildren && !row.isUnreadCompletion ? null : (
+          <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
+        )}
         {/* T3-CUSTOM(expbkt3): Vertically centered adaptive content lane. */}
         <span className={PHASE_SIDEBAR_CONTENT_CLASS_NAME}>
           {renaming ? (
@@ -1405,10 +1424,33 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               {workBadge.label.toUpperCase()}
             </span>
           ) : null}
+          {/* T3-CUSTOM(expbkt3): A descendant is waiting on a human. Outlined
+              with a ↳ glyph, same grammar as the derived work badge: solid is
+              this row, outlined is somewhere beneath it. */}
+          {collapsedDescendantAttention !== null && attentionKind === null ? (
+            <span
+              role="status"
+              aria-label={`A child session needs ${collapsedDescendantAttention}`}
+              data-testid={`phase-thread-subtree-attention-${row.thread.id}`}
+              className={cn(
+                "rounded-sm border px-1 py-0.5 text-[8px] font-black tracking-wide",
+                collapsedDescendantAttention === "input"
+                  ? "border-red-500/50 text-red-600 dark:border-red-400/50 dark:text-red-300"
+                  : collapsedDescendantAttention === "approval"
+                    ? "border-amber-500/50 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
+                    : "border-red-500/40 text-red-700 dark:border-red-400/40 dark:text-red-300",
+              )}
+            >
+              ↳ {collapsedDescendantAttention.toUpperCase()}
+            </span>
+          ) : null}
           {/* T3-CUSTOM(expbkt3): Work happening BELOW this row, not in it.
               Outlined rather than filled, with a ↳ glyph: the same grammar
               distinguishes "mine" from "my subtree's" everywhere on the row. */}
-          {hasCollapsedBusyDescendant && workBadge === null && attentionKind === null ? (
+          {hasCollapsedBusyDescendant &&
+          workBadge === null &&
+          attentionKind === null &&
+          collapsedDescendantAttention === null ? (
             <span
               role="status"
               aria-label="A child session is working"
@@ -2684,6 +2726,7 @@ export function PhaseGroupedSidebar() {
           treeDepth: node.depth,
           treeDescendantCount: node.descendantCount,
           treeHasBusyDescendant: node.hasBusyDescendant,
+          treeDescendantAttention: node.descendantAttention,
           treeExpanded: expanded,
           treeParentKey: node.orphanedFrom?.key ?? null,
           treeParentTitle: node.orphanedFrom?.title ?? null,

@@ -8,7 +8,9 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 
 import {
   matchesPhaseSidebarFilters,
+  resolvePhaseSidebarAttentionKind,
   PHASE_SIDEBAR_PHASES,
+  type PhaseSidebarAttentionKind,
   type PhaseSidebarFilters,
   type PhaseSidebarPhaseDefinition,
   type PhaseSidebarPhaseId,
@@ -38,6 +40,32 @@ const BUSY_PHASE_IDS: ReadonlySet<PhaseSidebarPhaseId> = new Set<PhaseSidebarPha
   "implementing",
 ]);
 
+/**
+ * Most-blocking first. A subtree can hold several stuck sessions at once, and
+ * the parent has room for exactly one derived badge, so it reports the worst.
+ */
+const ATTENTION_RANK: ReadonlyArray<PhaseSidebarAttentionKind> = ["input", "approval", "error"];
+
+/**
+ * A descendant needs a human when it is parked in the Needs Input phase or is
+ * flying an attention badge of its own — a pending approval does not change a
+ * session's phase, so both signals matter.
+ */
+function attentionKindOf(row: PhaseSidebarRow): PhaseSidebarAttentionKind | null {
+  const kind = resolvePhaseSidebarAttentionKind(row.thread);
+  if (kind !== null) return kind;
+  return row.phaseId === "needs_input" ? "input" : null;
+}
+
+function moreUrgent(
+  left: PhaseSidebarAttentionKind | null,
+  right: PhaseSidebarAttentionKind | null,
+): PhaseSidebarAttentionKind | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return ATTENTION_RANK.indexOf(left) <= ATTENTION_RANK.indexOf(right) ? left : right;
+}
+
 export interface PhaseSidebarTreeNode {
   readonly row: PhaseSidebarRow;
   readonly key: string;
@@ -48,6 +76,12 @@ export interface PhaseSidebarTreeNode {
   readonly descendantCount: number;
   /** True when any descendant is planning or implementing (see BUSY_PHASE_IDS). */
   readonly hasBusyDescendant: boolean;
+  /**
+   * The most blocking thing any descendant is waiting on, or null. Drives both
+   * the parent's group placement and its derived badge: work buried in a
+   * collapsed subtree is invisible, so the parent has to raise its hand.
+   */
+  readonly descendantAttention: PhaseSidebarAttentionKind | null;
   /**
    * Set only on a row whose recorded parent is not rendering in this section —
    * archived, settled, filtered out, in another environment, or deleted. The row
@@ -80,6 +114,7 @@ interface MutableNode {
   depth: number;
   descendantCount: number;
   hasBusyDescendant: boolean;
+  descendantAttention: PhaseSidebarAttentionKind | null;
   orphanedFrom: { readonly key: string; readonly title: string } | null;
 }
 
@@ -126,13 +161,19 @@ function finalize(node: MutableNode, depth: number): void {
   node.depth = depth;
   let descendantCount = 0;
   let hasBusyDescendant = false;
+  let descendantAttention: PhaseSidebarAttentionKind | null = null;
   for (const child of node.children) {
     finalize(child, depth + 1);
     descendantCount += 1 + child.descendantCount;
     hasBusyDescendant = hasBusyDescendant || isBusy(child.row) || child.hasBusyDescendant;
+    descendantAttention = moreUrgent(
+      descendantAttention,
+      moreUrgent(attentionKindOf(child.row), child.descendantAttention),
+    );
   }
   node.descendantCount = descendantCount;
   node.hasBusyDescendant = hasBusyDescendant;
+  node.descendantAttention = descendantAttention;
 }
 
 function freeze(node: MutableNode): PhaseSidebarTreeNode {
@@ -143,6 +184,7 @@ function freeze(node: MutableNode): PhaseSidebarTreeNode {
     depth: node.depth,
     descendantCount: node.descendantCount,
     hasBusyDescendant: node.hasBusyDescendant,
+    descendantAttention: node.descendantAttention,
     orphanedFrom: node.orphanedFrom,
   };
 }
@@ -170,6 +212,7 @@ export function buildPhaseSidebarTree(
     depth: 0,
     descendantCount: 0,
     hasBusyDescendant: false,
+    descendantAttention: null,
     orphanedFrom: null,
   }));
   const byKey = new Map(nodes.map((node) => [node.key, node]));
@@ -202,24 +245,23 @@ export function buildPhaseSidebarTree(
 /**
  * The phase a ROOT row is grouped under.
  *
- * A parent whose subtree contains active work is pulled into Implementing, no
- * matter what its own phase says — a session that fanned work out is not "Ready"
- * while that work is still running, and the operator scanning for live work
- * needs to find it. Every other state follows the parent's own lifecycle: a
- * child waiting on input does not move its parent, because the child is the
- * thing that needs answering and it is one disclosure away.
+ * Precedence, most urgent first:
+ *
+ *   1. Anything in the subtree is waiting on a human  → Needs Input
+ *   2. Anything in the subtree is doing work          → Implementing
+ *   3. Otherwise                                      → the row's own phase
+ *
+ * Attention outranks work because a collapsed subtree hides it completely: an
+ * approval sitting two levels down under a parent filed as "Implementing" is
+ * invisible until someone happens to expand the right row. Hoisting the parent
+ * costs one row of churn and is the whole reason the Needs Input group is worth
+ * scanning first.
  */
 export function resolvePhaseSidebarTreePhase(node: PhaseSidebarTreeNode): PhaseSidebarPhaseId {
+  if (node.descendantAttention !== null) return "needs_input";
   return node.hasBusyDescendant ? "implementing" : node.row.phaseId;
 }
 
-/**
- * Render order, minus the subtrees the user has collapsed.
- *
- * Keyboard traversal (thread.previous / thread.next) and the thread.jump.1..9
- * indices both read this, so a collapsed child can never be focused by a key
- * that does not visibly move the selection.
- */
 export function flattenPhaseSidebarTree(
   nodes: ReadonlyArray<PhaseSidebarTreeNode>,
   isExpanded: (key: string) => boolean,

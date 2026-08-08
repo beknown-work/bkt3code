@@ -77,6 +77,7 @@ function makeRow(
     readonly phaseId?: PhaseSidebarPhaseId;
     readonly repositoryKey?: string;
     readonly archived?: boolean;
+    readonly pendingApproval?: boolean;
   } = {},
 ): PhaseSidebarRow {
   const thread = makeThread(id, {
@@ -84,6 +85,7 @@ function makeRow(
       ? { parentThreadId: options.parent === null ? null : ThreadId.make(options.parent) }
       : {}),
     ...(options.archived ? { archivedAt: now } : {}),
+    ...(options.pendingApproval ? { hasPendingApprovals: true } : {}),
   });
   return {
     thread,
@@ -230,18 +232,72 @@ describe("resolvePhaseSidebarTreePhase", () => {
     expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("implementing");
   });
 
-  it("leaves the parent in its own phase when a child merely needs input", () => {
-    // Deliberate: the child is the thing that needs answering, and it is one
-    // disclosure away. Only live work moves the parent.
+  it("hoists a parent into Needs Input when a child is waiting on a human", () => {
+    // Reversal of the original rule. In practice a stuck child two levels down
+    // under a parent filed as "Implementing" was invisible: nothing surfaced it
+    // until someone expanded the right row.
     const tree = buildPhaseSidebarTree(
       [
-        makeRow("parent", { phaseId: "ready" }),
+        makeRow("parent", { phaseId: "implementing" }),
         makeRow("child", { parent: "parent", phaseId: "needs_input" }),
       ],
       { compareSiblings: byId },
     );
 
-    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("ready");
+    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
+    expect(tree[0]?.descendantAttention).toBe("input");
+  });
+
+  it("hoists on a pending approval, which never changes a child's own phase", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("child", { parent: "parent", phaseId: "implementing", pendingApproval: true }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
+    expect(tree[0]?.descendantAttention).toBe("approval");
+  });
+
+  it("reports the most blocking descendant when several are stuck", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("waiting", { parent: "parent", phaseId: "needs_input" }),
+        makeRow("approving", { parent: "parent", phaseId: "ready", pendingApproval: true }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(tree[0]?.descendantAttention).toBe("input");
+  });
+
+  it("rolls attention up through a grandchild", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("root", { phaseId: "ready" }),
+        makeRow("mid", { parent: "root", phaseId: "ready" }),
+        makeRow("leaf", { parent: "mid", phaseId: "needs_input" }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
+  });
+
+  it("prefers attention over work when the subtree has both", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("busy", { parent: "parent", phaseId: "implementing" }),
+        makeRow("stuck", { parent: "parent", phaseId: "needs_input" }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
   });
 
   it("leaves a childless row in its own phase", () => {
