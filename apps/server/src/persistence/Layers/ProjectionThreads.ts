@@ -51,6 +51,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at,
           priority,
           linear_issue_url,
+          parent_thread_id,
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary,
           -- T3-CUSTOM(expbkt3): END
@@ -85,6 +86,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.snoozedAt},
           ${row.priority},
           ${row.linearIssueUrl ?? null},
+          ${row.parentThreadId ?? null},
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           ${row.workSummary ?? null},
           -- T3-CUSTOM(expbkt3): END
@@ -119,6 +121,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at = excluded.snoozed_at,
           priority = excluded.priority,
           linear_issue_url = excluded.linear_issue_url,
+          parent_thread_id = excluded.parent_thread_id,
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary = excluded.work_summary,
           -- T3-CUSTOM(expbkt3): END
@@ -160,6 +163,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          parent_thread_id AS "parentThreadId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
@@ -203,6 +207,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          parent_thread_id AS "parentThreadId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END

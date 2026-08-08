@@ -50,6 +50,10 @@ import { mcpUpstreamProxyRouteLayer } from "./mcp/McpUpstreamProxy.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 // T3-CUSTOM(expbkt3): BEGIN — experimental native-plan review runtime.
 import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
+// T3-CUSTOM(expbkt3): native plan review.
+import * as PlanIngestListener from "./planreview/PlanIngestListener.ts";
+import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
+import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
 import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
 // T3-CUSTOM(expbkt3): END
 import * as PreviewManager from "./preview/Manager.ts";
@@ -122,6 +126,10 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
+import * as SessionArchiveSweeper from "./sessionArchive/SessionArchiveSweeper.ts";
+import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import { ThreadExecutionSupervisorLive } from "./execution/ThreadExecutionSupervisorLive.ts";
 // T3-CUSTOM(expbkt3): durable execution state machine repository.
@@ -447,6 +455,23 @@ const ProviderExecutionRuntimeLayerLive = Layer.mergeAll(
 
 const ProviderRateLimitsLayerLive = ProviderRateLimits.layer.pipe(Layer.provide(ProviderLayerLive));
 
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim. Reads the projection
+// for archived threads and their messages, and removes worktrees through the
+// same git workflow service the delete path uses.
+const SessionArchiveLayerLive = SessionArchiveService.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+  Layer.provide(ProjectionThreadMessageRepositoryLive),
+  Layer.provide(GitWorkflowLayerLive),
+  Layer.provide(PersistenceLayerLive),
+);
+
+// The sweeper only puts the service on a timer, so it composes on top of it.
+const SessionArchiveSweeperLayerLive = SessionArchiveSweeper.layer.pipe(
+  Layer.provide(SessionArchiveLayerLive),
+  Layer.provide(ServerSettingsLayerLive),
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
@@ -459,7 +484,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
     ),
   ),
   Layer.provideMerge(GitLayerLive),
-  Layer.provideMerge(VcsLayerLive),
+  // T3-CUSTOM(expbkt3): the session archive is merged into the VCS group rather
+  // than added as its own `pipe` step — the chain is already at TypeScript's
+  // 20-overload ceiling for `.pipe`.
+  Layer.provideMerge(
+    Layer.mergeAll(VcsLayerLive, SessionArchiveLayerLive, SessionArchiveSweeperLayerLive),
+  ),
   Layer.provideMerge(ProviderExecutionRuntimeLayerLive),
   Layer.provideMerge(
     Layer.mergeAll(ProviderRateLimitsLayerLive, TerminalLayerLive, PreviewLayerLive),
@@ -774,8 +804,16 @@ export const makeServerLayer = Layer.unwrap(
       runtimeBaseServicesLive,
       OrchestrationCommandDispatcher.layer.pipe(Layer.provide(runtimeBaseServicesLive)),
     );
-    const runtimeServicesLive = PlannotatorManager.layer.pipe(
+    // T3-CUSTOM(expbkt3): native plan review sits beside Plannotator; both read
+    // the same proposed-plan events and neither depends on the other.
+    const planReviewServicesLive = PlanReviewServiceLayer.layer.pipe(
+      Layer.provide(PlanReviewDocuments.layer),
       Layer.provideMerge(runtimeServicesWithoutPlannotatorLive),
+    );
+    const runtimeServicesLive = Layer.mergeAll(
+      PlannotatorManager.layer.pipe(Layer.provideMerge(runtimeServicesWithoutPlannotatorLive)),
+      PlanIngestListener.layer.pipe(Layer.provideMerge(planReviewServicesLive)),
+      planReviewServicesLive,
     );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {

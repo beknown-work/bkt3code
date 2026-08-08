@@ -147,6 +147,8 @@ import {
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
+// T3-CUSTOM(expbkt3): native plan review surface.
+import { PlanReviewPanel, useOpenPlanReviewDocumentId } from "../fork/planReviewSurface";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -177,6 +179,8 @@ import {
   AlarmClockIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  // T3-CUSTOM(expbkt3): icon for the native plan review pill.
+  ClipboardListIcon,
   GitBranchIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -439,6 +443,7 @@ const PreviewPanel = lazy(() =>
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+// T3-CUSTOM(expbkt3): native plan review surface (lazy: Plate is ~200 kB gzip).
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -3553,6 +3558,17 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThreadRef],
   );
+  const openPlanReviewSurface = useCallback(
+    (documentId: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openPlanReview(activeThreadRef, documentId);
+    },
+    [activeThreadRef],
+  );
+  const planReviewDocumentId = useOpenPlanReviewDocumentId(
+    activeThreadRef?.environmentId ?? null,
+    activeThreadRef?.threadId ?? null,
+  );
   // T3-CUSTOM(expbkt3): END
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
@@ -6621,7 +6637,20 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
-    ) : activeRightPanelSurface?.kind === "agents" ? (
+    ) : /* T3-CUSTOM(expbkt3): BEGIN — native plan review panel. */
+    activeRightPanelSurface?.kind === "planReview" ? (
+      <Suspense fallback={null}>
+        <PlanReviewPanel
+          key={activeRightPanelSurface.documentId}
+          environmentId={activeThreadRef.environmentId}
+          documentId={activeRightPanelSurface.documentId}
+          onClose={() =>
+            useRightPanelStore.getState().closeSurface(activeThreadRef, activeRightPanelSurface.id)
+          }
+        />
+      </Suspense>
+    ) : /* T3-CUSTOM(expbkt3): END */
+    activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
@@ -6770,6 +6799,8 @@ function ChatViewContent(props: ChatViewProps) {
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 onOpenPlannotator={openPlannotatorSurface}
+                onOpenPlanReview={openPlanReviewSurface}
+                planReviewDocumentId={planReviewDocumentId}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
@@ -6809,6 +6840,28 @@ function ChatViewContent(props: ChatViewProps) {
                   </button>
                 </div>
               )}
+              {/* T3-CUSTOM(expbkt3): BEGIN — floating entry point for a plan awaiting review. */}
+              {planReviewDocumentId !== null &&
+              !showScrollToBottom &&
+              activeRightPanelSurface?.kind !== "planReview" ? (
+                <div
+                  className="pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5"
+                  style={{ bottom: composerOverlayHeight + 4 }}
+                >
+                  <button
+                    type="button"
+                    aria-label="Open the plan in preview"
+                    title="Open the plan in preview"
+                    data-plan-review-pill
+                    onClick={() => openPlanReviewSurface(planReviewDocumentId)}
+                    className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:cursor-pointer hover:border-border hover:text-foreground"
+                  >
+                    <ClipboardListIcon className="size-3.5" />
+                    Open the plan in preview
+                  </button>
+                </div>
+              ) : null}
+              {/* T3-CUSTOM(expbkt3): END */}
             </div>
 
             {/* Input bar — centered hero while a draft has no messages, docked at the bottom otherwise */}

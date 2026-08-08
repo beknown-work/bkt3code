@@ -109,6 +109,8 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
+// T3-CUSTOM(expbkt3): native plan review service.
+import { PlanReviewService } from "./planreview/PlanReviewService.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -119,6 +121,8 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -393,6 +397,8 @@ const makeWsRpcLayer = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const gitVcsDriver = yield* GitVcsDriver.GitVcsDriver;
+      // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+      const sessionArchive = yield* SessionArchiveService.SessionArchiveService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
@@ -428,6 +434,20 @@ const makeWsRpcLayer = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const environmentUsers = yield* EnvironmentUserService.EnvironmentUserService;
+      // T3-CUSTOM(expbkt3): BEGIN native plan review connection state.
+      const planReview = yield* PlanReviewService;
+      // Resolved once per connection: it only labels this actor's own comments.
+      const actorLabel =
+        actorUserId === null
+          ? null
+          : yield* clerkDirectory.listOrgMembers().pipe(
+              Effect.map((members) => {
+                const member = members.find((user) => user.id === actorUserId);
+                return member?.name ?? member?.email ?? null;
+              }),
+              Effect.orElseSucceed(() => null),
+            );
+      // T3-CUSTOM(expbkt3): END native plan review connection state.
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
@@ -1120,11 +1140,14 @@ const makeWsRpcLayer = (
         httpClient,
         sourceControlProfiles,
         environmentUsers,
+        planReview,
+        actorLabel,
         systemResourceMonitor,
         providerRateLimits,
         projectionSnapshotQuery,
         orchestrationEngine,
         gitVcsDriver,
+        sessionArchive,
         executionSupervisor,
         sourceControlActionLock,
         enrichOrchestrationEvents,

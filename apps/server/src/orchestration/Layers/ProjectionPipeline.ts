@@ -748,6 +748,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             priority: event.payload.priority ?? null,
             // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
             linearIssueUrl: null,
+            // T3-CUSTOM(expbkt3): session lineage stamped at creation.
+            parentThreadId: event.payload.parentThreadId ?? null,
             // T3-CUSTOM(expbkt3): BEGIN — no work summary until one is requested.
             workSummary: null,
             // T3-CUSTOM(expbkt3): END
@@ -977,6 +979,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // T3-CUSTOM(expbkt3): durable manual Linear tag.
             ...(event.payload.linearIssueUrl !== undefined
               ? { linearIssueUrl: event.payload.linearIssueUrl }
+              : {}),
+            // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
+            ...(event.payload.parentThreadId !== undefined
+              ? { parentThreadId: event.payload.parentThreadId }
               : {}),
             updatedAt: event.payload.updatedAt,
           });

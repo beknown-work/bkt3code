@@ -136,6 +136,9 @@ import {
   useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+// T3-CUSTOM(expbkt3): BEGIN — archived-session worktree reclaim.
+import { SessionArchiveReclaimSection } from "./SessionArchiveReclaimSection";
+// T3-CUSTOM(expbkt3): END
 import { ProjectFavicon } from "../ProjectFavicon";
 
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
@@ -2347,6 +2350,12 @@ export function ArchivedThreadsPanel() {
 
   return (
     <SettingsPageContainer>
+      {/* T3-CUSTOM(expbkt3): BEGIN — reclaim disk from archived sessions' worktrees. */}
+      <SessionArchiveReclaimSection
+        environmentIds={environmentIds}
+        onReclaimed={refreshArchivedThreads}
+      />
+      {/* T3-CUSTOM(expbkt3): END */}
       {archivedGroups.length === 0 ? (
         <SettingsSection
           id={isLoadingArchive ? undefined : searchableSetting("archive").id}

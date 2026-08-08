@@ -20,11 +20,15 @@ export * from "./settings.ts";
 export * from "./personalMcp.ts";
 // T3-CUSTOM(expbkt3): lifecycle-row Linear issue status schemas
 export * from "./linearIssue.ts";
+// T3-CUSTOM(expbkt3): native plan review contracts.
+export * from "./planReview.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
 // T3-CUSTOM(expbkt3): fork source-control identity schemas
 export * from "./sourceControlProfiles.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim schemas
+export * from "./sessionArchive.ts";
 // T3-CUSTOM(expbkt3): fork websocket RPC definitions
 export * from "./rpcFork.ts";
 export * from "./orchestration.ts";

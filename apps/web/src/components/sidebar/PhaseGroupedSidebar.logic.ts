@@ -179,15 +179,39 @@ export interface PhaseSidebarFilters {
   readonly repositoryKeys: ReadonlyArray<string>;
   readonly phaseIds: ReadonlyArray<PhaseSidebarPhaseId>;
   readonly providerKinds: ReadonlyArray<string>;
-  readonly assignedToMe: boolean;
+  /**
+   * T3-CUSTOM(expbkt3): sessions this operator started.
+   *
+   * NOT "owner or tagged": that is the server's own visibility rule, so every
+   * thread you can see already satisfies it and the filter selected everything.
+   * Ownership is the distinction that means something — my sessions versus the
+   * ones I was pulled into.
+   */
+  readonly ownedByMe: boolean;
+  /**
+   * T3-CUSTOM(expbkt3): show only sessions ALL of these people are on. Anyone
+   * listed here is a co-participant on threads you can already see, since
+   * visibility never widens — the filter narrows to shared work.
+   */
+  readonly participantUserIds: ReadonlyArray<string>;
 }
 
 export const EMPTY_PHASE_SIDEBAR_FILTERS: PhaseSidebarFilters = {
   repositoryKeys: [],
   phaseIds: [],
   providerKinds: [],
-  assignedToMe: false,
+  ownedByMe: false,
+  participantUserIds: [],
 };
+
+/** T3-CUSTOM(expbkt3): everyone on a thread, owner included. */
+export function phaseSidebarThreadParticipantIds(
+  thread: Pick<ThreadShell, "ownerUserId" | "memberUserIds">,
+): ReadonlyArray<string> {
+  return thread.ownerUserId === null
+    ? thread.memberUserIds
+    : [thread.ownerUserId, ...thread.memberUserIds.filter((id) => id !== thread.ownerUserId)];
+}
 
 /**
  * "Assigned to me" = owned by, or directly tagged on, the thread. A thread made
@@ -208,6 +232,10 @@ export interface PhaseSidebarRow {
   readonly providerKind: string;
   readonly providerName: string;
   readonly isAssignedToMe: boolean;
+  // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
+  readonly isOwnedByMe: boolean;
+  readonly participantUserIds: ReadonlyArray<string>;
+  // T3-CUSTOM(expbkt3): END
   readonly attentionPriority: number;
   readonly isUnreadCompletion: boolean;
   /** False on environments whose server predates thread.settle/unsettle:
@@ -369,7 +397,8 @@ export interface PhaseSidebarGroup extends PhaseSidebarPhaseDefinition {
 }
 
 export interface PhaseSidebarFilterChip {
-  readonly facet: "repository" | "phase" | "provider" | "assignment";
+  // T3-CUSTOM(expbkt3): "person" is the co-participant facet.
+  readonly facet: "repository" | "phase" | "provider" | "assignment" | "person";
   readonly value: string;
   readonly label: string;
 }
@@ -570,7 +599,13 @@ export function matchesPhaseSidebarFilters(
     (filters.repositoryKeys.length === 0 || filters.repositoryKeys.includes(row.repositoryKey)) &&
     (filters.phaseIds.length === 0 || filters.phaseIds.includes(row.phaseId)) &&
     (filters.providerKinds.length === 0 || filters.providerKinds.includes(row.providerKind)) &&
-    (!filters.assignedToMe || row.isAssignedToMe)
+    // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
+    (!filters.ownedByMe || row.isOwnedByMe) &&
+    // Every selected person must be on the thread: selecting two people asks
+    // for their shared sessions, not the union of their work.
+    (filters.participantUserIds.length === 0 ||
+      filters.participantUserIds.every((userId) => row.participantUserIds.includes(userId)))
+    // T3-CUSTOM(expbkt3): END
   );
 }
 
@@ -737,8 +772,10 @@ export function sanitizePhaseSidebarFilters(value: unknown): PhaseSidebarFilters
       (phaseId): phaseId is PhaseSidebarPhaseId => PHASE_ID_SET.has(phaseId),
     ),
     providerKinds: sanitizeStringArray(candidate.providerKinds),
-    // Missing on older persisted (v1) blobs ⇒ default off; storage stays v1.
-    assignedToMe: candidate.assignedToMe === true,
+    // T3-CUSTOM(expbkt3): missing on blobs written before these facets existed,
+    // so both default off; storage stays v1.
+    ownedByMe: candidate.ownedByMe === true,
+    participantUserIds: sanitizeStringArray(candidate.participantUserIds),
   };
 }
 
@@ -748,15 +785,24 @@ export function reconcilePhaseSidebarFilters(
     readonly repositoryKeys: ReadonlySet<string>;
     readonly providerKinds: ReadonlySet<string>;
     // False on single-user builds (no operator identity): a persisted
-    // "assigned to me" filter would otherwise hide every thread.
+    // ownership filter would otherwise hide every thread.
     readonly assignmentAvailable: boolean;
+    // T3-CUSTOM(expbkt3): people still present in the directory. A teammate who
+    // leaves must not keep an invisible filter pinned over the sidebar.
+    readonly participantUserIds?: ReadonlySet<string>;
   },
 ): PhaseSidebarFilters {
+  const knownParticipants = options.participantUserIds;
   return {
     repositoryKeys: filters.repositoryKeys.filter((key) => options.repositoryKeys.has(key)),
     phaseIds: filters.phaseIds.filter((phaseId) => PHASE_ID_SET.has(phaseId)),
     providerKinds: filters.providerKinds.filter((kind) => options.providerKinds.has(kind)),
-    assignedToMe: options.assignmentAvailable ? filters.assignedToMe : false,
+    ownedByMe: options.assignmentAvailable ? filters.ownedByMe : false,
+    participantUserIds: !options.assignmentAvailable
+      ? []
+      : knownParticipants === undefined
+        ? filters.participantUserIds
+        : filters.participantUserIds.filter((userId) => knownParticipants.has(userId)),
   };
 }
 
@@ -765,6 +811,8 @@ export function buildPhaseSidebarFilterChips(
   labels: {
     readonly repositories: ReadonlyMap<string, string>;
     readonly providers: ReadonlyMap<string, string>;
+    // T3-CUSTOM(expbkt3): display names for the co-participant facet.
+    readonly people?: ReadonlyMap<string, string>;
   },
 ): ReadonlyArray<PhaseSidebarFilterChip> {
   const phaseLabels = new Map(PHASE_SIDEBAR_PHASES.map((phase) => [phase.id, phase.label]));
@@ -784,9 +832,16 @@ export function buildPhaseSidebarFilterChips(
       value,
       label: labels.providers.get(value) ?? value,
     })),
-    ...(filters.assignedToMe
-      ? [{ facet: "assignment" as const, value: "assigned-to-me", label: "Assigned to me" }]
+    // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant chips.
+    ...(filters.ownedByMe
+      ? [{ facet: "assignment" as const, value: "owned-by-me", label: "Started by me" }]
       : []),
+    ...filters.participantUserIds.map((value) => ({
+      facet: "person" as const,
+      value,
+      label: labels.people?.get(value) ?? "Teammate",
+    })),
+    // T3-CUSTOM(expbkt3): END
   ];
 }
 

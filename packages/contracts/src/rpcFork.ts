@@ -25,8 +25,32 @@ import {
   PersonalMcpTokenResult,
 } from "./personalMcp.ts";
 import { LinearIssueStatusInput, LinearIssueStatusResult } from "./linearIssue.ts";
+import {
+  PlanReviewCutVersionInput,
+  PlanReviewDocumentIdInput,
+  PlanReviewError,
+  PlanReviewListInput,
+  PlanReviewListResult,
+  PlanReviewResolveDiscussionInput,
+  PlanReviewSaveDraftInput,
+  PlanReviewSaveDraftResult,
+  PlanReviewSnapshotResult,
+  PlanReviewSubmitInput,
+  PlanReviewSubmitResult,
+  PlanReviewUpsertDiscussionInput,
+  PlanReviewVersionDiffInput,
+  PlanReviewVersionDiffResult,
+} from "./planReview.ts";
 import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
 import { ServerResourceSample } from "./server.ts";
+import {
+  SessionArchiveError,
+  SessionArchiveExportInput,
+  SessionArchiveExportResult,
+  SessionArchiveReclaimInput,
+  SessionArchiveReclaimResult,
+  SessionArchiveScanResult,
+} from "./sessionArchive.ts";
 import {
   GitHubSourceControlProfile,
   SourceControlProfileArchiveInput,
@@ -68,6 +92,18 @@ export const WS_FORK_METHODS = {
   subscribeServerResources: "subscribeServerResources",
   subscribeProviderRateLimits: "subscribeProviderRateLimits",
   linearIssuesResolve: "linearIssues.resolve",
+  planReviewGet: "planReview.get",
+  planReviewList: "planReview.list",
+  planReviewSaveDraft: "planReview.saveDraft",
+  planReviewCutVersion: "planReview.cutVersion",
+  planReviewUpsertDiscussion: "planReview.upsertDiscussion",
+  planReviewResolveDiscussion: "planReview.resolveDiscussion",
+  planReviewVersionDiff: "planReview.versionDiff",
+  planReviewSubmit: "planReview.submit",
+  subscribePlanReview: "subscribePlanReview",
+  sessionArchiveScan: "sessionArchive.scan",
+  sessionArchiveExport: "sessionArchive.export",
+  sessionArchiveReclaim: "sessionArchive.reclaim",
 } as const;
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_FORK_METHODS.personalMcpGetProfile, {
@@ -230,6 +266,25 @@ export const WsLinearIssuesResolveRpc = Rpc.make(WS_FORK_METHODS.linearIssuesRes
   error: EnvironmentAuthorizationError,
 });
 
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+export const WsSessionArchiveScanRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveScan, {
+  payload: Schema.Struct({}),
+  success: SessionArchiveScanResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
+export const WsSessionArchiveExportRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveExport, {
+  payload: SessionArchiveExportInput,
+  success: SessionArchiveExportResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
+export const WsSessionArchiveReclaimRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveReclaim, {
+  payload: SessionArchiveReclaimInput,
+  success: SessionArchiveReclaimResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
 export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
   payload: OrchestrationRpcSchemas.stopExecution.input,
   success: OrchestrationRpcSchemas.stopExecution.output,
@@ -242,7 +297,79 @@ export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   error: Schema.Union([OrchestrationReplayEventsError, EnvironmentAuthorizationError]),
 });
 
+// T3-CUSTOM(expbkt3): native plan review.
+export const WsPlanReviewGetRpc = Rpc.make(WS_FORK_METHODS.planReviewGet, {
+  payload: PlanReviewDocumentIdInput,
+  success: PlanReviewSnapshotResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPlanReviewListRpc = Rpc.make(WS_FORK_METHODS.planReviewList, {
+  payload: PlanReviewListInput,
+  success: PlanReviewListResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPlanReviewSaveDraftRpc = Rpc.make(WS_FORK_METHODS.planReviewSaveDraft, {
+  payload: PlanReviewSaveDraftInput,
+  success: PlanReviewSaveDraftResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPlanReviewCutVersionRpc = Rpc.make(WS_FORK_METHODS.planReviewCutVersion, {
+  payload: PlanReviewCutVersionInput,
+  success: PlanReviewSnapshotResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPlanReviewUpsertDiscussionRpc = Rpc.make(
+  WS_FORK_METHODS.planReviewUpsertDiscussion,
+  {
+    payload: PlanReviewUpsertDiscussionInput,
+    success: PlanReviewSnapshotResult,
+    error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsPlanReviewResolveDiscussionRpc = Rpc.make(
+  WS_FORK_METHODS.planReviewResolveDiscussion,
+  {
+    payload: PlanReviewResolveDiscussionInput,
+    success: PlanReviewSnapshotResult,
+    error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsPlanReviewVersionDiffRpc = Rpc.make(WS_FORK_METHODS.planReviewVersionDiff, {
+  payload: PlanReviewVersionDiffInput,
+  success: PlanReviewVersionDiffResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPlanReviewSubmitRpc = Rpc.make(WS_FORK_METHODS.planReviewSubmit, {
+  payload: PlanReviewSubmitInput,
+  success: PlanReviewSubmitResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+});
+
+/** Pushes a fresh snapshot whenever any client mutates the review. */
+export const WsSubscribePlanReviewRpc = Rpc.make(WS_FORK_METHODS.subscribePlanReview, {
+  payload: PlanReviewDocumentIdInput,
+  success: PlanReviewSnapshotResult,
+  error: Schema.Union([PlanReviewError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 export const FORK_WS_RPCS = [
+  WsPlanReviewGetRpc,
+  WsPlanReviewListRpc,
+  WsPlanReviewSaveDraftRpc,
+  WsPlanReviewCutVersionRpc,
+  WsPlanReviewUpsertDiscussionRpc,
+  WsPlanReviewResolveDiscussionRpc,
+  WsPlanReviewVersionDiffRpc,
+  WsPlanReviewSubmitRpc,
+  WsSubscribePlanReviewRpc,
   WsPersonalMcpGetProfileRpc,
   WsPersonalMcpUpdateProfileRpc,
   WsPersonalMcpRotateTokenRpc,
@@ -262,6 +389,9 @@ export const FORK_WS_RPCS = [
   WsSubscribeServerResourcesRpc,
   WsSubscribeProviderRateLimitsRpc,
   WsLinearIssuesResolveRpc,
+  WsSessionArchiveScanRpc,
+  WsSessionArchiveExportRpc,
+  WsSessionArchiveReclaimRpc,
   WsOrchestrationStopExecutionRpc,
   WsOrchestrationReplayEventsRpc,
 ] as const;
