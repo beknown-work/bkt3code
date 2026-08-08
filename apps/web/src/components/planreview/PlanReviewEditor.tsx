@@ -10,6 +10,16 @@ import { CommentPlugin } from "@platejs/comment/react";
 import { MarkdownPlugin } from "@platejs/markdown";
 import { SuggestionPlugin } from "@platejs/suggestion/react";
 import {
+  BlockquoteRules,
+  BoldRules,
+  CodeRules,
+  HeadingRules,
+  HighlightRules,
+  HorizontalRuleRules,
+  ItalicRules,
+  StrikethroughRules,
+} from "@platejs/basic-nodes";
+import {
   BlockquotePlugin,
   BoldPlugin,
   CodePlugin,
@@ -26,8 +36,10 @@ import {
   StrikethroughPlugin,
   UnderlinePlugin,
 } from "@platejs/basic-nodes/react";
+import { CodeBlockRules } from "@platejs/code-block";
 import { CodeBlockPlugin, CodeLinePlugin } from "@platejs/code-block/react";
 import { LinkPlugin } from "@platejs/link/react";
+import { BulletedListRules, OrderedListRules, TaskListRules } from "@platejs/list-classic";
 import {
   BulletedListPlugin,
   ListItemContentPlugin,
@@ -88,20 +100,52 @@ import { cn } from "../../lib/utils";
  */
 const PLAN_REVIEW_PLUGINS = [
   ParagraphPlugin.withComponent(ParagraphElement),
-  H1Plugin.withComponent(H1Element),
-  H2Plugin.withComponent(H2Element),
-  H3Plugin.withComponent(H3Element),
-  H4Plugin.withComponent(H4Element),
+  // `rules.break.empty: "reset"` makes Enter on an empty heading fall back to a
+  // paragraph, which is what every markdown editor does.
+  H1Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H1Element),
+  H2Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H2Element),
+  H3Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H3Element),
+  H4Plugin.configure({
+    inputRules: [HeadingRules.markdown()],
+    rules: { break: { empty: "reset" } },
+  }).withComponent(H4Element),
   H5Plugin.withComponent(H5Element),
   H6Plugin.withComponent(H6Element),
-  BlockquotePlugin.withComponent(BlockquoteElement),
-  HorizontalRulePlugin.withComponent(HorizontalRuleElement),
-  CodeBlockPlugin.withComponent(CodeBlockElement),
+  BlockquotePlugin.configure({ inputRules: [BlockquoteRules.markdown()] }).withComponent(
+    BlockquoteElement,
+  ),
+  HorizontalRulePlugin.configure({
+    inputRules: [
+      HorizontalRuleRules.markdown({ variant: "-" }),
+      HorizontalRuleRules.markdown({ variant: "_" }),
+    ],
+  }).withComponent(HorizontalRuleElement),
+  CodeBlockPlugin.configure({
+    inputRules: [CodeBlockRules.markdown({ on: "match" })],
+  }).withComponent(CodeBlockElement),
   CodeLinePlugin.withComponent(CodeLineElement),
   LinkPlugin.withComponent(LinkElement),
 
   // Classic ul/ol/li lists map straight from markdown, and carry task lists.
-  ListPlugin,
+  ListPlugin.configure({
+    inputRules: [
+      BulletedListRules.markdown({ variant: "-" }),
+      BulletedListRules.markdown({ variant: "*" }),
+      OrderedListRules.markdown({ variant: "." }),
+      OrderedListRules.markdown({ variant: ")" }),
+      TaskListRules.markdown({ checked: false }),
+      TaskListRules.markdown({ checked: true }),
+    ],
+  }),
   ListItemContentPlugin,
   ListItemPlugin.withComponent(ListItemElement),
   BulletedListPlugin.withComponent(BulletedListElement),
@@ -113,12 +157,18 @@ const PLAN_REVIEW_PLUGINS = [
   TableCellPlugin.withComponent(TableCellElement),
   TableCellHeaderPlugin.withComponent(TableCellHeaderElement),
 
-  BoldPlugin,
-  ItalicPlugin,
+  BoldPlugin.configure({
+    inputRules: [BoldRules.markdown({ variant: "*" }), BoldRules.markdown({ variant: "_" })],
+  }),
+  ItalicPlugin.configure({
+    inputRules: [ItalicRules.markdown({ variant: "*" }), ItalicRules.markdown({ variant: "_" })],
+  }),
   UnderlinePlugin,
-  StrikethroughPlugin,
-  HighlightPlugin.withComponent(HighlightLeaf),
-  CodePlugin.withComponent(CodeLeaf),
+  StrikethroughPlugin.configure({ inputRules: [StrikethroughRules.markdown()] }),
+  HighlightPlugin.configure({
+    inputRules: [HighlightRules.markdown({ variant: "==" })],
+  }).withComponent(HighlightLeaf),
+  CodePlugin.configure({ inputRules: [CodeRules.markdown()] }).withComponent(CodeLeaf),
   KbdPlugin.withComponent(KbdLeaf),
 
   CommentPlugin.withComponent(CommentLeaf),
@@ -244,21 +294,14 @@ function PlanReviewEditorImpl({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {suggestionMode && !readOnly ? (
-        <div className="flex items-center gap-2 border-b px-3 py-1.5">
-          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-amber-700 text-xs dark:text-amber-400">
-            Suggesting — your edits are tracked
-          </span>
-          <span className="text-muted-foreground text-xs">Select text to format or comment</span>
-        </div>
-      ) : null}
-
-      <div ref={surfaceRef} className="relative min-h-0 flex-1 overflow-auto">
+      <div
+        ref={surfaceRef}
+        className="relative min-h-0 flex-1 cursor-text select-text overflow-y-auto caret-primary selection:bg-primary/25"
+      >
         <Plate editor={editor} onChange={handleChange}>
           <PlateContent
             className={cn(
-              "min-h-full px-5 py-4 text-[15px] text-foreground leading-relaxed outline-none",
-              "[&_::selection]:bg-primary/25",
+              "min-h-full px-5 pt-3 pb-24 text-[15px] text-foreground leading-relaxed outline-none",
             )}
             readOnly={readOnly}
             placeholder="This plan is empty."

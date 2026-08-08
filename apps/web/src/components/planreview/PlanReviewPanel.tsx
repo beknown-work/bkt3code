@@ -22,6 +22,7 @@ import { cn } from "../../lib/utils";
 import { planReviewEnvironment } from "../../state/planReview";
 import { toastManager } from "../ui/toast";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useCurrentUserId } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
 
 interface PlanReviewPanelProps {
@@ -52,6 +53,8 @@ export default function PlanReviewPanel({
   const editedMarkdownRef = useRef<string | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorHandleRef = useRef<PlanReviewEditorHandle | null>(null);
+  // Read inside the save callback without making it depend on every snapshot.
+  const latestDraftRef = useRef<PlanReviewSnapshotResult["draft"]>(null);
 
   const initial = useEnvironmentQuery(
     planReviewEnvironment.review({ environmentId, input: { documentId } }),
@@ -85,9 +88,12 @@ export default function PlanReviewPanel({
 
   const latestVersion = useMemo(() => snapshot?.versions.at(-1) ?? null, [snapshot?.versions]);
 
+  const viewerUserId = useCurrentUserId();
+
   // Adopt a token only from our own save. Taking whatever the last writer
   // produced would make the next save look valid and silently overwrite them.
   useEffect(() => {
+    latestDraftRef.current = snapshot?.draft ?? null;
     if (revisionTokenRef.current === null && snapshot?.draft) {
       revisionTokenRef.current = snapshot.draft.revisionToken;
     }
@@ -154,8 +160,18 @@ export default function PlanReviewPanel({
           revisionTokenRef.current = result.value.revisionToken;
           return;
         }
-        // A stale token means somebody else edited this plan; say so rather
-        // than silently clobbering their work on the next save.
+
+        // A rejected save only means somebody *else* is editing when the draft
+        // on the server belongs to somebody else. Our own saves can land out of
+        // order — that is a token to catch up on, not a conflict to report.
+        const draft = latestDraftRef.current;
+        const owner = draft?.updatedByUserId ?? null;
+        const isOurs = owner === null || owner === viewerUserId;
+        if (isOurs) {
+          if (draft) revisionTokenRef.current = draft.revisionToken;
+          return;
+        }
+
         toastManager.add({
           type: "error",
           title: "Someone else edited this plan",
@@ -163,7 +179,7 @@ export default function PlanReviewPanel({
         });
       });
     }, DRAFT_SAVE_DEBOUNCE_MS);
-  }, [documentId, environmentId, saveDraft]);
+  }, [documentId, environmentId, saveDraft, viewerUserId]);
 
   // Stable identity: an inline arrow here would defeat the editor's `memo` and
   // re-render the whole Plate tree on every panel state change.
@@ -297,25 +313,19 @@ export default function PlanReviewPanel({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header className="flex items-center gap-2 border-b px-3 py-2">
-        <h2 className="min-w-0 flex-1 truncate font-medium text-sm" title={snapshot.document.title}>
-          {snapshot.document.title}
-        </h2>
-        <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-          v{snapshot.document.currentRevision}
-        </span>
-        {isResolved ? (
-          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
-            {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
-          </span>
-        ) : null}
-      </header>
-
+      {/*
+        One chrome row, not three. The plan's own H1 already titles the
+        document and the right-panel tab already says "Plan review", so a
+        separate title row and a mode banner were spending vertical space the
+        document needs — the panel is tall and narrow, and reading the plan is
+        the whole job.
+      */}
       <nav className="flex items-center gap-1 border-b px-2 py-1">
         <Button
           size="sm"
           variant={tab === "review" ? "secondary" : "ghost"}
           onClick={() => setTab("review")}
+          title={snapshot.document.title}
         >
           <MessageSquareIcon className="size-3.5" aria-hidden /> Review
           {openDiscussionCount > 0 ? (
@@ -329,20 +339,31 @@ export default function PlanReviewPanel({
           variant={tab === "versions" ? "secondary" : "ghost"}
           onClick={() => setTab("versions")}
         >
-          <HistoryIcon className="size-3.5" aria-hidden /> Versions
-          <span className="ml-1 text-muted-foreground text-[11px] tabular-nums">
-            {snapshot.versions.length}
-          </span>
+          <HistoryIcon className="size-3.5" aria-hidden /> v{snapshot.document.currentRevision}
+          {snapshot.versions.length > 1 ? (
+            <span className="ml-1 text-muted-foreground text-[11px] tabular-nums">
+              of {snapshot.versions.length}
+            </span>
+          ) : null}
         </Button>
-        <label className="ml-auto flex items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            checked={suggestionMode}
-            disabled={isResolved}
-            onChange={(event) => setSuggestionMode(event.target.checked)}
-          />
-          Suggest edits
-        </label>
+
+        {isResolved ? (
+          <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
+            {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
+          </span>
+        ) : (
+          <label
+            className="ml-auto flex shrink-0 items-center gap-1.5 text-xs"
+            title="Record your edits as tracked suggestions instead of editing in place"
+          >
+            <input
+              type="checkbox"
+              checked={suggestionMode}
+              onChange={(event) => setSuggestionMode(event.target.checked)}
+            />
+            Suggest edits
+          </label>
+        )}
       </nav>
 
       {roundTripWarning ? (
