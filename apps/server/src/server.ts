@@ -63,6 +63,9 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CatchupSummaryReactorLive } from "./orchestration/Layers/CatchupSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+import { WorkSummaryReactorLive } from "./orchestration/Layers/WorkSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): END
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -258,6 +261,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(CatchupSummaryReactorLive),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  Layer.provideMerge(WorkSummaryReactorLive),
+  // T3-CUSTOM(expbkt3): END
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),

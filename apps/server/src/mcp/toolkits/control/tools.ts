@@ -235,7 +235,7 @@ export const T3UpdateSessionTool = mutatingTool(
 export const T3SessionActionTool = mutatingTool(
   Tool.make("t3_session_action", {
     description:
-      "Perform a lifecycle action on a T3 session: interrupt the active turn, stop/restart its provider, archive/unarchive, settle/activate, snooze/unsnooze, delete, or request a fresh catch-up summary.",
+      "Perform a lifecycle action on a T3 session: interrupt the active turn, stop/restart its provider, archive/unarchive, settle/activate, snooze/unsnooze, delete, request a fresh catch-up summary, or request a fresh work summary and progress estimate.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       action: described(
@@ -251,6 +251,7 @@ export const T3SessionActionTool = mutatingTool(
           "unsnooze",
           "delete",
           "request-catchup",
+          "request-work-summary",
         ]),
         "Lifecycle action to perform. delete is irreversible; snooze additionally requires snoozedUntil.",
       ),

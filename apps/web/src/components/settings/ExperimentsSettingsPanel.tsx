@@ -3,6 +3,8 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { Switch } from "../ui/switch";
 import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
+// T3-CUSTOM(expbkt3): session work summary + progress assessment.
+import { SessionWorkSummarySettingsSection } from "./SessionWorkSummarySettingsSection";
 import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
 import { T3ConductorSettingsSection } from "./T3ConductorSettingsSection";
 // T3-CUSTOM(expbkt3): session title maintenance.
@@ -118,6 +120,9 @@ export function ExperimentsSettingsPanel() {
       ) : null}
       {/* T3-CUSTOM(expbkt3): END */}
       <SessionSummarySettingsSection />
+      {/* T3-CUSTOM(expbkt3): BEGIN — session work summary + progress assessment. */}
+      <SessionWorkSummarySettingsSection />
+      {/* T3-CUSTOM(expbkt3): END */}
       {/* T3-CUSTOM(expbkt3): BEGIN — session title maintenance. */}
       <ThreadTitleMaintenanceSettingsSection />
       {/* T3-CUSTOM(expbkt3): END */}

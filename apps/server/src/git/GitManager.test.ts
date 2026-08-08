@@ -300,6 +300,8 @@ function createTextGeneration(
       Effect.die("updateRollingSummary is not exercised by GitManager tests"),
     generateCatchupSummary: () =>
       Effect.die("generateCatchupSummary is not exercised by GitManager tests"),
+    generateWorkSummary: () =>
+      Effect.die("generateWorkSummary is not exercised by GitManager tests"),
     ...overrides,
   };
 
@@ -353,6 +355,7 @@ function createTextGeneration(
       Effect.die("updateRollingSummary is not used by git text generation"),
     generateCatchupSummary: () =>
       Effect.die("generateCatchupSummary is not used by git text generation"),
+    generateWorkSummary: () => Effect.die("generateWorkSummary is not used by git text generation"),
   };
 }
 

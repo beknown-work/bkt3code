@@ -6,6 +6,9 @@ import {
   type OrchestrationReactorShape,
 } from "../Services/OrchestrationReactor.ts";
 import { CatchupSummaryReactor } from "../Services/CatchupSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+import { WorkSummaryReactor } from "../Services/WorkSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): END
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -17,6 +20,9 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const providerCommandReactor = yield* ProviderCommandReactor;
   const checkpointReactor = yield* CheckpointReactor;
   const catchupSummaryReactor = yield* CatchupSummaryReactor;
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  const workSummaryReactor = yield* WorkSummaryReactor;
+  // T3-CUSTOM(expbkt3): END
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
@@ -25,6 +31,9 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* providerCommandReactor.start();
     yield* checkpointReactor.start();
     yield* catchupSummaryReactor.start();
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+    yield* workSummaryReactor.start();
+    // T3-CUSTOM(expbkt3): END
     yield* threadDeletionReactor.start();
     yield* agentAwarenessRelay.start();
   });

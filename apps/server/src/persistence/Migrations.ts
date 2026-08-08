@@ -81,6 +81,12 @@ import Migration1007 from "./Migrations/1007_OwnershipBackfillFastPath.ts";
 // block already occupies (ThreadExecutions). It registers at the next free ID in
 // the 1000+ lane instead; the file keeps its upstream name.
 import Migration1008 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+// T3-CUSTOM(expbkt3): BEGIN — durable bulk-session-manager work summaries. Allocated at
+// 1012 because the expbkmain deployment has already applied through 1011
+// (PlanReviewDocuments/ProjectionThreadsParentThread/PlanDocumentFormat), which
+// this branch has not merged yet — a lower ID would never run on that database.
+import Migration1012 from "./Migrations/1012_ProjectionThreadsWorkSummary.ts";
+// T3-CUSTOM(expbkt3): END
 
 /**
  * Migration loader with all migrations defined inline.
@@ -168,6 +174,10 @@ const migrationEntries = [
   [1006, "AuthSessionClientVersion", Migration1006],
   [1007, "OwnershipBackfillFastPath", Migration1007],
   [1008, "ProjectionTurnsKeysetIndex", Migration1008],
+  // T3-CUSTOM(expbkt3): BEGIN — 1009-1011 are reserved for expbkmain migrations that are
+  // not merged into this branch yet. Do not backfill them here.
+  [1012, "ProjectionThreadsWorkSummary", Migration1012],
+  // T3-CUSTOM(expbkt3): END
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -541,6 +541,35 @@ export const SessionSummarySettings = Schema.Struct({
 });
 export type SessionSummarySettings = typeof SessionSummarySettings.Type;
 
+/**
+ * T3-CUSTOM(expbkt3): BEGIN — Bulk session manager work summaries.
+ *
+ * Deliberately a peer of `SessionSummarySettings` rather than a reuse of it.
+ * The catch-up note answers "what just happened in this turn" for one open
+ * session; the work summary answers "what has this session achieved and how far
+ * is it" for thirty sessions at once. Different reader, different prompt, and
+ * different cost profile — so it gets its own model, character budget, and
+ * prompt instructions instead of inheriting the catch-up ones.
+ */
+export const SessionWorkSummarySettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  modelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_TEXT_GENERATION_MODEL,
+      }),
+    ),
+  ),
+  dataLimitChars: SessionSummaryDataLimitChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  // Appended to the work-summary prompt. Empty means "use the built-in prompt".
+  promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type SessionWorkSummarySettings = typeof SessionWorkSummarySettings.Type;
+// T3-CUSTOM(expbkt3): END
+
 export const ExternalMcpSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -601,6 +630,11 @@ export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettin
 
 export const ExperimentalSettings = Schema.Struct({
   sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  sessionWorkSummary: SessionWorkSummarySettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // T3-CUSTOM(expbkt3): END
   externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   t3Conductor: T3ConductorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // T3-CUSTOM(expbkt3): periodic title refresh.
@@ -940,6 +974,17 @@ export const ServerSettingsPatch = Schema.Struct({
           promptInstructions: Schema.optionalKey(TrimmedString),
         }),
       ),
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries are patched
+      // independently of the catch-up summary block.
+      sessionWorkSummary: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          modelSelection: Schema.optionalKey(ModelSelectionPatch),
+          dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          promptInstructions: Schema.optionalKey(TrimmedString),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): END
     }),
   ),
   providers: Schema.optionalKey(

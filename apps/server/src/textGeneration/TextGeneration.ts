@@ -106,6 +106,30 @@ export interface CatchupSummaryGenerationResult {
   summary: string;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+//
+// A peer of the catch-up summary rather than an extension of it: separate
+// settings, separate model, separate prompt, and a structured result the table
+// sorts by. The reactor renders `context` itself so every provider receives an
+// identical, already budget-capped payload.
+export interface WorkSummaryGenerationInput {
+  cwd: string;
+  /** Rendered session context, already capped to the configured char budget. */
+  context: string;
+  /** Optional user-supplied prompt instructions from settings. */
+  promptInstructions?: string | undefined;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface WorkSummaryGenerationResult {
+  summary: string;
+  stage: "planning" | "implementing" | "blocked" | "awaiting-review" | "done";
+  remaining: string;
+  percent: number;
+}
+// T3-CUSTOM(expbkt3): END
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -119,6 +143,9 @@ export interface TextGenerationService {
   generateCatchupSummary(
     input: CatchupSummaryGenerationInput,
   ): Promise<CatchupSummaryGenerationResult>;
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  generateWorkSummary(input: WorkSummaryGenerationInput): Promise<WorkSummaryGenerationResult>;
+  // T3-CUSTOM(expbkt3): END
 }
 
 /**
@@ -166,6 +193,15 @@ export class TextGeneration extends Context.Service<
     readonly generateCatchupSummary: (
       input: CatchupSummaryGenerationInput,
     ) => Effect.Effect<CatchupSummaryGenerationResult, TextGenerationError>;
+
+    /**
+     * T3-CUSTOM(expbkt3): BEGIN — Write the bulk session manager's work summary
+     * and assigned progress for one session.
+     */
+    readonly generateWorkSummary: (
+      input: WorkSummaryGenerationInput,
+    ) => Effect.Effect<WorkSummaryGenerationResult, TextGenerationError>;
+    // T3-CUSTOM(expbkt3): END
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -178,7 +214,10 @@ export type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "updateRollingSummary"
-  | "generateCatchupSummary";
+  | "generateCatchupSummary"
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  | "generateWorkSummary";
+// T3-CUSTOM(expbkt3): END
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -226,6 +265,12 @@ export const makeTextGenerationFromRegistry = (
       resolveInstance(registry, "generateCatchupSummary", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateCatchupSummary(input)),
       ),
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+    generateWorkSummary: (input) =>
+      resolveInstance(registry, "generateWorkSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateWorkSummary(input)),
+      ),
+    // T3-CUSTOM(expbkt3): END
   });
 
 export const make = Effect.gen(function* () {

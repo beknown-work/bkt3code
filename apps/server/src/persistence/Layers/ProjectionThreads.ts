@@ -51,6 +51,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at,
           priority,
           linear_issue_url,
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary,
+          -- T3-CUSTOM(expbkt3): END
           pinned_at,
           title_regeneration_request_id,
           title_regeneration_started_at,
@@ -82,6 +85,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.snoozedAt},
           ${row.priority},
           ${row.linearIssueUrl ?? null},
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          ${row.workSummary ?? null},
+          -- T3-CUSTOM(expbkt3): END
           ${row.pinnedAt},
           ${row.titleRegenerationRequestId ?? null},
           ${row.titleRegenerationStartedAt ?? null},
@@ -113,6 +119,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at = excluded.snoozed_at,
           priority = excluded.priority,
           linear_issue_url = excluded.linear_issue_url,
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary = excluded.work_summary,
+          -- T3-CUSTOM(expbkt3): END
           pinned_at = excluded.pinned_at,
           title_regeneration_request_id = excluded.title_regeneration_request_id,
           title_regeneration_started_at = excluded.title_regeneration_started_at,
@@ -151,6 +160,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -191,6 +203,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",

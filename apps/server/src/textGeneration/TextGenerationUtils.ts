@@ -54,6 +54,85 @@ export function sanitizeCatchupSummary(raw: string): string {
   return lines.slice(0, MAX_CATCHUP_SUMMARY_LINES).join("\n");
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary sanitizers.
+//
+// The bulk table renders thirty of these at once, so the caps are tighter than
+// the catch-up card's and enforced here rather than trusted from the prompt: a
+// chatty model must not be able to stretch a table row.
+export const WORK_SUMMARY_STAGES = [
+  "planning",
+  "implementing",
+  "blocked",
+  "awaiting-review",
+  "done",
+] as const;
+export type WorkSummaryStage = (typeof WORK_SUMMARY_STAGES)[number];
+
+/** Roughly four sentences of prose. */
+export const MAX_WORK_SUMMARY_CHARS = 700;
+/** One scannable line in a table cell. */
+export const MAX_WORK_SUMMARY_REMAINING_CHARS = 90;
+
+const WORK_SUMMARY_STAGE_SET: ReadonlySet<string> = new Set(WORK_SUMMARY_STAGES);
+
+/** Collapse to a single plain-text paragraph, strip list/heading markers, cap. */
+export function sanitizeWorkSummary(raw: string): string {
+  const normalized = raw
+    .trim()
+    .split(/\r?\n/g)
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^([-*+]|\d+[.)]|#{1,6})\s+/, "")
+        .trim(),
+    )
+    .filter((line) => line.length > 0)
+    .join(" ")
+    .replace(/\s+/g, " ");
+
+  return normalized.length <= MAX_WORK_SUMMARY_CHARS
+    ? normalized
+    : `${normalized.slice(0, MAX_WORK_SUMMARY_CHARS).trimEnd()}...`;
+}
+
+/** First line only, no markers, capped to one table-cell line. */
+export function sanitizeWorkSummaryRemaining(raw: string): string {
+  const firstLine =
+    raw
+      .trim()
+      .split(/\r?\n/g)
+      .map((line) =>
+        line
+          .trim()
+          .replace(/^([-*+]|\d+[.)]|#{1,6})\s+/, "")
+          .trim(),
+      )
+      .find((line) => line.length > 0) ?? "";
+  const normalized = firstLine.replace(/\s+/g, " ");
+  return normalized.length <= MAX_WORK_SUMMARY_REMAINING_CHARS
+    ? normalized
+    : `${normalized.slice(0, MAX_WORK_SUMMARY_REMAINING_CHARS - 3).trimEnd()}...`;
+}
+
+/**
+ * Unknown stage falls back to "implementing" — the neutral middle bucket. A
+ * wrong-but-plausible stage is a smaller lie in a sortable column than a
+ * missing row or an invented sixth value.
+ */
+export function sanitizeWorkSummaryStage(raw: string): WorkSummaryStage {
+  const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-");
+  return WORK_SUMMARY_STAGE_SET.has(normalized) ? (normalized as WorkSummaryStage) : "implementing";
+}
+
+/** Clamp to 0..100 and round; non-finite input reports zero progress. */
+export function sanitizeWorkSummaryPercent(raw: number): number {
+  if (!Number.isFinite(raw)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, Math.round(raw)));
+}
+// T3-CUSTOM(expbkt3): END
+
 /** Keep the stored rolling summary bounded regardless of model behavior. */
 export function sanitizeRollingSummary(raw: string): string {
   const normalized = raw.trim();

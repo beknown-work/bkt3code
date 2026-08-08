@@ -23,6 +23,9 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildCatchupSummaryPrompt,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  buildWorkSummaryPrompt,
+  // T3-CUSTOM(expbkt3): END
   buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
@@ -31,6 +34,12 @@ import {
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeCatchupSummary,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  sanitizeWorkSummary,
+  sanitizeWorkSummaryPercent,
+  sanitizeWorkSummaryRemaining,
+  sanitizeWorkSummaryStage,
+  // T3-CUSTOM(expbkt3): END
   sanitizeRollingSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
@@ -45,6 +54,9 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generateThreadTitle",
   "updateRollingSummary",
   "generateCatchupSummary",
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  "generateWorkSummary",
+  // T3-CUSTOM(expbkt3): END
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -261,7 +273,10 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generateBranchName"
       | "generateThreadTitle"
       | "updateRollingSummary"
-      | "generateCatchupSummary";
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary";
+    // T3-CUSTOM(expbkt3): END
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -667,6 +682,31 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       } satisfies TextGeneration.CatchupSummaryGenerationResult;
     });
 
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  const generateWorkSummary: TextGeneration.TextGeneration["Service"]["generateWorkSummary"] =
+    Effect.fn("OpenCodeTextGeneration.generateWorkSummary")(function* (input) {
+      const { prompt, outputSchema } = buildWorkSummaryPrompt({
+        context: input.context,
+        promptInstructions: input.promptInstructions,
+      });
+
+      const generated = yield* runOpenCodeJson({
+        operation: "generateWorkSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeWorkSummary(generated.summary),
+        stage: sanitizeWorkSummaryStage(generated.stage),
+        remaining: sanitizeWorkSummaryRemaining(generated.remaining),
+        percent: sanitizeWorkSummaryPercent(generated.percent),
+      } satisfies TextGeneration.WorkSummaryGenerationResult;
+    });
+  // T3-CUSTOM(expbkt3): END
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -674,5 +714,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     generateThreadTitle,
     updateRollingSummary,
     generateCatchupSummary,
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+    generateWorkSummary,
+    // T3-CUSTOM(expbkt3): END
   } satisfies TextGeneration.TextGeneration["Service"];
 });

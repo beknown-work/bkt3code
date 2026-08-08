@@ -1,9 +1,15 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  // T3-CUSTOM(expbkt3): BEGIN — work summary supersede support.
+  type CommandId,
+  // T3-CUSTOM(expbkt3): END
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
+  // T3-CUSTOM(expbkt3): BEGIN — durable bulk-session-manager work summary.
+  ThreadWorkSummary,
+  // T3-CUSTOM(expbkt3): END
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -11,6 +17,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
+// T3-CUSTOM(expbkt3): BEGIN — encodes the durable work-summary blob.
+import * as Schema from "effect/Schema";
+// T3-CUSTOM(expbkt3): END
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
@@ -86,6 +95,33 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
 
 type ProjectorName =
   (typeof ORCHESTRATION_PROJECTOR_NAMES)[keyof typeof ORCHESTRATION_PROJECTOR_NAMES];
+
+/**
+ * T3-CUSTOM(expbkt3): BEGIN — work summary supersede support.
+ *
+ * Reads just the `requestId` out of a stored work-summary blob. A row written
+ * by an older build, or corrupted by hand, must not wedge the feature: an
+ * unreadable value reports "no owning request", which lets the next result
+ * through instead of rejecting every one of them forever.
+ */
+const encodeWorkSummary = Schema.encodeSync(Schema.fromJsonString(ThreadWorkSummary));
+
+function parseWorkSummaryRequestId(raw: string | null | undefined): CommandId | null {
+  if (raw === null || raw === undefined || raw.length === 0) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) {
+      return null;
+    }
+    const requestId = (parsed as { readonly requestId?: unknown }).requestId;
+    return typeof requestId === "string" ? (requestId as CommandId) : null;
+  } catch {
+    return null;
+  }
+}
+// T3-CUSTOM(expbkt3): END
 
 /**
  * Turn state to settle still-running turns with when their session leaves the
@@ -712,6 +748,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             priority: event.payload.priority ?? null,
             // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
             linearIssueUrl: null,
+            // T3-CUSTOM(expbkt3): BEGIN — no work summary until one is requested.
+            workSummary: null,
+            // T3-CUSTOM(expbkt3): END
             pinnedAt: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
@@ -1081,6 +1120,58 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
         }
+
+        // T3-CUSTOM(expbkt3): BEGIN — durable bulk-session-manager work summary.
+        //
+        // The request event installs the pending record so a reconnecting table
+        // still shows the spinner; the update event replaces it with the
+        // result. Both are stored as one JSON blob in `work_summary` rather
+        // than a column per field, because the whole record is written and read
+        // atomically and never queried field-wise.
+        case "thread.work-summary-requested": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            workSummary: encodeWorkSummary({
+              status: "pending",
+              summary: null,
+              stage: null,
+              remaining: null,
+              percent: null,
+              error: null,
+              requestId: event.payload.requestId,
+              updatedAt: event.payload.requestedAt,
+            }),
+          });
+          return;
+        }
+
+        case "thread.work-summary-updated": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          // Supersede rule: only the request that currently owns the row may
+          // write its result. A re-request installs a new pending requestId, so
+          // the older generation's late answer is dropped here.
+          const currentRequestId = parseWorkSummaryRequestId(existingRow.value.workSummary);
+          if (currentRequestId !== null && currentRequestId !== event.payload.requestId) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            workSummary: encodeWorkSummary(event.payload.workSummary),
+          });
+          return;
+        }
+        // T3-CUSTOM(expbkt3): END
 
         case "thread.reverted": {
           const existingRow = yield* projectionThreadRepository.getById({

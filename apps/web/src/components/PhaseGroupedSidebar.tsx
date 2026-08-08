@@ -37,6 +37,9 @@ import {
   LaptopIcon,
   PlusIcon,
   RotateCcwIcon,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager entry point.
+  Rows3Icon,
+  // T3-CUSTOM(expbkt3): END
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -2284,6 +2287,18 @@ export function PhaseGroupedSidebar() {
                 ) : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {/* T3-CUSTOM(expbkt3): BEGIN — entry point for the bulk session manager. */}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                className="gap-2 px-2 py-1.5"
+                onClick={() => void router.navigate({ to: "/sessions" })}
+              >
+                <Rows3Icon className="size-3.5" />
+                <span className="flex-1 text-left text-xs">Manage sessions</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            {/* T3-CUSTOM(expbkt3): END */}
           </SidebarMenu>
         </SidebarGroup>
         <SidebarEnvironmentNotices />
