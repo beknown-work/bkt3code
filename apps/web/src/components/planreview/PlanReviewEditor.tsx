@@ -44,7 +44,7 @@ import {
 } from "@platejs/table/react";
 import { ParagraphPlugin, Plate, PlateContent, usePlateEditor } from "platejs/react";
 import remarkGfm from "remark-gfm";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { PlanReviewFloatingToolbar } from "./plate/PlanReviewFloatingToolbar";
 import {
@@ -128,13 +128,25 @@ const PLAN_REVIEW_PLUGINS = [
   MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
 ];
 
+/**
+ * Pull-based access to the document.
+ *
+ * Serializing the whole tree to markdown costs a full walk plus a
+ * remark-stringify pass, so the panel asks for it when it actually needs it —
+ * on the debounced save and on submit — rather than on every keystroke.
+ */
+export interface PlanReviewEditorHandle {
+  readonly getMarkdown: () => string;
+}
+
 interface PlanReviewEditorProps {
   /** Canonical markdown for the version being reviewed. */
   readonly markdown: string;
   readonly readOnly: boolean;
   readonly suggestionMode: boolean;
-  /** Fires on every change with freshly serialized markdown. */
-  readonly onMarkdownChange: (markdown: string) => void;
+  readonly handleRef: React.RefObject<PlanReviewEditorHandle | null>;
+  /** Cheap notification that the reviewer changed something. */
+  readonly onChanged: () => void;
   /** Fires when the reviewer comments on a selection. */
   readonly onAddComment: (quotedText: string, body: string) => void;
   /** Reports whether Plate's markdown round trip reached a fixed point. */
@@ -145,7 +157,8 @@ function PlanReviewEditorImpl({
   markdown,
   readOnly,
   suggestionMode,
-  onMarkdownChange,
+  handleRef,
+  onChanged,
   onAddComment,
   onRoundTripUnstable,
 }: PlanReviewEditorProps) {
@@ -153,6 +166,8 @@ function PlanReviewEditorImpl({
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
   const loadedMarkdownRef = useRef<string | null>(null);
+  // Loading a version fires Plate's onChange; that is not a reviewer edit.
+  const loadingRef = useRef(false);
   const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
 
@@ -163,8 +178,12 @@ function PlanReviewEditorImpl({
     loadedMarkdownRef.current = markdown;
 
     try {
+      loadingRef.current = true;
       const value = editor.api.markdown.deserialize(markdown);
       editor.tf.setValue(value);
+      requestAnimationFrame(() => {
+        loadingRef.current = false;
+      });
 
       // Round-trip check: an unstable document would make every later diff
       // full of formatting noise the reviewer never typed.
@@ -174,6 +193,7 @@ function PlanReviewEditorImpl({
       });
       if (once !== twice) onRoundTripUnstable();
     } catch {
+      loadingRef.current = false;
       onRoundTripUnstable();
     }
   }, [editor, markdown, onRoundTripUnstable]);
@@ -184,14 +204,26 @@ function PlanReviewEditorImpl({
     editor.setOption(SuggestionPlugin, "isSuggesting", suggestionMode && !readOnly);
   }, [editor, suggestionMode, readOnly]);
 
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      getMarkdown: () => {
+        try {
+          return editor.api.markdown.serialize();
+        } catch {
+          // A tree mid-edit can be transiently invalid; the caller falls back
+          // to the last known good document rather than saving nonsense.
+          return "";
+        }
+      },
+    }),
+    [editor],
+  );
+
   const handleChange = useCallback(() => {
-    try {
-      onMarkdownChange(editor.api.markdown.serialize());
-    } catch {
-      // A transient invalid tree during typing is not worth surfacing; the
-      // next keystroke serializes again.
-    }
-  }, [editor, onMarkdownChange]);
+    if (loadingRef.current) return;
+    onChanged();
+  }, [onChanged]);
 
   const startComment = useCallback(() => {
     const quote = normalizeQuotedText(window.getSelection()?.toString() ?? "");
