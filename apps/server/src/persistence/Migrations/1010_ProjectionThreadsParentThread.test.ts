@@ -8,12 +8,12 @@ import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))(
-  "1009_ProjectionThreadsParentThread",
+  "1010_ProjectionThreadsParentThread",
   (it) => {
     it.effect("adds the nullable parent thread column", () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 1009 });
+        yield* runMigrations({ toMigrationInclusive: 1010 });
 
         const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
           PRAGMA table_info(projection_threads)
@@ -28,7 +28,7 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))(
     it.effect("indexes children so the cycle guard never scans the projection", () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 1009 });
+        yield* runMigrations({ toMigrationInclusive: 1010 });
 
         const indexes = yield* sql<{ readonly name: string }>`
           PRAGMA index_list(projection_threads)

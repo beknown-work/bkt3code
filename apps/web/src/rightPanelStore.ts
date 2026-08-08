@@ -21,6 +21,8 @@ import { withoutPersistedPlannotatorSurfaces } from "./plannotatorRightPanelPers
 
 export const RIGHT_PANEL_KINDS = [
   "plannotator",
+  // T3-CUSTOM(expbkt3): native plan review surface.
+  "planReview",
   "diff",
   "files",
   "file",
@@ -55,12 +57,19 @@ export type RightPanelSurface =
       kind: "plannotator";
       url: `/plannotator/${string}/`;
     }
+  // T3-CUSTOM(expbkt3): native plan review surface.
+  | {
+      id: `plan-review:${string}`;
+      kind: "planReview";
+      documentId: string;
+    }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
 // T3-CUSTOM(expbkt3): v9 also drops legacy persisted Plannotator surfaces.
-const RIGHT_PANEL_STORAGE_VERSION = 9;
+// T3-CUSTOM(expbkt3): v10 validates persisted native plan-review surfaces.
+const RIGHT_PANEL_STORAGE_VERSION = 10;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -72,10 +81,12 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator" | "planReview">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openPlannotator: (ref: ScopedThreadRef, url: `/plannotator/${string}/`) => void;
+  // T3-CUSTOM(expbkt3): native plan review.
+  openPlanReview: (ref: ScopedThreadRef, documentId: string) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -98,7 +109,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator" | "planReview">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -110,7 +121,8 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "plannotator">,
+  // T3-CUSTOM(expbkt3): planReview carries a document id, so it is never a singleton.
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "plannotator" | "planReview">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -123,6 +135,13 @@ const singletonSurface = (
 };
 
 // T3-CUSTOM(expbkt3): BEGIN — construct the persisted Plannotator surface descriptor.
+// T3-CUSTOM(expbkt3): native plan review surface descriptor.
+const planReviewSurface = (documentId: string): RightPanelSurface => ({
+  id: `plan-review:${documentId}`,
+  kind: "planReview",
+  documentId,
+});
+
 const plannotatorSurface = (url: `/plannotator/${string}/`): RightPanelSurface => ({
   id: `plannotator:${url}`,
   kind: "plannotator",
@@ -221,6 +240,19 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           ? surface.revealRequestId
                           : 0;
                       return [{ ...surface, revealLine, revealRequestId }];
+                    }
+                    // T3-CUSTOM(expbkt3): a plan-review surface is only valid
+                    // when its id still matches its document (v10).
+                    if ((surface as { kind?: string }).kind === "planReview") {
+                      const documentId = (surface as { documentId?: unknown }).documentId;
+                      if (
+                        typeof documentId !== "string" ||
+                        documentId.length === 0 ||
+                        surface.id !== `plan-review:${documentId}`
+                      ) {
+                        return [];
+                      }
+                      return [surface];
                     }
                     if (surface.kind === "plannotator") {
                       if (
@@ -321,6 +353,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             upsertSurface(current, plannotatorSurface(url)),
+          ),
+        })),
+      openPlanReview: (ref, documentId) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, planReviewSurface(documentId)),
           ),
         })),
       // T3-CUSTOM(expbkt3): END

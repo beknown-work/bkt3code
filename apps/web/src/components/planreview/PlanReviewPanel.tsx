@@ -1,0 +1,451 @@
+/**
+ * T3-CUSTOM(expbkt3): the native plan review panel.
+ *
+ * Default export so `ChatView` can `lazy()` it — Plate is ~200 kB gzip and must
+ * not land in the main chunk. Everything the panel needs arrives over the fork
+ * `planReview.*` RPCs; the live subscription keeps every open client converged.
+ */
+import type {
+  EnvironmentId,
+  PlanReviewSnapshotResult,
+  PlanReviewVersion,
+} from "@t3tools/contracts";
+import { CheckIcon, HistoryIcon, MessageSquareIcon, SendIcon, Trash2Icon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { PlanReviewDiscussions } from "./PlanReviewDiscussions";
+import { PlanReviewEditor, type PlanReviewEditorHandle } from "./PlanReviewEditor";
+import { PlanReviewVersions } from "./PlanReviewVersions";
+import { nextPlanDiscussionId } from "./planReviewMarkdown";
+import { Button } from "../ui/button";
+import { cn } from "../../lib/utils";
+import { planReviewEnvironment } from "../../state/planReview";
+import { toastManager } from "../ui/toast";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { useCurrentUserId } from "../../state/identity";
+import { useEnvironmentQuery } from "../../state/query";
+
+interface PlanReviewPanelProps {
+  readonly environmentId: EnvironmentId;
+  readonly documentId: string;
+  readonly onClose: () => void;
+}
+
+type PanelTab = "review" | "versions";
+
+const DRAFT_SAVE_DEBOUNCE_MS = 500;
+
+export default function PlanReviewPanel({
+  environmentId,
+  documentId,
+  onClose,
+}: PlanReviewPanelProps) {
+  const [tab, setTab] = useState<PanelTab>("review");
+  const [suggestionMode, setSuggestionMode] = useState(true);
+  const [globalComment, setGlobalComment] = useState("");
+  // A boolean, not the document: keeping the markdown in state would re-render
+  // the panel — and the editor beneath it — on every keystroke.
+  const [hasLocalEdits, setHasLocalEdits] = useState(false);
+  const [roundTripWarning, setRoundTripWarning] = useState(false);
+  const [comparison, setComparison] = useState<{ from: string; to: string } | null>(null);
+
+  const revisionTokenRef = useRef<string | null>(null);
+  const editedMarkdownRef = useRef<string | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorHandleRef = useRef<PlanReviewEditorHandle | null>(null);
+  // Read inside the save callback without making it depend on every snapshot.
+  const latestDraftRef = useRef<PlanReviewSnapshotResult["draft"]>(null);
+
+  const initial = useEnvironmentQuery(
+    planReviewEnvironment.review({ environmentId, input: { documentId } }),
+  );
+  const live = useEnvironmentQuery(
+    planReviewEnvironment.subscription({ environmentId, input: { documentId } }),
+  );
+
+  // The subscription supersedes the one-shot read as soon as it produces a
+  // frame, so the panel never renders stale state after another client writes.
+  const snapshot: PlanReviewSnapshotResult | null = live.data ?? initial.data ?? null;
+
+  const diffQuery = useEnvironmentQuery(
+    comparison === null
+      ? null
+      : planReviewEnvironment.versionDiff({
+          environmentId,
+          input: {
+            documentId,
+            fromVersionId: comparison.from,
+            toVersionId: comparison.to,
+          },
+        }),
+  );
+
+  const saveDraft = useAtomCommand(planReviewEnvironment.saveDraft, { reportFailure: false });
+  const upsertDiscussion = useAtomCommand(planReviewEnvironment.upsertDiscussion);
+  const resolveDiscussion = useAtomCommand(planReviewEnvironment.resolveDiscussion);
+  const cutVersion = useAtomCommand(planReviewEnvironment.cutVersion);
+  const submit = useAtomCommand(planReviewEnvironment.submit);
+
+  const latestVersion = useMemo(() => snapshot?.versions.at(-1) ?? null, [snapshot?.versions]);
+
+  const viewerUserId = useCurrentUserId();
+
+  // Adopt a token only from our own save. Taking whatever the last writer
+  // produced would make the next save look valid and silently overwrite them.
+  useEffect(() => {
+    latestDraftRef.current = snapshot?.draft ?? null;
+    if (revisionTokenRef.current === null && snapshot?.draft) {
+      revisionTokenRef.current = snapshot.draft.revisionToken;
+    }
+  }, [snapshot?.draft]);
+
+  // A resolved review is history: it stays readable, but nothing can be sent
+  // from it twice.
+  const isResolved = snapshot !== null && snapshot.document.status !== "open";
+  const versionMarkdown = latestVersion?.contentMarkdown ?? "";
+
+  // A saved draft is what this reviewer was last working on, so it — not the
+  // committed version — is what the editor should reopen with. Without this the
+  // panel silently discards unsaved edits on every close or tab switch.
+  const draftMarkdown = useMemo(() => {
+    if (!snapshot?.draft || snapshot.draft.baseVersionId !== latestVersion?.versionId) return null;
+    try {
+      const parsed: unknown = JSON.parse(snapshot.draft.contentValueJson);
+      const markdown = (parsed as { markdown?: unknown }).markdown;
+      return typeof markdown === "string" && markdown.trim().length > 0 ? markdown : null;
+    } catch {
+      return null;
+    }
+  }, [snapshot?.draft, latestVersion?.versionId]);
+
+  // Seeded once per version: re-seeding from the live draft on every frame
+  // would fight the reviewer's cursor.
+  const [seededDraft, setSeededDraft] = useState<string | null>(null);
+  const seededForVersionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const versionId = latestVersion?.versionId ?? null;
+    if (seededForVersionRef.current === versionId) return;
+    seededForVersionRef.current = versionId;
+    setSeededDraft(draftMarkdown);
+  }, [draftMarkdown, latestVersion?.versionId]);
+
+  const canonicalMarkdown = seededDraft ?? versionMarkdown;
+  // A restored draft is already ahead of the committed version, so the panel
+  // opens dirty even before the reviewer types.
+  const isDirty =
+    hasLocalEdits || (seededDraft?.trim() ?? versionMarkdown.trim()) !== versionMarkdown.trim();
+
+  /**
+   * Typing must not serialize the document or re-render the panel. It flips one
+   * boolean the first time and schedules the debounced save, which is the only
+   * place the markdown is actually pulled out of the editor.
+   */
+  const handleEditorChanged = useCallback(() => {
+    setHasLocalEdits(true);
+    if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      const markdown = editorHandleRef.current?.getMarkdown() ?? "";
+      if (markdown.trim().length === 0) return;
+      editedMarkdownRef.current = markdown;
+
+      void saveDraft({
+        environmentId,
+        input: {
+          documentId,
+          contentValueJson: JSON.stringify({ markdown }),
+          expectedRevisionToken: revisionTokenRef.current,
+        },
+      }).then((result) => {
+        if (result._tag === "Success") {
+          revisionTokenRef.current = result.value.revisionToken;
+          return;
+        }
+
+        // A rejected save only means somebody *else* is editing when the draft
+        // on the server belongs to somebody else. Our own saves can land out of
+        // order — that is a token to catch up on, not a conflict to report.
+        const draft = latestDraftRef.current;
+        const owner = draft?.updatedByUserId ?? null;
+        const isOurs = owner === null || owner === viewerUserId;
+        if (isOurs) {
+          if (draft) revisionTokenRef.current = draft.revisionToken;
+          return;
+        }
+
+        toastManager.add({
+          type: "error",
+          title: "Someone else edited this plan",
+          description: "Reload the panel to pick up their changes before saving again.",
+        });
+      });
+    }, DRAFT_SAVE_DEBOUNCE_MS);
+  }, [documentId, environmentId, saveDraft, viewerUserId]);
+
+  // Stable identity: an inline arrow here would defeat the editor's `memo` and
+  // re-render the whole Plate tree on every panel state change.
+  const handleRoundTripUnstable = useCallback(() => setRoundTripWarning(true), []);
+
+  /** The document as it stands, pulled from the editor only when needed. */
+  const readCurrentMarkdown = useCallback(
+    () => editorHandleRef.current?.getMarkdown() || editedMarkdownRef.current || canonicalMarkdown,
+    [canonicalMarkdown],
+  );
+
+  useEffect(
+    () => () => {
+      if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
+    },
+    [],
+  );
+
+  const handleAddComment = useCallback(
+    (quotedText: string, body: string) => {
+      void upsertDiscussion({
+        environmentId,
+        input: {
+          documentId,
+          discussionId: nextPlanDiscussionId(),
+          quotedText,
+          bodyMarkdown: body,
+        },
+      });
+    },
+    [documentId, environmentId, upsertDiscussion],
+  );
+
+  const handleResolve = useCallback(
+    (discussionId: string, isResolvedNext: boolean) => {
+      void resolveDiscussion({
+        environmentId,
+        input: { documentId, discussionId, isResolved: isResolvedNext },
+      });
+    },
+    [documentId, environmentId, resolveDiscussion],
+  );
+
+  const handleSaveVersion = useCallback(() => {
+    if (!isDirty) return;
+    const contentMarkdown = readCurrentMarkdown();
+    void cutVersion({
+      environmentId,
+      input: {
+        documentId,
+        contentMarkdown,
+        contentValueJson: null,
+        summary: null,
+      },
+    }).then((result) => {
+      if (result._tag === "Success") {
+        setHasLocalEdits(false);
+        editedMarkdownRef.current = null;
+        toastManager.add({ type: "success", title: "Saved a new version of the plan" });
+      }
+    });
+  }, [cutVersion, documentId, environmentId, isDirty, readCurrentMarkdown]);
+
+  const handleRestore = useCallback(
+    (version: PlanReviewVersion) => {
+      // Restoring appends rather than rewriting: history stays append-only.
+      void cutVersion({
+        environmentId,
+        input: {
+          documentId,
+          contentMarkdown: version.contentMarkdown,
+          contentValueJson: null,
+          summary: `Restored v${version.revision}`,
+        },
+      }).then((result) => {
+        if (result._tag === "Success") {
+          setHasLocalEdits(false);
+          editedMarkdownRef.current = null;
+          setTab("review");
+        }
+      });
+    },
+    [cutVersion, documentId, environmentId],
+  );
+
+  const handleSubmit = useCallback(
+    (decision: "approved" | "changes-requested" | "discarded") => {
+      void submit({
+        environmentId,
+        input: {
+          documentId,
+          decision,
+          globalComment,
+          editedMarkdown: isDirty ? readCurrentMarkdown() : null,
+        },
+      }).then((result) => {
+        if (result._tag !== "Success") return;
+        setGlobalComment("");
+        setHasLocalEdits(false);
+        editedMarkdownRef.current = null;
+        if (decision === "approved") {
+          toastManager.add({
+            type: "success",
+            title: "Plan approved",
+            description: result.value.resentPlan
+              ? "The full plan was re-sent because this session lost it from context."
+              : "Implementation started.",
+          });
+        } else if (decision === "changes-requested") {
+          toastManager.add({ type: "success", title: "Feedback sent to the planning agent" });
+        }
+        onClose();
+      });
+    },
+    [documentId, environmentId, globalComment, isDirty, onClose, readCurrentMarkdown, submit],
+  );
+
+  if (snapshot === null) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+        <p className="text-muted-foreground text-sm">
+          {initial.error ? "This plan review could not be loaded." : "Loading plan…"}
+        </p>
+      </div>
+    );
+  }
+
+  const openDiscussionCount = snapshot.discussions.filter(
+    (discussion) => !discussion.isResolved,
+  ).length;
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      {/*
+        One chrome row, not three. The plan's own H1 already titles the
+        document and the right-panel tab already says "Plan review", so a
+        separate title row and a mode banner were spending vertical space the
+        document needs — the panel is tall and narrow, and reading the plan is
+        the whole job.
+      */}
+      <nav className="flex items-center gap-1 border-b px-2 py-1">
+        <Button
+          size="sm"
+          variant={tab === "review" ? "secondary" : "ghost"}
+          onClick={() => setTab("review")}
+          title={snapshot.document.title}
+        >
+          <MessageSquareIcon className="size-3.5" aria-hidden /> Review
+          {openDiscussionCount > 0 ? (
+            <span className="ml-1 rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums">
+              {openDiscussionCount}
+            </span>
+          ) : null}
+        </Button>
+        <Button
+          size="sm"
+          variant={tab === "versions" ? "secondary" : "ghost"}
+          onClick={() => setTab("versions")}
+        >
+          <HistoryIcon className="size-3.5" aria-hidden /> v{snapshot.document.currentRevision}
+          {snapshot.versions.length > 1 ? (
+            <span className="ml-1 text-muted-foreground text-[11px] tabular-nums">
+              of {snapshot.versions.length}
+            </span>
+          ) : null}
+        </Button>
+
+        {isResolved ? (
+          <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
+            {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
+          </span>
+        ) : (
+          <label
+            className="ml-auto flex shrink-0 items-center gap-1.5 text-xs"
+            title="Record your edits as tracked suggestions instead of editing in place"
+          >
+            <input
+              type="checkbox"
+              checked={suggestionMode}
+              onChange={(event) => setSuggestionMode(event.target.checked)}
+            />
+            Suggest edits
+          </label>
+        )}
+      </nav>
+
+      {roundTripWarning ? (
+        <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
+          This plan uses markdown the editor cannot reproduce exactly. Edits may reformat parts of
+          it — check the diff before sending.
+        </p>
+      ) : null}
+
+      {tab === "versions" ? (
+        <PlanReviewVersions
+          versions={snapshot.versions}
+          diff={diffQuery.data?.diff ?? null}
+          isDiffPending={comparison !== null && diffQuery.isPending}
+          canRestore={!isResolved}
+          onCompare={(from, to) => setComparison({ from, to })}
+          onRestore={handleRestore}
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <PlanReviewEditor
+            markdown={canonicalMarkdown}
+            readOnly={isResolved}
+            suggestionMode={suggestionMode}
+            handleRef={editorHandleRef}
+            onChanged={handleEditorChanged}
+            onAddComment={handleAddComment}
+            onRoundTripUnstable={handleRoundTripUnstable}
+          />
+          <aside
+            className={cn(
+              "min-h-0 shrink-0 overflow-auto border-t lg:w-72 lg:border-t-0 lg:border-l",
+              "max-h-56 lg:max-h-none",
+            )}
+            aria-label="Plan discussions"
+          >
+            <PlanReviewDiscussions
+              discussions={snapshot.discussions}
+              comments={snapshot.comments}
+              onResolve={handleResolve}
+              disabled={isResolved}
+            />
+          </aside>
+        </div>
+      )}
+
+      {isResolved ? null : (
+        <footer className="border-t p-3">
+          <textarea
+            className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
+            rows={2}
+            value={globalComment}
+            placeholder="Overall notes for the agent (optional)"
+            aria-label="Overall review notes"
+            onChange={(event) => setGlobalComment(event.target.value)}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={() => handleSubmit("approved")}>
+              <CheckIcon className="size-3.5" aria-hidden /> Approve
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleSubmit("changes-requested")}
+              disabled={openDiscussionCount === 0 && globalComment.trim().length === 0 && !isDirty}
+            >
+              <SendIcon className="size-3.5" aria-hidden /> Send feedback
+            </Button>
+            <Button size="sm" variant="ghost" onClick={handleSaveVersion} disabled={!isDirty}>
+              Save version
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto text-destructive"
+              onClick={() => handleSubmit("discarded")}
+            >
+              <Trash2Icon className="size-3.5" aria-hidden /> Discard
+            </Button>
+          </div>
+        </footer>
+      )}
+    </div>
+  );
+}
