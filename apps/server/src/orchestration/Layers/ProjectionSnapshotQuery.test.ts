@@ -334,6 +334,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           priority: null,
           // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
           linearIssueUrl: null,
+          // T3-CUSTOM(expbkt3): session lineage.
+          parentThreadId: null,
           pinnedAt: null,
           titleRegeneration: null,
           deletedAt: null,
@@ -470,6 +472,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           priority: null,
           // T3-CUSTOM(expbkt3): no manual Linear tag on this fixture.
           linearIssueUrl: null,
+          // T3-CUSTOM(expbkt3): session lineage.
+          parentThreadId: null,
           pinnedAt: null,
           titleRegeneration: null,
           session: {

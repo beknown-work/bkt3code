@@ -445,6 +445,22 @@ export const T3CreateSessionTool = mutatingTool(
           "Optional session priority: 0 (P0, highest) through 4 (P4, lowest). Omit to leave the session unprioritised.",
         ),
       ),
+      // T3-CUSTOM(expbkt3): BEGIN — session lineage. The description is
+      // load-bearing: it is the only guidance the calling model receives about
+      // when nesting is the wrong choice.
+      createAsChild: Schema.optional(
+        described(
+          Schema.Boolean,
+          "Whether this session is filed under yours in the sidebar. Defaults to true, so work you fan out stays visible as your subtree. Pass false when the new session is independent work that should stand on its own at the top level.",
+        ),
+      ),
+      parentSessionId: Schema.optional(
+        described(
+          Schema.String,
+          "Optional explicit parent session ID, for building a tree you are not the root of. Defaults to the calling session. Cannot be combined with createAsChild: false.",
+        ),
+      ),
+      // T3-CUSTOM(expbkt3): END
     }),
     success: Schema.Unknown,
     failure: T3ControlToolError,

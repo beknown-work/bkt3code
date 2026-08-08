@@ -50,6 +50,8 @@ export const ProjectionThread = Schema.Struct({
   priority: Schema.NullOr(ThreadPriority),
   // T3-CUSTOM(expbkt3): durable manual Linear issue URL.
   linearIssueUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  // T3-CUSTOM(expbkt3): session lineage; null means this is a root session.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   pinnedAt: Schema.NullOr(IsoDateTime),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),

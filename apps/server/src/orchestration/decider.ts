@@ -21,6 +21,8 @@ import {
   requireThreadAbsent,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
+// T3-CUSTOM(expbkt3): session lineage must stay acyclic.
+import { requireThreadLineageAcyclic } from "./threadLineage.ts";
 // T3-CUSTOM(expbkt3): fork command decisions
 import { decideForkOrchestrationCommand, isForkOrchestrationCommand } from "./deciderForkCases.ts";
 import { projectEvent } from "./projector.ts";
@@ -413,6 +415,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
           // T3-CUSTOM(expbkt3): session priority.
           priority: command.priority ?? null,
+          // T3-CUSTOM(expbkt3): session lineage. No cycle check is needed on
+          // create: the thread does not exist yet, so it cannot be an ancestor
+          // of anything.
+          parentThreadId: command.parentThreadId ?? null,
         },
       };
     }
@@ -796,6 +802,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      // T3-CUSTOM(expbkt3): re-parenting must not close a lineage loop.
+      // Detaching (null) is always safe and skips the walk.
+      if (command.parentThreadId != null) {
+        yield* requireThreadLineageAcyclic({
+          readModel,
+          command,
+          threadId: command.threadId,
+          parentThreadId: command.parentThreadId,
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -831,6 +847,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // T3-CUSTOM(expbkt3): undefined leaves the manual Linear tag unchanged.
           ...(command.linearIssueUrl !== undefined
             ? { linearIssueUrl: command.linearIssueUrl }
+            : {}),
+          // T3-CUSTOM(expbkt3): undefined leaves lineage unchanged; null detaches.
+          ...(command.parentThreadId !== undefined
+            ? { parentThreadId: command.parentThreadId }
             : {}),
           updatedAt: occurredAt,
         },
@@ -1046,6 +1066,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 createdAt: bootstrapCreate.createdAt,
                 updatedAt: bootstrapCreate.createdAt,
                 priority: bootstrapCreate.priority ?? null,
+                // T3-CUSTOM(expbkt3): session lineage carried through bootstrap.
+                parentThreadId: bootstrapCreate.parentThreadId ?? null,
               },
             }
           : null;

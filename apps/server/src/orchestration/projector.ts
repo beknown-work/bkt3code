@@ -335,6 +335,8 @@ export function projectEvent(
             priority: payload.priority ?? null,
             // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
             linearIssueUrl: null,
+            // T3-CUSTOM(expbkt3): session lineage stamped at creation.
+            parentThreadId: payload.parentThreadId ?? null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -477,6 +479,10 @@ export function projectEvent(
             // T3-CUSTOM(expbkt3): durable manual Linear tag.
             ...(payload.linearIssueUrl !== undefined
               ? { linearIssueUrl: payload.linearIssueUrl }
+              : {}),
+            // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
+            ...(payload.parentThreadId !== undefined
+              ? { parentThreadId: payload.parentThreadId }
               : {}),
             updatedAt: payload.updatedAt,
           }),
