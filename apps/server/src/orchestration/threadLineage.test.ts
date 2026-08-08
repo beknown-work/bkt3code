@@ -9,8 +9,8 @@ import {
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { expect as effectExpect, it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 
 import {
   collectThreadDescendants,
@@ -150,9 +150,9 @@ describe("collectThreadDescendants", () => {
   });
 });
 
-describe("requireThreadLineageAcyclic", () => {
-  it("passes an acyclic parent", () => {
-    const exit = Effect.runSyncExit(
+effectIt.effect("requireThreadLineageAcyclic passes an acyclic parent", () =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
       requireThreadLineageAcyclic({
         readModel,
         command,
@@ -161,11 +161,13 @@ describe("requireThreadLineageAcyclic", () => {
       }),
     );
 
-    expect(Exit.isSuccess(exit)).toBe(true);
-  });
+    effectExpect(exit._tag).toBe("Success");
+  }),
+);
 
-  it("fails with a descendant-specific message", () => {
-    const exit = Effect.runSyncExit(
+effectIt.effect("requireThreadLineageAcyclic rejects adopting a descendant", () =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
       requireThreadLineageAcyclic({
         readModel,
         command,
@@ -174,6 +176,6 @@ describe("requireThreadLineageAcyclic", () => {
       }),
     );
 
-    expect(Exit.isFailure(exit)).toBe(true);
-  });
-});
+    effectExpect(exit._tag).toBe("Failure");
+  }),
+);
