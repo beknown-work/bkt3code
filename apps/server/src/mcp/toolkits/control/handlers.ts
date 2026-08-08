@@ -119,6 +119,70 @@ const hasUserWideScope = (scope: McpInvocationContext.McpInvocationScope): boole
   scope.principal === "external-user" ||
   scope.capabilities.has("t3.session.create");
 
+/**
+ * T3-CUSTOM(expbkt3): decide which session a newly created session is filed
+ * under.
+ *
+ * Nesting is the agent's call. A session fanning out cross-repo work wants its
+ * children visible as a subtree; a session that incidentally files unrelated
+ * work does not, and burying that session inside an unrelated tree is worse
+ * than leaving it flat.
+ *
+ *   createAsChild === false        → root session
+ *   parentSessionId given          → that session, after existence + access
+ *   caller is a provider session   → the calling session
+ *   otherwise                      → root session
+ *
+ * The principal check is load-bearing independently of the flag: an
+ * external-user token's threadId is that user's *conductor* thread, not a
+ * session they are working in, so defaulting to it would file every session the
+ * user creates under one synthetic root.
+ */
+const resolveCreatedSessionParent = Effect.fn("T3ControlToolkit.resolveCreatedSessionParent")(
+  function* (input: {
+    readonly operation: string;
+    readonly scope: McpInvocationContext.McpInvocationScope;
+    readonly threads: ReadonlyArray<{ readonly id: ThreadId; readonly projectId: ProjectId }>;
+    readonly createAsChild: boolean | undefined;
+    readonly parentSessionId: string | undefined;
+  }) {
+    const { operation, scope } = input;
+    // Two ways to say different things about the same field: refuse rather
+    // than letting one silently win.
+    if (input.parentSessionId !== undefined && input.createAsChild === false) {
+      return yield* new T3ControlToolError({
+        operation,
+        message:
+          "createAsChild: false cannot be combined with parentSessionId. Omit parentSessionId to create a top-level session.",
+      });
+    }
+    if (input.createAsChild === false) return null;
+
+    if (input.parentSessionId !== undefined) {
+      const requestedParentId = ThreadId.make(input.parentSessionId);
+      const parent = input.threads.find((candidate) => candidate.id === requestedParentId);
+      // A parent the caller cannot see is reported as absent rather than
+      // forbidden, matching how this handler already treats projects.
+      const visible =
+        parent !== undefined &&
+        (McpInvocationContext.isExternalMcpOperator(scope) ||
+          scope.actorUserId === null ||
+          (yield* (yield* OrchestrationAccessControl)
+            .canAccessProject(scope.actorUserId, parent.projectId)
+            .pipe(mapControlError(operation))));
+      if (!visible) {
+        return yield* new T3ControlToolError({
+          operation,
+          message: `T3 session ${requestedParentId} was not found.`,
+        });
+      }
+      return requestedParentId;
+    }
+
+    return scope.principal === "provider-session" ? scope.threadId : null;
+  },
+);
+
 const resolveConfiguredOwnerUserId = Effect.fn("T3ControlToolkit.resolveConfiguredOwnerUserId")(
   function* (operation: string) {
     const config = yield* ServerConfig;
@@ -237,6 +301,9 @@ function sessionSummary(
     snoozedUntil: thread.snoozedUntil ?? null,
     // T3-CUSTOM(expbkt3): session priority (0 = P0 highest, null = unset).
     priority: thread.priority ?? null,
+    // T3-CUSTOM(expbkt3): session lineage. Lets an agent inspect its own
+    // subtree instead of re-spawning work it already delegated.
+    parentSessionId: thread.parentThreadId ?? null,
     session: thread.session,
     execution,
     needsHumanAttention: reasons.length > 0,
@@ -873,6 +940,14 @@ const handlers = {
         });
       }
     }
+    // T3-CUSTOM(expbkt3): session lineage.
+    const parentThreadId = yield* resolveCreatedSessionParent({
+      operation,
+      scope,
+      threads: shell.threads,
+      createAsChild: input.createAsChild,
+      parentSessionId: input.parentSessionId,
+    });
     const uuid = yield* crypto.randomUUIDv4.pipe(mapControlError(operation));
     const sessionId = ThreadId.make(`mcp:${uuid}`);
     const ownerUserId =
@@ -925,6 +1000,8 @@ const handlers = {
         : {}),
       sourceControlProfileId: null,
       priority: input.priority ?? null,
+      // T3-CUSTOM(expbkt3): session lineage.
+      parentThreadId,
       ...(ownerUserId ? { ownerUserId } : {}),
       createdAt,
     } as const;
@@ -956,6 +1033,8 @@ const handlers = {
               ...(bootstrapRequest.overrides ? { overrides: bootstrapRequest.overrides } : {}),
               sourceControlProfileId: null,
               priority: bootstrapRequest.priority,
+              // T3-CUSTOM(expbkt3): session lineage.
+              parentThreadId: bootstrapRequest.parentThreadId,
               ...(ownerUserId ? { ownerUserId } : {}),
               createdAt,
             },
@@ -1118,4 +1197,6 @@ export const __testing = {
   resolveSessionId,
   // T3-CUSTOM(expbkt3): caller-seam regression for bounded session list reads.
   listSessions: handlers.t3_list_sessions,
+  // T3-CUSTOM(expbkt3): session lineage resolution for created sessions.
+  resolveCreatedSessionParent,
 };

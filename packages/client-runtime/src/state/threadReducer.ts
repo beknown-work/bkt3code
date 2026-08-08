@@ -240,6 +240,10 @@ export function applyThreadDetailEvent(
           ...(event.payload.linearIssueUrl !== undefined
             ? { linearIssueUrl: event.payload.linearIssueUrl }
             : {}),
+          // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
+          ...(event.payload.parentThreadId !== undefined
+            ? { parentThreadId: event.payload.parentThreadId }
+            : {}),
           updatedAt: event.payload.updatedAt,
         },
       };

@@ -196,6 +196,30 @@ It returns `threadId`, `bootstrapId`, and `bootstrapStatus: "queued"` after dura
 prompt is supplied, the first turn remains pending until new-worktree setup succeeds or a user
 bypasses a failed setup.
 
+### Session lineage
+
+A session created by another session records that session as its parent, and the experimental
+phase-grouped sidebar files it under that parent as a collapsible subtree. This keeps a fan-out —
+typically cross-repo work — readable as one unit of work instead of several unrelated rows.
+
+Nesting is the calling agent's choice:
+
+| Field                             | Effect                                                                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createAsChild` omitted or `true` | Nested under the calling session. The default, and the right choice for work you fanned out.                                                       |
+| `createAsChild: false`            | Created at the top level, exactly as if a person had started it. Use this when the new session is independent work that should stand on its own.   |
+| `parentSessionId`                 | Nest under a specific session rather than the caller, for building a tree you are not the root of. Cannot be combined with `createAsChild: false`. |
+
+`t3_list_sessions` and `t3_get_session` report `parentSessionId`, so an agent can inspect its own
+subtree instead of re-spawning work it already delegated.
+
+Sessions created through a personal external token are never parented automatically: that token is
+scoped to the user's conductor thread rather than to a session they are working in.
+
+A person can re-file a session at any time from the sidebar row's context menu — **Move under
+session…** and **Detach from parent**. Lineage always stays a forest; a parent that would close a
+cycle is rejected.
+
 ## Recommended triage loop
 
 1. Call `t3_list_sessions` with `attentionOnly: true`.

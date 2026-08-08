@@ -142,6 +142,8 @@ export function mergeThreadCreationDefaults(input: {
     ...(command.initialTurn ? { initialTurn: command.initialTurn } : {}),
     sourceControlProfileId: command.sourceControlProfileId ?? null,
     priority: command.priority ?? null,
+    // T3-CUSTOM(expbkt3): session lineage survives bootstrap resolution.
+    parentThreadId: command.parentThreadId ?? null,
     ...(command.ownerUserId ? { ownerUserId: command.ownerUserId } : {}),
     createdAt: command.createdAt,
   };
