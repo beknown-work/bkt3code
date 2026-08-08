@@ -162,6 +162,8 @@ import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDir
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -852,7 +854,21 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(gitManagerLayer),
       Layer.provide(gitVcsDriverLayer),
-      Layer.provide(gitWorkflowLayer),
+      // T3-CUSTOM(expbkt3): the session archive is stubbed rather than wired —
+      // these routes never exercise it, and a real one would walk the
+      // filesystem during unit tests. Merged into this provision rather than
+      // added as its own step: the chain is at TypeScript's `.pipe` ceiling.
+      Layer.provide(
+        Layer.mergeAll(
+          gitWorkflowLayer,
+          Layer.mock(SessionArchiveService.SessionArchiveService)({
+            scan: () => Effect.die("session archive not stubbed"),
+            exportHistory: () => Effect.die("session archive not stubbed"),
+            reclaim: () => Effect.die("session archive not stubbed"),
+            sweep: () => Effect.die("session archive not stubbed"),
+          }),
+        ),
+      ),
       Layer.provide(reviewLayer),
       Layer.provide(vcsProvisioningLayer),
       Layer.provide(

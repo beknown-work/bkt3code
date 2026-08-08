@@ -28,6 +28,14 @@ import { LinearIssueStatusInput, LinearIssueStatusResult } from "./linearIssue.t
 import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
 import { ServerResourceSample } from "./server.ts";
 import {
+  SessionArchiveError,
+  SessionArchiveExportInput,
+  SessionArchiveExportResult,
+  SessionArchiveReclaimInput,
+  SessionArchiveReclaimResult,
+  SessionArchiveScanResult,
+} from "./sessionArchive.ts";
+import {
   GitHubSourceControlProfile,
   SourceControlProfileArchiveInput,
   SourceControlProfileError,
@@ -68,6 +76,9 @@ export const WS_FORK_METHODS = {
   subscribeServerResources: "subscribeServerResources",
   subscribeProviderRateLimits: "subscribeProviderRateLimits",
   linearIssuesResolve: "linearIssues.resolve",
+  sessionArchiveScan: "sessionArchive.scan",
+  sessionArchiveExport: "sessionArchive.export",
+  sessionArchiveReclaim: "sessionArchive.reclaim",
 } as const;
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_FORK_METHODS.personalMcpGetProfile, {
@@ -230,6 +241,25 @@ export const WsLinearIssuesResolveRpc = Rpc.make(WS_FORK_METHODS.linearIssuesRes
   error: EnvironmentAuthorizationError,
 });
 
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+export const WsSessionArchiveScanRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveScan, {
+  payload: Schema.Struct({}),
+  success: SessionArchiveScanResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
+export const WsSessionArchiveExportRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveExport, {
+  payload: SessionArchiveExportInput,
+  success: SessionArchiveExportResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
+export const WsSessionArchiveReclaimRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveReclaim, {
+  payload: SessionArchiveReclaimInput,
+  success: SessionArchiveReclaimResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
 export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
   payload: OrchestrationRpcSchemas.stopExecution.input,
   success: OrchestrationRpcSchemas.stopExecution.output,
@@ -262,6 +292,9 @@ export const FORK_WS_RPCS = [
   WsSubscribeServerResourcesRpc,
   WsSubscribeProviderRateLimitsRpc,
   WsLinearIssuesResolveRpc,
+  WsSessionArchiveScanRpc,
+  WsSessionArchiveExportRpc,
+  WsSessionArchiveReclaimRpc,
   WsOrchestrationStopExecutionRpc,
   WsOrchestrationReplayEventsRpc,
 ] as const;

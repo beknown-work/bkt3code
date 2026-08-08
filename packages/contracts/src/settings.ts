@@ -599,6 +599,55 @@ export const ThreadTitleMaintenanceSettings = Schema.Struct({
 });
 export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettings.Type;
 
+/**
+ * T3-CUSTOM(expbkt3): How much of an archived session's worktree to give back.
+ *
+ * `slim` deletes only regenerable directories (`node_modules`, build output,
+ * caches) and leaves a usable checkout behind. `remove` runs
+ * `git worktree remove`, which reclaims everything but means reopening the
+ * session has to re-create the worktree first.
+ */
+export const SessionArchiveReclaimMode = Schema.Literals(["slim", "remove"]);
+export type SessionArchiveReclaimMode = typeof SessionArchiveReclaimMode.Type;
+
+/** Days an archived thread must sit untouched before the sweeper may reclaim it. */
+export const SessionArchiveMinArchivedDays = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 365 }),
+);
+
+export const DEFAULT_SESSION_ARCHIVE_MIN_ARCHIVED_DAYS = 14;
+
+/**
+ * T3-CUSTOM(expbkt3): Reclaim archived sessions' worktrees without losing what
+ * the session did.
+ *
+ * Upstream only removes a worktree when a thread is *deleted*, so the sole way
+ * to get the disk back is to destroy the history. Archived worktrees therefore
+ * accumulate indefinitely. This exports a durable history file pair (digest
+ * Markdown plus a full transcript sidecar) outside the worktree first, then
+ * reclaims the worktree per `SessionArchiveReclaimMode`.
+ *
+ * `historyDir` is blank by default, meaning `<baseDir>/session-history`.
+ * `autoSweep` is off by default: the panel drives this by hand until an
+ * operator opts into the timer.
+ */
+export const SessionArchiveAutoSweepSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  mode: SessionArchiveReclaimMode.pipe(Schema.withDecodingDefault(Effect.succeed("slim" as const))),
+  minArchivedDays: SessionArchiveMinArchivedDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_ARCHIVE_MIN_ARCHIVED_DAYS)),
+  ),
+});
+export type SessionArchiveAutoSweepSettings = typeof SessionArchiveAutoSweepSettings.Type;
+
+export const SessionArchiveSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  historyDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  includeTranscriptSidecar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  autoSweep: SessionArchiveAutoSweepSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type SessionArchiveSettings = typeof SessionArchiveSettings.Type;
+
 export const ExperimentalSettings = Schema.Struct({
   sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -607,6 +656,8 @@ export const ExperimentalSettings = Schema.Struct({
   threadTitleMaintenance: ThreadTitleMaintenanceSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+  sessionArchive: SessionArchiveSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ExperimentalSettings = typeof ExperimentalSettings.Type;
 
@@ -938,6 +989,21 @@ export const ServerSettingsPatch = Schema.Struct({
           dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
           minTurnDurationMinutes: Schema.optionalKey(SessionSummaryTurnDurationMinutes),
           promptInstructions: Schema.optionalKey(TrimmedString),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+      sessionArchive: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          historyDir: Schema.optionalKey(TrimmedString),
+          includeTranscriptSidecar: Schema.optionalKey(Schema.Boolean),
+          autoSweep: Schema.optionalKey(
+            Schema.Struct({
+              enabled: Schema.optionalKey(Schema.Boolean),
+              mode: Schema.optionalKey(SessionArchiveReclaimMode),
+              minArchivedDays: Schema.optionalKey(SessionArchiveMinArchivedDays),
+            }),
+          ),
         }),
       ),
     }),

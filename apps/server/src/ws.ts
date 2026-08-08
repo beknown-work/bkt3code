@@ -119,6 +119,8 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -393,6 +395,8 @@ const makeWsRpcLayer = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const gitVcsDriver = yield* GitVcsDriver.GitVcsDriver;
+      // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+      const sessionArchive = yield* SessionArchiveService.SessionArchiveService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
@@ -1125,6 +1129,7 @@ const makeWsRpcLayer = (
         projectionSnapshotQuery,
         orchestrationEngine,
         gitVcsDriver,
+        sessionArchive,
         executionSupervisor,
         sourceControlActionLock,
         enrichOrchestrationEvents,

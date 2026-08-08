@@ -7,6 +7,8 @@ import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
 import { T3ConductorSettingsSection } from "./T3ConductorSettingsSection";
 // T3-CUSTOM(expbkt3): session title maintenance.
 import { ThreadTitleMaintenanceSettingsSection } from "./ThreadTitleMaintenanceSettingsSection";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+import { SessionArchiveSettingsSection } from "./SessionArchiveSettingsSection";
 import {
   EXPERIMENTAL_CONTROL_CENTER_ENABLED,
   T3_CONDUCTOR_ENABLED,
@@ -120,6 +122,9 @@ export function ExperimentsSettingsPanel() {
       <SessionSummarySettingsSection />
       {/* T3-CUSTOM(expbkt3): BEGIN — session title maintenance. */}
       <ThreadTitleMaintenanceSettingsSection />
+      {/* T3-CUSTOM(expbkt3): END */}
+      {/* T3-CUSTOM(expbkt3): BEGIN — archived-session worktree reclaim. */}
+      <SessionArchiveSettingsSection />
       {/* T3-CUSTOM(expbkt3): END */}
     </SettingsPageContainer>
   );

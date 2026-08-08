@@ -41,6 +41,7 @@ import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import type * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
 import type { ThreadExecutionSupervisorShape } from "./execution/ThreadExecutionSupervisor.ts";
 import { resolveLinearIssueStatuses } from "./linear/LinearIssueResolver.ts";
+import type { SessionArchiveServiceShape } from "./sessionArchive/SessionArchiveService.ts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 type WsRpcs = RpcGroup.Rpcs<typeof WsRpcGroup>;
@@ -63,6 +64,8 @@ export interface ForkWsHandlerDeps {
   readonly projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
   readonly orchestrationEngine: OrchestrationEngine.OrchestrationEngineService["Service"];
   readonly gitVcsDriver: GitVcsDriver.GitVcsDriver["Service"];
+  // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+  readonly sessionArchive: SessionArchiveServiceShape;
   readonly executionSupervisor: ThreadExecutionSupervisorShape;
   /** Serialises source-control actions per thread. */
   readonly sourceControlActionLock: {
@@ -108,6 +111,7 @@ export const makeForkWsHandlers = ({
   projectionSnapshotQuery,
   orchestrationEngine,
   gitVcsDriver,
+  sessionArchive,
   executionSupervisor,
   sourceControlActionLock,
   enrichOrchestrationEvents,
@@ -152,6 +156,22 @@ export const makeForkWsHandlers = ({
         }),
         { "rpc.aggregate": "linear-issues" },
       ),
+    // T3-CUSTOM(expbkt3): BEGIN — archived-session worktree reclaim.
+    [WS_METHODS.sessionArchiveScan]: (_input) =>
+      observeRpcEffect(WS_METHODS.sessionArchiveScan, sessionArchive.scan(), {
+        "rpc.aggregate": "session-archive",
+      }),
+    [WS_METHODS.sessionArchiveExport]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.sessionArchiveExport,
+        sessionArchive.exportHistory(input.threadIds),
+        { "rpc.aggregate": "session-archive" },
+      ),
+    [WS_METHODS.sessionArchiveReclaim]: (input) =>
+      observeRpcEffect(WS_METHODS.sessionArchiveReclaim, sessionArchive.reclaim(input), {
+        "rpc.aggregate": "session-archive",
+      }),
+    // T3-CUSTOM(expbkt3): END
     [WS_METHODS.sourceControlProfilesList]: (_input) =>
       observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {
         "rpc.aggregate": "source-control-profile",

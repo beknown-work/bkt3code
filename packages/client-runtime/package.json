@@ -155,6 +155,10 @@
       "types": "./src/state/threadSearch.ts",
       "default": "./src/state/threadSearch.ts"
     },
+    "./state/session-archive": {
+      "types": "./src/state/sessionArchive.ts",
+      "default": "./src/state/sessionArchive.ts"
+    },
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
