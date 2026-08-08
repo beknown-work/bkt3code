@@ -19,6 +19,27 @@ import { Children } from "react";
 
 import { Checkbox } from "../../ui/checkbox";
 import { cn } from "../../../lib/utils";
+import { useTheme } from "../../../hooks/useTheme";
+import { PlanReviewMermaid } from "./PlanReviewMermaid";
+
+/** Plate keeps a code block's fence language on the element as `lang`. */
+function codeBlockLanguage(element: unknown): string {
+  const lang = (element as { lang?: unknown }).lang;
+  return typeof lang === "string" ? lang.trim().toLowerCase() : "";
+}
+
+/** Slate stores text in leaves; a code block's source is its descendant text. */
+function codeBlockText(element: unknown): string {
+  const collect = (node: unknown): string => {
+    if (typeof (node as { text?: unknown }).text === "string") {
+      return (node as { text: string }).text;
+    }
+    const children = (node as { children?: unknown }).children;
+    return Array.isArray(children) ? children.map(collect).join("\n") : "";
+  };
+  const children = (element as { children?: unknown }).children;
+  return Array.isArray(children) ? children.map(collect).join("\n") : "";
+}
 
 const headingVariants = cva("relative font-semibold text-foreground", {
   variants: {
@@ -83,6 +104,25 @@ export function HorizontalRuleElement(props: PlateElementProps) {
 }
 
 export function CodeBlockElement(props: PlateElementProps) {
+  const { resolvedTheme } = useTheme();
+  const isMermaid = codeBlockLanguage(props.element) === "mermaid";
+
+  if (isMermaid) {
+    return (
+      <PlateElement {...props}>
+        {/* The rendered diagram is decoration; the code lines stay in the
+            document so the text remains selectable, editable and serializable. */}
+        <div contentEditable={false} className="select-none">
+          <PlanReviewMermaid
+            code={codeBlockText(props.element)}
+            isDark={resolvedTheme === "dark"}
+          />
+        </div>
+        <div className="sr-only">{props.children}</div>
+      </PlateElement>
+    );
+  }
+
   return (
     <PlateElement
       className="my-3 overflow-x-auto rounded-md border bg-muted/50 py-2.5 font-mono text-[13px] leading-relaxed"

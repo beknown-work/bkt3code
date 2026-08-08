@@ -17,6 +17,9 @@ export const PlanReviewStatus = Schema.Literals([
 ]);
 export type PlanReviewStatus = typeof PlanReviewStatus.Type;
 
+export const PlanReviewFormat = Schema.Literals(["md", "html"]);
+export type PlanReviewFormat = typeof PlanReviewFormat.Type;
+
 export const PlanReviewAuthorKind = Schema.Literals(["agent", "user"]);
 export type PlanReviewAuthorKind = typeof PlanReviewAuthorKind.Type;
 
@@ -37,6 +40,7 @@ export const PlanReviewDocument = Schema.Struct({
   title: Schema.String,
   currentRevision: Schema.Number,
   status: PlanReviewStatus,
+  format: PlanReviewFormat,
   createdByUserId: Schema.NullOr(UserId),
   createdAt: Schema.String,
   updatedAt: Schema.String,

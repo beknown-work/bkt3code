@@ -15,10 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PlanReviewDiscussions } from "./PlanReviewDiscussions";
 import { PlanReviewEditor, type PlanReviewEditorHandle } from "./PlanReviewEditor";
+import { PlanReviewHtmlView } from "./PlanReviewHtmlView";
 import { PlanReviewVersions } from "./PlanReviewVersions";
 import { nextPlanDiscussionId } from "./planReviewMarkdown";
 import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
 import { planReviewEnvironment } from "../../state/planReview";
 import { toastManager } from "../ui/toast";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -311,79 +311,37 @@ export default function PlanReviewPanel({
     (discussion) => !discussion.isResolved,
   ).length;
 
+  const isHtmlPlan = snapshot.document.format === "html";
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      {/*
-        One chrome row, not three. The plan's own H1 already titles the
-        document and the right-panel tab already says "Plan review", so a
-        separate title row and a mode banner were spending vertical space the
-        document needs — the panel is tall and narrow, and reading the plan is
-        the whole job.
-      */}
-      <nav className="flex items-center gap-1 border-b px-2 py-1">
-        <Button
-          size="sm"
-          variant={tab === "review" ? "secondary" : "ghost"}
-          onClick={() => setTab("review")}
-          title={snapshot.document.title}
-        >
-          <MessageSquareIcon className="size-3.5" aria-hidden /> Review
-          {openDiscussionCount > 0 ? (
-            <span className="ml-1 rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums">
-              {openDiscussionCount}
-            </span>
-          ) : null}
-        </Button>
-        <Button
-          size="sm"
-          variant={tab === "versions" ? "secondary" : "ghost"}
-          onClick={() => setTab("versions")}
-        >
-          <HistoryIcon className="size-3.5" aria-hidden /> v{snapshot.document.currentRevision}
-          {snapshot.versions.length > 1 ? (
-            <span className="ml-1 text-muted-foreground text-[11px] tabular-nums">
-              of {snapshot.versions.length}
-            </span>
-          ) : null}
-        </Button>
+    /*
+      The document column owns the full height of the panel. Every control —
+      the view switch, the notes box and the decisions — lives in the rail, so
+      reading the plan is never traded against chrome. This is the layout the
+      reviewer asked for after living with a header and a footer eating ~150px
+      of a tall, narrow panel.
+    */
+    <div className="flex min-h-0 min-w-0 flex-1 flex-row bg-background">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {roundTripWarning && !isHtmlPlan ? (
+          <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
+            This plan uses markdown the editor cannot reproduce exactly. Edits may reformat parts of
+            it — check the diff before sending.
+          </p>
+        ) : null}
 
-        {isResolved ? (
-          <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
-            {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
-          </span>
+        {tab === "versions" ? (
+          <PlanReviewVersions
+            versions={snapshot.versions}
+            diff={diffQuery.data?.diff ?? null}
+            isDiffPending={comparison !== null && diffQuery.isPending}
+            canRestore={!isResolved && !isHtmlPlan}
+            onCompare={(from, to) => setComparison({ from, to })}
+            onRestore={handleRestore}
+          />
+        ) : isHtmlPlan ? (
+          <PlanReviewHtmlView html={canonicalMarkdown} title={snapshot.document.title} />
         ) : (
-          <label
-            className="ml-auto flex shrink-0 items-center gap-1.5 text-xs"
-            title="Record your edits as tracked suggestions instead of editing in place"
-          >
-            <input
-              type="checkbox"
-              checked={suggestionMode}
-              onChange={(event) => setSuggestionMode(event.target.checked)}
-            />
-            Suggest edits
-          </label>
-        )}
-      </nav>
-
-      {roundTripWarning ? (
-        <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
-          This plan uses markdown the editor cannot reproduce exactly. Edits may reformat parts of
-          it — check the diff before sending.
-        </p>
-      ) : null}
-
-      {tab === "versions" ? (
-        <PlanReviewVersions
-          versions={snapshot.versions}
-          diff={diffQuery.data?.diff ?? null}
-          isDiffPending={comparison !== null && diffQuery.isPending}
-          canRestore={!isResolved}
-          onCompare={(from, to) => setComparison({ from, to })}
-          onRestore={handleRestore}
-        />
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
           <PlanReviewEditor
             markdown={canonicalMarkdown}
             readOnly={isResolved}
@@ -393,59 +351,119 @@ export default function PlanReviewPanel({
             onAddComment={handleAddComment}
             onRoundTripUnstable={handleRoundTripUnstable}
           />
-          <aside
-            className={cn(
-              "min-h-0 shrink-0 overflow-auto border-t lg:w-72 lg:border-t-0 lg:border-l",
-              "max-h-56 lg:max-h-none",
-            )}
-            aria-label="Plan discussions"
+        )}
+      </main>
+
+      <aside
+        className="flex min-h-0 w-72 shrink-0 flex-col border-l"
+        aria-label="Plan review controls"
+      >
+        <nav className="flex items-center gap-1 border-b px-2 py-1">
+          <Button
+            size="sm"
+            variant={tab === "review" ? "secondary" : "ghost"}
+            onClick={() => setTab("review")}
+            title={snapshot.document.title}
           >
+            <MessageSquareIcon className="size-3.5" aria-hidden /> Review
+            {openDiscussionCount > 0 ? (
+              <span className="ml-1 rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums">
+                {openDiscussionCount}
+              </span>
+            ) : null}
+          </Button>
+          <Button
+            size="sm"
+            variant={tab === "versions" ? "secondary" : "ghost"}
+            onClick={() => setTab("versions")}
+          >
+            <HistoryIcon className="size-3.5" aria-hidden /> v{snapshot.document.currentRevision}
+          </Button>
+          {isResolved ? (
+            <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-[11px]">
+              {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
+            </span>
+          ) : null}
+        </nav>
+
+        {!isResolved && !isHtmlPlan ? (
+          <label
+            className="flex items-center gap-1.5 border-b px-3 py-1.5 text-xs"
+            title="Record your edits as tracked suggestions instead of editing in place"
+          >
+            <input
+              type="checkbox"
+              checked={suggestionMode}
+              onChange={(event) => setSuggestionMode(event.target.checked)}
+            />
+            Suggest edits
+          </label>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          {isHtmlPlan ? (
+            <p className="p-4 text-muted-foreground text-xs">
+              This plan is an HTML document, so it is shown as the agent rendered it. Use the notes
+              below to send feedback.
+            </p>
+          ) : (
             <PlanReviewDiscussions
               discussions={snapshot.discussions}
               comments={snapshot.comments}
               onResolve={handleResolve}
               disabled={isResolved}
             />
-          </aside>
+          )}
         </div>
-      )}
 
-      {isResolved ? null : (
-        <footer className="border-t p-3">
-          <textarea
-            className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
-            rows={2}
-            value={globalComment}
-            placeholder="Overall notes for the agent (optional)"
-            aria-label="Overall review notes"
-            onChange={(event) => setGlobalComment(event.target.value)}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => handleSubmit("approved")}>
-              <CheckIcon className="size-3.5" aria-hidden /> Approve
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => handleSubmit("changes-requested")}
-              disabled={openDiscussionCount === 0 && globalComment.trim().length === 0 && !isDirty}
-            >
-              <SendIcon className="size-3.5" aria-hidden /> Send feedback
-            </Button>
-            <Button size="sm" variant="ghost" onClick={handleSaveVersion} disabled={!isDirty}>
-              Save version
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto text-destructive"
-              onClick={() => handleSubmit("discarded")}
-            >
-              <Trash2Icon className="size-3.5" aria-hidden /> Discard
-            </Button>
+        {isResolved ? null : (
+          <div className="border-t p-2">
+            <textarea
+              className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
+              rows={3}
+              value={globalComment}
+              placeholder="Overall notes for the agent (optional)"
+              aria-label="Overall review notes"
+              onChange={(event) => setGlobalComment(event.target.value)}
+            />
+            <div className="flex flex-col gap-1.5">
+              <Button size="sm" onClick={() => handleSubmit("approved")}>
+                <CheckIcon className="size-3.5" aria-hidden /> Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleSubmit("changes-requested")}
+                disabled={
+                  openDiscussionCount === 0 && globalComment.trim().length === 0 && !isDirty
+                }
+              >
+                <SendIcon className="size-3.5" aria-hidden /> Send feedback
+              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="flex-1"
+                  onClick={handleSaveVersion}
+                  disabled={!isDirty || isHtmlPlan}
+                >
+                  Save version
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive"
+                  onClick={() => handleSubmit("discarded")}
+                  aria-label="Discard this review"
+                >
+                  <Trash2Icon className="size-3.5" aria-hidden />
+                </Button>
+              </div>
+            </div>
           </div>
-        </footer>
-      )}
+        )}
+      </aside>
     </div>
   );
 }

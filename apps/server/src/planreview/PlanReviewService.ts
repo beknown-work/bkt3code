@@ -18,6 +18,7 @@ import {
   type UserId,
 } from "@t3tools/contracts";
 import { withoutPlannotatorPlanMarker } from "@t3tools/shared/plannotator";
+import { detectPlannotatorPlanFormat } from "../plannotator/planFormat.ts";
 import {
   buildPlanReviewApprovalPrompt,
   buildPlanReviewFeedbackPrompt,
@@ -171,6 +172,18 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 /** First heading, else first non-empty line, capped so titles stay tab-sized. */
 export function derivePlanTitle(markdown: string): string {
+  if (detectPlannotatorPlanFormat(markdown) === "html") {
+    const titled =
+      /<title[^>]*>([\s\S]*?)<\/title>/i.exec(markdown) ??
+      /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(markdown);
+    const text = titled?.[1]
+      ?.replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) return text.length > 80 ? `${text.slice(0, 77)}…` : text;
+    return "HTML plan";
+  }
+
   for (const rawLine of markdown.split("\n")) {
     const line = rawLine.trim();
     if (line.length === 0) continue;
@@ -286,6 +299,9 @@ export const make = Effect.gen(function* () {
           title: input.title,
           currentRevision: 1,
           status: "open",
+          // Providers put an HTML plan in the same field as markdown, so the
+          // renderer is decided once at capture and remembered.
+          format: detectPlannotatorPlanFormat(input.planMarkdown),
           createdByUserId: input.authorUserId,
           createdAt,
           updatedAt: createdAt,
@@ -345,6 +361,7 @@ export const make = Effect.gen(function* () {
         ...openDocument,
         title: input.title,
         currentRevision: nextRevision,
+        format: detectPlannotatorPlanFormat(input.planMarkdown),
         // The revision answers the feedback, so the review is live again.
         status: "open",
         updatedAt: createdAt,
