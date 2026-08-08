@@ -18,6 +18,7 @@ import {
   WsRpcGroup,
   EnvironmentAuthorizationError,
   OrchestrationGetSnapshotError,
+  PlanReviewError,
   SourceControlProfileError,
   type AuthSessionId,
   type OrchestrationEvent,
@@ -33,6 +34,7 @@ import type * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
 import type * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import type * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
 import type * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import type * as PlanReviewService from "./planreview/PlanReviewService.ts";
 import type * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts";
 import type { ProviderRateLimitsShape } from "./provider/ProviderRateLimits.ts";
@@ -41,6 +43,7 @@ import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import type * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
 import type { ThreadExecutionSupervisorShape } from "./execution/ThreadExecutionSupervisor.ts";
 import { resolveLinearIssueStatuses } from "./linear/LinearIssueResolver.ts";
+import type { SessionArchiveServiceShape } from "./sessionArchive/SessionArchiveService.ts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 type WsRpcs = RpcGroup.Rpcs<typeof WsRpcGroup>;
@@ -58,11 +61,17 @@ export interface ForkWsHandlerDeps {
   readonly httpClient: HttpClient.HttpClient;
   readonly sourceControlProfiles: SourceControlProfileService.SourceControlProfileService["Service"];
   readonly environmentUsers: EnvironmentUserService.EnvironmentUserService["Service"];
+  // T3-CUSTOM(expbkt3): native plan review.
+  readonly planReview: PlanReviewService.PlanReviewService["Service"];
+  /** Display name for the acting user, stamped onto their review comments. */
+  readonly actorLabel: string | null;
   readonly systemResourceMonitor: SystemResourceMonitor.SystemResourceMonitor["Service"];
   readonly providerRateLimits: ProviderRateLimitsShape;
   readonly projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
   readonly orchestrationEngine: OrchestrationEngine.OrchestrationEngineService["Service"];
   readonly gitVcsDriver: GitVcsDriver.GitVcsDriver["Service"];
+  // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+  readonly sessionArchive: SessionArchiveServiceShape;
   readonly executionSupervisor: ThreadExecutionSupervisorShape;
   /** Serialises source-control actions per thread. */
   readonly sourceControlActionLock: {
@@ -103,11 +112,14 @@ export const makeForkWsHandlers = ({
   httpClient,
   sourceControlProfiles,
   environmentUsers,
+  planReview,
+  actorLabel,
   systemResourceMonitor,
   providerRateLimits,
   projectionSnapshotQuery,
   orchestrationEngine,
   gitVcsDriver,
+  sessionArchive,
   executionSupervisor,
   sourceControlActionLock,
   enrichOrchestrationEvents,
@@ -115,8 +127,47 @@ export const makeForkWsHandlers = ({
   observeRpcStream,
   requireThreadAccess,
   visibleAggregateIdsForActor,
-}: ForkWsHandlerDeps) =>
-  ({
+}: ForkWsHandlerDeps) => {
+  // T3-CUSTOM(expbkt3): BEGIN native plan review helpers.
+  const planReviewAccessError = (cause: OrchestrationGetSnapshotError) =>
+    new PlanReviewError({ operation: "access", reason: "not-found", detail: cause.message });
+
+  const toPlanReviewError =
+    (operation: string) => (cause: { readonly _tag: string; readonly message: string }) =>
+      cause._tag === "PlanReviewError"
+        ? (cause as unknown as PlanReviewError)
+        : new PlanReviewError({
+            operation,
+            reason:
+              cause._tag === "PlanReviewNotFoundError"
+                ? "not-found"
+                : cause._tag === "PlanDraftConflictError"
+                  ? "draft-conflict"
+                  : cause._tag === "PlanVersionConflictError"
+                    ? "version-conflict"
+                    : "invalid",
+            detail: cause.message,
+          });
+
+  /**
+   * Reviews are reachable only through the thread that owns them, so every
+   * entry point resolves the document first and then applies thread access.
+   * A denial reads as "not found" so the check cannot leak existence.
+   */
+  const guardDocument = (documentId: string) =>
+    planReview.getReview(documentId).pipe(
+      Effect.mapError(toPlanReviewError("access")),
+      Effect.tap((snapshot) =>
+        requireThreadAccess(snapshot.document.threadId).pipe(
+          Effect.mapError(planReviewAccessError),
+        ),
+      ),
+    );
+
+  const guardedReview = (documentId: string) => guardDocument(documentId);
+  // T3-CUSTOM(expbkt3): END native plan review helpers.
+
+  return {
     [WS_METHODS.personalMcpGetProfile]: (_input) =>
       observeRpcEffect(
         WS_METHODS.personalMcpGetProfile,
@@ -152,6 +203,22 @@ export const makeForkWsHandlers = ({
         }),
         { "rpc.aggregate": "linear-issues" },
       ),
+    // T3-CUSTOM(expbkt3): BEGIN — archived-session worktree reclaim.
+    [WS_METHODS.sessionArchiveScan]: (_input) =>
+      observeRpcEffect(WS_METHODS.sessionArchiveScan, sessionArchive.scan(), {
+        "rpc.aggregate": "session-archive",
+      }),
+    [WS_METHODS.sessionArchiveExport]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.sessionArchiveExport,
+        sessionArchive.exportHistory(input.threadIds),
+        { "rpc.aggregate": "session-archive" },
+      ),
+    [WS_METHODS.sessionArchiveReclaim]: (input) =>
+      observeRpcEffect(WS_METHODS.sessionArchiveReclaim, sessionArchive.reclaim(input), {
+        "rpc.aggregate": "session-archive",
+      }),
+    // T3-CUSTOM(expbkt3): END
     [WS_METHODS.sourceControlProfilesList]: (_input) =>
       observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {
         "rpc.aggregate": "source-control-profile",
@@ -332,4 +399,127 @@ export const makeForkWsHandlers = ({
       observeRpcStream(WS_METHODS.subscribeProviderRateLimits, providerRateLimits.stream, {
         "rpc.aggregate": "server",
       }),
-  }) satisfies ForkWsHandlers;
+    // T3-CUSTOM(expbkt3): BEGIN native plan review.
+    [WS_METHODS.planReviewGet]: (input) =>
+      observeRpcEffect(WS_METHODS.planReviewGet, guardedReview(input.documentId), {
+        "rpc.aggregate": "plan-review",
+      }),
+    [WS_METHODS.planReviewList]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewList,
+        requireThreadAccess(input.threadId).pipe(
+          Effect.mapError(planReviewAccessError),
+          Effect.andThen(planReview.listForThread(input.threadId)),
+          Effect.map((documents) => ({ documents })),
+          Effect.mapError(toPlanReviewError("list")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.planReviewSaveDraft]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewSaveDraft,
+        guardDocument(input.documentId).pipe(
+          Effect.andThen(
+            planReview.saveDraft({
+              documentId: input.documentId,
+              contentValueJson: input.contentValueJson,
+              expectedRevisionToken: input.expectedRevisionToken,
+              actorUserId,
+            }),
+          ),
+          Effect.mapError(toPlanReviewError("saveDraft")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.planReviewCutVersion]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewCutVersion,
+        guardDocument(input.documentId).pipe(
+          Effect.andThen(
+            planReview.cutVersion({
+              documentId: input.documentId,
+              contentMarkdown: input.contentMarkdown,
+              contentValueJson: input.contentValueJson,
+              summary: input.summary,
+              actorUserId,
+            }),
+          ),
+          Effect.andThen(planReview.getReview(input.documentId)),
+          Effect.mapError(toPlanReviewError("cutVersion")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.planReviewUpsertDiscussion]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewUpsertDiscussion,
+        guardDocument(input.documentId).pipe(
+          Effect.andThen(
+            planReview.upsertDiscussion({
+              documentId: input.documentId,
+              discussionId: input.discussionId,
+              quotedText: input.quotedText,
+              bodyMarkdown: input.bodyMarkdown,
+              actorUserId,
+            }),
+          ),
+          Effect.andThen(planReview.getReview(input.documentId)),
+          Effect.mapError(toPlanReviewError("upsertDiscussion")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.planReviewResolveDiscussion]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewResolveDiscussion,
+        guardDocument(input.documentId).pipe(
+          Effect.andThen(
+            planReview.resolveDiscussion({
+              documentId: input.documentId,
+              discussionId: input.discussionId,
+              isResolved: input.isResolved,
+              actorUserId,
+            }),
+          ),
+          Effect.andThen(planReview.getReview(input.documentId)),
+          Effect.mapError(toPlanReviewError("resolveDiscussion")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.planReviewVersionDiff]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewVersionDiff,
+        guardDocument(input.documentId).pipe(
+          Effect.andThen(planReview.getVersionDiff(input)),
+          Effect.mapError(toPlanReviewError("versionDiff")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.planReviewSubmit]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.planReviewSubmit,
+        guardDocument(input.documentId).pipe(
+          Effect.andThen(
+            planReview.submit({
+              documentId: input.documentId,
+              decision: input.decision,
+              globalComment: input.globalComment,
+              editedMarkdown: input.editedMarkdown,
+              actorUserId,
+              actorLabel,
+            }),
+          ),
+          Effect.mapError(toPlanReviewError("submit")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    [WS_METHODS.subscribePlanReview]: (input) =>
+      observeRpcStream(
+        WS_METHODS.subscribePlanReview,
+        Stream.fromEffect(guardDocument(input.documentId)).pipe(
+          Stream.flatMap(() => planReview.watch(input.documentId)),
+          Stream.mapError(toPlanReviewError("watch")),
+        ),
+        { "rpc.aggregate": "plan-review" },
+      ),
+    // T3-CUSTOM(expbkt3): END native plan review.
+  } satisfies ForkWsHandlers;
+};

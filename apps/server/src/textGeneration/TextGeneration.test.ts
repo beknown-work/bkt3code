@@ -25,6 +25,7 @@ const makeStubTextGeneration = (
       Effect.die("updateRollingSummary stub not configured for this test"),
     generateCatchupSummary: () =>
       Effect.die("generateCatchupSummary stub not configured for this test"),
+    generateWorkSummary: () => Effect.die("generateWorkSummary stub not configured for this test"),
     ...overrides,
   });
 

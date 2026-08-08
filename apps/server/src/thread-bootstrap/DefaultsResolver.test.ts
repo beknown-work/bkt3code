@@ -197,3 +197,28 @@ describe("resolveExactBranch", () => {
     ).toBeNull();
   });
 });
+
+// T3-CUSTOM(expbkt3): session lineage. Resolution is one link in the chain that
+// carries a spawning session into the created thread; the Coordinator dispatch
+// is the other.
+describe("mergeThreadCreationDefaults session lineage", () => {
+  it("carries an explicit parent through resolution", () => {
+    const resolved = mergeThreadCreationDefaults({
+      command: command({ parentThreadId: ThreadId.make("thread-parent") }),
+      project: project(),
+      settings: DEFAULT_SERVER_SETTINGS,
+    });
+
+    expect(resolved.parentThreadId).toBe("thread-parent");
+  });
+
+  it("resolves an absent parent to null, so a human-started session is a root", () => {
+    const resolved = mergeThreadCreationDefaults({
+      command: command(),
+      project: project(),
+      settings: DEFAULT_SERVER_SETTINGS,
+    });
+
+    expect(resolved.parentThreadId).toBe(null);
+  });
+});

@@ -22,6 +22,7 @@ import {
   buildPhaseSidebarRepositoryOptions,
   derivePhaseSidebarRepositoryKey,
   isThreadAssignedToUser,
+  phaseSidebarThreadParticipantIds,
   filterVisiblePhaseSidebarRows,
   matchesPhaseSidebarFilters,
   partitionPhaseSidebarRows,
@@ -308,6 +309,8 @@ function makeRow(overrides: Partial<PhaseSidebarRow> = {}): PhaseSidebarRow {
     providerKind: "codex",
     providerName: "Codex",
     isAssignedToMe: false,
+    isOwnedByMe: false,
+    participantUserIds: [],
     attentionPriority: 5,
     isUnreadCompletion: false,
     // Settlement and snooze default ON: most cases exercise the partition,
@@ -704,7 +707,8 @@ describe("phase sidebar metadata and filters", () => {
         repositoryKeys: ["repo-2", "repo-1"],
         phaseIds: ["ready", "planning"],
         providerKinds: ["codex"],
-        assignedToMe: false,
+        ownedByMe: false,
+        participantUserIds: [],
       }),
     ).toBe(true);
     expect(
@@ -712,13 +716,20 @@ describe("phase sidebar metadata and filters", () => {
         repositoryKeys: ["repo-1"],
         phaseIds: ["ready"],
         providerKinds: ["opencode"],
-        assignedToMe: false,
+        ownedByMe: false,
+        participantUserIds: [],
       }),
     ).toBe(false);
     expect(
       buildPhaseSidebarGroups(
         [row],
-        { repositoryKeys: ["missing"], phaseIds: [], providerKinds: [], assignedToMe: false },
+        {
+          repositoryKeys: ["missing"],
+          phaseIds: [],
+          providerKinds: [],
+          ownedByMe: false,
+          participantUserIds: [],
+        },
         "updated_at",
       ),
     ).toEqual([]);
@@ -731,7 +742,8 @@ describe("phase sidebar metadata and filters", () => {
           repositoryKeys: ["repo-1"],
           phaseIds: ["plan_ready"],
           providerKinds: ["codex"],
-          assignedToMe: false,
+          ownedByMe: false,
+          participantUserIds: [],
         },
         {
           repositories: new Map([["repo-1", "T3 Code"]]),
@@ -757,7 +769,8 @@ describe("phase sidebar metadata and filters", () => {
       repositoryKeys: ["repo-1"],
       phaseIds: ["ready"],
       providerKinds: [],
-      assignedToMe: false,
+      ownedByMe: false,
+      participantUserIds: [],
     });
 
     expect(
@@ -766,7 +779,8 @@ describe("phase sidebar metadata and filters", () => {
           repositoryKeys: ["repo-1", "stale-repo"],
           phaseIds: ["ready"],
           providerKinds: ["codex", "stale-provider"],
-          assignedToMe: false,
+          ownedByMe: false,
+          participantUserIds: [],
         },
         {
           repositoryKeys: new Set(["repo-1"]),
@@ -778,7 +792,8 @@ describe("phase sidebar metadata and filters", () => {
       repositoryKeys: ["repo-1"],
       phaseIds: ["ready"],
       providerKinds: ["codex"],
-      assignedToMe: false,
+      ownedByMe: false,
+      participantUserIds: [],
     });
   });
 
@@ -796,46 +811,87 @@ describe("phase sidebar metadata and filters", () => {
     ).toBe(false);
   });
 
-  it("keeps only assigned rows when assignedToMe is on and all rows when off", () => {
-    const assignedRow = makeRow({ isAssignedToMe: true });
-    const unassignedRow = makeRow({ isAssignedToMe: false });
-    const assignedFilters = { ...EMPTY_PHASE_SIDEBAR_FILTERS, assignedToMe: true };
+  // T3-CUSTOM(expbkt3): ownership, not "owner or tagged". The old filter matched
+  // the server's visibility rule, so every thread you could see satisfied it and
+  // turning it on changed nothing.
+  it("keeps only sessions this operator started when ownedByMe is on", () => {
+    const mine = makeRow({ isOwnedByMe: true, isAssignedToMe: true });
+    // Tagged into someone else's session: visible, assigned, but not mine.
+    const theirs = makeRow({ isOwnedByMe: false, isAssignedToMe: true });
+    const ownedFilters = { ...EMPTY_PHASE_SIDEBAR_FILTERS, ownedByMe: true };
 
-    expect(matchesPhaseSidebarFilters(assignedRow, assignedFilters)).toBe(true);
-    expect(matchesPhaseSidebarFilters(unassignedRow, assignedFilters)).toBe(false);
-    expect(matchesPhaseSidebarFilters(assignedRow, EMPTY_PHASE_SIDEBAR_FILTERS)).toBe(true);
-    expect(matchesPhaseSidebarFilters(unassignedRow, EMPTY_PHASE_SIDEBAR_FILTERS)).toBe(true);
+    expect(matchesPhaseSidebarFilters(mine, ownedFilters)).toBe(true);
+    expect(matchesPhaseSidebarFilters(theirs, ownedFilters)).toBe(false);
+    expect(matchesPhaseSidebarFilters(theirs, EMPTY_PHASE_SIDEBAR_FILTERS)).toBe(true);
   });
 
-  it("defaults assignedToMe to false when missing and reads it when present", () => {
-    expect(
-      sanitizePhaseSidebarFilters({
-        repositoryKeys: [],
-        phaseIds: [],
-        providerKinds: [],
-      }).assignedToMe,
-    ).toBe(false);
-    expect(
-      sanitizePhaseSidebarFilters({
-        repositoryKeys: [],
-        phaseIds: [],
-        providerKinds: [],
-        assignedToMe: true,
-      }).assignedToMe,
-    ).toBe(true);
+  it("requires every selected person to be on the session", () => {
+    const withBoth = makeRow({ participantUserIds: ["user-a", "user-b", "user-me"] });
+    const withOne = makeRow({ participantUserIds: ["user-a", "user-me"] });
+    const onePerson = { ...EMPTY_PHASE_SIDEBAR_FILTERS, participantUserIds: ["user-a"] };
+    const twoPeople = { ...EMPTY_PHASE_SIDEBAR_FILTERS, participantUserIds: ["user-a", "user-b"] };
+
+    expect(matchesPhaseSidebarFilters(withOne, onePerson)).toBe(true);
+    expect(matchesPhaseSidebarFilters(withBoth, onePerson)).toBe(true);
+    // Two people selected asks for their shared sessions, not the union.
+    expect(matchesPhaseSidebarFilters(withBoth, twoPeople)).toBe(true);
+    expect(matchesPhaseSidebarFilters(withOne, twoPeople)).toBe(false);
   });
 
-  it("forces assignedToMe off when assignment is unavailable and preserves it otherwise", () => {
-    const filters = { ...EMPTY_PHASE_SIDEBAR_FILTERS, assignedToMe: true };
+  it("counts the owner as a participant alongside tagged members", () => {
+    const owner = UserId.make("user_owner");
+    const member = UserId.make("user_member");
+
+    expect(
+      phaseSidebarThreadParticipantIds(makeThread({ ownerUserId: owner, memberUserIds: [member] })),
+    ).toEqual([owner, member]);
+    // An owner who is also tagged appears once.
+    expect(
+      phaseSidebarThreadParticipantIds(makeThread({ ownerUserId: owner, memberUserIds: [owner] })),
+    ).toEqual([owner]);
+    expect(
+      phaseSidebarThreadParticipantIds(makeThread({ ownerUserId: null, memberUserIds: [member] })),
+    ).toEqual([member]);
+  });
+
+  it("defaults the new facets off when missing and reads them when present", () => {
+    const legacyBlob = { repositoryKeys: [], phaseIds: [], providerKinds: [] };
+
+    expect(sanitizePhaseSidebarFilters(legacyBlob).ownedByMe).toBe(false);
+    expect(sanitizePhaseSidebarFilters(legacyBlob).participantUserIds).toEqual([]);
+    expect(
+      sanitizePhaseSidebarFilters({
+        ...legacyBlob,
+        ownedByMe: true,
+        participantUserIds: ["user-a", "user-a", ""],
+      }),
+    ).toMatchObject({ ownedByMe: true, participantUserIds: ["user-a"] });
+  });
+
+  it("clears people filters that outlive the directory or the operator identity", () => {
+    const filters = {
+      ...EMPTY_PHASE_SIDEBAR_FILTERS,
+      ownedByMe: true,
+      participantUserIds: ["user-a", "user-departed"],
+    };
     const options = { repositoryKeys: new Set<string>(), providerKinds: new Set<string>() };
 
     expect(
-      reconcilePhaseSidebarFilters(filters, { ...options, assignmentAvailable: false })
-        .assignedToMe,
-    ).toBe(false);
+      reconcilePhaseSidebarFilters(filters, { ...options, assignmentAvailable: false }),
+    ).toMatchObject({ ownedByMe: false, participantUserIds: [] });
+    // Without a directory set the selection is left alone: an empty list while
+    // the directory loads must not wipe a good filter.
     expect(
-      reconcilePhaseSidebarFilters(filters, { ...options, assignmentAvailable: true }).assignedToMe,
-    ).toBe(true);
+      reconcilePhaseSidebarFilters(filters, { ...options, assignmentAvailable: true })
+        .participantUserIds,
+    ).toEqual(["user-a", "user-departed"]);
+    expect(
+      reconcilePhaseSidebarFilters(filters, {
+        ...options,
+        assignmentAvailable: true,
+        participantUserIds: new Set(["user-a"]),
+      }),
+    ).toMatchObject({ ownedByMe: true, participantUserIds: ["user-a"] });
   });
 
   it("traverses only visible filtered rows and starts at an edge when the active row is hidden", () => {

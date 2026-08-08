@@ -37,6 +37,8 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveSweeper from "./sessionArchive/SessionArchiveSweeper.ts";
 // T3-CUSTOM(expbkt3): automatic session recovery.
 import { SessionRecovery } from "./recovery/SessionRecovery.ts";
 import { forkParked } from "./serverActivation.ts";
@@ -308,6 +310,9 @@ export const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+    // T3-CUSTOM(expbkt3): archived-session worktree reclaim; no-ops unless the
+    // operator has switched the automatic sweep on.
+    const sessionArchiveSweeper = yield* SessionArchiveSweeper.SessionArchiveSweeper;
     // T3-CUSTOM(expbkt3): v1 remains wired for rollback compatibility but its
     // sweep is disabled while the durable coordinator owns recovery.
     yield* SessionRecovery;
@@ -360,6 +365,8 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+          // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+          yield* sessionArchiveSweeper.start().pipe(Scope.provide(reactorScope));
         }),
       );
 

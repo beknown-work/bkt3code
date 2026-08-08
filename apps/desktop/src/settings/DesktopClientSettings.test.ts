@@ -31,6 +31,7 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   phaseGroupedSidebarEnabled: true,
   planModeEnabled: false,
+  nativePlanReviewEnabled: true,
   providerModelPreferences: {},
   providerRateLimitsEnabled: true,
   resourceMonitorEnabled: false,

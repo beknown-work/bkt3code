@@ -69,6 +69,21 @@ Examples include `thread.create`, `thread.turn.start`, and `thread.checkpoint.re
 A persisted fact that something already happened. In [the contracts][1], events are the source of truth, and [projector.ts][4] shows how they are applied.
 Examples include `thread.created`, `thread.message-sent`, and `thread.turn-diff-completed`.
 
+#### Session lineage (child session, session tree)
+
+A thread created by another thread — today via the `t3_create_session` MCP tool — stores that thread
+in `parentThreadId`. A thread with a parent is a **child session**; a parent plus everything beneath
+it is a **session tree**. `parentThreadId` is null for a **root session**, which is what any
+person-started thread is.
+
+Lineage is always a forest: the invariant lives in [threadLineage.ts][28], and the decider rejects a
+re-parent that would close a cycle. The link is a bare `ThreadId` with no environment qualifier,
+because a session can only be created by a caller on the same server.
+
+The experimental phase-grouped sidebar renders a tree as nested rows and pulls a parent into the
+Implementing group whenever anything in its subtree is working. See [t3-mcp-control.md][29] for the
+agent-facing `createAsChild` control.
+
 #### Decider
 
 The pure orchestration logic that turns commands plus current state into events. The core implementation is in [decider.ts][8], with preconditions in [commandInvariants.ts][9].
@@ -243,3 +258,5 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [25]: ./source-control-identity.md
 [26]: ./thread-bootstrap.md
 [27]: ./execution-reliability.md
+[28]: ../../apps/server/src/orchestration/threadLineage.ts
+[29]: ../user/t3-mcp-control.md

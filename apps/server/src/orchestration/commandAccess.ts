@@ -80,6 +80,11 @@ export const checkCommandAccess = (
     case "thread.user-input.respond":
     case "thread.checkpoint.revert":
     case "thread.catchup-summary.request":
+    // The bulk session manager dispatches one of these per selected session, so
+    // it is gated exactly like every other user-triggered thread command.
+    // `thread.work-summary.update` is reactor-issued and falls through to the
+    // internal-command default below.
+    case "thread.work-summary.request":
     case "thread.session.stop":
     case "thread.session.restart":
       return accessControl.canAccessThread(actorUserId, command.threadId);

@@ -1,0 +1,180 @@
+/**
+ * T3-CUSTOM(expbkt3): Whether an archived session's worktree may be reclaimed.
+ *
+ * This is the gate that keeps the feature from being destructive. Two of its
+ * rules protect *other* people's work — a worktree shared with a live thread,
+ * or one a session is running out of right now — and those are never
+ * overridable. The rest protect the operator's own uncommitted work and can be
+ * forced deliberately.
+ *
+ * Pure on purpose, in the style of `../thread-title/titleRefreshCadence.ts`:
+ * the service call site stays one line, and every gate is testable without a
+ * filesystem, a git repository, or a running server.
+ */
+import type { SessionArchiveBlockedReason, SessionArchiveReclaimMode } from "@t3tools/contracts";
+
+/** The subset of a thread shell this decision needs. */
+export interface ReclaimThreadFacts {
+  readonly threadId: string;
+  readonly worktreePath: string | null;
+  /** Null means the thread is not archived. */
+  readonly archivedAt: string | null;
+}
+
+/** Git facts for the worktree, read once per scan. */
+export interface ReclaimGitFacts {
+  /** Tracked files with modifications, or staged changes. */
+  readonly hasUncommittedChanges: boolean;
+  /** Untracked, non-ignored files. Lost forever on a `remove`. */
+  readonly hasUntrackedFiles: boolean;
+  /** Commits on the branch that no remote has. */
+  readonly hasUnpushedCommits: boolean;
+}
+
+export interface ReclaimEligibilityInput {
+  readonly thread: ReclaimThreadFacts;
+  readonly mode: SessionArchiveReclaimMode;
+  /** Git facts, or null when the worktree is already gone from disk. */
+  readonly git: ReclaimGitFacts | null;
+  /**
+   * Worktree paths in use by a running provider session or by a live T3
+   * deployment. Reclaiming one of these kills a running process.
+   */
+  readonly liveWorktreePaths: ReadonlySet<string>;
+  /** Worktree paths referenced by at least one thread that is *not* archived. */
+  readonly activeThreadWorktreePaths: ReadonlySet<string>;
+  /**
+   * Retention floor, in days, applied to `archivedAt`. Zero disables it. The
+   * panel passes zero (the operator is looking right at the session); the
+   * sweeper passes the configured window.
+   */
+  readonly minArchivedDays: number;
+  /** Now, as epoch milliseconds. Injected so the gate stays pure. */
+  readonly nowMs: number;
+  /**
+   * Override the dirty-tree and unpushed-commit gates. Deliberately powerless
+   * against the shared/live gates below.
+   */
+  readonly force: boolean;
+}
+
+export interface ReclaimEligibility {
+  readonly eligible: boolean;
+  readonly blockedReason: SessionArchiveBlockedReason | null;
+}
+
+const ELIGIBLE: ReclaimEligibility = { eligible: true, blockedReason: null };
+
+const blocked = (blockedReason: SessionArchiveBlockedReason): ReclaimEligibility => ({
+  eligible: false,
+  blockedReason,
+});
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Normalize the way `worktreeCleanup.ts` does, so both tiers compare alike. */
+export function normalizeWorktreePath(path: string | null | undefined): string | null {
+  const trimmed = path?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Whether enough time has passed since archiving.
+ *
+ * An unparseable or missing `archivedAt` fails closed: a retention window we
+ * cannot evaluate is not a window we may ignore.
+ */
+export function isPastRetention(input: {
+  readonly archivedAt: string | null;
+  readonly minArchivedDays: number;
+  readonly nowMs: number;
+}): boolean {
+  if (input.minArchivedDays <= 0) {
+    return true;
+  }
+  if (input.archivedAt === null) {
+    return false;
+  }
+  const archivedMs = Date.parse(input.archivedAt);
+  if (Number.isNaN(archivedMs)) {
+    return false;
+  }
+  return input.nowMs - archivedMs >= input.minArchivedDays * MS_PER_DAY;
+}
+
+/**
+ * Evaluate every gate in order and report the first that fails.
+ *
+ * Order matters for the message the operator sees: the un-overridable
+ * protections are checked before the forceable ones, so "shared with a live
+ * session" is never masked by "you have uncommitted changes".
+ */
+export function evaluateReclaimEligibility(input: ReclaimEligibilityInput): ReclaimEligibility {
+  const { thread, mode, git, force } = input;
+
+  if (thread.archivedAt === null) {
+    return blocked("not-archived");
+  }
+
+  const worktreePath = normalizeWorktreePath(thread.worktreePath);
+  if (worktreePath === null) {
+    return blocked("no-worktree");
+  }
+
+  // Un-overridable: these protect work that is not the operator's to discard.
+  if (input.liveWorktreePaths.has(worktreePath)) {
+    return blocked("worktree-live");
+  }
+  if (input.activeThreadWorktreePaths.has(worktreePath)) {
+    return blocked("worktree-shared");
+  }
+
+  if (
+    !isPastRetention({
+      archivedAt: thread.archivedAt,
+      minArchivedDays: input.minArchivedDays,
+      nowMs: input.nowMs,
+    })
+  ) {
+    return blocked("retention-window");
+  }
+
+  // A slim only deletes regenerable, git-ignored directories, so uncommitted
+  // work survives it. Removing the worktree does not, hence the extra gates.
+  if (mode === "remove") {
+    if (git === null) {
+      return blocked("no-worktree");
+    }
+    if (!force && (git.hasUncommittedChanges || git.hasUntrackedFiles)) {
+      return blocked("dirty-worktree");
+    }
+    if (!force && git.hasUnpushedCommits) {
+      return blocked("unpushed-commits");
+    }
+  }
+
+  return ELIGIBLE;
+}
+
+/**
+ * Human-facing text for a gate. Kept beside the gates so a new reason cannot be
+ * added without deciding what the panel will say about it.
+ */
+export function describeBlockedReason(reason: SessionArchiveBlockedReason): string {
+  switch (reason) {
+    case "not-archived":
+      return "Only archived sessions can be reclaimed.";
+    case "worktree-shared":
+      return "Another active session still uses this worktree.";
+    case "worktree-live":
+      return "A session is running out of this worktree right now.";
+    case "retention-window":
+      return "Archived too recently for the configured retention window.";
+    case "dirty-worktree":
+      return "Uncommitted or untracked changes would be lost.";
+    case "unpushed-commits":
+      return "Commits here are not on any remote yet.";
+    case "no-worktree":
+      return "This session has no worktree on disk.";
+  }
+}

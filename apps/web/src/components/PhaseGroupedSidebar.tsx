@@ -21,6 +21,8 @@ import {
   type EnvironmentId,
   type LinearIssueStatusSummary,
   type ScopedThreadRef,
+  // T3-CUSTOM(expbkt3): session lineage.
+  type ThreadId,
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
@@ -29,7 +31,9 @@ import {
   ArchiveIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   ClockIcon,
+  CornerDownRightIcon,
   FilterIcon,
   FolderGit2Icon,
   FolderPlusIcon,
@@ -37,10 +41,14 @@ import {
   LaptopIcon,
   PlusIcon,
   RotateCcwIcon,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager entry point.
+  Rows3Icon,
+  // T3-CUSTOM(expbkt3): END
   SearchIcon,
   XIcon,
 } from "lucide-react";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -48,6 +56,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -109,11 +118,10 @@ import {
 import {
   PHASE_SIDEBAR_PHASES,
   buildPhaseSidebarFilterChips,
-  buildPhaseSidebarGroups,
   buildPhaseSidebarRepositoryOptions,
+  comparePhaseSidebarRows,
   derivePhaseSidebarRepositoryKey,
   filterVisiblePhaseSidebarRows,
-  flattenPhaseSidebarGroups,
   isThreadAssignedToUser,
   partitionPhaseSidebarRows,
   phaseSidebarGroupHeaderClassName,
@@ -134,7 +142,10 @@ import {
   PHASE_SIDEBAR_PRIORITY_CHOICES,
   // T3-CUSTOM(expbkt3): strict in-group ordering.
   PHASE_SIDEBAR_SORT_DIRECTION_LABELS,
+  // T3-CUSTOM(expbkt3): ownership and co-participant facets.
+  phaseSidebarThreadParticipantIds,
   compactPhaseSidebarTimeLabel,
+  type PhaseSidebarAttentionKind,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
   type PhaseSidebarSection,
@@ -146,7 +157,20 @@ import {
   PHASE_SIDEBAR_METADATA_CLASS_NAME,
 } from "./sidebar/PhaseSidebarRowLayout";
 // T3-CUSTOM(expbkt3): END
+// T3-CUSTOM(expbkt3): BEGIN — session trees.
+import {
+  buildPhaseSidebarTreeGroups,
+  collectPhaseSidebarSubtreeKeys,
+  flattenPhaseSidebarTree,
+  phaseSidebarTreeIndent,
+  type PhaseSidebarTreeNode,
+} from "./sidebar/PhaseSidebarTree.logic";
+import { usePhaseSidebarTreeStore } from "../phaseSidebarTreeStore";
+import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
+// T3-CUSTOM(expbkt3): END
 import { useCurrentUserId } from "../state/identity";
+// T3-CUSTOM(expbkt3): directory for the co-participant filter facet.
+import { useOrgMembers } from "../state/orgMembers";
 import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
   SidebarChromeFooter,
@@ -164,6 +188,8 @@ import {
   runningSessionDividerPhase,
   shouldShowRunningSessionGlint,
 } from "./sidebar/RunningSessionGlint.logic";
+// T3-CUSTOM(expbkt3): teammate avatars in the filter popover.
+import { Avatar, userDisplayName } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -296,12 +322,14 @@ function PhaseFilterPopover({
     repositoryKeys,
     phaseIds,
     providerKinds,
-    assignedToMe,
+    ownedByMe,
+    participantUserIds,
     sort,
     toggleRepository,
     togglePhase,
     toggleProvider,
-    toggleAssignedToMe,
+    toggleOwnedByMe,
+    toggleParticipant,
     setSortDirection,
     togglePriorityFirst,
   } = usePhaseSidebarFilterStore(
@@ -309,21 +337,31 @@ function PhaseFilterPopover({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
-      assignedToMe: state.assignedToMe,
+      ownedByMe: state.ownedByMe,
+      participantUserIds: state.participantUserIds,
       sort: state.sort,
       toggleRepository: state.toggleRepository,
       togglePhase: state.togglePhase,
       toggleProvider: state.toggleProvider,
-      toggleAssignedToMe: state.toggleAssignedToMe,
+      toggleOwnedByMe: state.toggleOwnedByMe,
+      toggleParticipant: state.toggleParticipant,
       setSortDirection: state.setSortDirection,
       togglePriorityFirst: state.togglePriorityFirst,
     })),
+  );
+  // T3-CUSTOM(expbkt3): everyone except the operator — "sessions I share with
+  // this person" is the question; a self entry would just mean "all of them".
+  const { users } = useOrgMembers();
+  const teammates = useMemo(
+    () => users.filter((user) => user.id !== currentUserId),
+    [currentUserId, users],
   );
   const selectionCount =
     repositoryKeys.length +
     phaseIds.length +
     providerKinds.length +
-    (assignmentAvailable && assignedToMe ? 1 : 0);
+    participantUserIds.length +
+    (assignmentAvailable && ownedByMe ? 1 : 0);
   const needle = search.trim().toLowerCase();
   const visibleRepositories = repositories.filter((option) =>
     option.searchText.toLowerCase().includes(needle),
@@ -339,6 +377,11 @@ function PhaseFilterPopover({
     PHASE_SIDEBAR_SORT_DIRECTION_LABELS,
   ).join(" ")}`.toLowerCase();
   const sortVisible = sortSearchText.includes(needle);
+  // T3-CUSTOM(expbkt3): the new facets answer to the same search box.
+  const ownershipVisible = assignmentAvailable && "ownership started by me".includes(needle);
+  const visibleTeammates = teammates.filter((user) =>
+    `${user.name ?? ""} ${user.email ?? ""}`.toLowerCase().includes(needle),
+  );
 
   return (
     <Popover>
@@ -443,18 +486,34 @@ function PhaseFilterPopover({
               />
             ))}
           </FacetSection>
-          {assignmentAvailable && "assigned to me".includes(needle) ? (
-            <FacetSection label="Assignment">
+          {/* T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets. */}
+          {ownershipVisible ? (
+            <FacetSection label="Ownership">
               <FacetOption
-                checked={assignedToMe}
-                label="Assigned to me"
-                onCheckedChange={() => toggleAssignedToMe()}
+                checked={ownedByMe}
+                label="Started by me"
+                onCheckedChange={() => toggleOwnedByMe()}
               />
             </FacetSection>
           ) : null}
+          {assignmentAvailable && visibleTeammates.length > 0 ? (
+            <FacetSection label="People on the session">
+              {visibleTeammates.map((user) => (
+                <FacetOption
+                  key={user.id}
+                  checked={participantUserIds.includes(user.id)}
+                  label={userDisplayName(user)}
+                  onCheckedChange={() => toggleParticipant(user.id)}
+                  leading={<Avatar size="xs" user={user} />}
+                />
+              ))}
+            </FacetSection>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {visibleRepositories.length + visiblePhases.length + visibleProviders.length === 0 &&
           !sortVisible &&
-          !(assignmentAvailable && "assigned to me".includes(needle)) ? (
+          !ownershipVisible &&
+          visibleTeammates.length === 0 ? (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">
               No filter options match.
             </p>
@@ -551,28 +610,38 @@ function ActiveFilterChips({
     repositoryKeys,
     phaseIds,
     providerKinds,
-    assignedToMe,
+    ownedByMe,
+    participantUserIds,
     toggleRepository,
     togglePhase,
     toggleProvider,
-    toggleAssignedToMe,
+    toggleOwnedByMe,
+    toggleParticipant,
     clearAll,
   } = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
-      assignedToMe: state.assignedToMe,
+      ownedByMe: state.ownedByMe,
+      participantUserIds: state.participantUserIds,
       toggleRepository: state.toggleRepository,
       togglePhase: state.togglePhase,
       toggleProvider: state.toggleProvider,
-      toggleAssignedToMe: state.toggleAssignedToMe,
+      toggleOwnedByMe: state.toggleOwnedByMe,
+      toggleParticipant: state.toggleParticipant,
       clearAll: state.clearAll,
     })),
   );
+  // T3-CUSTOM(expbkt3): a person chip reads as their name, not an opaque id.
+  const { users } = useOrgMembers();
+  const peopleLabels = useMemo(
+    () => new Map(users.map((user) => [String(user.id), userDisplayName(user)] as const)),
+    [users],
+  );
   const chips = buildPhaseSidebarFilterChips(
-    { repositoryKeys, phaseIds, providerKinds, assignedToMe },
-    { repositories: repositoryLabels, providers: providerLabels },
+    { repositoryKeys, phaseIds, providerKinds, ownedByMe, participantUserIds },
+    { repositories: repositoryLabels, providers: providerLabels, people: peopleLabels },
   );
   if (chips.length === 0) return null;
 
@@ -586,7 +655,8 @@ function ActiveFilterChips({
             if (chip.facet === "repository") toggleRepository(chip.value);
             if (chip.facet === "phase") togglePhase(chip.value as PhaseSidebarPhaseId);
             if (chip.facet === "provider") toggleProvider(chip.value);
-            if (chip.facet === "assignment") toggleAssignedToMe();
+            if (chip.facet === "assignment") toggleOwnedByMe();
+            if (chip.facet === "person") toggleParticipant(chip.value);
           }}
         />
       ))}
@@ -774,6 +844,44 @@ interface PhaseThreadRowProps {
   // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
   readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
   readonly linearIssueStatus: LinearIssueStatusSummary | null;
+  // T3-CUSTOM(expbkt3): BEGIN — session tree. Deliberately flat primitives plus
+  // one stable actions object rather than a per-row object: this row is memo'd
+  // and the sidebar re-renders on every shell event, so a fresh object per
+  // render would defeat the memo for the entire active list.
+  // `treeActions` absent = shelf row, which renders as flat history.
+  readonly treeActions?: PhaseThreadRowTreeActions;
+  readonly treeDepth?: number;
+  readonly treeDescendantCount?: number;
+  readonly treeHasBusyDescendant?: boolean;
+  readonly treeDescendantAttention?: PhaseSidebarAttentionKind | null;
+  readonly treeExpanded?: boolean;
+  readonly treeParentKey?: string | null;
+  readonly treeParentTitle?: string | null;
+  // T3-CUSTOM(expbkt3): END
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Tree actions, keyed by scoped thread key so one object
+ * instance serves every row.
+ */
+type PhaseThreadRowTreeProps = Pick<
+  PhaseThreadRowProps,
+  | "treeActions"
+  | "treeDepth"
+  | "treeDescendantCount"
+  | "treeHasBusyDescendant"
+  | "treeDescendantAttention"
+  | "treeExpanded"
+  | "treeParentKey"
+  | "treeParentTitle"
+>;
+
+interface PhaseThreadRowTreeActions {
+  readonly onToggle: (threadKey: string) => void;
+  readonly onSetSubtreeExpanded: (threadKey: string, expanded: boolean) => void;
+  readonly onMoveUnder: (row: PhaseSidebarRow) => void;
+  readonly onDetach: (row: PhaseSidebarRow) => void;
+  readonly onJumpToParent: (parentKey: string) => void;
 }
 
 const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) {
@@ -804,6 +912,14 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onSetPriority,
     onSetLinearIssueUrl,
     linearIssueStatus,
+    treeActions,
+    treeDepth,
+    treeDescendantCount,
+    treeHasBusyDescendant,
+    treeDescendantAttention,
+    treeExpanded,
+    treeParentKey,
+    treeParentTitle,
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -840,6 +956,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
+  // T3-CUSTOM(expbkt3): BEGIN — session tree derivations. Subtree state only
+  // surfaces on the parent while the subtree is closed; once open, the child
+  // rows speak for themselves.
+  const hasChildren = (treeDescendantCount ?? 0) > 0;
+  const hasCollapsedBusyDescendant =
+    hasChildren && treeHasBusyDescendant === true && treeExpanded !== true;
+  // Attention outranks work: a parent hoisted into Needs Input has to say which
+  // of its descendants is stuck, or the group placement reads as a glitch.
+  const collapsedDescendantAttention =
+    hasChildren && treeExpanded !== true ? (treeDescendantAttention ?? null) : null;
+  // T3-CUSTOM(expbkt3): END
   const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
   // While the preset popover is open the pointer sits over the popup, not
@@ -977,6 +1104,24 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             : []),
         ]
       : [];
+    // Session lineage. "Detach" is always offered when a parent exists —
+    // nesting must never be a one-way door.
+    const lineageItems = treeActions
+      ? [
+          { id: "move-under", label: "Move under session…" },
+          ...(row.thread.parentThreadId != null
+            ? [{ id: "detach-parent", label: "Detach from parent" }]
+            : []),
+          ...(hasChildren
+            ? [
+                {
+                  id: treeExpanded ? "collapse-subtree" : "expand-subtree",
+                  label: treeExpanded ? "Collapse all children" : "Expand all children",
+                },
+              ]
+            : []),
+        ]
+      : [];
     // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
@@ -984,6 +1129,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         { id: "mark-unread", label: "Mark unread" },
         ...priorityItems,
         ...linearItems,
+        // T3-CUSTOM(expbkt3): session lineage.
+        ...lineageItems,
         ...settlementItems,
         ...snoozeItems,
         {
@@ -1041,14 +1188,30 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "copy-id") await navigator.clipboard.writeText(row.thread.id);
     if (action === "archive") onArchive(row);
     if (action === "delete") onDelete(row);
+    // T3-CUSTOM(expbkt3): session lineage.
+    if (action === "move-under") treeActions?.onMoveUnder(row);
+    if (action === "detach-parent") treeActions?.onDetach(row);
+    if (action === "expand-subtree") treeActions?.onSetSubtreeExpanded(threadKey, true);
+    if (action === "collapse-subtree") treeActions?.onSetSubtreeExpanded(threadKey, false);
   };
 
   return (
-    <li data-thread-item>
+    <li
+      data-thread-item
+      // T3-CUSTOM(expbkt3): nested rows indent, capped so a deep chain does not
+      // eat the title. Depth 0 emits no style, keeping root rows unchanged.
+      {...(treeDepth !== undefined && treeDepth > 0
+        ? {
+            "data-thread-depth": treeDepth,
+            style: { paddingLeft: phaseSidebarTreeIndent(treeDepth) },
+          }
+        : {})}
+    >
       <button
         type="button"
         className={phaseSidebarRowClassName(active, selected, needsUserInput)}
         aria-current={active ? "page" : undefined}
+        aria-expanded={hasChildren ? treeExpanded : undefined}
         data-attention={needsUserInput ? "user-input" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
@@ -1056,7 +1219,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         onContextMenu={(event) => void handleContextMenu(event)}
       >
         {workBadge?.monitoring !== true &&
-        (executionPresentation.active || shouldShowRunningSessionGlint(row.phaseId, section)) ? (
+        (executionPresentation.active ||
+          shouldShowRunningSessionGlint(row.phaseId, section) ||
+          // T3-CUSTOM(expbkt3): a collapsed parent carries its subtree's
+          // running signal. Only while collapsed — once open the child that is
+          // actually working carries it, and two sweeps for one unit of work
+          // would both mislead and repaint twice.
+          (hasCollapsedBusyDescendant && workBadge === null)) ? (
           <RunningSessionGlint />
         ) : null}
         {active ? (
@@ -1066,7 +1235,56 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             className="pointer-events-none absolute inset-y-1 right-0 w-0.5 rounded-full bg-primary shadow-[0_0_6px_var(--color-primary)]"
           />
         ) : null}
-        <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
+        {/* T3-CUSTOM(expbkt3): BEGIN — session-tree disclosure.
+            This sits in the SAME lane the unread dot reserves rather than
+            adding another one: the row is a flex box with gap-2, so an extra
+            child would cost its own width plus a gap and shove the title ~48px
+            right of every neighbouring row. The count is bare tabular text for
+            the same reason — pill chrome costs another ~10px of horizontal
+            padding for one glyph. */}
+        {hasChildren ? (
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={treeExpanded ? "Collapse child sessions" : "Expand child sessions"}
+            data-testid={`phase-thread-disclosure-${row.thread.id}`}
+            className="-my-1 -ml-0.5 flex shrink-0 cursor-pointer items-center gap-px self-center rounded py-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+            onClick={(event) => {
+              // The row itself navigates; opening a subtree must not.
+              event.stopPropagation();
+              event.preventDefault();
+              treeActions?.onToggle(threadKey);
+            }}
+          >
+            <ChevronRightIcon
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0 transition-transform duration-150",
+                treeExpanded && "rotate-90",
+              )}
+            />
+            <span
+              aria-label={`${treeDescendantCount} child sessions`}
+              className={cn(
+                "text-[10px] font-semibold tabular-nums leading-none",
+                collapsedDescendantAttention !== null
+                  ? "text-red-600 dark:text-red-300"
+                  : hasCollapsedBusyDescendant
+                    ? "text-sky-600 dark:text-sky-300"
+                    : "text-current",
+              )}
+            >
+              {treeDescendantCount}
+            </span>
+          </span>
+        ) : null}
+        {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): the empty spacer only earns its width when there
+            is no disclosure in the lane. An unread dot still renders on a
+            parent — that is real state, not reserved space. */}
+        {hasChildren && !row.isUnreadCompletion ? null : (
+          <PhaseSidebarUnreadIndicator isUnread={row.isUnreadCompletion} threadId={row.thread.id} />
+        )}
         {/* T3-CUSTOM(expbkt3): Vertically centered adaptive content lane. */}
         <span className={PHASE_SIDEBAR_CONTENT_CLASS_NAME}>
           {renaming ? (
@@ -1100,6 +1318,33 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           )}
           {/* T3-CUSTOM(expbkt3): Checkout and Linear details remain in the content lane. */}
           <span className={PHASE_SIDEBAR_METADATA_CLASS_NAME}>
+            {/* T3-CUSTOM(expbkt3): This row has a parent that is not rendering
+                here (settled, snoozed, filtered out). Naming it keeps the
+                lineage visible instead of silently flattening the row. */}
+            {treeParentKey && treeParentTitle ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      data-testid={`phase-thread-parent-crumb-${row.thread.id}`}
+                      aria-label={`Go to parent session ${treeParentTitle}`}
+                      className="inline-flex max-w-full shrink-0 cursor-pointer items-center gap-0.5 whitespace-nowrap text-muted-foreground/70 hover:text-foreground hover:underline"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        treeActions?.onJumpToParent(treeParentKey);
+                      }}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                    />
+                  }
+                >
+                  <CornerDownRightIcon aria-hidden className="size-2.5 shrink-0" />
+                  <span className="min-w-0 truncate">{treeParentTitle}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">Started by {treeParentTitle}</TooltipPopup>
+              </Tooltip>
+            ) : null}
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
@@ -1180,6 +1425,42 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               )}
             >
               {workBadge.label.toUpperCase()}
+            </span>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): A descendant is waiting on a human. Outlined
+              with a ↳ glyph, same grammar as the derived work badge: solid is
+              this row, outlined is somewhere beneath it. */}
+          {collapsedDescendantAttention !== null && attentionKind === null ? (
+            <span
+              role="status"
+              aria-label={`A child session needs ${collapsedDescendantAttention}`}
+              data-testid={`phase-thread-subtree-attention-${row.thread.id}`}
+              className={cn(
+                "rounded-sm border px-1 py-0.5 text-[8px] font-black tracking-wide",
+                collapsedDescendantAttention === "input"
+                  ? "border-red-500/50 text-red-600 dark:border-red-400/50 dark:text-red-300"
+                  : collapsedDescendantAttention === "approval"
+                    ? "border-amber-500/50 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
+                    : "border-red-500/40 text-red-700 dark:border-red-400/40 dark:text-red-300",
+              )}
+            >
+              ↳ {collapsedDescendantAttention.toUpperCase()}
+            </span>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): Work happening BELOW this row, not in it.
+              Outlined rather than filled, with a ↳ glyph: the same grammar
+              distinguishes "mine" from "my subtree's" everywhere on the row. */}
+          {hasCollapsedBusyDescendant &&
+          workBadge === null &&
+          attentionKind === null &&
+          collapsedDescendantAttention === null ? (
+            <span
+              role="status"
+              aria-label="A child session is working"
+              data-testid={`phase-thread-subtree-working-${row.thread.id}`}
+              className="rounded-sm border border-sky-500/40 px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:border-sky-400/40 dark:text-sky-300"
+            >
+              ↳ WORKING
             </span>
           ) : null}
           {attentionKind === "input" ? (
@@ -1439,12 +1720,19 @@ export function PhaseGroupedSidebar() {
   const t3Conductor = personalMcpProfile?.conductor ?? legacyT3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
+  // T3-CUSTOM(expbkt3): directory ids backing the co-participant facet.
+  const { users: orgMembers } = useOrgMembers();
+  const orgMemberIds = useMemo(
+    () => new Set(orgMembers.map((user) => String(user.id))),
+    [orgMembers],
+  );
   const filters = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
-      assignedToMe: state.assignedToMe,
+      ownedByMe: state.ownedByMe,
+      participantUserIds: state.participantUserIds,
     })),
   );
   const clearFilters = usePhaseSidebarFilterStore((state) => state.clearAll);
@@ -1601,6 +1889,10 @@ export function PhaseGroupedSidebar() {
             providerName:
               provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
             isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
+            // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
+            isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
+            participantUserIds: phaseSidebarThreadParticipantIds(thread),
+            // T3-CUSTOM(expbkt3): END
             attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
             isUnreadCompletion,
             // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
@@ -1628,17 +1920,39 @@ export function PhaseGroupedSidebar() {
   // T3-CUSTOM(expbkt3): BEGIN — split the inbox from the parked shelves.
   // Filtering happens once, before the partition, so a filter chip means the
   // same thing in the lifecycle groups and on both shelves.
-  const { activeRows, snoozedRows, settledRows } = useMemo(() => {
+  const {
+    activeRows: unfilteredActiveRows,
+    snoozedRows: unfilteredSnoozedRows,
+    settledRows: unfilteredSettledRows,
+  } = useMemo(() => {
     // Snooze classification uses a REAL clock, not the quantized minute: a
     // thread whose wake time just passed must leave the shelf immediately.
     // snoozeWakeTick re-runs this at the exact boundary.
     void snoozeWakeTick;
-    return partitionPhaseSidebarRows(filterVisiblePhaseSidebarRows(allRows, filters), {
-      now: nowMinute,
-      preciseNow: new Date().toISOString(),
-      autoSettleAfterDays,
-    });
-  }, [allRows, autoSettleAfterDays, filters, nowMinute, snoozeWakeTick]);
+    // T3-CUSTOM(expbkt3): partition the UNFILTERED set. Classification never
+    // reads the filters, and the lifecycle groups need every row: a session
+    // tree has to be able to keep a parent that does not itself match so a
+    // matching child stays reachable. Each section applies the filter below.
+    return partitionPhaseSidebarRows(
+      allRows.filter((row) => row.thread.archivedAt === null),
+      {
+        now: nowMinute,
+        preciseNow: new Date().toISOString(),
+        autoSettleAfterDays,
+      },
+    );
+  }, [allRows, autoSettleAfterDays, nowMinute, snoozeWakeTick]);
+  // T3-CUSTOM(expbkt3): the shelves are flat history lists, so they filter
+  // row-by-row as before. Only the lifecycle groups nest.
+  const activeRows = unfilteredActiveRows;
+  const snoozedRows = useMemo(
+    () => filterVisiblePhaseSidebarRows(unfilteredSnoozedRows, filters),
+    [filters, unfilteredSnoozedRows],
+  );
+  const settledRows = useMemo(
+    () => filterVisiblePhaseSidebarRows(unfilteredSettledRows, filters),
+    [filters, unfilteredSettledRows],
+  );
 
   // Wake exactly when the soonest snooze expires (the shelf is sorted, so
   // that is the first row). Clamped at 0, and capped so a far-future wake
@@ -1651,13 +1965,58 @@ export function PhaseGroupedSidebar() {
     return () => window.clearTimeout(id);
   }, [snoozedRows]);
 
-  const groups = useMemo(
-    () => buildPhaseSidebarGroups(activeRows, filters, sortOrder, rowSort),
-    [activeRows, filters, rowSort, sortOrder],
+  // T3-CUSTOM(expbkt3): BEGIN — session trees. Rows created by another session
+  // nest under it; grouping then runs over roots only, with a parent pulled
+  // into Implementing whenever anything in its subtree is working.
+  const titleForThreadKey = useCallback(
+    (key: string) =>
+      allRows.find(
+        (row) => scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)) === key,
+      )?.thread.title ?? null,
+    [allRows],
   );
+  const { groups, forcedExpansionKeys } = useMemo(
+    () =>
+      buildPhaseSidebarTreeGroups({
+        rows: activeRows,
+        filters,
+        compareSiblings: (left, right) => comparePhaseSidebarRows(left, right, sortOrder, rowSort),
+        titleForKey: titleForThreadKey,
+      }),
+    [activeRows, filters, rowSort, sortOrder, titleForThreadKey],
+  );
+  const storedExpandedKeys = usePhaseSidebarTreeStore((state) => state.expandedKeys);
+  const toggleTreeKey = usePhaseSidebarTreeStore((state) => state.toggle);
+  const setTreeKeysExpanded = usePhaseSidebarTreeStore((state) => state.setExpanded);
+  // A filter match inside a closed parent forces that parent open for as long
+  // as the filter is on, without touching what the user chose.
+  const expandedKeys = useMemo(() => {
+    const keys = new Set(storedExpandedKeys);
+    for (const key of forcedExpansionKeys) keys.add(key);
+    return keys;
+  }, [forcedExpansionKeys, storedExpandedKeys]);
+  const isTreeKeyExpanded = useCallback((key: string) => expandedKeys.has(key), [expandedKeys]);
+  // Keys that HAVE children, so the arrow-key handler can ignore leaf rows.
+  const expandableThreadKeys = useMemo(() => {
+    const keys = new Set<string>();
+    const visit = (node: PhaseSidebarTreeNode) => {
+      if (node.children.length > 0) keys.add(node.key);
+      for (const child of node.children) visit(child);
+    };
+    for (const group of groups) for (const node of group.nodes) visit(node);
+    return keys;
+  }, [groups]);
+  // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): Separate idle lifecycle groups from live agent work.
   const runningDividerPhaseId = runningSessionDividerPhase(groups.map((group) => group.id));
-  const activeVisibleRows = useMemo(() => flattenPhaseSidebarGroups(groups), [groups]);
+  const activeVisibleNodes = useMemo(
+    () => groups.flatMap((group) => flattenPhaseSidebarTree(group.nodes, isTreeKeyExpanded)),
+    [groups, isTreeKeyExpanded],
+  );
+  const activeVisibleRows = useMemo(
+    () => activeVisibleNodes.map((node) => node.row),
+    [activeVisibleNodes],
+  );
 
   // The settled tail renders in pages: history must not dominate the list.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
@@ -1768,7 +2127,8 @@ export function PhaseGroupedSidebar() {
     filters.repositoryKeys.length +
     filters.phaseIds.length +
     filters.providerKinds.length +
-    (filters.assignedToMe ? 1 : 0);
+    filters.participantUserIds.length +
+    (filters.ownedByMe ? 1 : 0);
   const activeThreadHidden =
     activeFiltersCount > 0 &&
     routeThreadKey !== null &&
@@ -1839,12 +2199,18 @@ export function PhaseGroupedSidebar() {
       repositoryKeys: new Set(repositoryOptions.map((option) => option.key)),
       providerKinds: new Set(providerOptions.map((option) => option.kind)),
       assignmentAvailable: currentUserId !== null,
+      // T3-CUSTOM(expbkt3): drop people who left the directory, so a departed
+      // teammate cannot leave an unremovable filter pinned over the sidebar.
+      // Skipped while the directory is still loading — an empty list then would
+      // clear a perfectly good filter.
+      ...(orgMemberIds.size > 0 ? { participantUserIds: orgMemberIds } : {}),
     });
   }, [
     allEnvironmentShellsLive,
     currentUserId,
     environments.length,
     networkStatus,
+    orgMemberIds,
     providerOptions,
     reconcileFilters,
     repositoryOptions,
@@ -1867,6 +2233,27 @@ export function PhaseGroupedSidebar() {
       if (event.defaultPrevented || event.repeat) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
         return;
+      // T3-CUSTOM(expbkt3): BEGIN — arrows open and close the routed row's
+      // subtree, matching how every other tree in the app behaves. Only
+      // meaningful on a row that has children, so anything else falls through
+      // to the normal shortcut resolution untouched.
+      if (
+        (event.key === "ArrowRight" || event.key === "ArrowLeft") &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        routeThreadKey !== null &&
+        expandableThreadKeys.has(routeThreadKey)
+      ) {
+        const shouldExpand = event.key === "ArrowRight";
+        if (expandedKeys.has(routeThreadKey) !== shouldExpand) {
+          event.preventDefault();
+          event.stopPropagation();
+          setTreeKeysExpanded(routeThreadKey, shouldExpand);
+        }
+        return;
+      }
+      // T3-CUSTOM(expbkt3): END
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
         context: {
@@ -1895,7 +2282,16 @@ export function PhaseGroupedSidebar() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, navigateToRow, routeThreadKey, visibleRowByKey, visibleThreadKeys]);
+  }, [
+    expandableThreadKeys,
+    expandedKeys,
+    keybindings,
+    navigateToRow,
+    routeThreadKey,
+    setTreeKeysExpanded,
+    visibleRowByKey,
+    visibleThreadKeys,
+  ]);
 
   useEffect(() => {
     const onMouseDown = (event: MouseEvent) => {
@@ -2001,6 +2397,80 @@ export function PhaseGroupedSidebar() {
       });
     },
     [forceStopThreadSession],
+  );
+  // Session lineage. Both directions travel on the same thread.meta.update
+  // command the Linear tag uses; the server rejects a parent that would close
+  // a cycle, so the failure toast is the only handling needed here.
+  const [moveUnderRow, setMoveUnderRow] = useState<PhaseSidebarRow | null>(null);
+  const setThreadParent = useCallback(
+    (row: PhaseSidebarRow, parentThreadId: ThreadId | null) => {
+      if ((row.thread.parentThreadId ?? null) === parentThreadId) return;
+      void updateThreadMetadata({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id, parentThreadId },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title:
+                parentThreadId === null ? "Failed to detach session" : "Failed to move session",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [updateThreadMetadata],
+  );
+  const detachFromParent = useCallback(
+    (row: PhaseSidebarRow) => setThreadParent(row, null),
+    [setThreadParent],
+  );
+  const openMoveUnderDialog = useCallback((row: PhaseSidebarRow) => setMoveUnderRow(row), []);
+  const subtreeKeysByThreadKey = useMemo(() => {
+    const map = new Map<string, ReadonlyArray<string>>();
+    const visit = (node: PhaseSidebarTreeNode) => {
+      map.set(node.key, collectPhaseSidebarSubtreeKeys(node));
+      for (const child of node.children) visit(child);
+    };
+    for (const group of groups) for (const node of group.nodes) visit(node);
+    return map;
+  }, [groups]);
+  const jumpToThreadKey = useCallback(
+    (key: string) => {
+      const target = allRows.find(
+        (candidate) =>
+          scopedThreadKey(scopeThreadRef(candidate.thread.environmentId, candidate.thread.id)) ===
+          key,
+      );
+      if (target) navigateToRow(scopeThreadRef(target.thread.environmentId, target.thread.id));
+    },
+    [allRows, navigateToRow],
+  );
+  // One object instance shared by every row, so the memo on PhaseThreadRow
+  // survives the sidebar's frequent re-renders.
+  const treeActions = useMemo<PhaseThreadRowTreeActions>(
+    () => ({
+      onToggle: (threadKey) => toggleTreeKey(threadKey),
+      onSetSubtreeExpanded: (threadKey, expanded) =>
+        setTreeKeysExpanded(
+          [threadKey, ...(subtreeKeysByThreadKey.get(threadKey) ?? [])],
+          expanded,
+        ),
+      onMoveUnder: openMoveUnderDialog,
+      onDetach: detachFromParent,
+      onJumpToParent: jumpToThreadKey,
+    }),
+    [
+      detachFromParent,
+      jumpToThreadKey,
+      openMoveUnderDialog,
+      setTreeKeysExpanded,
+      subtreeKeysByThreadKey,
+      toggleTreeKey,
+    ],
   );
   // T3-CUSTOM(expbkt3): END
   const requestArchive = useCallback(
@@ -2190,7 +2660,16 @@ export function PhaseGroupedSidebar() {
 
   // T3-CUSTOM(expbkt3): One row shape for the lifecycle groups and both
   // parked shelves — only `section` differs.
-  const renderThreadRow = (row: PhaseSidebarRow, section: PhaseSidebarSection) => {
+  const renderThreadRow = (
+    row: PhaseSidebarRow,
+    section: PhaseSidebarSection,
+    // T3-CUSTOM(expbkt3): omitted on shelf rows, which stay a flat history list.
+    // Spread this straight onto the row — never nest it under a `tree` key.
+    // JSX spread skips excess-property checking, so a stale wrapper compiles
+    // clean while silently leaving every treeXxx prop undefined, which reads as
+    // "the feature is off" rather than as a build error.
+    tree?: PhaseThreadRowTreeProps,
+  ) => {
     const key = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
     const project =
       projectByKey.get(
@@ -2234,9 +2713,43 @@ export function PhaseGroupedSidebar() {
               ) ?? null)
             : null;
         })()}
+        {...(tree ?? {})}
       />
     );
   };
+
+  // T3-CUSTOM(expbkt3): BEGIN — a session tree renders as nested <ul>s so the
+  // list stays a list for assistive tech, and each level animates on its own.
+  const renderTreeNode = (node: PhaseSidebarTreeNode): ReactNode => {
+    const expanded = expandedKeys.has(node.key);
+    return (
+      <Fragment key={node.key}>
+        {renderThreadRow(node.row, "active", {
+          treeActions,
+          treeDepth: node.depth,
+          treeDescendantCount: node.descendantCount,
+          treeHasBusyDescendant: node.hasBusyDescendant,
+          treeDescendantAttention: node.descendantAttention,
+          treeExpanded: expanded,
+          treeParentKey: node.orphanedFrom?.key ?? null,
+          treeParentTitle: node.orphanedFrom?.title ?? null,
+        })}
+        {expanded && node.children.length > 0 ? (
+          <li>
+            <ul
+              ref={attachAutoAnimate}
+              role="group"
+              aria-label={`Sessions started by ${node.row.thread.title}`}
+              className="mt-0.5 space-y-0.5 border-l border-sidebar-border pl-1"
+            >
+              {node.children.map((child) => renderTreeNode(child))}
+            </ul>
+          </li>
+        ) : null}
+      </Fragment>
+    );
+  };
+  // T3-CUSTOM(expbkt3): END
 
   return (
     <>
@@ -2284,6 +2797,18 @@ export function PhaseGroupedSidebar() {
                 ) : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {/* T3-CUSTOM(expbkt3): BEGIN — entry point for the bulk session manager. */}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                className="gap-2 px-2 py-1.5"
+                onClick={() => void router.navigate({ to: "/sessions" })}
+              >
+                <Rows3Icon className="size-3.5" />
+                <span className="flex-1 text-left text-xs">Manage sessions</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            {/* T3-CUSTOM(expbkt3): END */}
           </SidebarMenu>
         </SidebarGroup>
         <SidebarEnvironmentNotices />
@@ -2333,11 +2858,11 @@ export function PhaseGroupedSidebar() {
                   {group.helperText}
                 </span>
                 <span className="min-w-4 rounded-full bg-background/45 px-1.5 py-0.5 text-center text-[9px] font-semibold tabular-nums text-current/70">
-                  {group.rows.length}
+                  {group.nodes.length}
                 </span>
               </header>
               <ul ref={attachAutoAnimate} className="space-y-0.5">
-                {group.rows.map((row) => renderThreadRow(row, "active"))}
+                {group.nodes.map((node) => renderTreeNode(node))}
               </ul>
             </section>
           ))}
@@ -2455,6 +2980,21 @@ export function PhaseGroupedSidebar() {
       />
       {/* T3-CUSTOM(expbkt3): attach-to-external-session. */}
       <AttachExternalSessionDialog open={attachSessionOpen} onOpenChange={setAttachSessionOpen} />
+      {/* T3-CUSTOM(expbkt3): session lineage. */}
+      <MoveUnderSessionDialog
+        subject={moveUnderRow?.thread ?? null}
+        threads={allRows.map((row) => row.thread)}
+        repositoryLabelFor={(thread) =>
+          allRows.find((row) => row.thread.id === thread.id)?.repositoryLabel ?? ""
+        }
+        onOpenChange={(open) => {
+          if (!open) setMoveUnderRow(null);
+        }}
+        onSelect={(parentThreadId) => {
+          if (moveUnderRow) setThreadParent(moveUnderRow, parentThreadId);
+          setMoveUnderRow(null);
+        }}
+      />
     </>
   );
 }
