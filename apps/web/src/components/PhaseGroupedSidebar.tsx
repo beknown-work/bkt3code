@@ -2619,6 +2619,10 @@ export function PhaseGroupedSidebar() {
     row: PhaseSidebarRow,
     section: PhaseSidebarSection,
     // T3-CUSTOM(expbkt3): omitted on shelf rows, which stay a flat history list.
+    // Spread this straight onto the row — never nest it under a `tree` key.
+    // JSX spread skips excess-property checking, so a stale wrapper compiles
+    // clean while silently leaving every treeXxx prop undefined, which reads as
+    // "the feature is off" rather than as a build error.
     tree?: PhaseThreadRowTreeProps,
   ) => {
     const key = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
@@ -2664,7 +2668,7 @@ export function PhaseGroupedSidebar() {
               ) ?? null)
             : null;
         })()}
-        {...(tree ? { tree } : {})}
+        {...(tree ?? {})}
       />
     );
   };
