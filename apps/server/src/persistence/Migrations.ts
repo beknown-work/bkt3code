@@ -86,6 +86,8 @@ import Migration1009 from "./Migrations/1009_PlanReviewDocuments.ts";
 
 // T3-CUSTOM(expbkt3): session lineage column for the experimental sidebar tree.
 import Migration1010 from "./Migrations/1010_ProjectionThreadsParentThread.ts";
+// T3-CUSTOM(expbkt3): plan documents record their renderer (markdown or HTML).
+import Migration1011 from "./Migrations/1011_PlanDocumentFormat.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -176,6 +178,7 @@ const migrationEntries = [
   [1009, "PlanReviewDocuments", Migration1009],
   // T3-CUSTOM(expbkt3): session lineage.
   [1010, "ProjectionThreadsParentThread", Migration1010],
+  [1011, "PlanDocumentFormat", Migration1011],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -30,6 +30,9 @@ export const PlanDocumentStatus = Schema.Literals([
 ]);
 export type PlanDocumentStatus = typeof PlanDocumentStatus.Type;
 
+export const PlanDocumentFormat = Schema.Literals(["md", "html"]);
+export type PlanDocumentFormat = typeof PlanDocumentFormat.Type;
+
 export const PlanVersionAuthorKind = Schema.Literals(["agent", "user"]);
 export type PlanVersionAuthorKind = typeof PlanVersionAuthorKind.Type;
 
@@ -47,6 +50,7 @@ export const PlanDocumentRecord = Schema.Struct({
   title: Schema.String,
   currentRevision: Schema.Number,
   status: PlanDocumentStatus,
+  format: PlanDocumentFormat,
   createdByUserId: Schema.NullOr(UserId),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -123,6 +127,7 @@ const PlanDocumentRawRow = Schema.Struct({
   title: Schema.Unknown,
   currentRevision: Schema.Unknown,
   status: Schema.Unknown,
+  format: Schema.Unknown,
   createdByUserId: Schema.Unknown,
   createdAt: Schema.Unknown,
   updatedAt: Schema.Unknown,
@@ -309,6 +314,7 @@ export const make = Effect.gen(function* () {
     title AS "title",
     current_revision AS "currentRevision",
     status AS "status",
+    format AS "format",
     created_by_user_id AS "createdByUserId",
     created_at AS "createdAt",
     updated_at AS "updatedAt"
@@ -345,16 +351,17 @@ export const make = Effect.gen(function* () {
     execute: (input) => sql`
       INSERT INTO plan_documents (
         document_id, thread_id, project_id, title, current_revision,
-        status, created_by_user_id, created_at, updated_at
+        status, format, created_by_user_id, created_at, updated_at
       ) VALUES (
         ${input.documentId}, ${input.threadId}, ${input.projectId}, ${input.title},
-        ${input.currentRevision}, ${input.status}, ${input.createdByUserId},
+        ${input.currentRevision}, ${input.status}, ${input.format}, ${input.createdByUserId},
         ${input.createdAt}, ${input.updatedAt}
       )
       ON CONFLICT(document_id) DO UPDATE SET
         title = excluded.title,
         current_revision = excluded.current_revision,
         status = excluded.status,
+        format = excluded.format,
         updated_at = excluded.updated_at
     `,
   });

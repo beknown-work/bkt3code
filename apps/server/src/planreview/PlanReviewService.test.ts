@@ -207,6 +207,45 @@ describe("PlanReviewService capture", () => {
   );
 });
 
+describe("PlanReviewService HTML plans", () => {
+  const HTML_PLAN = [
+    "<html><head><title>Quarterly growth</title></head>",
+    '<body><h1>Growth</h1><canvas id="chart"></canvas></body></html>',
+  ].join("");
+
+  it.effect("records the renderer and titles from the document", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:html", HTML_PLAN);
+        expect(document.format).toBe("html");
+        expect(document.title).toBe("Quarterly growth");
+      }),
+    ),
+  );
+
+  it.effect("keeps a markdown plan on the markdown renderer", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:md");
+        expect(document.format).toBe("md");
+      }),
+    ),
+  );
+
+  it.effect("does not treat inline HTML in markdown as an HTML plan", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(
+          service,
+          "plan:inline",
+          `${PLAN}\n\nUse <div> for the wrapper.`,
+        );
+        expect(document.format).toBe("md");
+      }),
+    ),
+  );
+});
+
 describe("PlanReviewService listForThread", () => {
   it.effect("captures a plan that startup reconciliation never reached", () =>
     runWithService(
