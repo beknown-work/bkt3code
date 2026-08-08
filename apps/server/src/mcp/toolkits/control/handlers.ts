@@ -913,6 +913,61 @@ const handlers = {
     };
   }),
 
+  // T3-CUSTOM(expbkt3): BEGIN — session lineage, editable after creation so an
+  // agent can reorganise a workspace it did not lay out itself.
+  t3_link_session: Effect.fn("T3ControlToolkit.linkSession")(function* (input) {
+    const operation = "link-session";
+    const sessionId = yield* resolveSessionId(
+      operation,
+      ThreadId.make(input.sessionId),
+      "t3.control",
+    );
+    // Read access is the right bar for the parent: the caller is not changing
+    // it, only pointing at it. resolveSessionId reports an inaccessible session
+    // as absent, so this leaks nothing.
+    const parentSessionId = yield* resolveSessionId(
+      operation,
+      ThreadId.make(input.parentSessionId),
+      "t3.read",
+    );
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const commandId = yield* makeCommandId(crypto, operation);
+    // The decider owns the tree invariant, so a cycle fails here with its
+    // message rather than being re-derived (and drifting) in this handler.
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.meta.update",
+        commandId,
+        threadId: sessionId,
+        parentThreadId: parentSessionId,
+      })
+      .pipe(mapControlError(operation));
+    return { linked: true, sessionId, parentSessionId, sequence: result.sequence };
+  }),
+
+  t3_unlink_session: Effect.fn("T3ControlToolkit.unlinkSession")(function* (input) {
+    const operation = "unlink-session";
+    const sessionId = yield* resolveSessionId(
+      operation,
+      ThreadId.make(input.sessionId),
+      "t3.control",
+    );
+    const dispatcher = yield* OrchestrationCommandDispatcher;
+    const crypto = yield* Crypto.Crypto;
+    const commandId = yield* makeCommandId(crypto, operation);
+    const result = yield* dispatcher
+      .dispatch({
+        type: "thread.meta.update",
+        commandId,
+        threadId: sessionId,
+        parentThreadId: null,
+      })
+      .pipe(mapControlError(operation));
+    return { unlinked: true, sessionId, parentSessionId: null, sequence: result.sequence };
+  }),
+  // T3-CUSTOM(expbkt3): END
+
   t3_create_session: Effect.fn("T3ControlToolkit.createSession")(function* (input) {
     const operation = "create-session";
     const scope = yield* requireSessionCreator(operation);

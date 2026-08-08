@@ -139,6 +139,8 @@ import {
   PHASE_SIDEBAR_PRIORITY_CHOICES,
   // T3-CUSTOM(expbkt3): strict in-group ordering.
   PHASE_SIDEBAR_SORT_DIRECTION_LABELS,
+  // T3-CUSTOM(expbkt3): ownership and co-participant facets.
+  phaseSidebarThreadParticipantIds,
   compactPhaseSidebarTimeLabel,
   type PhaseSidebarPhaseId,
   type PhaseSidebarRow,
@@ -163,6 +165,8 @@ import { usePhaseSidebarTreeStore } from "../phaseSidebarTreeStore";
 import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
 // T3-CUSTOM(expbkt3): END
 import { useCurrentUserId } from "../state/identity";
+// T3-CUSTOM(expbkt3): directory for the co-participant filter facet.
+import { useOrgMembers } from "../state/orgMembers";
 import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
   SidebarChromeFooter,
@@ -180,6 +184,8 @@ import {
   runningSessionDividerPhase,
   shouldShowRunningSessionGlint,
 } from "./sidebar/RunningSessionGlint.logic";
+// T3-CUSTOM(expbkt3): teammate avatars in the filter popover.
+import { Avatar, userDisplayName } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -312,12 +318,14 @@ function PhaseFilterPopover({
     repositoryKeys,
     phaseIds,
     providerKinds,
-    assignedToMe,
+    ownedByMe,
+    participantUserIds,
     sort,
     toggleRepository,
     togglePhase,
     toggleProvider,
-    toggleAssignedToMe,
+    toggleOwnedByMe,
+    toggleParticipant,
     setSortDirection,
     togglePriorityFirst,
   } = usePhaseSidebarFilterStore(
@@ -325,21 +333,31 @@ function PhaseFilterPopover({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
-      assignedToMe: state.assignedToMe,
+      ownedByMe: state.ownedByMe,
+      participantUserIds: state.participantUserIds,
       sort: state.sort,
       toggleRepository: state.toggleRepository,
       togglePhase: state.togglePhase,
       toggleProvider: state.toggleProvider,
-      toggleAssignedToMe: state.toggleAssignedToMe,
+      toggleOwnedByMe: state.toggleOwnedByMe,
+      toggleParticipant: state.toggleParticipant,
       setSortDirection: state.setSortDirection,
       togglePriorityFirst: state.togglePriorityFirst,
     })),
+  );
+  // T3-CUSTOM(expbkt3): everyone except the operator — "sessions I share with
+  // this person" is the question; a self entry would just mean "all of them".
+  const { users } = useOrgMembers();
+  const teammates = useMemo(
+    () => users.filter((user) => user.id !== currentUserId),
+    [currentUserId, users],
   );
   const selectionCount =
     repositoryKeys.length +
     phaseIds.length +
     providerKinds.length +
-    (assignmentAvailable && assignedToMe ? 1 : 0);
+    participantUserIds.length +
+    (assignmentAvailable && ownedByMe ? 1 : 0);
   const needle = search.trim().toLowerCase();
   const visibleRepositories = repositories.filter((option) =>
     option.searchText.toLowerCase().includes(needle),
@@ -355,6 +373,11 @@ function PhaseFilterPopover({
     PHASE_SIDEBAR_SORT_DIRECTION_LABELS,
   ).join(" ")}`.toLowerCase();
   const sortVisible = sortSearchText.includes(needle);
+  // T3-CUSTOM(expbkt3): the new facets answer to the same search box.
+  const ownershipVisible = assignmentAvailable && "ownership started by me".includes(needle);
+  const visibleTeammates = teammates.filter((user) =>
+    `${user.name ?? ""} ${user.email ?? ""}`.toLowerCase().includes(needle),
+  );
 
   return (
     <Popover>
@@ -459,18 +482,34 @@ function PhaseFilterPopover({
               />
             ))}
           </FacetSection>
-          {assignmentAvailable && "assigned to me".includes(needle) ? (
-            <FacetSection label="Assignment">
+          {/* T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets. */}
+          {ownershipVisible ? (
+            <FacetSection label="Ownership">
               <FacetOption
-                checked={assignedToMe}
-                label="Assigned to me"
-                onCheckedChange={() => toggleAssignedToMe()}
+                checked={ownedByMe}
+                label="Started by me"
+                onCheckedChange={() => toggleOwnedByMe()}
               />
             </FacetSection>
           ) : null}
+          {assignmentAvailable && visibleTeammates.length > 0 ? (
+            <FacetSection label="People on the session">
+              {visibleTeammates.map((user) => (
+                <FacetOption
+                  key={user.id}
+                  checked={participantUserIds.includes(user.id)}
+                  label={userDisplayName(user)}
+                  onCheckedChange={() => toggleParticipant(user.id)}
+                  leading={<Avatar size="xs" user={user} />}
+                />
+              ))}
+            </FacetSection>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {visibleRepositories.length + visiblePhases.length + visibleProviders.length === 0 &&
           !sortVisible &&
-          !(assignmentAvailable && "assigned to me".includes(needle)) ? (
+          !ownershipVisible &&
+          visibleTeammates.length === 0 ? (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">
               No filter options match.
             </p>
@@ -567,28 +606,38 @@ function ActiveFilterChips({
     repositoryKeys,
     phaseIds,
     providerKinds,
-    assignedToMe,
+    ownedByMe,
+    participantUserIds,
     toggleRepository,
     togglePhase,
     toggleProvider,
-    toggleAssignedToMe,
+    toggleOwnedByMe,
+    toggleParticipant,
     clearAll,
   } = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
-      assignedToMe: state.assignedToMe,
+      ownedByMe: state.ownedByMe,
+      participantUserIds: state.participantUserIds,
       toggleRepository: state.toggleRepository,
       togglePhase: state.togglePhase,
       toggleProvider: state.toggleProvider,
-      toggleAssignedToMe: state.toggleAssignedToMe,
+      toggleOwnedByMe: state.toggleOwnedByMe,
+      toggleParticipant: state.toggleParticipant,
       clearAll: state.clearAll,
     })),
   );
+  // T3-CUSTOM(expbkt3): a person chip reads as their name, not an opaque id.
+  const { users } = useOrgMembers();
+  const peopleLabels = useMemo(
+    () => new Map(users.map((user) => [String(user.id), userDisplayName(user)] as const)),
+    [users],
+  );
   const chips = buildPhaseSidebarFilterChips(
-    { repositoryKeys, phaseIds, providerKinds, assignedToMe },
-    { repositories: repositoryLabels, providers: providerLabels },
+    { repositoryKeys, phaseIds, providerKinds, ownedByMe, participantUserIds },
+    { repositories: repositoryLabels, providers: providerLabels, people: peopleLabels },
   );
   if (chips.length === 0) return null;
 
@@ -602,7 +651,8 @@ function ActiveFilterChips({
             if (chip.facet === "repository") toggleRepository(chip.value);
             if (chip.facet === "phase") togglePhase(chip.value as PhaseSidebarPhaseId);
             if (chip.facet === "provider") toggleProvider(chip.value);
-            if (chip.facet === "assignment") toggleAssignedToMe();
+            if (chip.facet === "assignment") toggleOwnedByMe();
+            if (chip.facet === "person") toggleParticipant(chip.value);
           }}
         />
       ))}
@@ -1625,12 +1675,19 @@ export function PhaseGroupedSidebar() {
   const t3Conductor = personalMcpProfile?.conductor ?? legacyT3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
+  // T3-CUSTOM(expbkt3): directory ids backing the co-participant facet.
+  const { users: orgMembers } = useOrgMembers();
+  const orgMemberIds = useMemo(
+    () => new Set(orgMembers.map((user) => String(user.id))),
+    [orgMembers],
+  );
   const filters = usePhaseSidebarFilterStore(
     useShallow((state) => ({
       repositoryKeys: state.repositoryKeys,
       phaseIds: state.phaseIds,
       providerKinds: state.providerKinds,
-      assignedToMe: state.assignedToMe,
+      ownedByMe: state.ownedByMe,
+      participantUserIds: state.participantUserIds,
     })),
   );
   const clearFilters = usePhaseSidebarFilterStore((state) => state.clearAll);
@@ -1787,6 +1844,10 @@ export function PhaseGroupedSidebar() {
             providerName:
               provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
             isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
+            // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
+            isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
+            participantUserIds: phaseSidebarThreadParticipantIds(thread),
+            // T3-CUSTOM(expbkt3): END
             attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
             isUnreadCompletion,
             // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
@@ -2021,7 +2082,8 @@ export function PhaseGroupedSidebar() {
     filters.repositoryKeys.length +
     filters.phaseIds.length +
     filters.providerKinds.length +
-    (filters.assignedToMe ? 1 : 0);
+    filters.participantUserIds.length +
+    (filters.ownedByMe ? 1 : 0);
   const activeThreadHidden =
     activeFiltersCount > 0 &&
     routeThreadKey !== null &&
@@ -2092,12 +2154,18 @@ export function PhaseGroupedSidebar() {
       repositoryKeys: new Set(repositoryOptions.map((option) => option.key)),
       providerKinds: new Set(providerOptions.map((option) => option.kind)),
       assignmentAvailable: currentUserId !== null,
+      // T3-CUSTOM(expbkt3): drop people who left the directory, so a departed
+      // teammate cannot leave an unremovable filter pinned over the sidebar.
+      // Skipped while the directory is still loading — an empty list then would
+      // clear a perfectly good filter.
+      ...(orgMemberIds.size > 0 ? { participantUserIds: orgMemberIds } : {}),
     });
   }, [
     allEnvironmentShellsLive,
     currentUserId,
     environments.length,
     networkStatus,
+    orgMemberIds,
     providerOptions,
     reconcileFilters,
     repositoryOptions,
@@ -2551,6 +2619,10 @@ export function PhaseGroupedSidebar() {
     row: PhaseSidebarRow,
     section: PhaseSidebarSection,
     // T3-CUSTOM(expbkt3): omitted on shelf rows, which stay a flat history list.
+    // Spread this straight onto the row — never nest it under a `tree` key.
+    // JSX spread skips excess-property checking, so a stale wrapper compiles
+    // clean while silently leaving every treeXxx prop undefined, which reads as
+    // "the feature is off" rather than as a build error.
     tree?: PhaseThreadRowTreeProps,
   ) => {
     const key = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
@@ -2596,7 +2668,7 @@ export function PhaseGroupedSidebar() {
               ) ?? null)
             : null;
         })()}
-        {...(tree ? { tree } : {})}
+        {...(tree ?? {})}
       />
     );
   };

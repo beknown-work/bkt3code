@@ -93,6 +93,8 @@ function makeRow(
     providerKind: "codex",
     providerName: "Codex",
     isAssignedToMe: false,
+    isOwnedByMe: false,
+    participantUserIds: [],
     attentionPriority: 5,
     isUnreadCompletion: false,
     settlementSupported: true,

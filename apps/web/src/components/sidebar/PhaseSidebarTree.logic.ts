@@ -280,7 +280,9 @@ export function phaseSidebarFiltersActive(filters: PhaseSidebarFilters): boolean
     filters.repositoryKeys.length > 0 ||
     filters.phaseIds.length > 0 ||
     filters.providerKinds.length > 0 ||
-    filters.assignedToMe
+    // T3-CUSTOM(expbkt3): ownership and co-participant facets.
+    filters.participantUserIds.length > 0 ||
+    filters.ownedByMe
   );
 }
 

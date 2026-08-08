@@ -631,6 +631,11 @@ const make = Effect.gen(function* () {
                       ...(resolved.ownerUserId ? { ownerUserId: resolved.ownerUserId } : {}),
                       createdAt: resolved.createdAt,
                       priority: resolved.priority,
+                      // T3-CUSTOM(expbkt3): session lineage. This is the branch
+                      // a prompt-bearing t3_create_session takes — thread,
+                      // message and intent commit atomically here rather than
+                      // through the separate thread.create below.
+                      parentThreadId: resolved.parentThreadId ?? null,
                     },
                   }
                 : {}),
@@ -667,6 +672,9 @@ const make = Effect.gen(function* () {
           ...(resolved.ownerUserId ? { ownerUserId: resolved.ownerUserId } : {}),
           createdAt: resolved.createdAt,
           priority: resolved.priority,
+          // T3-CUSTOM(expbkt3): session lineage survives bootstrap into the
+          // created thread.
+          parentThreadId: resolved.parentThreadId ?? null,
         });
       }
       const recorded = yield* dispatch({
