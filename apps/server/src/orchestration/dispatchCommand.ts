@@ -651,6 +651,12 @@ export const make = Effect.gen(function* () {
               ? { sourceControlProfileId: request.sourceControlProfileId }
               : {}),
             ...(request.priority !== undefined ? { priority: request.priority } : {}),
+            // T3-CUSTOM(expbkt3): session lineage. This rebuild is the only
+            // carrier for a prompt-bearing t3_create_session, so dropping the
+            // field here silently orphans every agent-spawned session.
+            ...(request.parentThreadId !== undefined
+              ? { parentThreadId: request.parentThreadId }
+              : {}),
             ...(request.ownerUserId ? { ownerUserId: request.ownerUserId } : {}),
             createdAt: request.createdAt,
           },

@@ -667,6 +667,9 @@ const make = Effect.gen(function* () {
           ...(resolved.ownerUserId ? { ownerUserId: resolved.ownerUserId } : {}),
           createdAt: resolved.createdAt,
           priority: resolved.priority,
+          // T3-CUSTOM(expbkt3): session lineage survives bootstrap into the
+          // created thread.
+          parentThreadId: resolved.parentThreadId ?? null,
         });
       }
       const recorded = yield* dispatch({

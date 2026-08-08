@@ -128,6 +128,8 @@ custom-header authentication are also supported.
 | `t3_create_project`           | Register or safely create a workspace project on a fresh T3 server. External operators only.                          |
 | `t3_update_project`           | Update project creation defaults, model/options, and project actions. External operators only.                        |
 | `t3_create_session`           | Create a user-owned session. User-bound provider sessions, external users, and legacy external operators.             |
+| `t3_link_session`             | File one session under another, for organising related work into a tree.                                              |
+| `t3_unlink_session`           | Detach a session from its parent, returning it to the top level.                                                      |
 | `t3_submit_plan`              | Publish Markdown or HTML and start an attached Plannotator review gate.                                               |
 | `t3_list_plannotator_reviews` | Inspect review state, decision, feedback, proxy path, and diagnostics.                                                |
 | `t3_update_server_settings`   | Apply a validated settings patch. External operators only.                                                            |
@@ -216,9 +218,19 @@ subtree instead of re-spawning work it already delegated.
 Sessions created through a personal external token are never parented automatically: that token is
 scoped to the user's conductor thread rather than to a session they are working in.
 
-A person can re-file a session at any time from the sidebar row's context menu — **Move under
-session…** and **Detach from parent**. Lineage always stays a forest; a parent that would close a
-cycle is rejected.
+Lineage is editable after creation, so an agent can reorganise a workspace it did not lay out
+itself:
+
+- `t3_link_session({ sessionId, parentSessionId })` files one session under another.
+- `t3_unlink_session({ sessionId })` returns it to the top level.
+
+A session's own children always travel with it, and unlinking a parent never orphans its subtree.
+
+A person can do the same from the sidebar row's context menu — **Move under session…** and **Detach
+from parent**.
+
+Lineage always stays a tree. A session cannot be filed under itself or under any of its own
+descendants; the server rejects such a link rather than storing a cycle.
 
 ## Recommended triage loop
 

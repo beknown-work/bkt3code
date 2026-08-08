@@ -323,6 +323,65 @@ describe("ThreadBootstrapCoordinator", () => {
     }),
   );
 
+  // T3-CUSTOM(expbkt3): session lineage. The resolver puts parentThreadId on the
+  // resolved request, but only this dispatch carries it into the created
+  // thread — when it did not, every agent-spawned session was stamped NULL and
+  // rendered as an unrelated top-level row.
+  it.effect("carries session lineage from the bootstrap request into thread.create", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        setup: () => Effect.succeed({ status: "no-script" as const }),
+        request: { ...resolvedRequest(), parentThreadId: ThreadId.make("thread-parent") },
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* coordinator.request(requestCommand());
+        yield* Deferred.await(turnStarted);
+        yield* Deferred.await(bootstrapCompleted);
+
+        const created = (yield* Ref.get(commands)).find(
+          (command) => command.type === "thread.create",
+        );
+        expect(created?.type === "thread.create" ? created.parentThreadId : undefined).toBe(
+          "thread-parent",
+        );
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
+  it.effect("creates a root session when the bootstrap request has no parent", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        setup: () => Effect.succeed({ status: "no-script" as const }),
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* coordinator.request(requestCommand());
+        yield* Deferred.await(turnStarted);
+        yield* Deferred.await(bootstrapCompleted);
+
+        const created = (yield* Ref.get(commands)).find(
+          (command) => command.type === "thread.create",
+        );
+        expect(created?.type === "thread.create" ? created.parentThreadId : undefined).toBe(null);
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
   it.effect("adopts an existing empty thread without dispatching thread.create", () =>
     Effect.gen(function* () {
       const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
