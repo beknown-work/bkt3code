@@ -65,12 +65,14 @@ import {
   type AddThreadMemberInput,
   type RemoveThreadMemberInput,
   type RequestThreadCatchupSummaryInput,
+  type RequestThreadWorkSummaryInput,
   type RestartThreadSessionInput,
   type StopThreadExecutionInput,
   type TransferThreadOwnershipInput,
   addThreadMember,
   removeThreadMember,
   requestThreadCatchupSummary,
+  requestThreadWorkSummary,
   restartThreadSession,
   stopThreadExecution,
   transferThreadOwnership,
@@ -235,6 +237,7 @@ export type {
   AddThreadMemberInput,
   RemoveThreadMemberInput,
   RequestThreadCatchupSummaryInput,
+  RequestThreadWorkSummaryInput,
   RestartThreadSessionInput,
   StopThreadExecutionInput,
   TransferThreadOwnershipInput,
@@ -412,6 +415,14 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary request.
+    requestWorkSummary: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:request-work-summary",
+      execute: (input: RequestThreadWorkSummaryInput) => requestThreadWorkSummary(input),
+      scheduler,
+      concurrency,
+    }),
+    // T3-CUSTOM(expbkt3): END
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),

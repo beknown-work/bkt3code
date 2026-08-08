@@ -615,6 +615,54 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+//
+// A per-thread, AI-written answer to "what did this session do and how far is
+// it?", generated on demand for the bulk session manager table. It is a
+// separate pipeline from the catch-up summary: its own settings block, its own
+// model, its own prompt, and its own durable column, so turning either off
+// leaves the other intact.
+/**
+ * Coarse lifecycle stage the model judges the session to be in. Deliberately
+ * five buckets: enough to sort a table by, few enough that the model picks the
+ * same one twice.
+ */
+export const ThreadWorkSummaryStage = Schema.Literals([
+  "planning",
+  "implementing",
+  "blocked",
+  "awaiting-review",
+  "done",
+]);
+export type ThreadWorkSummaryStage = typeof ThreadWorkSummaryStage.Type;
+
+/**
+ * "pending" while the reactor is generating, "ready" once the model answered,
+ * and "error" when generation failed or the feature is disabled. The error
+ * state is durable so a reconnecting table shows the reason instead of an
+ * eternal spinner.
+ */
+export const ThreadWorkSummaryStatus = Schema.Literals(["pending", "ready", "error"]);
+export type ThreadWorkSummaryStatus = typeof ThreadWorkSummaryStatus.Type;
+
+export const ThreadWorkSummary = Schema.Struct({
+  status: ThreadWorkSummaryStatus,
+  /** Prose work summary. Null while pending and on error. */
+  summary: Schema.NullOr(Schema.String),
+  stage: Schema.NullOr(ThreadWorkSummaryStage),
+  /** One line describing what is left. Empty string when the session is done. */
+  remaining: Schema.NullOr(Schema.String),
+  /** Rough completion of the session's stated goal, 0..100. */
+  percent: Schema.NullOr(NonNegativeInt),
+  /** User-facing failure detail; only set for `status: "error"`. */
+  error: Schema.NullOr(Schema.String),
+  /** Command id of the request this record answers; drives the supersede rule. */
+  requestId: Schema.NullOr(CommandId),
+  updatedAt: IsoDateTime,
+});
+export type ThreadWorkSummary = typeof ThreadWorkSummary.Type;
+// T3-CUSTOM(expbkt3): END
+
 // T3-CUSTOM(expbkt3): session priority. Linear-style P0..P4 stored as an
 // integer so ordering is arithmetic; 0 is the highest priority and an absent
 // value means "unprioritised" (sorts after P4). The "P0" spelling is purely
@@ -693,6 +741,10 @@ export const OrchestrationThread = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage. Optional so payloads from
   // pre-lineage servers decode; null means this is a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary. Optional so payloads
+  // from pre-work-summary servers decode; absent/null means never generated.
+  workSummary: Schema.optional(Schema.NullOr(ThreadWorkSummary)),
+  // T3-CUSTOM(expbkt3): END
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
@@ -773,6 +825,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage (see the ThreadPriority block above).
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (see ThreadWorkSummary).
+  workSummary: Schema.optional(Schema.NullOr(ThreadWorkSummary)),
+  // T3-CUSTOM(expbkt3): END
   session: Schema.NullOr(OrchestrationSession),
   execution: Schema.optionalKey(Schema.NullOr(ThreadExecutionSnapshot)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -1451,6 +1506,16 @@ const ThreadCatchupSummaryRequestCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary request. Public
+// and user-triggered, dispatched one command per selected session.
+const ThreadWorkSummaryRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.work-summary.request"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+// T3-CUSTOM(expbkt3): END
+
 const ThreadSessionStopCommand = Schema.Struct({
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
@@ -1498,6 +1563,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadCatchupSummaryRequestCommand,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  ThreadWorkSummaryRequestCommand,
+  // T3-CUSTOM(expbkt3): END
   ThreadSessionStopCommand,
   ThreadSessionRestartCommand,
 ]);
@@ -1537,6 +1605,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadCatchupSummaryRequestCommand,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  ThreadWorkSummaryRequestCommand,
+  // T3-CUSTOM(expbkt3): END
   ThreadSessionStopCommand,
   ThreadSessionRestartCommand,
 ]);
@@ -1621,6 +1692,20 @@ const ThreadCatchupSummaryUpdateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — internal work summary result. Dispatched by the
+// WorkSummaryReactor only; the public entry point is
+// `thread.work-summary.request` above.
+const ThreadWorkSummaryUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.work-summary.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  /** The `thread.work-summary.request` command id this result answers. */
+  requestId: CommandId,
+  workSummary: ThreadWorkSummary,
+  createdAt: IsoDateTime,
+});
+// T3-CUSTOM(expbkt3): END
+
 const ThreadActivityAppendCommand = Schema.Struct({
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
@@ -1698,6 +1783,9 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadCatchupSummaryUpdateCommand,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary result.
+  ThreadWorkSummaryUpdateCommand,
+  // T3-CUSTOM(expbkt3): END
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
@@ -1752,6 +1840,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-diff-completed",
   "thread.catchup-summary-requested",
   "thread.catchup-summary-updated",
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary lifecycle.
+  "thread.work-summary-requested",
+  "thread.work-summary-updated",
+  // T3-CUSTOM(expbkt3): END
   "thread.activity-appended",
   // T3-CUSTOM(expbkt3): durable workspace preparation lifecycle.
   "thread.bootstrap-requested",
@@ -2030,6 +2122,21 @@ export const ThreadCatchupSummaryUpdatedPayload = Schema.Struct({
   ),
   createdAt: IsoDateTime,
 });
+
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary events.
+export const ThreadWorkSummaryRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  /** Command id of the request; the projector stores it on the pending record. */
+  requestId: CommandId,
+  requestedAt: IsoDateTime,
+});
+
+export const ThreadWorkSummaryUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  requestId: CommandId,
+  workSummary: ThreadWorkSummary,
+});
+// T3-CUSTOM(expbkt3): END
 
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
@@ -2323,6 +2430,18 @@ export const OrchestrationEvent = Schema.Union([
     type: Schema.Literal("thread.catchup-summary-updated"),
     payload: ThreadCatchupSummaryUpdatedPayload,
   }),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary events.
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.work-summary-requested"),
+    payload: ThreadWorkSummaryRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.work-summary-updated"),
+    payload: ThreadWorkSummaryUpdatedPayload,
+  }),
+  // T3-CUSTOM(expbkt3): END
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),

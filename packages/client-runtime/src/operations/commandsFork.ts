@@ -25,6 +25,7 @@ import {
 } from "./commands.ts";
 
 export type RequestThreadCatchupSummaryInput = ForkCommandInput<"thread.catchup-summary.request">;
+export type RequestThreadWorkSummaryInput = ForkCommandInput<"thread.work-summary.request">;
 export type RestartThreadSessionInput = ForkCommandInput<"thread.session.restart">;
 export type StopThreadExecutionInput = OrchestrationStopExecutionInput;
 export type AddThreadMemberInput = ForkCommandInput<"thread.member.add">;
@@ -104,6 +105,23 @@ export const requestThreadCatchupSummary: (
     });
   },
 );
+
+/**
+ * Bulk session manager: ask the server to (re)generate this thread's work
+ * summary. One command per selected session; the reactor answers durably on
+ * the thread's `workSummary` column, so the table renders progress from live
+ * shell state rather than from this call's result.
+ */
+export const requestThreadWorkSummary: (input: RequestThreadWorkSummaryInput) => ForkCommandEffect =
+  Effect.fn("EnvironmentCommands.requestThreadWorkSummary")(function* (input) {
+    const metadata = yield* timestampedCommandMetadataInternal(input);
+    return yield* dispatchCommandInternal({
+      ...input,
+      type: "thread.work-summary.request",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const restartThreadSession: (input: RestartThreadSessionInput) => ForkCommandEffect =
   Effect.fn("EnvironmentCommands.restartThreadSession")(function* (input) {

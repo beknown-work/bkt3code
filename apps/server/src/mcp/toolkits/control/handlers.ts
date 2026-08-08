@@ -466,6 +466,10 @@ const handlers = {
       },
       execution,
       humanAttentionReasons: attentionReasons(thread, execution),
+      // T3-CUSTOM(expbkt3): bulk session manager work summary, hoisted to the
+      // top level so an agent reading a session does not have to know it lives
+      // on the thread object. Null when one was never requested.
+      workSummary: thread.workSummary ?? null,
     };
   }),
 
@@ -748,6 +752,17 @@ const handlers = {
         };
         break;
       }
+      // T3-CUSTOM(expbkt3): bulk session manager work summary. Unlike catch-up,
+      // this summarizes the whole session, so it needs no turn to anchor to and
+      // works on a session that has never completed a turn.
+      case "request-work-summary":
+        command = {
+          type: "thread.work-summary.request",
+          commandId,
+          threadId: sessionId,
+          createdAt,
+        };
+        break;
     }
     const result = yield* dispatcher.dispatch(command).pipe(mapControlError(operation));
     return { accepted: true, action: input.action, sessionId, sequence: result.sequence };

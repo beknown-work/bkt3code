@@ -15,6 +15,9 @@ import {
   ProjectThreadCreationDefaults,
   ResolvedThreadBootstrapRequest,
   ThreadBootstrapProgress,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  ThreadWorkSummary,
+  // T3-CUSTOM(expbkt3): END
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -339,6 +342,27 @@ function mapTitleRegeneration(row: Schema.Schema.Type<typeof ProjectionThreadDbR
     : null;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — decode the durable work-summary blob.
+//
+// The column is written by the projector as one JSON object. Decoding failures
+// degrade to "no summary" rather than failing the enclosing snapshot: one row
+// written by an older or newer build must not take the whole session list down,
+// and the user can always regenerate.
+const isThreadWorkSummary = Schema.is(ThreadWorkSummary);
+
+function mapWorkSummary(raw: string | null | undefined): ThreadWorkSummary | null {
+  if (raw === null || raw === undefined || raw.length === 0) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isThreadWorkSummary(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+// T3-CUSTOM(expbkt3): END
+
 function mapSessionRow(
   row: Schema.Schema.Type<typeof ProjectionThreadSessionDbRowSchema>,
 ): OrchestrationSession {
@@ -557,6 +581,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           priority,
           linear_issue_url AS "linearIssueUrl",
           parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -637,6 +664,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           priority,
           linear_issue_url AS "linearIssueUrl",
           parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -680,6 +710,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           priority,
           linear_issue_url AS "linearIssueUrl",
           parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -1128,6 +1161,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           priority,
           linear_issue_url AS "linearIssueUrl",
           parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -1192,6 +1228,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           priority,
           linear_issue_url AS "linearIssueUrl",
           parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -2022,6 +2061,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 priority: row.priority,
                 linearIssueUrl: row.linearIssueUrl ?? null,
                 parentThreadId: row.parentThreadId ?? null,
+                // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+                workSummary: mapWorkSummary(row.workSummary),
+                // T3-CUSTOM(expbkt3): END
                 pinnedAt: row.pinnedAt,
                 titleRegeneration: mapTitleRegeneration(row),
                 deletedAt: row.deletedAt,
@@ -2330,6 +2372,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   priority: row.priority,
                   linearIssueUrl: row.linearIssueUrl ?? null,
                   parentThreadId: row.parentThreadId ?? null,
+                  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+                  workSummary: mapWorkSummary(row.workSummary),
+                  // T3-CUSTOM(expbkt3): END
                   pinnedAt: row.pinnedAt,
                   titleRegeneration: mapTitleRegeneration(row),
                   deletedAt: row.deletedAt,
@@ -2505,6 +2550,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         priority: row.priority,
                         linearIssueUrl: row.linearIssueUrl ?? null,
                         parentThreadId: row.parentThreadId ?? null,
+                        // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+                        workSummary: mapWorkSummary(row.workSummary),
+                        // T3-CUSTOM(expbkt3): END
                         pinnedAt: row.pinnedAt,
                         titleRegeneration: mapTitleRegeneration(row),
                         session: sessionByThread.get(row.threadId) ?? null,
@@ -2686,6 +2734,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     priority: row.priority,
                     linearIssueUrl: row.linearIssueUrl ?? null,
                     parentThreadId: row.parentThreadId ?? null,
+                    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+                    workSummary: mapWorkSummary(row.workSummary),
+                    // T3-CUSTOM(expbkt3): END
                     pinnedAt: row.pinnedAt,
                     titleRegeneration: mapTitleRegeneration(row),
                     session: sessionByThread.get(row.threadId) ?? null,
@@ -3007,6 +3058,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         priority: threadRow.value.priority,
         linearIssueUrl: threadRow.value.linearIssueUrl ?? null,
         parentThreadId: threadRow.value.parentThreadId ?? null,
+        // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+        workSummary: mapWorkSummary(threadRow.value.workSummary),
+        // T3-CUSTOM(expbkt3): END
         pinnedAt: threadRow.value.pinnedAt,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
@@ -3212,6 +3266,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         priority: threadRow.value.priority,
         linearIssueUrl: threadRow.value.linearIssueUrl ?? null,
         parentThreadId: threadRow.value.parentThreadId ?? null,
+        // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+        workSummary: mapWorkSummary(threadRow.value.workSummary),
+        // T3-CUSTOM(expbkt3): END
         pinnedAt: threadRow.value.pinnedAt,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         deletedAt: null,

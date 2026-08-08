@@ -1,7 +1,8 @@
 /**
  * T3-CUSTOM(expbkt3): Fork orchestration event projections.
  *
- * Membership/ownership, thread source-control identity and catch-up summaries.
+ * Membership/ownership, thread source-control identity, catch-up summaries and
+ * bulk-session-manager work summaries.
  * Upstream's `projectEvent` delegates here through a single type-narrowing
  * guard. `decodeForEvent` and `updateThread` are passed in rather than imported
  * so this module stays below `projector.ts` in the import graph.
@@ -15,6 +16,8 @@ import {
   ThreadMemberRemovedPayload,
   ThreadOwnerTransferredPayload,
   ThreadSourceControlProfileSetPayload,
+  ThreadWorkSummaryRequestedPayload,
+  ThreadWorkSummaryUpdatedPayload,
   OrchestrationTurnCatchupSummary,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -38,6 +41,8 @@ const FORK_EVENT_TYPES = [
   "project.owner-transferred",
   "thread.source-control-profile-set",
   "thread.catchup-summary-updated",
+  "thread.work-summary-requested",
+  "thread.work-summary-updated",
 ] as const;
 
 export type ForkOrchestrationEvent = Extract<
@@ -282,6 +287,70 @@ export function projectForkEvent(
             // A null rolling summary means "unchanged" (e.g. the pending marker).
             ...(payload.rollingSummary === null ? {} : { rollingSummary: payload.rollingSummary }),
             turnSummaries,
+          }),
+        };
+      });
+
+    /**
+     * The request event itself installs the pending record, so the bulk table
+     * can show a spinner on the row the moment the command is accepted rather
+     * than waiting for the reactor to pick the job off its queue.
+     */
+    case "thread.work-summary-requested":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadWorkSummaryRequestedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workSummary: {
+              status: "pending",
+              summary: null,
+              stage: null,
+              remaining: null,
+              percent: null,
+              error: null,
+              requestId: payload.requestId,
+              updatedAt: payload.requestedAt,
+            },
+          }),
+        };
+      });
+
+    /**
+     * Supersede rule: a result may only overwrite the record it was requested
+     * for. Re-requesting a session while its first generation is still in
+     * flight installs a new pending requestId, and the stale result that lands
+     * afterwards is dropped instead of clobbering the newer run.
+     */
+    case "thread.work-summary-updated":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadWorkSummaryUpdatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+        const currentRequestId = thread.workSummary?.requestId ?? null;
+        if (currentRequestId !== null && currentRequestId !== payload.requestId) {
+          return nextBase;
+        }
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workSummary: payload.workSummary,
           }),
         };
       });
