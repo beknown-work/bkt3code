@@ -277,6 +277,98 @@ describe("ThreadBootstrapCoordinator", () => {
     }),
   );
 
+  // T3-CUSTOM(expbkt3): session lineage on the ATOMIC path. A prompt-bearing
+  // t3_create_session commits thread, message and intent in one turn.start
+  // rather than a separate thread.create, so lineage has to ride along in
+  // bootstrap.createThread. Missing it here is what left every agent-spawned
+  // session at the top level while the no-prompt path already worked.
+  it.effect("carries session lineage through an atomically accepted first turn", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        setup: () => Effect.die("setup must be owned by the durable execution coordinator"),
+        request: { ...resolvedRequest(), parentThreadId: ThreadId.make("thread-parent") },
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* coordinator.request(requestCommand(), {
+          createThread: true,
+          turnStart: {
+            type: "thread.turn.start",
+            commandId: CommandId.make("original-turn-command"),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: MessageId.make("message-1"),
+              role: "user",
+              text: "Build it",
+              attachments: [],
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: NOW,
+          },
+        });
+        yield* Deferred.await(turnStarted);
+
+        const emitted = (yield* Ref.get(commands))[0];
+        expect(
+          emitted?.type === "thread.turn.start"
+            ? emitted.bootstrap?.createThread?.parentThreadId
+            : undefined,
+        ).toBe("thread-parent");
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
+  it.effect("creates a root session on the atomic path when there is no parent", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        setup: () => Effect.die("setup must be owned by the durable execution coordinator"),
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* coordinator.request(requestCommand(), {
+          createThread: true,
+          turnStart: {
+            type: "thread.turn.start",
+            commandId: CommandId.make("original-turn-command"),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: MessageId.make("message-1"),
+              role: "user",
+              text: "Build it",
+              attachments: [],
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: NOW,
+          },
+        });
+        yield* Deferred.await(turnStarted);
+
+        const emitted = (yield* Ref.get(commands))[0];
+        expect(
+          emitted?.type === "thread.turn.start"
+            ? emitted.bootstrap?.createThread?.parentThreadId
+            : undefined,
+        ).toBe(null);
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
   it.effect("returns after queueing and gates the first turn on setup success", () =>
     Effect.gen(function* () {
       const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
