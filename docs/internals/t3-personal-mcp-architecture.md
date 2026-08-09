@@ -24,7 +24,6 @@
 `user_mcp_profiles` stores:
 
 - Clerk user ID, or the deterministic `local-user` identity in single-user mode;
-- per-user Conductor configuration and durable thread ID;
 - enabled upstream integration metadata;
 - provider-instance and tool assignments;
 - personal external-token hash, prefix, and use timestamps.
@@ -62,12 +61,8 @@ receives `t3.session.create`. It may:
 - create a new actor-owned session in an accessible project.
 
 It may not access another user's private session, create server-wide projects,
-modify server settings, or dispatch raw
-orchestration commands. Those remain legacy administrator operations.
-
-The persisted personal Conductor remains a convenient durable coordination
-thread, but it has no additional cross-session authority over another
-user-bound provider session.
+modify server settings, or dispatch raw orchestration commands. Those remain
+legacy administrator operations.
 
 ## Shared sessions
 
@@ -76,8 +71,8 @@ causes a provider generation change and uses Priya's profile. A persistent MCP
 connection from the previous generation loses authorization when its T3 token is
 revoked.
 
-Autonomous Conductor work always uses the Conductor owner's identity because its
-thread is personal and owned by that user.
+Personal external tokens use a synthetic request scope, so they never imply a
+current session or an automatic parent for newly created work.
 
 ## Operations
 

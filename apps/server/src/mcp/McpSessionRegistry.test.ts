@@ -2,7 +2,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   AuthSessionId,
-  DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
@@ -341,10 +340,10 @@ it.effect("resolves the enabled external operator key without storing it in the 
   }),
 );
 
-it.effect("binds Conductor credentials and upstream MCP servers to the actor user", () =>
+it.effect("binds credentials and upstream MCP servers to the actor user", () =>
   Effect.gen(function* () {
     const userId = UserId.make("user-tushar");
-    const conductorThreadId = ThreadId.make("thread-tushar-conductor");
+    const threadId = ThreadId.make("thread-tushar-work");
     const registry = yield* McpSessionRegistry.__testing
       .make({
         now: () => 1_000,
@@ -353,11 +352,6 @@ it.effect("binds Conductor credentials and upstream MCP servers to the actor use
             requestedUserId === userId
               ? {
                   userId,
-                  conductor: {
-                    ...DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
-                    enabled: true,
-                    threadId: conductorThreadId,
-                  },
                   externalAccessEnabled: true,
                   externalTokenConfigured: true,
                   externalTokenPrefix: "t3usr_test…",
@@ -386,7 +380,7 @@ it.effect("binds Conductor credentials and upstream MCP servers to the actor use
       );
 
     const issued = yield* registry.issue({
-      threadId: conductorThreadId,
+      threadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
       actorUserId: userId,
     });
@@ -408,7 +402,6 @@ it.effect("grants user-wide session authority to every user-bound ACP", () =>
         loadPersonalProfile: () =>
           Effect.succeed({
             userId,
-            conductor: DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
             externalAccessEnabled: false,
             externalTokenConfigured: false,
             externalTokenPrefix: "",
@@ -458,7 +451,6 @@ it.effect("pre-registers the shared Bifrost proxy for user sessions before setup
         loadPersonalProfile: () =>
           Effect.succeed({
             userId,
-            conductor: DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
             externalAccessEnabled: false,
             externalTokenConfigured: false,
             externalTokenPrefix: "",
@@ -499,11 +491,7 @@ it.effect("resolves a personal external token only while the external endpoint i
         now: () => 1_000,
         loadExternalMcpSettings: () => Effect.succeed({ enabled: endpointEnabled, apiKey: "" }),
         resolveExternalUserToken: (rawToken) =>
-          Effect.succeed(
-            rawToken === "t3usr_personal-token"
-              ? { userId, conductorThreadId: "thread-tushar-conductor" }
-              : undefined,
-          ),
+          Effect.succeed(rawToken === "t3usr_personal-token" ? { userId } : undefined),
       })
       .pipe(
         Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
@@ -514,6 +502,7 @@ it.effect("resolves a personal external token only while the external endpoint i
     const resolved = yield* registry.resolve("t3usr_personal-token");
     expect(resolved?.principal).toBe("external-user");
     expect(resolved?.actorUserId).toBe(userId);
+    expect(resolved?.threadId).toBe(`external-user:${userId}`);
     expect(resolved?.capabilities.has("t3.session.create")).toBe(true);
 
     endpointEnabled = false;

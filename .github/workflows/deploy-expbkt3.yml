@@ -103,7 +103,6 @@ jobs:
         run: pnpm exec vp run --filter @t3tools/web build
         env:
           VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true"
-          VITE_T3_CONDUCTOR: "true"
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
 
       - name: Build server bundle

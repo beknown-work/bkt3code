@@ -353,7 +353,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           principal: "external-user",
           actorUserId: externalUser.userId,
           environmentId,
-          threadId: ThreadId.make(externalUser.conductorThreadId || "external-user"),
+          threadId: ThreadId.make(`external-user:${externalUser.userId}`),
           providerSessionId: `external-user:${externalUser.userId}`,
           providerInstanceId: ProviderInstanceId.make("external-user"),
           capabilities: new Set(["t3.read", "t3.control", "t3.plan", "t3.session.create"]),

@@ -1,7 +1,7 @@
 // T3-CUSTOM(expbkt3): session lineage on t3_create_session.
 //
 // Covers the full createAsChild matrix: nesting is the agent's call, and the
-// implicit default must never fire for a conductor-scoped external-user token.
+// implicit default must never fire for a synthetic external-user scope.
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId, UserId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -82,10 +82,10 @@ it.effect("creates a top-level session when createAsChild is false", () =>
   }),
 );
 
-it.effect("never parents an external-user token to its conductor thread", () =>
+it.effect("never parents an external-user token to its synthetic scope", () =>
   Effect.gen(function* () {
-    // scope.threadId here is the user's conductor thread, not a session they
-    // are working in — defaulting to it would build one giant bogus tree.
+    // scope.threadId is not a session the user is working in, so defaulting to
+    // it would build one giant bogus tree.
     const scope = makeScope({ principal: "external-user" });
     expect(yield* resolve({ scope })).toBe(null);
   }),

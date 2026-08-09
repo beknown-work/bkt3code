@@ -39,11 +39,11 @@ suite, and the suite fails there on
 The fix for that test exists in the fork lineage, and porting it would mean
 editing upstream source on `t3main`.
 
-| Workflow                                             | Branch      | Web build flags                                                       | Artifact        |
-| ---------------------------------------------------- | ----------- | --------------------------------------------------------------------- | --------------- |
-| `.github/workflows/deploy-t3.yml` (on `t3main` only) | `t3main`    | none                                                                  | `t3-<sha>`      |
-| `.github/workflows/deploy-bkt3.yml`                  | `bkmain`    | `VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true`, `VITE_T3_CONDUCTOR=false` | `bkt3-<sha>`    |
-| `.github/workflows/deploy-expbkt3.yml`               | `expbkmain` | `VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true`, `VITE_T3_CONDUCTOR=true`  | `expbkt3-<sha>` |
+| Workflow                                             | Branch      | Web build flags                            | Artifact        |
+| ---------------------------------------------------- | ----------- | ------------------------------------------ | --------------- |
+| `.github/workflows/deploy-t3.yml` (on `t3main` only) | `t3main`    | none                                       | `t3-<sha>`      |
+| `.github/workflows/deploy-bkt3.yml`                  | `bkmain`    | `VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true` | `bkt3-<sha>`    |
+| `.github/workflows/deploy-expbkt3.yml`               | `expbkmain` | `VITE_T3_EXPERIMENTAL_CONTROL_CENTER=true` | `expbkt3-<sha>` |
 
 `deploy/t3/deploy-t3.yml` is the source of truth for the `t3main` workflow file,
 since `t3main` is upstream `main` plus only that file and a `.gitmodules` entry.
