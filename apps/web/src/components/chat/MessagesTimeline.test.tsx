@@ -273,6 +273,36 @@ describe("MessagesTimeline", () => {
         ]}
       />,
     );
+    // T3-CUSTOM(expbkt3): native plan preview stays visible during async capture.
+    const nativePreviewPending = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onOpenPlanReview={() => {}}
+        timelineEntries={[
+          {
+            id: "entry-plan-native-pending",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan,
+          },
+        ]}
+      />,
+    );
+    const nativePreviewReady = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onOpenPlanReview={() => {}}
+        planReviewDocumentId="plan-doc:ready"
+        timelineEntries={[
+          {
+            id: "entry-plan-native-ready",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan,
+          },
+        ]}
+      />,
+    );
 
     expect(withReview).toContain("data-plannotator-review-trigger");
     expect(withReview).toContain('aria-label="Review plan in Plannotator"');
@@ -281,6 +311,10 @@ describe("MessagesTimeline", () => {
     expect(withoutReview).not.toContain("data-plannotator-review-trigger");
     expect(withoutReview).toContain("data-plannotator-review-pending");
     expect(withoutReview).toContain('aria-label="Preparing Plannotator review"');
+    expect(nativePreviewPending).toContain("data-plan-review-pending");
+    expect(nativePreviewPending).toContain('aria-label="Preparing plan preview"');
+    expect(nativePreviewReady).toContain("data-plan-review-trigger");
+    expect(nativePreviewReady).toContain('aria-label="Open the plan in the review panel"');
   });
 
   it("uses the larger leading inset only when the top fade is enabled", () => {
