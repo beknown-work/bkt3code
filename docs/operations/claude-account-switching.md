@@ -53,7 +53,7 @@ Three properties follow, and each solves one of the problems above:
   provider panel reports the real email and plan, and the CLI refreshes its own token.
 
 Do not point `CLAUDE_CONFIG_DIR` at `~/.claude` itself. That directory's account
-metadata lives in `~/.claude.json`, *beside* it rather than inside it, so it resolves
+metadata lives in `~/.claude.json`, _beside_ it rather than inside it, so it resolves
 to credentials without an email. `~/.claude.json` is also rewritten by atomic rename,
 which replaces a symlink there with a regular file.
 
@@ -97,15 +97,15 @@ tail ~/.claude-profiles/.autoswitch.jsonl        # every decision, with its inpu
 
 Config lives in `~/.claude-profiles/.autoswitch.json`:
 
-| key | default | meaning |
-| --- | --- | --- |
-| `rotation` | `["tushar","agent","default"]` | order tried; first entry is the primary |
-| `five_hour_trip_pct` | `88` | trip when the 5-hour window is this **used** |
-| `weekly_trip_pct` | `95` | trip when the weekly window is this **used** |
-| `count_weekly_scoped` | `false` | include the model-scoped weekly window |
-| `min_switch_interval_sec` | `900` | anti-flap floor between switches |
-| `failback_to_primary` | `true` | return to the primary once it has headroom |
-| `notify_command` | `""` | optional shell command; `{from} {to} {reason}` |
+| key                       | default                        | meaning                                        |
+| ------------------------- | ------------------------------ | ---------------------------------------------- |
+| `rotation`                | `["tushar","agent","default"]` | order tried; first entry is the primary        |
+| `five_hour_trip_pct`      | `88`                           | trip when the 5-hour window is this **used**   |
+| `weekly_trip_pct`         | `95`                           | trip when the weekly window is this **used**   |
+| `count_weekly_scoped`     | `false`                        | include the model-scoped weekly window         |
+| `min_switch_interval_sec` | `900`                          | anti-flap floor between switches               |
+| `failback_to_primary`     | `true`                         | return to the primary once it has headroom     |
+| `notify_command`          | `""`                           | optional shell command; `{from} {to} {reason}` |
 
 The percentages are **used**, not remaining: "switch when under 12% of the 5-hour window
 is left" is `five_hour_trip_pct: 88`.
@@ -141,14 +141,14 @@ why the machine-global point above matters more than the account count.
 
 ## Files
 
-| path | role |
-| --- | --- |
-| `~/.local/bin/claude-profile` | create/login/list/use/delete profiles |
-| `~/.local/share/claude-profile/shell-init.sh` | `cs` shell function, sourced from `~/.bashrc` |
-| `~/.local/bin/claude-autoswitch` | usage-based switcher (python3, stdlib only) |
-| `~/.local/bin/claude-elected` | unused fallback wrapper; see note below |
-| `/etc/systemd/system/claude-autoswitch.{service,timer}` | five-minute timer, `User=ubuntu` |
-| `~/.claude-profiles/.autoswitch{.json,-state.json,.jsonl}` | config, state, decision log |
+| path                                                       | role                                          |
+| ---------------------------------------------------------- | --------------------------------------------- |
+| `~/.local/bin/claude-profile`                              | create/login/list/use/delete profiles         |
+| `~/.local/share/claude-profile/shell-init.sh`              | `cs` shell function, sourced from `~/.bashrc` |
+| `~/.local/bin/claude-autoswitch`                           | usage-based switcher (python3, stdlib only)   |
+| `~/.local/bin/claude-elected`                              | unused fallback wrapper; see note below       |
+| `/etc/systemd/system/claude-autoswitch.{service,timer}`    | five-minute timer, `User=ubuntu`              |
+| `~/.claude-profiles/.autoswitch{.json,-state.json,.jsonl}` | config, state, decision log                   |
 
 `claude-elected` injects the elected config directory via a wrapper set as `binaryPath`.
 It works standalone but is not in use: `binaryPath` is captured at adapter creation, so a
