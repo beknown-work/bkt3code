@@ -235,7 +235,7 @@ export const T3UpdateSessionTool = mutatingTool(
 export const T3SessionActionTool = mutatingTool(
   Tool.make("t3_session_action", {
     description:
-      "Perform a lifecycle action on a T3 session: interrupt the active turn, stop/restart its provider, archive/unarchive, settle/activate, snooze/unsnooze, delete, or request a fresh catch-up summary.",
+      "Perform a lifecycle action on a T3 session: interrupt the active turn, stop/restart its provider, archive/unarchive, settle/activate, snooze/unsnooze, delete, request a fresh catch-up summary, or request a fresh work summary and progress estimate.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       action: described(
@@ -251,6 +251,7 @@ export const T3SessionActionTool = mutatingTool(
           "unsnooze",
           "delete",
           "request-catchup",
+          "request-work-summary",
         ]),
         "Lifecycle action to perform. delete is irreversible; snooze additionally requires snoozedUntil.",
       ),
@@ -445,6 +446,22 @@ export const T3CreateSessionTool = mutatingTool(
           "Optional session priority: 0 (P0, highest) through 4 (P4, lowest). Omit to leave the session unprioritised.",
         ),
       ),
+      // T3-CUSTOM(expbkt3): BEGIN — session lineage. The description is
+      // load-bearing: it is the only guidance the calling model receives about
+      // when nesting is the wrong choice.
+      createAsChild: Schema.optional(
+        described(
+          Schema.Boolean,
+          "Whether this session is filed under yours in the sidebar. Defaults to true, so work you fan out stays visible as your subtree. Pass false when the new session is independent work that should stand on its own at the top level.",
+        ),
+      ),
+      parentSessionId: Schema.optional(
+        described(
+          Schema.String,
+          "Optional explicit parent session ID, for building a tree you are not the root of. Defaults to the calling session. Cannot be combined with createAsChild: false.",
+        ),
+      ),
+      // T3-CUSTOM(expbkt3): END
     }),
     success: Schema.Unknown,
     failure: T3ControlToolError,
@@ -544,6 +561,41 @@ export const T3UpdateServerSettingsTool = mutatingTool(
   }).annotate(Tool.Title, "Update T3 server settings"),
 );
 
+// T3-CUSTOM(expbkt3): BEGIN — session lineage as an explicit pair of verbs.
+// One tri-state field would be terser, but an agent reorganising a workspace
+// has to be able to reach "detach" without emitting a literal null, and a tool
+// named for what it does is far likelier to be picked correctly.
+export const T3LinkSessionTool = mutatingTool(
+  Tool.make("t3_link_session", {
+    description:
+      "File one T3 session under another, so it renders nested beneath its parent in the sidebar. Use this to organise related work — for example, grouping sessions you fanned out across repositories under the session coordinating them. The session's own children move with it. Lineage must stay a tree: a session cannot be filed under itself or under any of its own descendants.",
+    parameters: Schema.Struct({
+      sessionId: described(Schema.String, "Session to move."),
+      parentSessionId: described(
+        Schema.String,
+        "Session it should be filed under. Must not be the session itself or one of its descendants.",
+      ),
+    }),
+    success: Schema.Unknown,
+    failure: T3ControlToolError,
+    dependencies,
+  }).annotate(Tool.Title, "Link T3 session to a parent"),
+);
+
+export const T3UnlinkSessionTool = mutatingTool(
+  Tool.make("t3_unlink_session", {
+    description:
+      "Detach a T3 session from its parent so it returns to the top level of the sidebar. Its own child sessions stay attached to it and move with it. Safe to call on a session that already has no parent.",
+    parameters: Schema.Struct({
+      sessionId: described(Schema.String, "Session to detach from its parent."),
+    }),
+    success: Schema.Unknown,
+    failure: T3ControlToolError,
+    dependencies,
+  }).annotate(Tool.Title, "Unlink T3 session from its parent"),
+);
+// T3-CUSTOM(expbkt3): END
+
 export const T3ControlToolkit = Toolkit.make(
   T3ListSessionsTool,
   T3GetSessionTool,
@@ -558,6 +610,9 @@ export const T3ControlToolkit = Toolkit.make(
   T3CreateProjectTool,
   T3UpdateProjectTool,
   T3CreateSessionTool,
+  // T3-CUSTOM(expbkt3): session lineage.
+  T3LinkSessionTool,
+  T3UnlinkSessionTool,
   T3SubmitPlanTool,
   T3ListPlannotatorReviewsTool,
   T3DispatchCommandTool,

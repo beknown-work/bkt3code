@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 
 import {
   buildBranchNamePrompt,
   buildCatchupSummaryPrompt,
+  buildWorkSummaryPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildRollingSummaryPrompt,
@@ -13,7 +15,14 @@ import {
   sanitizeCatchupSummary,
   sanitizeRollingSummary,
   sanitizeThreadTitle,
+  sanitizeWorkSummary,
+  sanitizeWorkSummaryPercent,
+  sanitizeWorkSummaryRemaining,
+  sanitizeWorkSummaryStage,
   MAX_ROLLING_SUMMARY_CHARS,
+  MAX_WORK_SUMMARY_CHARS,
+  MAX_WORK_SUMMARY_REMAINING_CHARS,
+  WORK_SUMMARY_STAGES,
 } from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 
@@ -406,5 +415,86 @@ describe("sanitizeRollingSummary", () => {
 
   it("leaves a short summary untouched", () => {
     expect(sanitizeRollingSummary("  short summary  ")).toBe("short summary");
+  });
+});
+
+// T3-CUSTOM(expbkt3): bulk session manager work summary prompt + sanitizers.
+describe("buildWorkSummaryPrompt", () => {
+  it("asks for the four structured fields the bulk table renders", () => {
+    const result = buildWorkSummaryPrompt({
+      context: "Session title: Ship the manager\n\nTranscript:\nuser: build it",
+    });
+
+    expect(Object.keys(result.outputSchema.fields)).toEqual([
+      "summary",
+      "stage",
+      "remaining",
+      "percent",
+    ]);
+    expect(result.prompt).toContain(
+      "Return a JSON object with keys: summary, stage, remaining, percent.",
+    );
+    expect(result.prompt).toContain("2 to 4 sentences");
+    expect(result.prompt).toContain(WORK_SUMMARY_STAGES.join(", "));
+    expect(result.prompt).toContain(String(MAX_WORK_SUMMARY_REMAINING_CHARS));
+    expect(result.prompt).toContain("Ship the manager");
+  });
+
+  it("accepts only the five sortable stage buckets", () => {
+    const isOutput = Schema.is(buildWorkSummaryPrompt({ context: "ctx" }).outputSchema);
+    const base = { summary: "did work", remaining: "land it", percent: 50 };
+
+    for (const stage of WORK_SUMMARY_STAGES) {
+      expect(isOutput({ ...base, stage })).toBe(true);
+    }
+    // A sixth bucket would be unsortable in the table and unmappable in the
+    // contract, so the provider must reject it rather than pass it through.
+    expect(isOutput({ ...base, stage: "shipping" })).toBe(false);
+    expect(isOutput({ ...base, stage: "done", percent: "50" })).toBe(false);
+  });
+
+  it("appends user-supplied instructions only when configured", () => {
+    const withInstructions = buildWorkSummaryPrompt({
+      context: "ctx",
+      promptInstructions: "Mention the Linear ticket.",
+    });
+    expect(withInstructions.prompt).toContain("Additional instructions:");
+    expect(withInstructions.prompt).toContain("Mention the Linear ticket.");
+
+    const without = buildWorkSummaryPrompt({ context: "ctx" });
+    expect(without.prompt).not.toContain("Additional instructions:");
+  });
+});
+
+describe("work summary sanitizers", () => {
+  it("collapses the summary to one plain-text paragraph", () => {
+    expect(sanitizeWorkSummary("- did a thing\n\n* then another")).toBe("did a thing then another");
+  });
+
+  it("truncates a summary past the table's bound", () => {
+    const result = sanitizeWorkSummary("z".repeat(MAX_WORK_SUMMARY_CHARS + 200));
+
+    expect(result.length).toBeLessThanOrEqual(MAX_WORK_SUMMARY_CHARS + 3);
+    expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("keeps remaining to a single capped line", () => {
+    expect(sanitizeWorkSummaryRemaining("- land the PR\nthen celebrate")).toBe("land the PR");
+    expect(sanitizeWorkSummaryRemaining("q".repeat(200)).length).toBe(
+      MAX_WORK_SUMMARY_REMAINING_CHARS,
+    );
+  });
+
+  it("falls back to implementing for an unknown stage", () => {
+    expect(sanitizeWorkSummaryStage("Awaiting Review")).toBe("awaiting-review");
+    expect(sanitizeWorkSummaryStage("shipping")).toBe("implementing");
+    expect(sanitizeWorkSummaryStage("")).toBe("implementing");
+  });
+
+  it("clamps percent into 0..100", () => {
+    expect(sanitizeWorkSummaryPercent(-40)).toBe(0);
+    expect(sanitizeWorkSummaryPercent(140)).toBe(100);
+    expect(sanitizeWorkSummaryPercent(61.6)).toBe(62);
+    expect(sanitizeWorkSummaryPercent(Number.NaN)).toBe(0);
   });
 });

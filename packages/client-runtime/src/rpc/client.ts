@@ -48,6 +48,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeServerLifecycle
   | typeof WS_METHODS.subscribeServerResources
   | typeof WS_METHODS.subscribeProviderRateLimits
+  // T3-CUSTOM(expbkt3): native plan review snapshots.
+  | typeof WS_METHODS.subscribePlanReview
   | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents

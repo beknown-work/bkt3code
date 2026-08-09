@@ -2,7 +2,8 @@
  * T3-CUSTOM(expbkt3): Fork orchestration command decisions.
  *
  * Membership/ownership transfer, thread source-control identity, session
- * restart and catch-up summaries. Upstream's `decideOrchestrationCommand`
+ * restart, catch-up summaries and bulk-session-manager work summaries.
+ * Upstream's `decideOrchestrationCommand`
  * delegates here through a single type-narrowing guard, so the upstream switch
  * keeps its exhaustive `command satisfies never` default.
  */
@@ -39,6 +40,8 @@ const FORK_COMMAND_TYPES = [
   "thread.session.restart",
   "thread.catchup-summary.request",
   "thread.catchup-summary.update",
+  "thread.work-summary.request",
+  "thread.work-summary.update",
 ] as const;
 
 export type ForkOrchestrationCommand = Extract<
@@ -366,6 +369,54 @@ export const decideForkOrchestrationCommand = Effect.fn("decideForkOrchestration
             displaySummary: command.displaySummary,
             progress: command.progress,
             createdAt: command.createdAt,
+          },
+        };
+      }
+      /**
+       * The request's own command id doubles as the request id, mirroring title
+       * regeneration. That keeps the pending marker, the reactor's dispatch and
+       * the projector's supersede check all keyed on one value without an extra
+       * round trip to mint one.
+       */
+      case "thread.work-summary.request": {
+        yield* requireThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+        });
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.work-summary-requested",
+          payload: {
+            threadId: command.threadId,
+            requestId: command.commandId,
+            requestedAt: command.createdAt,
+          },
+        };
+      }
+      case "thread.work-summary.update": {
+        yield* requireThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+        });
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.work-summary-updated",
+          payload: {
+            threadId: command.threadId,
+            requestId: command.requestId,
+            workSummary: command.workSummary,
           },
         };
       }

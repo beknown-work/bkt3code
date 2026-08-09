@@ -81,6 +81,19 @@ import Migration1007 from "./Migrations/1007_OwnershipBackfillFastPath.ts";
 // block already occupies (ThreadExecutions). It registers at the next free ID in
 // the 1000+ lane instead; the file keeps its upstream name.
 import Migration1008 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+// T3-CUSTOM(expbkt3): native plan review documents, versions and discussions.
+import Migration1009 from "./Migrations/1009_PlanReviewDocuments.ts";
+
+// T3-CUSTOM(expbkt3): session lineage column for the experimental sidebar tree.
+import Migration1010 from "./Migrations/1010_ProjectionThreadsParentThread.ts";
+// T3-CUSTOM(expbkt3): plan documents record their renderer (markdown or HTML).
+import Migration1011 from "./Migrations/1011_PlanDocumentFormat.ts";
+// T3-CUSTOM(expbkt3): BEGIN — durable bulk-session-manager work summaries.
+// Allocated at 1012, above the highest applied id: Effect only runs migrations
+// newer than the newest row in effect_sql_migrations, so a lower id would never
+// execute on a database that already applied 1011.
+import Migration1012 from "./Migrations/1012_ProjectionThreadsWorkSummary.ts";
+// T3-CUSTOM(expbkt3): END
 
 /**
  * Migration loader with all migrations defined inline.
@@ -168,6 +181,13 @@ const migrationEntries = [
   [1006, "AuthSessionClientVersion", Migration1006],
   [1007, "OwnershipBackfillFastPath", Migration1007],
   [1008, "ProjectionTurnsKeysetIndex", Migration1008],
+  [1009, "PlanReviewDocuments", Migration1009],
+  // T3-CUSTOM(expbkt3): session lineage.
+  [1010, "ProjectionThreadsParentThread", Migration1010],
+  [1011, "PlanDocumentFormat", Migration1011],
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  [1012, "ProjectionThreadsWorkSummary", Migration1012],
+  // T3-CUSTOM(expbkt3): END
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

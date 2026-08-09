@@ -26,12 +26,21 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildCatchupSummaryPrompt,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  buildWorkSummaryPrompt,
+  // T3-CUSTOM(expbkt3): END
   buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
   sanitizeCatchupSummary,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  sanitizeWorkSummary,
+  sanitizeWorkSummaryPercent,
+  sanitizeWorkSummaryRemaining,
+  sanitizeWorkSummaryStage,
+  // T3-CUSTOM(expbkt3): END
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeRollingSummary,
@@ -107,7 +116,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateBranchName"
       | "generateThreadTitle"
       | "updateRollingSummary"
-      | "generateCatchupSummary",
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary",
+    // T3-CUSTOM(expbkt3): END
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -128,7 +140,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateBranchName"
       | "generateThreadTitle"
       | "updateRollingSummary"
-      | "generateCatchupSummary",
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary",
+    // T3-CUSTOM(expbkt3): END
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
   ): Effect.fn.Return<MaterializedImageAttachments, TextGenerationError> {
     if (!attachments || attachments.length === 0) {
@@ -172,7 +187,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateBranchName"
       | "generateThreadTitle"
       | "updateRollingSummary"
-      | "generateCatchupSummary";
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary";
+    // T3-CUSTOM(expbkt3): END
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -459,6 +477,31 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.CatchupSummaryGenerationResult;
     });
 
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  const generateWorkSummary: TextGeneration.TextGeneration["Service"]["generateWorkSummary"] =
+    Effect.fn("CodexTextGeneration.generateWorkSummary")(function* (input) {
+      const { prompt, outputSchema } = buildWorkSummaryPrompt({
+        context: input.context,
+        promptInstructions: input.promptInstructions,
+      });
+
+      const generated = yield* runCodexJson({
+        operation: "generateWorkSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeWorkSummary(generated.summary),
+        stage: sanitizeWorkSummaryStage(generated.stage),
+        remaining: sanitizeWorkSummaryRemaining(generated.remaining),
+        percent: sanitizeWorkSummaryPercent(generated.percent),
+      } satisfies TextGeneration.WorkSummaryGenerationResult;
+    });
+  // T3-CUSTOM(expbkt3): END
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -466,5 +509,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     generateThreadTitle,
     updateRollingSummary,
     generateCatchupSummary,
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+    generateWorkSummary,
+    // T3-CUSTOM(expbkt3): END
   } satisfies TextGeneration.TextGeneration["Service"];
 });

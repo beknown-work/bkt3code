@@ -209,6 +209,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Restore plan mode (legacy)",
     to: "/settings/beta",
   },
+  // T3-CUSTOM(expbkt3): native plan review.
+  {
+    id: "native-plan-review",
+    title: "Native plan review",
+    to: "/settings/beta",
+  },
   {
     id: "archive",
     title: "Archived threads",

@@ -65,6 +65,9 @@ import {
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+import { WorkSummaryReactor } from "../src/orchestration/Services/WorkSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): END
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   RuntimeReceiptBus,
@@ -377,6 +380,15 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
       Layer.provideMerge(catchupSummaryReactorLayer),
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries are exercised by
+      // their own reactor test; this harness only needs the dependency satisfied.
+      Layer.provideMerge(
+        Layer.succeed(WorkSummaryReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): END
       Layer.provideMerge(
         Layer.succeed(ThreadDeletionReactor, {
           start: () => Effect.void,

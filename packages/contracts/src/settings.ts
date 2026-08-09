@@ -189,6 +189,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
   planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // T3-CUSTOM(expbkt3): native plan review. On by default; turning it off hides
+  // the Preview entry points and leaves Plannotator as the only review path.
+  nativePlanReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -541,6 +544,35 @@ export const SessionSummarySettings = Schema.Struct({
 });
 export type SessionSummarySettings = typeof SessionSummarySettings.Type;
 
+/**
+ * T3-CUSTOM(expbkt3): BEGIN — Bulk session manager work summaries.
+ *
+ * Deliberately a peer of `SessionSummarySettings` rather than a reuse of it.
+ * The catch-up note answers "what just happened in this turn" for one open
+ * session; the work summary answers "what has this session achieved and how far
+ * is it" for thirty sessions at once. Different reader, different prompt, and
+ * different cost profile — so it gets its own model, character budget, and
+ * prompt instructions instead of inheriting the catch-up ones.
+ */
+export const SessionWorkSummarySettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  modelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_TEXT_GENERATION_MODEL,
+      }),
+    ),
+  ),
+  dataLimitChars: SessionSummaryDataLimitChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  // Appended to the work-summary prompt. Empty means "use the built-in prompt".
+  promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type SessionWorkSummarySettings = typeof SessionWorkSummarySettings.Type;
+// T3-CUSTOM(expbkt3): END
+
 export const ExternalMcpSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -599,14 +631,70 @@ export const ThreadTitleMaintenanceSettings = Schema.Struct({
 });
 export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettings.Type;
 
+/**
+ * T3-CUSTOM(expbkt3): How much of an archived session's worktree to give back.
+ *
+ * `slim` deletes only regenerable directories (`node_modules`, build output,
+ * caches) and leaves a usable checkout behind. `remove` runs
+ * `git worktree remove`, which reclaims everything but means reopening the
+ * session has to re-create the worktree first.
+ */
+export const SessionArchiveReclaimMode = Schema.Literals(["slim", "remove"]);
+export type SessionArchiveReclaimMode = typeof SessionArchiveReclaimMode.Type;
+
+/** Days an archived thread must sit untouched before the sweeper may reclaim it. */
+export const SessionArchiveMinArchivedDays = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 365 }),
+);
+
+export const DEFAULT_SESSION_ARCHIVE_MIN_ARCHIVED_DAYS = 14;
+
+/**
+ * T3-CUSTOM(expbkt3): Reclaim archived sessions' worktrees without losing what
+ * the session did.
+ *
+ * Upstream only removes a worktree when a thread is *deleted*, so the sole way
+ * to get the disk back is to destroy the history. Archived worktrees therefore
+ * accumulate indefinitely. This exports a durable history file pair (digest
+ * Markdown plus a full transcript sidecar) outside the worktree first, then
+ * reclaims the worktree per `SessionArchiveReclaimMode`.
+ *
+ * `historyDir` is blank by default, meaning `<baseDir>/session-history`.
+ * `autoSweep` is off by default: the panel drives this by hand until an
+ * operator opts into the timer.
+ */
+export const SessionArchiveAutoSweepSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  mode: SessionArchiveReclaimMode.pipe(Schema.withDecodingDefault(Effect.succeed("slim" as const))),
+  minArchivedDays: SessionArchiveMinArchivedDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_ARCHIVE_MIN_ARCHIVED_DAYS)),
+  ),
+});
+export type SessionArchiveAutoSweepSettings = typeof SessionArchiveAutoSweepSettings.Type;
+
+export const SessionArchiveSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  historyDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  includeTranscriptSidecar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  autoSweep: SessionArchiveAutoSweepSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type SessionArchiveSettings = typeof SessionArchiveSettings.Type;
+
 export const ExperimentalSettings = Schema.Struct({
   sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  sessionWorkSummary: SessionWorkSummarySettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // T3-CUSTOM(expbkt3): END
   externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   t3Conductor: T3ConductorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // T3-CUSTOM(expbkt3): periodic title refresh.
   threadTitleMaintenance: ThreadTitleMaintenanceSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+  sessionArchive: SessionArchiveSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ExperimentalSettings = typeof ExperimentalSettings.Type;
 
@@ -940,6 +1028,32 @@ export const ServerSettingsPatch = Schema.Struct({
           promptInstructions: Schema.optionalKey(TrimmedString),
         }),
       ),
+      // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+      sessionArchive: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          historyDir: Schema.optionalKey(TrimmedString),
+          includeTranscriptSidecar: Schema.optionalKey(Schema.Boolean),
+          autoSweep: Schema.optionalKey(
+            Schema.Struct({
+              enabled: Schema.optionalKey(Schema.Boolean),
+              mode: Schema.optionalKey(SessionArchiveReclaimMode),
+              minArchivedDays: Schema.optionalKey(SessionArchiveMinArchivedDays),
+            }),
+          ),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries are patched
+      // independently of the catch-up summary block.
+      sessionWorkSummary: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          modelSelection: Schema.optionalKey(ModelSelectionPatch),
+          dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          promptInstructions: Schema.optionalKey(TrimmedString),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): END
     }),
   ),
   providers: Schema.optionalKey(
@@ -999,6 +1113,8 @@ export const ClientSettingsPatch = Schema.Struct({
   providerRateLimitsEnabled: Schema.optionalKey(Schema.Boolean),
   resourceMonitorEnabled: Schema.optionalKey(Schema.Boolean),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): native plan review.
+  nativePlanReviewEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

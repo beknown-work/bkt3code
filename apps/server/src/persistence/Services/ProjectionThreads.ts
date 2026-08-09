@@ -50,6 +50,14 @@ export const ProjectionThread = Schema.Struct({
   priority: Schema.NullOr(ThreadPriority),
   // T3-CUSTOM(expbkt3): durable manual Linear issue URL.
   linearIssueUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  // T3-CUSTOM(expbkt3): session lineage; null means this is a root session.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): BEGIN — JSON-encoded ThreadWorkSummary for the bulk session
+  // manager. Kept as a raw string here so the projection repository stays a
+  // dumb column carrier; decoding happens in ProjectionSnapshotQuery, where a
+  // malformed row degrades to "no summary" instead of failing a whole snapshot.
+  workSummary: Schema.optional(Schema.NullOr(Schema.String)),
+  // T3-CUSTOM(expbkt3): END
   pinnedAt: Schema.NullOr(IsoDateTime),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),

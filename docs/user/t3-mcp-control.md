@@ -128,6 +128,8 @@ custom-header authentication are also supported.
 | `t3_create_project`           | Register or safely create a workspace project on a fresh T3 server. External operators only.                          |
 | `t3_update_project`           | Update project creation defaults, model/options, and project actions. External operators only.                        |
 | `t3_create_session`           | Create a user-owned session. User-bound provider sessions, external users, and legacy external operators.             |
+| `t3_link_session`             | File one session under another, for organising related work into a tree.                                              |
+| `t3_unlink_session`           | Detach a session from its parent, returning it to the top level.                                                      |
 | `t3_submit_plan`              | Publish Markdown or HTML and start an attached Plannotator review gate.                                               |
 | `t3_list_plannotator_reviews` | Inspect review state, decision, feedback, proxy path, and diagnostics.                                                |
 | `t3_update_server_settings`   | Apply a validated settings patch. External operators only.                                                            |
@@ -195,6 +197,40 @@ override can request Local, an existing worktree, or a new worktree with a Local
 It returns `threadId`, `bootstrapId`, and `bootstrapStatus: "queued"` after durable queueing. When a
 prompt is supplied, the first turn remains pending until new-worktree setup succeeds or a user
 bypasses a failed setup.
+
+### Session lineage
+
+A session created by another session records that session as its parent, and the experimental
+phase-grouped sidebar files it under that parent as a collapsible subtree. This keeps a fan-out —
+typically cross-repo work — readable as one unit of work instead of several unrelated rows.
+
+Nesting is the calling agent's choice:
+
+| Field                             | Effect                                                                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createAsChild` omitted or `true` | Nested under the calling session. The default, and the right choice for work you fanned out.                                                       |
+| `createAsChild: false`            | Created at the top level, exactly as if a person had started it. Use this when the new session is independent work that should stand on its own.   |
+| `parentSessionId`                 | Nest under a specific session rather than the caller, for building a tree you are not the root of. Cannot be combined with `createAsChild: false`. |
+
+`t3_list_sessions` and `t3_get_session` report `parentSessionId`, so an agent can inspect its own
+subtree instead of re-spawning work it already delegated.
+
+Sessions created through a personal external token are never parented automatically: that token is
+scoped to the user's conductor thread rather than to a session they are working in.
+
+Lineage is editable after creation, so an agent can reorganise a workspace it did not lay out
+itself:
+
+- `t3_link_session({ sessionId, parentSessionId })` files one session under another.
+- `t3_unlink_session({ sessionId })` returns it to the top level.
+
+A session's own children always travel with it, and unlinking a parent never orphans its subtree.
+
+A person can do the same from the sidebar row's context menu — **Move under session…** and **Detach
+from parent**.
+
+Lineage always stays a tree. A session cannot be filed under itself or under any of its own
+descendants; the server rejects such a link rather than storing a cycle.
 
 ## Recommended triage loop
 

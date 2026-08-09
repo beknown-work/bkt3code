@@ -211,6 +211,10 @@
       "types": "./src/plannotator.ts",
       "import": "./src/plannotator.ts"
     },
+    "./planReview": {
+      "types": "./src/planReview.ts",
+      "import": "./src/planReview.ts"
+    },
     "./devHome": {
       "types": "./src/devHome.ts",
       "import": "./src/devHome.ts"

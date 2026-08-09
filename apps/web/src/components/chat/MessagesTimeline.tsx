@@ -157,6 +157,10 @@ interface TimelineRowSharedState {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   // T3-CUSTOM(expbkt3): Native proposed-plan cards open the focused review surface.
   onOpenPlannotator: (url: `/plannotator/${string}/`) => void;
+  // T3-CUSTOM(expbkt3): native plan review entry point. Optional so upstream
+  // fixtures that predate it keep compiling.
+  onOpenPlanReview?: ((documentId: string) => void) | undefined;
+  planReviewDocumentId?: string | null | undefined;
   onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorElement?: HTMLElement) => void;
@@ -237,6 +241,10 @@ interface MessagesTimelineProps {
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenPlannotator: (url: `/plannotator/${string}/`) => void;
+  // T3-CUSTOM(expbkt3): native plan review entry point. Optional so upstream
+  // fixtures that predate it keep compiling.
+  onOpenPlanReview?: ((documentId: string) => void) | undefined;
+  planReviewDocumentId?: string | null | undefined;
   onRegenerateCatchupSummary?: ((turnId: TurnId) => void) | undefined;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -288,6 +296,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   onOpenPlannotator,
+  onOpenPlanReview,
+  planReviewDocumentId = null,
   onRegenerateCatchupSummary,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -552,6 +562,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenTurnDiff,
       onOpenPlannotator,
+      onOpenPlanReview,
+      planReviewDocumentId,
       onRegenerateCatchupSummary,
       onToggleTurnFold,
       onToggleWorkGroup,
@@ -572,6 +584,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenTurnDiff,
       onOpenPlannotator,
+      onOpenPlanReview,
+      planReviewDocumentId,
       onRegenerateCatchupSummary,
       onToggleTurnFold,
       onToggleWorkGroup,
@@ -1242,6 +1256,8 @@ function ProposedPlanTimelineRow({
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
         onOpenPlannotator={ctx.onOpenPlannotator}
+        onOpenPlanReview={ctx.onOpenPlanReview}
+        planReviewDocumentId={ctx.planReviewDocumentId}
         reviewable={row.proposedPlan.implementedAt === null}
       />
     </div>
