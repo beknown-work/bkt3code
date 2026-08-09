@@ -62,8 +62,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
-import { usePersonalMcpProfile } from "../hooks/usePersonalMcpProfile";
-import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
+import { useClientSettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -171,7 +170,6 @@ import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
 import { useCurrentUserId } from "../state/identity";
 // T3-CUSTOM(expbkt3): directory for the co-participant filter facet.
 import { useOrgMembers } from "../state/orgMembers";
-import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
   SidebarChromeFooter,
   SidebarChromeHeader,
@@ -180,8 +178,6 @@ import {
 import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 // T3-CUSTOM(expbkt3): attach-to-external-session.
 import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
-import { T3ConductorCard } from "./sidebar/T3ConductorCard";
-import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
 import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
 import { RunningSessionDivider } from "./sidebar/RunningSessionDivider";
 import {
@@ -1714,10 +1710,6 @@ export function PhaseGroupedSidebar() {
   const nowMinute = useNowMinute();
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   // T3-CUSTOM(expbkt3): END
-  // T3-CUSTOM(expbkt3): Reserve one permanent row outside normal lifecycle groups.
-  const legacyT3Conductor = usePrimarySettings((settings) => settings.experimental.t3Conductor);
-  const { profile: personalMcpProfile } = usePersonalMcpProfile();
-  const t3Conductor = personalMcpProfile?.conductor ?? legacyT3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   // T3-CUSTOM(expbkt3): directory ids backing the co-participant facet.
@@ -1847,63 +1839,55 @@ export function PhaseGroupedSidebar() {
   );
   const allRows = useMemo<ReadonlyArray<PhaseSidebarRow>>(
     () =>
-      threads
-        // T3-CUSTOM(expbkt3): Conductor owns a fixed command-deck card.
-        .filter(
-          (thread) =>
-            !T3_CONDUCTOR_ENABLED ||
-            !isT3ConductorThread(t3Conductor, primaryEnvironmentId, thread),
-        )
-        .map((thread) => {
-          const project = projectByKey.get(
-            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-          );
-          const repositoryKey = project
-            ? derivePhaseSidebarRepositoryKey(project)
-            : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-          const serverConfig = serverConfigs.get(thread.environmentId);
-          const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-          const provider = serverConfig?.providers.find(
-            (candidate) => candidate.instanceId === instanceId,
-          );
-          const providerKind = String(provider?.driver ?? instanceId);
-          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          const vcsStatus = vcsStatusByThreadKey.get(threadKey);
-          const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
-          const isUnreadCompletion = hasUnseenCompletion({
-            ...thread,
-            lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
-          });
-          return {
-            thread,
-            phaseId: resolvePhaseSidebarDisplayPhase(
-              currentPhase,
-              allEnvironmentShellsLive
-                ? null
-                : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
-            ),
-            repositoryKey,
-            repositoryLabel:
-              project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
-            providerKind,
-            providerName:
-              provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
-            isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
-            // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
-            isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
-            participantUserIds: phaseSidebarThreadParticipantIds(thread),
-            // T3-CUSTOM(expbkt3): END
-            attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
-            isUnreadCompletion,
-            // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
-            settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
-            snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
-            prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
-            linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
-            changeRequestState: vcsStatus?.pr?.state ?? null,
-            // T3-CUSTOM(expbkt3): END
-          };
-        }),
+      threads.map((thread) => {
+        const project = projectByKey.get(
+          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+        );
+        const repositoryKey = project
+          ? derivePhaseSidebarRepositoryKey(project)
+          : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+        const serverConfig = serverConfigs.get(thread.environmentId);
+        const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+        const provider = serverConfig?.providers.find(
+          (candidate) => candidate.instanceId === instanceId,
+        );
+        const providerKind = String(provider?.driver ?? instanceId);
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const vcsStatus = vcsStatusByThreadKey.get(threadKey);
+        const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
+        const isUnreadCompletion = hasUnseenCompletion({
+          ...thread,
+          lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
+        });
+        return {
+          thread,
+          phaseId: resolvePhaseSidebarDisplayPhase(
+            currentPhase,
+            allEnvironmentShellsLive
+              ? null
+              : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
+          ),
+          repositoryKey,
+          repositoryLabel:
+            project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
+          providerKind,
+          providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
+          isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
+          // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
+          isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
+          participantUserIds: phaseSidebarThreadParticipantIds(thread),
+          // T3-CUSTOM(expbkt3): END
+          attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
+          isUnreadCompletion,
+          // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
+          settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
+          snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
+          prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
+          linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
+          changeRequestState: vcsStatus?.pr?.state ?? null,
+          // T3-CUSTOM(expbkt3): END
+        };
+      }),
     [
       projectByKey,
       repositoryLabels,
@@ -1913,7 +1897,6 @@ export function PhaseGroupedSidebar() {
       currentUserId,
       lastVisitedAtByThreadKey,
       primaryEnvironmentId,
-      t3Conductor,
       vcsStatusByThreadKey,
     ],
   );
@@ -2812,14 +2795,6 @@ export function PhaseGroupedSidebar() {
           </SidebarMenu>
         </SidebarGroup>
         <SidebarEnvironmentNotices />
-        {/* T3-CUSTOM(expbkt3): Permanent orchestration home above lifecycle rows. */}
-        {T3_CONDUCTOR_ENABLED ? (
-          <T3ConductorCard
-            shellReady={allEnvironmentShellsLive && networkStatus === "online"}
-            activeThreadKey={routeThreadKey}
-            onNavigate={navigateToRow}
-          />
-        ) : null}
         <SidebarGroup className="px-2 pt-1 pb-2">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">

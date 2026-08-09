@@ -15,7 +15,6 @@ interface ImportMetaEnv {
   readonly VITE_RELAY_OTLP_TRACES_TOKEN: string;
   // T3-CUSTOM(expbkt3): Build-time gate for experimental control-center UI seams.
   readonly VITE_T3_EXPERIMENTAL_CONTROL_CENTER: string;
-  readonly VITE_T3_CONDUCTOR: string;
   readonly APP_VERSION: string;
 }
 

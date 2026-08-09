@@ -109,7 +109,6 @@ export function ExternalMcpSettingsSection() {
   ) => {
     if (!profile) return;
     await update({
-      conductor: profile.conductor,
       externalAccessEnabled: profile.externalAccessEnabled,
       integrations: integrations.map((integration) =>
         toUpdate(integration, secretPatch?.id === integration.id ? secretPatch.value : undefined),
@@ -179,7 +178,6 @@ export function ExternalMcpSettingsSection() {
               onCheckedChange={(checked) => {
                 if (!profile) return;
                 void update({
-                  conductor: profile.conductor,
                   externalAccessEnabled: Boolean(checked),
                   integrations: profile.integrations,
                 });
