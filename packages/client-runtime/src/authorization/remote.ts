@@ -72,6 +72,8 @@ export const bootstrapRemoteBearerSession = Effect.fn(
   readonly credential: string;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly clientMetadata?: AuthClientPresentationMetadata;
+  // T3-CUSTOM(expbkt3): bind the operator at exchange time, as the DPoP twin does.
+  readonly identityToken?: string;
   readonly timeoutMs?: number;
 }) {
   const client = yield* makeEnvironmentHttpApiClient(input.httpBaseUrl);
@@ -85,6 +87,8 @@ export const bootstrapRemoteBearerSession = Effect.fn(
         subject_token: input.credential,
         subject_token_type: AuthEnvironmentBootstrapTokenType,
         requested_token_type: AuthAccessTokenType,
+        // T3-CUSTOM(expbkt3): a team-mode environment binds this to the session.
+        ...(input.identityToken ? { identity_token: input.identityToken } : {}),
         ...(input.scopes ? { scope: encodeOAuthScope(input.scopes) } : {}),
         ...clientMetadataTokenExchangeFields(input.clientMetadata),
       },

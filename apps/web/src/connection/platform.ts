@@ -1,6 +1,8 @@
 import {
   ClientPresentation,
   CloudSession,
+  // T3-CUSTOM(expbkt3): team-mode identity for remote pairing.
+  EnvironmentIdentity,
   EnvironmentOwnedDataCleanup,
   PlatformConnectionSource,
   PrimaryEnvironmentAuth,
@@ -45,6 +47,8 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 // T3-CUSTOM(expbkt3): attach the built client version to connection metadata.
 import { APP_VERSION } from "../branding";
+// T3-CUSTOM(expbkt3): the operator's Clerk token, for identity-bearing pairing.
+import { readTeamClerkToken } from "../state/teamIdentityToken";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentTarget,
@@ -228,6 +232,13 @@ const capabilitiesLayer = Layer.effectContext(
     const identity = RelayDeviceIdentity.of({
       deviceId: Effect.succeed(Option.none()),
     });
+    // T3-CUSTOM(expbkt3): BEGIN — present the operator's Clerk identity when pairing
+    // a remote fork environment. Never fails: an absent token means "no identity",
+    // and the environment's own identity mode decides whether that is acceptable.
+    const environmentIdentity = EnvironmentIdentity.of({
+      identityToken: Effect.promise(readTeamClerkToken).pipe(Effect.map(Option.fromNullishOr)),
+    });
+    // T3-CUSTOM(expbkt3): END
     const primaryAuth = PrimaryEnvironmentAuth.of({
       bearerToken: Effect.tryPromise({
         try: readDesktopPrimaryBearerToken,
@@ -299,6 +310,8 @@ const capabilitiesLayer = Layer.effectContext(
     return Context.make(CloudSession, cloudSession).pipe(
       Context.add(PrimaryEnvironmentAuth, primaryAuth),
       Context.add(RelayDeviceIdentity, identity),
+      // T3-CUSTOM(expbkt3): team-mode identity for remote pairing.
+      Context.add(EnvironmentIdentity, environmentIdentity),
       Context.add(ClientPresentation, presentation),
       Context.add(SshEnvironmentGateway, ssh),
     );
