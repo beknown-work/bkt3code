@@ -1497,15 +1497,12 @@ export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
 
-export function resolveDesktopBuildIconAssets(
-  version: string,
-  // T3-CUSTOM(expbkt3): BEGIN - optional env so the fork brand can override icons.
-  env: Readonly<Record<string, string | undefined>> = process.env,
-  // T3-CUSTOM(expbkt3): END
-): DesktopBuildIconAssets {
+export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
   // T3-CUSTOM(expbkt3): BEGIN - the fork icon wins over the nightly icon, because
   // every fork build is nightly-versioned to reach the nightly updater channel.
-  const brand = resolveDesktopBrandOverride(env);
+  // The upstream signature is left untouched; the brand comes from the build
+  // environment, which is what the packager sets.
+  const brand = resolveDesktopBrandOverride();
   if (brand) {
     return {
       macIconPng: brand.macIconPng,
@@ -1547,15 +1544,11 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(
-  version: string,
-  // T3-CUSTOM(expbkt3): BEGIN - optional env so the fork brand can override the name.
-  env: Readonly<Record<string, string | undefined>> = process.env,
-  // T3-CUSTOM(expbkt3): END
-): string {
+export function resolveDesktopProductName(version: string): string {
   // T3-CUSTOM(expbkt3): BEGIN - the fork name wins over the nightly name, so fork
-  // builds are not labelled "T3 Code (Nightly)".
-  const brandProductName = resolveDesktopBrandOverride(env)?.productName;
+  // builds are not labelled "T3 Code (Nightly)". The upstream signature is left
+  // untouched; the brand comes from the build environment.
+  const brandProductName = resolveDesktopBrandOverride()?.productName;
   if (brandProductName) return brandProductName;
 
   // T3-CUSTOM(expbkt3): END
