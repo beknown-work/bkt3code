@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  decidePlanResend,
-  shouldSendFullDocumentInsteadOfDiff,
-} from "./PlanReviewContextPolicy.ts";
+import { decidePlanResend } from "./PlanReviewContextPolicy.ts";
 
 const baseSignals = {
   latestCompactionAt: null,
@@ -60,17 +57,5 @@ describe("decidePlanResend", () => {
       latestCompactionAt: "2026-08-07T23:00:00.000Z",
     });
     expect(decision.reason).toContain("different session");
-  });
-});
-
-describe("shouldSendFullDocumentInsteadOfDiff", () => {
-  it("prefers a diff for ordinary edits", () => {
-    expect(shouldSendFullDocumentInsteadOfDiff(0.1)).toBe(false);
-    expect(shouldSendFullDocumentInsteadOfDiff(0.6)).toBe(false);
-  });
-
-  it("sends the whole document once the diff stops being smaller", () => {
-    expect(shouldSendFullDocumentInsteadOfDiff(0.61)).toBe(true);
-    expect(shouldSendFullDocumentInsteadOfDiff(1)).toBe(true);
   });
 });

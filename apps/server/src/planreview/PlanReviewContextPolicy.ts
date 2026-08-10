@@ -62,13 +62,3 @@ export function decidePlanResend(signals: PlanResendSignals): PlanResendDecision
 
   return { shouldResend: false, reason: null };
 }
-
-/**
- * Guards the feedback path: a diff that rewrites most of the document is
- * neither smaller than the document nor easier to read.
- */
-export const MAX_DIFF_CHANGE_RATIO = 0.6;
-
-export function shouldSendFullDocumentInsteadOfDiff(changeRatio: number): boolean {
-  return changeRatio > MAX_DIFF_CHANGE_RATIO;
-}
