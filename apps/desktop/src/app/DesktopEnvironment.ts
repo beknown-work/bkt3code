@@ -11,8 +11,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-// T3-CUSTOM(expbkt3): Fork desktop brand baked in at build time.
+// T3-CUSTOM(expbkt3): BEGIN - fork desktop brand baked in at build time.
 import { resolveRuntimeBrand } from "../branding/BkBrand.ts";
+// T3-CUSTOM(expbkt3): END
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
