@@ -196,6 +196,16 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   };
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — present the operator's Clerk identity when pairing a
+// remote fork environment. Never fails: an absent token means "no identity to
+// present", and the environment's own identity mode decides whether that is
+// acceptable. Exported so the wiring from Clerk through to pairing is testable —
+// a silently-null token here is exactly the failure this feature has to avoid.
+export const teamEnvironmentIdentity: typeof EnvironmentIdentity.Service = EnvironmentIdentity.of({
+  identityToken: Effect.promise(readTeamClerkToken).pipe(Effect.map(Option.fromNullishOr)),
+});
+// T3-CUSTOM(expbkt3): END
+
 const capabilitiesLayer = Layer.effectContext(
   Effect.sync(() => {
     const presentation = ClientPresentation.of({
@@ -232,13 +242,8 @@ const capabilitiesLayer = Layer.effectContext(
     const identity = RelayDeviceIdentity.of({
       deviceId: Effect.succeed(Option.none()),
     });
-    // T3-CUSTOM(expbkt3): BEGIN — present the operator's Clerk identity when pairing
-    // a remote fork environment. Never fails: an absent token means "no identity",
-    // and the environment's own identity mode decides whether that is acceptable.
-    const environmentIdentity = EnvironmentIdentity.of({
-      identityToken: Effect.promise(readTeamClerkToken).pipe(Effect.map(Option.fromNullishOr)),
-    });
-    // T3-CUSTOM(expbkt3): END
+    // T3-CUSTOM(expbkt3): the operator's Clerk identity, for remote pairing.
+    const environmentIdentity = teamEnvironmentIdentity;
     const primaryAuth = PrimaryEnvironmentAuth.of({
       bearerToken: Effect.tryPromise({
         try: readDesktopPrimaryBearerToken,
