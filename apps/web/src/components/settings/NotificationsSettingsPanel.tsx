@@ -247,7 +247,7 @@ export function NotificationsSettingsPanel() {
         />
         <SettingsRow
           title="Unread pile-up threshold"
-          description="How many finished-but-unopened sessions it takes to trigger the pile-up alert. Counted per browser, like the unread badge itself."
+          description="How many finished-but-unopened sessions it takes before the pile-up alert starts. From then on it sounds once per session that joins the pile, never for one that is merely still sitting there. Counted per browser, like the unread badge itself."
           control={
             <Input
               value={thresholdDraft}
