@@ -10,6 +10,7 @@
  * a failed export aborts that session's reclaim rather than proceeding.
  */
 import {
+  CommandId,
   SessionArchiveError,
   type ProjectId,
   type SessionArchiveEntry,
@@ -35,6 +36,7 @@ import * as Path from "effect/Path";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -106,6 +108,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const snapshots = yield* ProjectionSnapshotQuery;
+  const orchestrationEngine = yield* OrchestrationEngineService;
   const messages = yield* ProjectionThreadMessageRepository;
   const gitWorkflow = yield* GitWorkflowService;
   const fs = yield* FileSystem.FileSystem;
@@ -668,6 +671,27 @@ export const make = Effect.gen(function* () {
       if (removal._tag === "failed") {
         return skipped(`git worktree remove failed: ${removal.message}`);
       }
+
+      // Clear the thread's pointer at the deleted directory. Left dangling, an
+      // archived-then-resumed thread would try to start sessions in a path that
+      // no longer exists. The worktree is already gone either way, so a failed
+      // clear must not un-reclaim the outcome.
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make(`session-archive:worktree-clear:${thread.id}:${input.nowMs}`),
+          threadId: thread.id,
+          worktreePath: null,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("session archive could not clear the reclaimed worktree path", {
+              threadId: thread.id,
+              worktreePath,
+              cause: describeCause(cause),
+            }),
+          ),
+        );
 
       return {
         threadId: thread.id,

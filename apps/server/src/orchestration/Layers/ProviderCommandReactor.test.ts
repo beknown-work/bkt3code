@@ -35,7 +35,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import { ProviderAdapterProcessError, ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -101,6 +101,38 @@ it("fails missing durable resume state without spending ten identical retries", 
   expect(missing.retryable).toBe(false);
   expect(transient.failureType).toBe("provider-history-read-failed");
   expect(transient.retryable).toBe(true);
+});
+
+// T3-CUSTOM(expbkt3): a spawn against a deleted worktree buries its ENOENT two
+// causes deep, where String() on the adapter error never surfaces it.
+it("classifies a spawn failure against a deleted worktree as permanent", () => {
+  const spawnFailure = durableRecoveryFailure(
+    new ProviderAdapterProcessError({
+      provider: "codex",
+      threadId: "thread-1",
+      detail: "Failed to spawn Codex App Server process for command: codex app-server",
+      cause: new Error("Failed to spawn Codex App Server process for command: codex app-server", {
+        cause: new Error(
+          "ENOENT: no such file or directory, access '/worktrees/proj/t3code-abc123'",
+        ),
+      }),
+    }),
+    "provider-turn-dispatch-failed",
+  );
+  const transientSpawnFailure = durableRecoveryFailure(
+    new ProviderAdapterProcessError({
+      provider: "codex",
+      threadId: "thread-1",
+      detail: "Codex App Server exited before the session was ready",
+      cause: new Error("process exited with code 143"),
+    }),
+    "provider-turn-dispatch-failed",
+  );
+
+  expect(spawnFailure.failureType).toBe("durable-resume-unavailable");
+  expect(spawnFailure.retryable).toBe(false);
+  expect(transientSpawnFailure.failureType).toBe("provider-turn-dispatch-failed");
+  expect(transientSpawnFailure.retryable).toBe(true);
 });
 
 // T3-CUSTOM(expbkt3): An unmaterialized Codex thread has never received its first prompt.
@@ -205,6 +237,7 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -455,6 +488,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           renameBranch,
+          ...input?.gitWorkflow,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
       ),
       Layer.provideMerge(
@@ -2117,6 +2151,9 @@ describe("ProviderCommandReactor", () => {
       cwd: "/tmp/provider-project",
     });
 
+    // The reactor verifies a thread's worktree exists before starting its
+    // session, so the fixture path must be a real directory.
+    NodeFS.mkdirSync("/tmp/provider-project-worktree", { recursive: true });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -2156,6 +2193,113 @@ describe("ProviderCommandReactor", () => {
       },
       runtimeMode: "approval-required",
     });
+  });
+
+  // T3-CUSTOM(expbkt3): a worktree deleted out from under a live thread must
+  // self-heal on the next turn start instead of failing with ENOENT forever.
+  it("recreates a missing worktree from its surviving branch before starting the session", async () => {
+    const tmpRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"));
+    const worktreePath = NodePath.join(tmpRoot, "t3code-recovered");
+    const listLocalBranchNames = vi.fn(() => Effect.succeed(["main", "t3code/recovered"]));
+    const pruneWorktrees = vi.fn(() => Effect.void);
+    const createWorktree = vi.fn(() => {
+      NodeFS.mkdirSync(worktreePath, { recursive: true });
+      return Effect.succeed({ worktree: { path: worktreePath, refName: "t3code/recovered" } });
+    });
+    const harness = await createHarness({
+      gitWorkflow: { listLocalBranchNames, pruneWorktrees, createWorktree },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-worktree-recovery-meta"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "t3code/recovered",
+        worktreePath,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-worktree-recovery"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-recovery"),
+          role: "user",
+          text: "turn against a deleted worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(listLocalBranchNames).toHaveBeenCalledWith("/tmp/provider-project");
+    expect(pruneWorktrees).toHaveBeenCalledWith("/tmp/provider-project");
+    expect(createWorktree).toHaveBeenCalledWith({
+      cwd: "/tmp/provider-project",
+      refName: "t3code/recovered",
+      path: worktreePath,
+    });
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: worktreePath });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.activities.some((activity) => activity.kind === "worktree.recreated") ?? false;
+    });
+  });
+
+  it("fails a turn permanently when both the worktree and its branch are gone", async () => {
+    const tmpRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"));
+    const worktreePath = NodePath.join(tmpRoot, "t3code-unrecoverable");
+    const listLocalBranchNames = vi.fn(() => Effect.succeed(["main"]));
+    const createWorktree = vi.fn(() => Effect.die("createWorktree must not run without a branch"));
+    const harness = await createHarness({
+      gitWorkflow: { listLocalBranchNames, createWorktree },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-worktree-unrecoverable-meta"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "t3code/deleted-branch",
+        worktreePath,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-worktree-unrecoverable"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-unrecoverable"),
+          role: "user",
+          text: "turn against an unrecoverable worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "error";
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.session?.lastError).toContain("no longer exists");
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(createWorktree).not.toHaveBeenCalled();
   });
 
   it("restarts claude sessions when claude effort changes", async () => {
