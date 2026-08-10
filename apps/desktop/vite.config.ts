@@ -1,5 +1,7 @@
 import { defineConfig } from "vite-plus";
 
+// T3-CUSTOM(expbkt3): Fork desktop brand selection.
+import { resolveDesktopBrandId } from "../../scripts/lib/bk-desktop-brand.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const repoEnv = loadRepoEnv();
@@ -8,6 +10,10 @@ const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
+  // T3-CUSTOM(expbkt3): Bake the desktop brand in. Nothing sets T3CODE_BRAND on a
+  // user's machine, so it has to be a build-time constant — see
+  // src/branding/BkBrand.ts and scripts/lib/bk-desktop-brand.ts.
+  __T3CODE_BUILD_BRAND__: JSON.stringify(resolveDesktopBrandId(process.env)),
 };
 
 export default defineConfig({

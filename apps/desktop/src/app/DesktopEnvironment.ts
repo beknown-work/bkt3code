@@ -11,6 +11,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+// T3-CUSTOM(expbkt3): Fork desktop brand baked in at build time.
+import { resolveRuntimeBrand } from "../branding/BkBrand.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
@@ -97,6 +99,19 @@ function resolveDesktopAppBranding(input: {
   readonly appVersion: string;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
+  // T3-CUSTOM(expbkt3): BEGIN - fork builds show one consistent name everywhere.
+  // stageLabel is left untouched (it stays "Nightly" for the nightly versions the
+  // fork ships) so the upstream DesktopAppStageLabel union needs no new member;
+  // only the rendered name changes, matching the bundle's productName exactly.
+  const brand = resolveRuntimeBrand();
+  if (brand) {
+    return {
+      baseName: brand.baseName,
+      stageLabel,
+      displayName: brand.displayName,
+    };
+  }
+  // T3-CUSTOM(expbkt3): END
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
@@ -168,8 +183,23 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  // T3-CUSTOM(expbkt3): BEGIN - fork builds keep their own user-data directory.
+  // The legacy name must be overridden too: resolveUserDataPath in
+  // DesktopAppIdentity.ts prefers the legacy directory when it exists, so leaving
+  // upstream's "T3 Code (Alpha)" here would make a fork build adopt an installed
+  // upstream app's state instead of starting clean beside it.
+  const runtimeBrand = resolveRuntimeBrand();
+  const userDataDirName = runtimeBrand
+    ? runtimeBrand.userDataDirName
+    : isDevelopment
+      ? "t3code-dev"
+      : "t3code";
+  const legacyUserDataDirName = runtimeBrand
+    ? runtimeBrand.legacyUserDataDirName
+    : isDevelopment
+      ? "T3 Code (Dev)"
+      : "T3 Code (Alpha)";
+  // T3-CUSTOM(expbkt3): END
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -212,11 +242,19 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpExportIntervalMs: config.otlpExportIntervalMs,
     branding,
     displayName,
-    appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+    // T3-CUSTOM(expbkt3): BEGIN - fork window-class and app-id identity. The
+    // explicit appUserModelIdOverride still wins, as upstream intends.
+    appUserModelId: Option.getOrElse(
+      config.appUserModelIdOverride,
+      () =>
+        runtimeBrand?.appUserModelId ??
+        (isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code"),
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName:
+      runtimeBrand?.linuxDesktopEntryName ??
+      (isDevelopment ? "t3code-dev.desktop" : "t3code.desktop"),
+    linuxWmClass: runtimeBrand?.linuxWmClass ?? (isDevelopment ? "t3code-dev" : "t3code"),
+    // T3-CUSTOM(expbkt3): END
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
