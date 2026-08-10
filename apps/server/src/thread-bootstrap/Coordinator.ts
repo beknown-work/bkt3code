@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
@@ -38,6 +39,11 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import { ThreadCreationDefaultsResolver } from "./DefaultsResolver.ts";
 import { resolveAvailableWorktreeBase } from "./WorktreeBaseResolver.ts";
+// T3-CUSTOM(expbkt3): worktree directories are named after their codename.
+import {
+  allocateWorktreeDirectoryName,
+  legacyWorktreeDirectoryName,
+} from "../worktreeNaming/allocateWorktreeDirectory.ts";
 
 export class ThreadBootstrapCoordinatorError extends Data.TaggedError(
   "ThreadBootstrapCoordinatorError",
@@ -119,6 +125,8 @@ const make = Effect.gen(function* () {
   const bootstraps = yield* ProjectionThreadBootstrapRepository;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
+  // T3-CUSTOM(expbkt3): worktree directories are named after their codename.
+  const fileSystem = yield* FileSystem.FileSystem;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
 
   const dispatch = (command: OrchestrationCommand, actorUserId: UserId | null = null) =>
@@ -571,18 +579,34 @@ const make = Effect.gen(function* () {
           );
           allocatedBranch = buildTemporaryWorktreeBranchName(() => uuid);
         }
+        // T3-CUSTOM(expbkt3): BEGIN — name the directory after the worktree's
+        // codename. The filesystem is the registry, so this is the one place
+        // that can guarantee uniqueness; the reactor's pure recompute keeps the
+        // legacy branch-derived formula and only runs when no intendedPath was
+        // persisted.
+        const projectWorktreesDir = path.join(
+          serverConfig.worktreesDir,
+          path.basename(resolved.workspace.projectCwd),
+        );
+        const legacyName = legacyWorktreeDirectoryName(allocatedBranch);
+        const directoryName = yield* allocateWorktreeDirectoryName({
+          projectWorktreesDir,
+          seed: allocatedBranch,
+          legacyName,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          // Naming must never be what stops a thread from starting.
+          Effect.orElseSucceed(() => legacyName),
+        );
         resolved = {
           ...resolved,
           workspace: {
             ...resolved.workspace,
             newBranch: allocatedBranch,
-            intendedPath: path.join(
-              serverConfig.worktreesDir,
-              path.basename(resolved.workspace.projectCwd),
-              allocatedBranch.replace(/\//g, "-"),
-            ),
+            intendedPath: path.join(projectWorktreesDir, directoryName),
           },
         };
+        // T3-CUSTOM(expbkt3): END
       }
       if (!resolved.ownerUserId && options?.actorUserId) {
         resolved = { ...resolved, ownerUserId: options.actorUserId };
