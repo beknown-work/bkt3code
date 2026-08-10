@@ -128,6 +128,10 @@ import {
   // T3-CUSTOM(expbkt3): Session priority badge tone.
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
+  // T3-CUSTOM(expbkt3): memorable worktree codenames.
+  phaseSidebarCheckoutToneClassName,
+  phaseSidebarWorktreeRowProps,
+  resolvePhaseSidebarWorktreeView,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
@@ -821,6 +825,12 @@ interface PhaseThreadRowProps {
   readonly section: PhaseSidebarSection;
   readonly project: Project | null;
   readonly vcsStatus: VcsStatusResult | null;
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codename, flattened to primitives so
+  // this memo'd row still compares by value.
+  readonly worktreeCodename: string | null;
+  readonly worktreeSharedCount: number;
+  readonly worktreeSharedSummary: string | null;
+  // T3-CUSTOM(expbkt3): END
   readonly active: boolean;
   readonly orderedThreadKeys: ReadonlyArray<string>;
   readonly jumpLabel: string | null;
@@ -891,6 +901,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     section,
     project,
     vcsStatus,
+    // T3-CUSTOM(expbkt3): worktree codename.
+    worktreeCodename,
+    worktreeSharedCount,
+    worktreeSharedSummary,
     active,
     orderedThreadKeys,
     jumpLabel,
@@ -952,7 +966,14 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
-  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
+  // T3-CUSTOM(expbkt3): worktree codename replaces the generic "Worktree" label.
+  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus, {
+    codename: worktreeCodename,
+    sharing:
+      worktreeSharedCount > 1
+        ? { count: worktreeSharedCount, summary: worktreeSharedSummary ?? "" }
+        : null,
+  });
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
@@ -1368,11 +1389,24 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {checkoutMetadata.kind === "worktree" ? (
-                  <FolderGit2Icon aria-hidden className="size-2.5 shrink-0" />
+                  <FolderGit2Icon
+                    aria-hidden
+                    className={cn(
+                      "size-2.5 shrink-0",
+                      phaseSidebarCheckoutToneClassName(checkoutMetadata.toneIndex),
+                    )}
+                  />
                 ) : (
                   <LaptopIcon aria-hidden className="size-2.5 shrink-0" />
                 )}
-                <span className="min-w-0 truncate">{checkoutMetadata.label}</span>
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    phaseSidebarCheckoutToneClassName(checkoutMetadata.toneIndex),
+                  )}
+                >
+                  {checkoutMetadata.label}
+                </span>
               </TooltipTrigger>
               {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
@@ -1917,6 +1951,11 @@ export function PhaseGroupedSidebar() {
       vcsStatusByThreadKey,
     ],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codenames. Resolved across the whole
+  // thread set rather than per row, because both answers are properties of the
+  // set: codenames disambiguate against each other, and occupancy is a count.
+  const worktreeView = useMemo(() => resolvePhaseSidebarWorktreeView(threads), [threads]);
+  // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): BEGIN — split the inbox from the parked shelves.
   // Filtering happens once, before the partition, so a filter chip means the
   // same thing in the lifecycle groups and on both shelves.
@@ -2682,6 +2721,7 @@ export function PhaseGroupedSidebar() {
         section={section}
         project={project}
         vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
+        {...phaseSidebarWorktreeRowProps(worktreeView, row.thread.worktreePath)}
         active={routeThreadKey === key}
         orderedThreadKeys={visibleThreadKeys}
         jumpLabel={jumpLabelByKey.get(key) ?? null}

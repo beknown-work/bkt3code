@@ -5,6 +5,8 @@ import {
   requiresDefaultBranchConfirmation,
 } from "@t3tools/client-runtime/state/vcs";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): memorable worktree codenames.
+import { resolveWorktreeCodename } from "@t3tools/shared/worktreeCodename";
 import {
   CommonActions,
   StackActions,
@@ -289,7 +291,13 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         />
       </View>
 
-      {currentWorktreePath ? <MetaCard label="Worktree" value={currentWorktreePath} /> : null}
+      {/* T3-CUSTOM(expbkt3): lead with the worktree codename, keep the path as detail. */}
+      {currentWorktreePath ? (
+        <MetaCard
+          label="Worktree"
+          value={`${resolveWorktreeCodename(currentWorktreePath)} — ${currentWorktreePath}`}
+        />
+      ) : null}
     </ScrollView>
   );
 
