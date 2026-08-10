@@ -75,8 +75,22 @@ export const make = Effect.gen(function* () {
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    let lastPongAtMillis: number | null = null;
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
+      onPong: Effect.sync(() => {
+        lastPongAtMillis = Date.now();
+      }),
+      onPingTimeout: Effect.suspend(() =>
+        Effect.logWarning("Connection closed by client ping timeout.").pipe(
+          Effect.annotateLogs({
+            "connection.label": connection.label,
+            "connection.environment.id": connection.environmentId,
+            "connection.ms_since_last_pong":
+              lastPongAtMillis === null ? "never" : Date.now() - lastPongAtMillis,
+          }),
+        ),
+      ),
       onDisconnect: Deferred.isDone(connected).pipe(
         Effect.flatMap((wasConnected) =>
           Deferred.fail(
