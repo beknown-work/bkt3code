@@ -27,3 +27,23 @@ export function normalizeQuotedText(value: string): string {
     .filter((line) => line.length > 0)
     .join("\n");
 }
+
+/**
+ * Plate normalizes markdown as it loads it (bullet markers, escapes and hard
+ * breaks can all change). That normalization is not a reviewer edit.
+ */
+export function hasPlanReviewEditorChange(input: {
+  readonly baselineEditorMarkdown: string;
+  readonly editorMarkdown: string;
+}): boolean {
+  return input.editorMarkdown !== input.baselineEditorMarkdown;
+}
+
+/** Preserve the agent's canonical bytes until the reviewer actually edits. */
+export function resolveSubmittedPlanMarkdown(input: {
+  readonly canonicalMarkdown: string;
+  readonly editorMarkdown: string;
+  readonly hasReviewerEdits: boolean;
+}): string {
+  return input.hasReviewerEdits ? input.editorMarkdown : input.canonicalMarkdown;
+}

@@ -204,6 +204,17 @@ A session created by another session records that session as its parent, and the
 phase-grouped sidebar files it under that parent as a collapsible subtree. This keeps a fan-out —
 typically cross-repo work — readable as one unit of work instead of several unrelated rows.
 
+A parent row reports what its subtree is doing without being opened. Next to the timestamp it
+carries two counters, each covering every level beneath it, and each shown whether the subtree is
+open or closed:
+
+- a green dot with a number — that many child sessions finished a turn you have not read
+- a pulse glyph with a number — that many child sessions have an agent working
+
+They use the same glyphs the child rows use for the same state, so the number reads as "this many of
+those, below me". A parent whose subtree is waiting on a human also flies a `↳ INPUT`, `↳ APPROVAL`,
+or `↳ ERROR` badge while it is collapsed.
+
 Nesting is the calling agent's choice:
 
 | Field                             | Effect                                                                                                                                             |
@@ -215,8 +226,8 @@ Nesting is the calling agent's choice:
 `t3_list_sessions` and `t3_get_session` report `parentSessionId`, so an agent can inspect its own
 subtree instead of re-spawning work it already delegated.
 
-Sessions created through a personal external token are never parented automatically: that token is
-scoped to the user's conductor thread rather than to a session they are working in.
+Sessions created through a personal external token are never parented automatically: that token
+has a synthetic request scope rather than a session the user is working in.
 
 Lineage is editable after creation, so an agent can reorganise a workspace it did not lay out
 itself:
@@ -231,6 +242,24 @@ from parent**.
 
 Lineage always stays a tree. A session cannot be filed under itself or under any of its own
 descendants; the server rejects such a link rather than storing a cycle.
+
+### Side-by-side sessions
+
+The same context menu starts one. **Create new thread** offers two workspaces:
+
+| Choice                  | Where the new session runs                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------------- |
+| **Using same worktree** | The worktree the session you clicked is using, or its project checkout when it is not in a worktree |
+| **Using new worktree**  | A fresh worktree, created immediately from the project's own base ref and setup script              |
+
+Either choice creates the session on the spot, files it under the one you started it from, and opens
+it with an empty composer. It is a real session before a single word is typed, so switching to
+another row and back returns to it with whatever you had written still there — the sidebar tree is
+the tab strip. It inherits the parent's provider and model; Build/Plan and the runtime mode come
+from the project's defaults. The first message you send retitles it, as in any other session.
+
+The **New thread** button in the sidebar header is unchanged: it still starts a single scratch draft
+per project rather than a durable session.
 
 ## Recommended triage loop
 

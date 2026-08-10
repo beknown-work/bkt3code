@@ -27,6 +27,8 @@ import {
 } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
+  // T3-CUSTOM(expbkt3): subtree running counter.
+  ActivityIcon,
   AlarmClockIcon,
   ArchiveIcon,
   CheckIcon,
@@ -37,6 +39,8 @@ import {
   FilterIcon,
   FolderGit2Icon,
   FolderPlusIcon,
+  // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
+  GitPullRequestIcon,
   Link2Icon,
   LaptopIcon,
   PlusIcon,
@@ -62,8 +66,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
-import { usePersonalMcpProfile } from "../hooks/usePersonalMcpProfile";
-import { useClientSettings, usePrimarySettings } from "../hooks/useSettings";
+import { useClientSettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -77,12 +80,21 @@ import {
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { cn, isMacPlatform } from "../lib/utils";
+// T3-CUSTOM(expbkt3): side-by-side sessions need their own thread id up front.
+import { cn, isMacPlatform, newThreadId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { usePhaseSidebarFilterStore } from "../phaseSidebarFilterStore";
 import { useShortcutModifierState } from "../shortcutModifierState";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import {
+  useEnvironmentAppearances,
+  useEnvironments,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
+// T3-CUSTOM(expbkt3): BEGIN — per-environment identity in a multi-environment sidebar.
+import type { ResolvedEnvironmentAppearance } from "../state/environmentAppearance";
+import { EnvironmentBadgeView } from "./environment/EnvironmentBadge";
+// T3-CUSTOM(expbkt3): END
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
@@ -90,6 +102,9 @@ import { allEnvironmentShellsLiveAtom } from "../state/shell";
 import { linearIssueStatusesEnvironment } from "../state/linearIssues";
 // T3-CUSTOM(expbkt3): pending IndexedDB sends drive sidebar state before acknowledgement.
 import { durableThreadOutbox, threadEnvironment, useEnvironmentThread } from "../state/threads";
+// T3-CUSTOM(expbkt3): a thread created from the sidebar is only navigable once
+// its shell row exists locally.
+import { waitForThreadShell } from "../state/threadShellArrival";
 import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -128,9 +143,15 @@ import {
   // T3-CUSTOM(expbkt3): Session priority badge tone.
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
+  // T3-CUSTOM(expbkt3): memorable worktree codenames.
+  phaseSidebarCheckoutToneClassName,
+  phaseSidebarWorktreeRowProps,
+  resolvePhaseSidebarWorktreeView,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
+  // T3-CUSTOM(expbkt3): PR number + colour-only state in the row.
+  resolvePhaseSidebarChangeRequestBadge,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
@@ -167,11 +188,15 @@ import {
 } from "./sidebar/PhaseSidebarTree.logic";
 import { usePhaseSidebarTreeStore } from "../phaseSidebarTreeStore";
 import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
+// T3-CUSTOM(expbkt3): "Create new thread" from a row, as a side-by-side session.
+import {
+  buildNewThreadFromRowBootstrapInput,
+  type NewThreadWorkspaceChoice,
+} from "./sidebar/NewThreadFromRow.logic";
 // T3-CUSTOM(expbkt3): END
 import { useCurrentUserId } from "../state/identity";
 // T3-CUSTOM(expbkt3): directory for the co-participant filter facet.
 import { useOrgMembers } from "../state/orgMembers";
-import { T3_CONDUCTOR_ENABLED } from "../experimentalFeatures";
 import {
   SidebarChromeFooter,
   SidebarChromeHeader,
@@ -180,8 +205,6 @@ import {
 import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 // T3-CUSTOM(expbkt3): attach-to-external-session.
 import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
-import { T3ConductorCard } from "./sidebar/T3ConductorCard";
-import { isT3ConductorThread } from "./sidebar/T3Conductor.logic";
 import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
 import { RunningSessionDivider } from "./sidebar/RunningSessionDivider";
 import {
@@ -820,7 +843,16 @@ interface PhaseThreadRowProps {
   readonly row: PhaseSidebarRow;
   readonly section: PhaseSidebarSection;
   readonly project: Project | null;
+  // T3-CUSTOM(expbkt3): set only when the rendered rows span more than one
+  // environment; a single-environment sidebar stays exactly as it was.
+  readonly environmentAppearance?: ResolvedEnvironmentAppearance | undefined;
   readonly vcsStatus: VcsStatusResult | null;
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codename, flattened to primitives so
+  // this memo'd row still compares by value.
+  readonly worktreeCodename: string | null;
+  readonly worktreeSharedCount: number;
+  readonly worktreeSharedSummary: string | null;
+  // T3-CUSTOM(expbkt3): END
   readonly active: boolean;
   readonly orderedThreadKeys: ReadonlyArray<string>;
   readonly jumpLabel: string | null;
@@ -844,6 +876,9 @@ interface PhaseThreadRowProps {
   // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
   readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
   readonly linearIssueStatus: LinearIssueStatusSummary | null;
+  // T3-CUSTOM(expbkt3): start a side-by-side session from this row. Offered on
+  // shelf rows too — a parked session is a perfectly good place to branch from.
+  readonly onCreateThread: (row: PhaseSidebarRow, choice: NewThreadWorkspaceChoice) => void;
   // T3-CUSTOM(expbkt3): BEGIN — session tree. Deliberately flat primitives plus
   // one stable actions object rather than a per-row object: this row is memo'd
   // and the sidebar re-renders on every shell event, so a fresh object per
@@ -853,6 +888,10 @@ interface PhaseThreadRowProps {
   readonly treeDepth?: number;
   readonly treeDescendantCount?: number;
   readonly treeHasBusyDescendant?: boolean;
+  // Exact subtree counts, shown open or closed: the number is what tells you
+  // whether the fan-out needs attention now or later.
+  readonly treeDescendantUnreadCount?: number;
+  readonly treeDescendantRunningCount?: number;
   readonly treeDescendantAttention?: PhaseSidebarAttentionKind | null;
   readonly treeExpanded?: boolean;
   readonly treeParentKey?: string | null;
@@ -870,6 +909,8 @@ type PhaseThreadRowTreeProps = Pick<
   | "treeDepth"
   | "treeDescendantCount"
   | "treeHasBusyDescendant"
+  | "treeDescendantUnreadCount"
+  | "treeDescendantRunningCount"
   | "treeDescendantAttention"
   | "treeExpanded"
   | "treeParentKey"
@@ -890,7 +931,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     row,
     section,
     project,
+    // T3-CUSTOM(expbkt3): present only in a multi-environment sidebar.
+    environmentAppearance,
     vcsStatus,
+    // T3-CUSTOM(expbkt3): worktree codename.
+    worktreeCodename,
+    worktreeSharedCount,
+    worktreeSharedSummary,
     active,
     orderedThreadKeys,
     jumpLabel,
@@ -912,10 +959,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onSetPriority,
     onSetLinearIssueUrl,
     linearIssueStatus,
+    onCreateThread,
     treeActions,
     treeDepth,
     treeDescendantCount,
     treeHasBusyDescendant,
+    treeDescendantUnreadCount,
+    treeDescendantRunningCount,
     treeDescendantAttention,
     treeExpanded,
     treeParentKey,
@@ -952,7 +1002,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
-  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
+  // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
+  // state, number as the label.
+  const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(vcsStatus);
+  // T3-CUSTOM(expbkt3): worktree codename replaces the generic "Worktree" label.
+  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus, {
+    codename: worktreeCodename,
+    sharing:
+      worktreeSharedCount > 1
+        ? { count: worktreeSharedCount, summary: worktreeSharedSummary ?? "" }
+        : null,
+  });
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
@@ -966,6 +1026,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   // of its descendants is stuck, or the group placement reads as a glitch.
   const collapsedDescendantAttention =
     hasChildren && treeExpanded !== true ? (treeDescendantAttention ?? null) : null;
+  // Unlike the signals above, the two counters stay visible while the subtree is
+  // open: a fan-out is often taller than the viewport, so "3 unread below me"
+  // still says something the visible children cannot.
+  const descendantUnreadCount = hasChildren ? (treeDescendantUnreadCount ?? 0) : 0;
+  const descendantRunningCount = hasChildren ? (treeDescendantRunningCount ?? 0) : 0;
   // T3-CUSTOM(expbkt3): END
   const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
@@ -1022,6 +1087,26 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           title: `Failed to open ${linearIssue.identifier}`,
           description:
             error instanceof Error ? error.message : "The Linear issue could not be opened.",
+        }),
+      );
+    });
+  };
+
+  // T3-CUSTOM(expbkt3): same affordance as the Linear tag — the badge opens the
+  // change request rather than routing to the thread.
+  const openChangeRequest = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!changeRequestBadge) return;
+    const api = readLocalApi();
+    if (!api) return;
+    void api.shell.openExternal(changeRequestBadge.url).catch((error: unknown) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to open ${changeRequestBadge.label}`,
+          description:
+            error instanceof Error ? error.message : "The change request could not be opened.",
         }),
       );
     });
@@ -1122,9 +1207,26 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             : []),
         ]
       : [];
+    // Side-by-side sessions. First in the menu because it is the one item that
+    // starts work rather than tidying up after it, and because the whole point
+    // is opening a second session without leaving the one you are reading.
+    const newThreadItems = row.threadBootstrapSupported
+      ? [
+          {
+            id: "new-thread",
+            label: "Create new thread",
+            children: [
+              { id: "new-thread:same-worktree", label: "Using same worktree" },
+              { id: "new-thread:new-worktree", label: "Using new worktree" },
+            ],
+          },
+        ]
+      : [];
     // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
+        // T3-CUSTOM(expbkt3): side-by-side sessions.
+        ...newThreadItems,
         { id: "rename", label: "Rename" },
         { id: "mark-unread", label: "Mark unread" },
         ...priorityItems,
@@ -1159,6 +1261,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "rename") onStartRename(row);
     if (action === "mark-unread") markThreadUnread(threadKey, row.thread.latestTurn?.completedAt);
     // T3-CUSTOM(expbkt3): BEGIN
+    if (action === "new-thread:same-worktree") onCreateThread(row, "same-worktree");
+    if (action === "new-thread:new-worktree") onCreateThread(row, "new-worktree");
     if (action === "settle") onSettle(row);
     if (action === "unsettle") onUnsettle(row);
     if (action === "unsnooze") onUnsnooze(row);
@@ -1345,6 +1449,18 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <TooltipPopup side="top">Started by {treeParentTitle}</TooltipPopup>
               </Tooltip>
             ) : null}
+            {/* T3-CUSTOM(expbkt3): BEGIN — which machine this session runs on. Sits
+                with the repository label because that is the pair that becomes
+                ambiguous once two environments contribute the same repo. */}
+            {environmentAppearance ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" />}>
+                  <EnvironmentBadgeView appearance={environmentAppearance} variant="dot" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">{environmentAppearance.name}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* T3-CUSTOM(expbkt3): END */}
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
@@ -1360,7 +1476,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
               {/* T3-CUSTOM(expbkt3): END */}
-              <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
+              <TooltipPopup side="top">
+                {environmentAppearance
+                  ? `${row.repositoryLabel} · ${environmentAppearance.name}`
+                  : row.repositoryLabel}
+              </TooltipPopup>
             </Tooltip>
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
@@ -1368,11 +1488,24 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {checkoutMetadata.kind === "worktree" ? (
-                  <FolderGit2Icon aria-hidden className="size-2.5 shrink-0" />
+                  <FolderGit2Icon
+                    aria-hidden
+                    className={cn(
+                      "size-2.5 shrink-0",
+                      phaseSidebarCheckoutToneClassName(checkoutMetadata.toneIndex),
+                    )}
+                  />
                 ) : (
                   <LaptopIcon aria-hidden className="size-2.5 shrink-0" />
                 )}
-                <span className="min-w-0 truncate">{checkoutMetadata.label}</span>
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    phaseSidebarCheckoutToneClassName(checkoutMetadata.toneIndex),
+                  )}
+                >
+                  {checkoutMetadata.label}
+                </span>
               </TooltipTrigger>
               {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
@@ -1412,10 +1545,93 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 </TooltipPopup>
               </Tooltip>
             ) : null}
+            {/* T3-CUSTOM(expbkt3): PR badge — number only, state by colour. */}
+            {changeRequestBadge ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      data-testid={`phase-thread-change-request-${row.thread.id}`}
+                      data-change-request-state={changeRequestBadge.state}
+                      aria-label={`Open ${changeRequestBadge.label} (${changeRequestBadge.statusText})`}
+                      className={cn(
+                        "inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                        changeRequestBadge.colorClassName,
+                      )}
+                      onClick={openChangeRequest}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        openChangeRequest(event);
+                      }}
+                    />
+                  }
+                >
+                  <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                  <span className="tabular-nums">{changeRequestBadge.label}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">{changeRequestBadge.tooltip}</TooltipPopup>
+              </Tooltip>
+            ) : null}
           </span>
         </span>
         {/* T3-CUSTOM(expbkt3): status/time own a fixed top-right lane. */}
         <span className="absolute top-2 right-2 flex max-w-[55%] shrink-0 items-center gap-1">
+          {/* T3-CUSTOM(expbkt3): BEGIN — exact subtree counters. Bare icon plus a
+              tabular number, no pill chrome: they share the lane with the
+              attention badges and the timestamp, and this row is already the
+              densest surface in the app. The glyphs are deliberately the ones
+              the child rows use for the same state — the emerald dot is the
+              unread indicator, sky is the working colour — so the counter reads
+              as "N of those, below me" without a legend. */}
+          {descendantRunningCount > 0 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="status"
+                    aria-label={`${descendantRunningCount} child sessions working`}
+                    data-testid={`phase-thread-subtree-running-count-${row.thread.id}`}
+                    className="inline-flex shrink-0 items-center gap-0.5 text-[9px] font-semibold leading-none tabular-nums text-sky-600 dark:text-sky-300"
+                  />
+                }
+              >
+                <ActivityIcon aria-hidden className="size-2.5 shrink-0" />
+                {descendantRunningCount}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {descendantRunningCount} child session
+                {descendantRunningCount === 1 ? "" : "s"} working
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {descendantUnreadCount > 0 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="status"
+                    aria-label={`${descendantUnreadCount} unread child sessions`}
+                    data-testid={`phase-thread-subtree-unread-count-${row.thread.id}`}
+                    className="inline-flex shrink-0 items-center gap-0.5 text-[9px] font-semibold leading-none tabular-nums text-emerald-600 dark:text-emerald-300/90"
+                  />
+                }
+              >
+                <span
+                  aria-hidden
+                  className="size-[7px] shrink-0 rounded-full bg-emerald-500 dark:bg-emerald-300/90"
+                />
+                {descendantUnreadCount}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {descendantUnreadCount} unread child session
+                {descendantUnreadCount === 1 ? "" : "s"}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {workBadge && attentionKind === null ? (
             <span
               role="status"
@@ -1447,22 +1663,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               ↳ {collapsedDescendantAttention.toUpperCase()}
             </span>
           ) : null}
-          {/* T3-CUSTOM(expbkt3): Work happening BELOW this row, not in it.
-              Outlined rather than filled, with a ↳ glyph: the same grammar
-              distinguishes "mine" from "my subtree's" everywhere on the row. */}
-          {hasCollapsedBusyDescendant &&
-          workBadge === null &&
-          attentionKind === null &&
-          collapsedDescendantAttention === null ? (
-            <span
-              role="status"
-              aria-label="A child session is working"
-              data-testid={`phase-thread-subtree-working-${row.thread.id}`}
-              className="rounded-sm border border-sky-500/40 px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:border-sky-400/40 dark:text-sky-300"
-            >
-              ↳ WORKING
-            </span>
-          ) : null}
+          {/* T3-CUSTOM(expbkt3): the "↳ WORKING" badge that used to live here is
+              gone — the running counter above says the same thing with the exact
+              number, in both open and closed states, for less width. The
+              collapsed sweep still runs, since that is about work the closed
+              subtree hides rather than about how much of it there is. */}
           {attentionKind === "input" ? (
             <span
               aria-label="Awaiting input"
@@ -1700,6 +1905,10 @@ export function PhaseGroupedSidebar() {
     reportFailure: false,
   });
   const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
+  // T3-CUSTOM(expbkt3): side-by-side sessions started from a row's context menu.
+  const requestThreadBootstrap = useAtomCommand(threadEnvironment.requestBootstrap, {
+    reportFailure: false,
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
@@ -1714,10 +1923,6 @@ export function PhaseGroupedSidebar() {
   const nowMinute = useNowMinute();
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   // T3-CUSTOM(expbkt3): END
-  // T3-CUSTOM(expbkt3): Reserve one permanent row outside normal lifecycle groups.
-  const legacyT3Conductor = usePrimarySettings((settings) => settings.experimental.t3Conductor);
-  const { profile: personalMcpProfile } = usePersonalMcpProfile();
-  const t3Conductor = personalMcpProfile?.conductor ?? legacyT3Conductor;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   // T3-CUSTOM(expbkt3): directory ids backing the co-participant facet.
@@ -1847,63 +2052,57 @@ export function PhaseGroupedSidebar() {
   );
   const allRows = useMemo<ReadonlyArray<PhaseSidebarRow>>(
     () =>
-      threads
-        // T3-CUSTOM(expbkt3): Conductor owns a fixed command-deck card.
-        .filter(
-          (thread) =>
-            !T3_CONDUCTOR_ENABLED ||
-            !isT3ConductorThread(t3Conductor, primaryEnvironmentId, thread),
-        )
-        .map((thread) => {
-          const project = projectByKey.get(
-            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-          );
-          const repositoryKey = project
-            ? derivePhaseSidebarRepositoryKey(project)
-            : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-          const serverConfig = serverConfigs.get(thread.environmentId);
-          const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-          const provider = serverConfig?.providers.find(
-            (candidate) => candidate.instanceId === instanceId,
-          );
-          const providerKind = String(provider?.driver ?? instanceId);
-          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          const vcsStatus = vcsStatusByThreadKey.get(threadKey);
-          const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
-          const isUnreadCompletion = hasUnseenCompletion({
-            ...thread,
-            lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
-          });
-          return {
-            thread,
-            phaseId: resolvePhaseSidebarDisplayPhase(
-              currentPhase,
-              allEnvironmentShellsLive
-                ? null
-                : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
-            ),
-            repositoryKey,
-            repositoryLabel:
-              project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
-            providerKind,
-            providerName:
-              provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
-            isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
-            // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
-            isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
-            participantUserIds: phaseSidebarThreadParticipantIds(thread),
-            // T3-CUSTOM(expbkt3): END
-            attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
-            isUnreadCompletion,
-            // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
-            settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
-            snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
-            prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
-            linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
-            changeRequestState: vcsStatus?.pr?.state ?? null,
-            // T3-CUSTOM(expbkt3): END
-          };
-        }),
+      threads.map((thread) => {
+        const project = projectByKey.get(
+          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+        );
+        const repositoryKey = project
+          ? derivePhaseSidebarRepositoryKey(project)
+          : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+        const serverConfig = serverConfigs.get(thread.environmentId);
+        const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+        const provider = serverConfig?.providers.find(
+          (candidate) => candidate.instanceId === instanceId,
+        );
+        const providerKind = String(provider?.driver ?? instanceId);
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const vcsStatus = vcsStatusByThreadKey.get(threadKey);
+        const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
+        const isUnreadCompletion = hasUnseenCompletion({
+          ...thread,
+          lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
+        });
+        return {
+          thread,
+          phaseId: resolvePhaseSidebarDisplayPhase(
+            currentPhase,
+            allEnvironmentShellsLive
+              ? null
+              : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
+          ),
+          repositoryKey,
+          repositoryLabel:
+            project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
+          providerKind,
+          providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
+          isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
+          // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
+          isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
+          participantUserIds: phaseSidebarThreadParticipantIds(thread),
+          // T3-CUSTOM(expbkt3): END
+          attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
+          isUnreadCompletion,
+          // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
+          settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
+          snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
+          prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
+          linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
+          threadBootstrapSupported:
+            serverConfig?.environment.capabilities.durableThreadBootstrap === true,
+          changeRequestState: vcsStatus?.pr?.state ?? null,
+          // T3-CUSTOM(expbkt3): END
+        };
+      }),
     [
       projectByKey,
       repositoryLabels,
@@ -1913,10 +2112,14 @@ export function PhaseGroupedSidebar() {
       currentUserId,
       lastVisitedAtByThreadKey,
       primaryEnvironmentId,
-      t3Conductor,
       vcsStatusByThreadKey,
     ],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codenames. Resolved across the whole
+  // thread set rather than per row, because both answers are properties of the
+  // set: codenames disambiguate against each other, and occupancy is a count.
+  const worktreeView = useMemo(() => resolvePhaseSidebarWorktreeView(threads), [threads]);
+  // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): BEGIN — split the inbox from the parked shelves.
   // Filtering happens once, before the partition, so a filter chip means the
   // same thing in the lifecycle groups and on both shelves.
@@ -2074,6 +2277,16 @@ export function PhaseGroupedSidebar() {
     () => [...activeVisibleRows, ...renderedSnoozedRows, ...renderedSettledRows],
     [activeVisibleRows, renderedSnoozedRows, renderedSettledRows],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — environment markers are conditional on what is
+  // actually rendered, not on how many environments are configured. With one
+  // environment (the normal case) the sidebar is byte-for-byte unchanged.
+  const environmentAppearances = useEnvironmentAppearances();
+  const sidebarSpansEnvironments = useMemo(() => {
+    const first = visibleRows[0]?.thread.environmentId;
+    if (first === undefined) return false;
+    return visibleRows.some((candidate) => candidate.thread.environmentId !== first);
+  }, [visibleRows]);
+  // T3-CUSTOM(expbkt3): END
   const linearIssueStatusRequests = useMemo(() => {
     const identifiersByEnvironment = new Map<EnvironmentId, Set<string>>();
     for (const row of visibleRows) {
@@ -2428,6 +2641,56 @@ export function PhaseGroupedSidebar() {
     (row: PhaseSidebarRow) => setThreadParent(row, null),
     [setThreadParent],
   );
+  // Side-by-side sessions. The thread is created before there is a prompt, so
+  // it survives navigating away: the row stays in the tree under the session it
+  // was started from, and coming back reopens the same empty composer with
+  // whatever was typed into it. Navigation waits for the row to exist locally,
+  // because the chat route bounces to "/" for a thread its shell has not seen.
+  const createThreadFromRow = useCallback(
+    (row: PhaseSidebarRow, choice: NewThreadWorkspaceChoice) => {
+      const threadId = newThreadId();
+      const parentKey = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
+      void (async () => {
+        const result = await requestThreadBootstrap({
+          environmentId: row.thread.environmentId,
+          input: buildNewThreadFromRowBootstrapInput({
+            parent: row.thread,
+            threadId,
+            choice,
+            createdAt: new Date().toISOString(),
+          }),
+        });
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) return;
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return;
+        }
+        // The new row renders inside the parent's subtree, so a collapsed
+        // parent would swallow it.
+        setTreeKeysExpanded(parentKey, true);
+        const threadRef = scopeThreadRef(row.thread.environmentId, threadId);
+        if (!(await waitForThreadShell(threadRef))) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Created the thread, but it has not appeared yet",
+              description: "It will show up in the sidebar once this client catches up.",
+            }),
+          );
+          return;
+        }
+        navigateToRow(threadRef);
+      })();
+    },
+    [navigateToRow, requestThreadBootstrap, setTreeKeysExpanded],
+  );
   const openMoveUnderDialog = useCallback((row: PhaseSidebarRow) => setMoveUnderRow(row), []);
   const subtreeKeysByThreadKey = useMemo(() => {
     const map = new Map<string, ReadonlyArray<string>>();
@@ -2681,7 +2944,14 @@ export function PhaseGroupedSidebar() {
         row={row}
         section={section}
         project={project}
+        // T3-CUSTOM(expbkt3): only when the sessions on screen actually span more
+        // than one environment — a second environment with nothing in view is not
+        // a reason to mark every row.
+        {...(sidebarSpansEnvironments
+          ? { environmentAppearance: environmentAppearances.get(row.thread.environmentId) }
+          : {})}
         vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
+        {...phaseSidebarWorktreeRowProps(worktreeView, row.thread.worktreePath)}
         active={routeThreadKey === key}
         orderedThreadKeys={visibleThreadKeys}
         jumpLabel={jumpLabelByKey.get(key) ?? null}
@@ -2702,6 +2972,7 @@ export function PhaseGroupedSidebar() {
         onUnsnooze={attemptUnsnooze}
         onSetPriority={setThreadPriority}
         onSetLinearIssueUrl={setThreadLinearIssueUrl}
+        onCreateThread={createThreadFromRow}
         linearIssueStatus={(() => {
           const issue = resolvePhaseSidebarLinearIssue(
             row.thread.branch,
@@ -2729,6 +3000,8 @@ export function PhaseGroupedSidebar() {
           treeDepth: node.depth,
           treeDescendantCount: node.descendantCount,
           treeHasBusyDescendant: node.hasBusyDescendant,
+          treeDescendantUnreadCount: node.descendantUnreadCount,
+          treeDescendantRunningCount: node.descendantRunningCount,
           treeDescendantAttention: node.descendantAttention,
           treeExpanded: expanded,
           treeParentKey: node.orphanedFrom?.key ?? null,
@@ -2812,14 +3085,6 @@ export function PhaseGroupedSidebar() {
           </SidebarMenu>
         </SidebarGroup>
         <SidebarEnvironmentNotices />
-        {/* T3-CUSTOM(expbkt3): Permanent orchestration home above lifecycle rows. */}
-        {T3_CONDUCTOR_ENABLED ? (
-          <T3ConductorCard
-            shellReady={allEnvironmentShellsLive && networkStatus === "online"}
-            activeThreadKey={routeThreadKey}
-            onNavigate={navigateToRow}
-          />
-        ) : null}
         <SidebarGroup className="px-2 pt-1 pb-2">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">

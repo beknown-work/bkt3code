@@ -1,5 +1,12 @@
 import { ProjectId } from "@t3tools/contracts";
-import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
+// T3-CUSTOM(expbkt3): BEGIN — checked-in t3.json setup scripts run automatically.
+import {
+  projectScriptFromFileScript,
+  projectScriptRuntimeEnv,
+  setupProjectScript,
+  setupT3ProjectFileScript,
+} from "@t3tools/shared/projectScripts";
+// T3-CUSTOM(expbkt3): END
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,6 +15,16 @@ import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+// T3-CUSTOM(expbkt3): BEGIN — checked-in t3.json setup scripts run automatically.
+import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
+
+/**
+ * Synthetic id for the setup script a repository declares in `t3.json`. It has
+ * no persisted record, so the id only has to be stable: it names the default
+ * setup terminal and appears in bootstrap receipts.
+ */
+const T3_PROJECT_FILE_SETUP_SCRIPT_ID = "t3-json-setup";
+// T3-CUSTOM(expbkt3): END
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
@@ -121,6 +138,22 @@ export class ProjectSetupScriptRunner extends Context.Service<
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const projectFileLoader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
+
+  /**
+   * The setup script a repository declares in its checked-in `t3.json`, if any.
+   * Loading is infallible: a missing, unreadable, or invalid file resolves to
+   * `Option.none`, and so to no script.
+   */
+  const t3ProjectFileSetupScript = Effect.fn("ProjectSetupScriptRunner.t3ProjectFileSetupScript")(
+    function* (workspaceRoot: string) {
+      const projectFile = yield* projectFileLoader.load(workspaceRoot);
+      const fileScript = setupT3ProjectFileScript(Option.getOrUndefined(projectFile)?.scripts);
+      return fileScript === null
+        ? null
+        : projectScriptFromFileScript(T3_PROJECT_FILE_SETUP_SCRIPT_ID, fileScript);
+    },
+  );
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -164,7 +197,12 @@ export const make = Effect.gen(function* () {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
 
-    const script = setupProjectScript(project.scripts);
+    // A project script the user configured always wins; the repository's
+    // checked-in t3.json is the fallback, so a repo that ships its setup action
+    // works in a fresh worktree without a per-environment manual import.
+    const script =
+      setupProjectScript(project.scripts) ??
+      (yield* t3ProjectFileSetupScript(project.workspaceRoot));
     if (!script) {
       return {
         status: "no-script",

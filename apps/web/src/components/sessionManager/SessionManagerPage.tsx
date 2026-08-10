@@ -29,6 +29,8 @@ import {
   threadLastActivityAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentId, ScopedThreadRef, ThreadPriority } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): memorable worktree codenames.
+import { resolveWorktreeCodename } from "@t3tools/shared/worktreeCodename";
 import { useRouter } from "@tanstack/react-router";
 import {
   AlertTriangleIcon,
@@ -704,12 +706,23 @@ const SessionManagerTableRow = memo(function SessionManagerTableRow({
                 {formatRelativeTimeLabel(row.thread.createdAt)}
               </span>
             </p>
+            {/* T3-CUSTOM(expbkt3): lead with the codename; the path is the detail. */}
             <p>
               <span className="inline-block w-20">Worktree</span>
-              <span className="text-foreground font-mono text-[10px] break-all">
-                {row.thread.worktreePath ?? "—"}
+              <span className="text-foreground">
+                {row.thread.worktreePath === null
+                  ? "—"
+                  : resolveWorktreeCodename(row.thread.worktreePath)}
               </span>
             </p>
+            {row.thread.worktreePath === null ? null : (
+              <p>
+                <span className="inline-block w-20" />
+                <span className="text-muted-foreground font-mono text-[10px] break-all">
+                  {row.thread.worktreePath}
+                </span>
+              </p>
+            )}
           </div>
         </div>
       ) : null}

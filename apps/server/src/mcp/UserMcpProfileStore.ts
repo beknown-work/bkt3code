@@ -1,12 +1,11 @@
 /**
- * T3-CUSTOM(expbkt3): Durable per-user Conductor and MCP integration store.
+ * T3-CUSTOM(expbkt3): Durable per-user MCP integration store.
  *
  * Metadata is stored in SQLite. Raw upstream credentials are stored as
  * user/integration-namespaced ServerSecretStore entries and never returned.
  */
 import {
   BIFROST_MCP_URL,
-  DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
   PersonalMcpProfile,
   type PersonalMcpProfileUpdate,
   PersonalMcpSettingsError,
@@ -29,7 +28,6 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 const StoredProfile = Schema.Struct({
-  conductor: PersonalMcpProfile.fields.conductor,
   externalAccessEnabled: Schema.Boolean,
   integrations: Schema.Array(PersonalMcpIntegration),
 });
@@ -48,7 +46,6 @@ interface ProfileRow {
 }
 
 const defaultStoredProfile = (): StoredProfile => ({
-  conductor: DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
   externalAccessEnabled: false,
   integrations: [],
 });
@@ -106,7 +103,6 @@ const validateIntegration = (integration: PersonalMcpProfileUpdate["integrations
 
 export interface ResolvedPersonalMcpToken {
   readonly userId: UserId;
-  readonly conductorThreadId: string;
 }
 
 export class UserMcpProfileStore extends Context.Service<
@@ -169,7 +165,6 @@ export const layer = Layer.effect(
       const now = yield* nowIso;
       return PersonalMcpProfile.make({
         userId,
-        conductor: stored.conductor,
         externalAccessEnabled: stored.externalAccessEnabled,
         externalTokenConfigured:
           row?.externalTokenHash !== null && row?.externalTokenHash !== undefined,
@@ -252,7 +247,6 @@ export const layer = Layer.effect(
       }
 
       yield* persistStored(userId, {
-        conductor: input.conductor,
         externalAccessEnabled: input.externalAccessEnabled,
         integrations,
       });
@@ -268,7 +262,6 @@ export const layer = Layer.effect(
       const tokenPrefix = `${rawToken.slice(0, 14)}…`;
       const now = yield* nowIso;
       yield* persistStored(userId, {
-        conductor: current.conductor,
         externalAccessEnabled: current.externalAccessEnabled,
         integrations: current.integrations,
       });
@@ -289,7 +282,6 @@ export const layer = Layer.effect(
     ) {
       const current = yield* get(userId);
       yield* persistStored(userId, {
-        conductor: current.conductor,
         externalAccessEnabled: current.externalAccessEnabled,
         integrations: current.integrations,
       });
@@ -336,7 +328,6 @@ export const layer = Layer.effect(
       `.pipe(Effect.mapError((cause) => fail("touch-external-token", cause)));
       return {
         userId: profile.userId,
-        conductorThreadId: profile.conductor.threadId,
       };
     });
 

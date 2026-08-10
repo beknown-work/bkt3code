@@ -118,17 +118,18 @@ describe("effectiveSettled", () => {
             running,
             pending,
             // Settled iff nothing blocks (pending work / live session) AND
-            // the override says settled, or (with no override) a merged PR
-            // or staleness auto-settles. The "active" pin suppresses both
-            // auto signals, and an open PR suppresses the inactivity path:
-            // a thread with a PR out for review is never done, however quiet.
+            // the override says settled, or (with no override) staleness
+            // auto-settles. The "active" pin suppresses the auto signal, and
+            // an open PR suppresses the inactivity path: a thread with a PR
+            // out for review is never done, however quiet. A merge is NOT an
+            // auto-settle signal — it reads exactly like having no PR.
             expected:
               pending === undefined &&
               !running &&
               (settledOverride === "settled" ||
                 (settledOverride === null &&
-                  (changeRequestState === "merged" ||
-                    (changeRequestState !== "open" && inactivity === "stale")))),
+                  changeRequestState !== "open" &&
+                  inactivity === "stale")),
           })),
         ),
       ),
@@ -159,7 +160,7 @@ describe("effectiveSettled", () => {
     },
   );
 
-  it("treats closed change requests like merged ones", () => {
+  it("settles immediately when a change request is closed unmerged", () => {
     const shell = makeShell({ activityAt: null });
     expect(
       effectiveSettled(shell, {
@@ -168,19 +169,44 @@ describe("effectiveSettled", () => {
         changeRequestState: "closed",
       }),
     ).toBe(true);
+    const recentlyActive = makeShell({ activityAt: "2026-04-09T23:59:59.999Z" });
+    expect(
+      effectiveSettled(recentlyActive, {
+        now: NOW,
+        autoSettleAfterDays: null,
+        changeRequestState: "closed",
+      }),
+    ).toBe(true);
   });
 
-  it("settles immediately when a change request merges or closes", () => {
+  it("never auto-settles on a merge: the merged thread only rejoins the inactivity path", () => {
+    // The follow-up (deploy check, ticket closure, review fallout) lives on
+    // the same thread, so the merge itself must not hide it.
     const recentlyActive = makeShell({ activityAt: "2026-04-09T23:59:59.999Z" });
-    for (const changeRequestState of ["merged", "closed"] as const) {
-      expect(
-        effectiveSettled(recentlyActive, {
-          now: NOW,
-          autoSettleAfterDays: null,
-          changeRequestState,
-        }),
-      ).toBe(true);
-    }
+    expect(
+      effectiveSettled(recentlyActive, {
+        now: NOW,
+        autoSettleAfterDays: 3,
+        changeRequestState: "merged",
+      }),
+    ).toBe(false);
+    // With auto-settle disabled a merged thread stays active indefinitely.
+    expect(
+      effectiveSettled(makeShell({ activityAt: STALE }), {
+        now: NOW,
+        autoSettleAfterDays: null,
+        changeRequestState: "merged",
+      }),
+    ).toBe(false);
+    // Once it goes quiet past the window it settles like any other thread —
+    // unlike an open PR, a merge does not block the inactivity path.
+    expect(
+      effectiveSettled(makeShell({ activityAt: STALE }), {
+        now: NOW,
+        autoSettleAfterDays: 3,
+        changeRequestState: "merged",
+      }),
+    ).toBe(true);
   });
 
   it("never auto-settles a stale thread with an open change request", () => {
@@ -203,15 +229,12 @@ describe("effectiveSettled", () => {
     ).toBe(true);
   });
 
-  it("keeps an explicitly un-settled merged-PR thread active", () => {
-    const shell = makeShell({
-      settledOverride: "active",
-      activityAt: "2026-04-09T23:59:59.999Z",
-    });
+  it("keeps an explicitly un-settled stale merged-PR thread active", () => {
+    const shell = makeShell({ settledOverride: "active", activityAt: STALE });
     expect(
       effectiveSettled(shell, {
         now: NOW,
-        autoSettleAfterDays: null,
+        autoSettleAfterDays: 3,
         changeRequestState: "merged",
       }),
     ).toBe(false);

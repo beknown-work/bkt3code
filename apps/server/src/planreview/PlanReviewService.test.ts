@@ -412,7 +412,7 @@ describe("PlanReviewService approval", () => {
     ),
   );
 
-  it.effect("carries reviewer edits as a diff and records a human version", () =>
+  it.effect("carries reviewer edits as one complete plan and records a human version", () =>
     runWithService({ sessionStatus: "running", compactionAt: null }, ({ service, dispatched }) =>
       Effect.gen(function* () {
         const document = yield* capturePlan(service, "plan:a");
@@ -426,15 +426,51 @@ describe("PlanReviewService approval", () => {
         });
 
         const text = turnText(yield* Ref.get(dispatched));
-        expect(text).toContain("The reviewer edited the plan before approving.");
-        expect(text).toContain("+3. Flip the flag behind a kill switch");
-        expect(text).not.toContain("1. Add the migration\n2. Backfill");
+        expect(text).toContain("Plan approved with reviewer edits.");
+        expect(text).toContain("1. Add the migration\n2. Backfill the rows");
+        expect(text).toContain("3. Flip the flag behind a kill switch");
+        expect(text).not.toContain("```diff");
+        expect(text.split("# Auth rewrite")).toHaveLength(2);
 
         const snapshot = yield* service.getReview(document.documentId);
         expect(snapshot.versions).toHaveLength(2);
         expect(snapshot.versions[1]?.authorKind).toBe("user");
         expect(snapshot.versions[1]?.authorUserId).toBe(reviewerId);
         expect(snapshot.document.status).toBe("approved");
+      }),
+    ),
+  );
+
+  it.effect("includes unresolved comments when approving without repeating the plan", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.upsertDiscussion({
+          documentId: document.documentId,
+          discussionId: "discussion-1",
+          quotedText: "2. Backfill the rows",
+          bodyMarkdown: "Keep this safe for a rolling deploy.",
+          actorUserId: reviewerId,
+        });
+
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "approved",
+          globalComment: "Start with the migration.",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const text = turnText(yield* Ref.get(dispatched));
+        expect(text).toContain("Plan approved. Implement the plan you proposed above");
+        expect(text).toContain("Reviewer notes:\nStart with the migration.");
+        expect(text).toContain("<review_comment ");
+        expect(text).toContain("Keep this safe for a rolling deploy.");
+        expect(text).not.toContain("3. Flip the flag");
+
+        const snapshot = yield* service.getReview(document.documentId);
+        expect(snapshot.discussions[0]?.isResolved).toBe(true);
       }),
     ),
   );
@@ -483,6 +519,30 @@ describe("PlanReviewService feedback", () => {
 
         const snapshot = yield* service.getReview(document.documentId);
         expect(snapshot.document.status).toBe("changes-requested");
+      }),
+    ),
+  );
+
+  it.effect("sends one complete revised plan instead of a formatting-sensitive diff", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        const revised = PLAN.replace("Flip the flag", "Flip the flag behind a kill switch");
+
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "changes-requested",
+          globalComment: "Use this wording.",
+          editedMarkdown: revised,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const text = turnText(yield* Ref.get(dispatched));
+        expect(text).toContain('<plan_edit filePath="Auth rewrite.md" mode="full">');
+        expect(text).toContain(revised);
+        expect(text).not.toContain("```diff");
+        expect(text.split("# Auth rewrite")).toHaveLength(2);
       }),
     ),
   );

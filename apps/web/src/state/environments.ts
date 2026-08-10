@@ -9,6 +9,12 @@ import * as Option from "effect/Option";
 import { useMemo } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
+// T3-CUSTOM(expbkt3): per-environment nickname, icon and colour.
+import { useEnvironmentAppearanceStore } from "../environmentAppearanceStore";
+import {
+  resolveEnvironmentAppearance,
+  type ResolvedEnvironmentAppearance,
+} from "./environmentAppearance";
 import { environmentPresentations, useEnvironmentPresentation } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
@@ -89,3 +95,77 @@ export function useRelayEnvironmentDiscovery(): Discovery.RelayEnvironmentDiscov
 export function useEnvironmentConnectionState(environmentId: EnvironmentId) {
   return useEnvironmentQuery(environmentCatalog.stateAtom(environmentId));
 }
+
+// T3-CUSTOM(expbkt3): BEGIN — per-environment identity for multi-environment clients.
+
+/**
+ * The resolved nickname, icon and colour for one environment. Falls back to the
+ * connection label and a value derived from the environment id, so an environment
+ * is always distinguishable even before anyone customises it.
+ */
+export function useEnvironmentAppearance(
+  environmentId: EnvironmentId | null,
+): ResolvedEnvironmentAppearance | null {
+  const environment = useEnvironment(environmentId);
+  const stored = useEnvironmentAppearanceStore((state) =>
+    environmentId === null ? undefined : state.appearanceByEnvironmentId[environmentId],
+  );
+  return useMemo(
+    () =>
+      environmentId === null
+        ? null
+        : resolveEnvironmentAppearance({
+            environmentId,
+            label: environment?.label ?? "Environment",
+            appearance: stored,
+          }),
+    [environmentId, environment?.label, stored],
+  );
+}
+
+/**
+ * Appearance for every known environment, keyed by id. For lists that render rows
+ * from several environments and would otherwise call the single hook in a loop.
+ */
+export function useEnvironmentAppearances(): ReadonlyMap<string, ResolvedEnvironmentAppearance> {
+  const { environments } = useEnvironments();
+  const stored = useEnvironmentAppearanceStore((state) => state.appearanceByEnvironmentId);
+  return useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => [
+          environment.environmentId,
+          resolveEnvironmentAppearance({
+            environmentId: environment.environmentId,
+            label: environment.label,
+            appearance: stored[environment.environmentId],
+          }),
+        ]),
+      ),
+    [environments, stored],
+  );
+}
+
+/**
+ * Whether this client knows about more than one environment at all.
+ *
+ * Surfaces that always show everything (settings lists) use this. Surfaces that
+ * show a filtered set — the sidebar above all — must instead ask whether *the rows
+ * they are about to render* span more than one environment, because a second
+ * environment with nothing in view is not a reason to add a column of badges to
+ * every row. See `hasMultipleEnvironments` for that case.
+ */
+export function useHasMultipleEnvironments(): boolean {
+  const { environments } = useEnvironments();
+  return environments.length > 1;
+}
+
+/** True when the supplied rows come from more than one environment. */
+export function hasMultipleEnvironments(
+  rows: ReadonlyArray<{ readonly environmentId: EnvironmentId }>,
+): boolean {
+  if (rows.length < 2) return false;
+  const first = rows[0]?.environmentId;
+  return rows.some((row) => row.environmentId !== first);
+}
+// T3-CUSTOM(expbkt3): END

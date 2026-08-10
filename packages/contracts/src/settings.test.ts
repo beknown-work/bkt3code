@@ -6,7 +6,6 @@ import {
   ClientSettingsPatch,
   ClientSettingsSchema,
   DEFAULT_SERVER_SETTINGS,
-  DEFAULT_T3_CONDUCTOR_PERSONALITY,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -42,21 +41,6 @@ describe("ClientSettings phase-grouped sidebar", () => {
       apiKey: "",
       publicUrl: "",
     });
-    // T3-CUSTOM(expbkt3): Legacy settings decode with Conductor safely disabled.
-    expect(decodeServerSettings({}).experimental.t3Conductor).toEqual({
-      enabled: false,
-      threadId: "",
-      workspacePath: "",
-      linearIssueUrl: "",
-      modelSelection: {
-        instanceId: "codex",
-        model: "gpt-5.6-sol",
-        options: [{ id: "effort", value: "high" }],
-      },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      personalityInstructions: DEFAULT_T3_CONDUCTOR_PERSONALITY,
-    });
   });
 
   it("accepts persisted values and client patches", () => {
@@ -66,45 +50,6 @@ describe("ClientSettings phase-grouped sidebar", () => {
     expect(
       decodeClientSettingsPatch({ phaseGroupedSidebarEnabled: true }).phaseGroupedSidebarEnabled,
     ).toBe(true);
-  });
-});
-
-// T3-CUSTOM(expbkt3): Contract coverage for the durable Conductor profile.
-describe("ServerSettings T3 Conductor", () => {
-  it("accepts an independently patchable orchestration profile", () => {
-    expect(
-      decodeServerSettingsPatch({
-        experimental: {
-          t3Conductor: {
-            enabled: true,
-            threadId: "conductor-1",
-            workspacePath: "/workspace",
-            linearIssueUrl: "https://linear.app/beknown/issue/TEC-123",
-            modelSelection: {
-              instanceId: "codex",
-              model: "gpt-5.6-terra",
-              options: [{ id: "effort", value: "medium" }],
-            },
-            runtimeMode: "approval-required",
-            interactionMode: "plan",
-            personalityInstructions: "Keep the team focused.",
-          },
-        },
-      }).experimental?.t3Conductor,
-    ).toEqual({
-      enabled: true,
-      threadId: "conductor-1",
-      workspacePath: "/workspace",
-      linearIssueUrl: "https://linear.app/beknown/issue/TEC-123",
-      modelSelection: {
-        instanceId: "codex",
-        model: "gpt-5.6-terra",
-        options: [{ id: "effort", value: "medium" }],
-      },
-      runtimeMode: "approval-required",
-      interactionMode: "plan",
-      personalityInstructions: "Keep the team focused.",
-    });
   });
 });
 
