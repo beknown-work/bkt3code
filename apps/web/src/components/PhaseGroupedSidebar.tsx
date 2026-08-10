@@ -1455,7 +1455,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             {environmentAppearance ? (
               <Tooltip>
                 <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" />}>
-                  <EnvironmentBadgeView appearance={environmentAppearance} variant="dot" />
+                  <EnvironmentBadgeView appearance={environmentAppearance} variant="glyph" />
                 </TooltipTrigger>
                 <TooltipPopup side="top">{environmentAppearance.name}</TooltipPopup>
               </Tooltip>

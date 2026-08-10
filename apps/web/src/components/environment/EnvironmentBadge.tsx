@@ -17,7 +17,7 @@ import {
 } from "../../state/environmentAppearance";
 import { useEnvironmentAppearance } from "../../state/environments";
 
-type BadgeVariant = "full" | "icon" | "dot";
+type BadgeVariant = "full" | "icon" | "glyph" | "dot";
 
 interface EnvironmentBadgeViewProps {
   readonly appearance: ResolvedEnvironmentAppearance;
@@ -47,6 +47,15 @@ export function EnvironmentBadgeView({
         className={cn("inline-block size-2 shrink-0 rounded-full", className)}
         style={{ backgroundColor: color }}
       />
+    );
+  }
+
+  // The bare glyph in the environment's colour, with no chrome around it. For
+  // dense metadata lanes that already carry other small icons — a bordered chip
+  // there would outweigh everything beside it.
+  if (variant === "glyph") {
+    return (
+      <Icon aria-label={label} className={cn("size-2.5 shrink-0", className)} style={{ color }} />
     );
   }
 
