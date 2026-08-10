@@ -50,6 +50,8 @@ import {
   SessionArchiveReclaimInput,
   SessionArchiveReclaimResult,
   SessionArchiveScanResult,
+  ThreadContextExportInput,
+  ThreadContextExportResult,
 } from "./sessionArchive.ts";
 import {
   GitHubSourceControlProfile,
@@ -104,6 +106,7 @@ export const WS_FORK_METHODS = {
   sessionArchiveScan: "sessionArchive.scan",
   sessionArchiveExport: "sessionArchive.export",
   sessionArchiveReclaim: "sessionArchive.reclaim",
+  threadContextExport: "threadContext.export",
 } as const;
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_FORK_METHODS.personalMcpGetProfile, {
@@ -285,6 +288,13 @@ export const WsSessionArchiveReclaimRpc = Rpc.make(WS_FORK_METHODS.sessionArchiv
   error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
 });
 
+// T3-CUSTOM(expbkt3): on-demand context handoff digest for live or archived threads.
+export const WsThreadContextExportRpc = Rpc.make(WS_FORK_METHODS.threadContextExport, {
+  payload: ThreadContextExportInput,
+  success: ThreadContextExportResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
 export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
   payload: OrchestrationRpcSchemas.stopExecution.input,
   success: OrchestrationRpcSchemas.stopExecution.output,
@@ -392,6 +402,7 @@ export const FORK_WS_RPCS = [
   WsSessionArchiveScanRpc,
   WsSessionArchiveExportRpc,
   WsSessionArchiveReclaimRpc,
+  WsThreadContextExportRpc,
   WsOrchestrationStopExecutionRpc,
   WsOrchestrationReplayEventsRpc,
 ] as const;
