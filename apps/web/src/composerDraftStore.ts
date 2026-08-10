@@ -216,6 +216,9 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // T3-CUSTOM(expbkt3): a draft seeded from another session's context can be
+  // promoted as a child of that session; the lineage must survive reloads.
+  parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -295,6 +298,8 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  /** When set, the promoted thread is created as a child of this thread. */
+  parentThreadId?: ThreadId | null;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -359,6 +364,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      parentThreadId?: ThreadId | null;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -374,6 +380,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      parentThreadId?: ThreadId | null;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -388,6 +395,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      parentThreadId?: ThreadId | null;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1338,6 +1346,7 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    parentThreadId?: ThreadId | null;
   },
 ): DraftThreadState {
   // A project change (including switching environments within a logical
@@ -1364,6 +1373,14 @@ function createDraftThreadState(
     options?.startFromOrigin === undefined
       ? (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
+  // A parent in another project cannot be linked, so a project change drops it
+  // exactly like the other machine-specific context.
+  const nextParentThreadId =
+    options?.parentThreadId === undefined
+      ? projectChanged
+        ? null
+        : (existingThread?.parentThreadId ?? null)
+      : (options.parentThreadId ?? null);
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1378,6 +1395,7 @@ function createDraftThreadState(
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    parentThreadId: nextParentThreadId,
     promotedTo: null,
   };
 }
@@ -1410,6 +1428,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1553,6 +1572,11 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        parentThreadId:
+          typeof candidateDraftThread.parentThreadId === "string" &&
+          candidateDraftThread.parentThreadId.length > 0
+            ? (candidateDraftThread.parentThreadId as ThreadId)
+            : null,
         promotedTo,
       };
     }
@@ -2170,6 +2194,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    parentThreadId: persistedDraftThread.parentThreadId ?? null,
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2362,6 +2387,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               options.startFromOrigin === undefined
                 ? existing.startFromOrigin
                 : options.startFromOrigin;
+            const nextParentThreadId =
+              options.parentThreadId === undefined
+                ? projectChanged
+                  ? null
+                  : (existing.parentThreadId ?? null)
+                : (options.parentThreadId ?? null);
             const nextDraftThread: DraftThreadState = {
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
@@ -2378,6 +2409,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              parentThreadId: nextParentThreadId,
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2391,6 +2423,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              (nextDraftThread.parentThreadId ?? null) === (existing.parentThreadId ?? null) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;

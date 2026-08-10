@@ -28,5 +28,10 @@ export function createSessionArchiveEnvironmentAtoms<R, E>(
       label: "environment-data:session-archive:reclaim",
       tag: WS_METHODS.sessionArchiveReclaim,
     }),
+    // T3-CUSTOM(expbkt3): on-demand handoff digest for a live or archived thread.
+    exportContext: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:session-archive:export-context",
+      tag: WS_METHODS.threadContextExport,
+    }),
   };
 }

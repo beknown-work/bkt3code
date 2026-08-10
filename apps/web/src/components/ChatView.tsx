@@ -5785,6 +5785,12 @@ function ChatViewContent(props: ChatViewProps) {
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+      // T3-CUSTOM(expbkt3): a draft seeded from another session's context may
+      // carry a parent; promotion has to create the thread as that child.
+      const draftParentThreadId = isLocalDraftThread
+        ? (useComposerDraftStore.getState().getDraftThread(composerDraftTarget)?.parentThreadId ??
+          null)
+        : null;
       const turnBootstrap =
         supportsDurableExecutionRecovery && (isLocalDraftThread || shouldCreateWorktree)
           ? {
@@ -5794,6 +5800,7 @@ function ChatViewContent(props: ChatViewProps) {
                 projectId: activeProject.id,
                 title,
                 ...(hasBootstrapOverrides ? { overrides: bootstrapOverrides } : {}),
+                ...(draftParentThreadId ? { parentThreadId: draftParentThreadId } : {}),
                 sourceControlProfileId: activeSourceControlProfileId,
                 createdAt: activeThread.createdAt,
               },
@@ -5810,6 +5817,7 @@ function ChatViewContent(props: ChatViewProps) {
                         interactionMode,
                         branch: activeThreadBranch,
                         worktreePath: activeThread.worktreePath,
+                        ...(draftParentThreadId ? { parentThreadId: draftParentThreadId } : {}),
                         sourceControlProfileId: activeSourceControlProfileId,
                         createdAt: activeThread.createdAt,
                       },
@@ -5844,6 +5852,7 @@ function ChatViewContent(props: ChatViewProps) {
                   titleSeed: title,
                 },
                 ...(hasBootstrapOverrides ? { overrides: bootstrapOverrides } : {}),
+                ...(draftParentThreadId ? { parentThreadId: draftParentThreadId } : {}),
                 sourceControlProfileId: activeSourceControlProfileId,
                 createdAt: activeThread.createdAt,
               },
