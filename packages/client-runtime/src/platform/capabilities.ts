@@ -43,6 +43,25 @@ export class ClientPresentation extends Context.Service<
   }
 >()("@t3tools/client-runtime/platform/capabilities/ClientPresentation") {}
 
+// T3-CUSTOM(expbkt3): BEGIN — team-mode Clerk identity for remote pairing.
+/**
+ * The operator's own Clerk session token, when this client runs in team mode.
+ *
+ * Distinct from {@link CloudSession}, whose token belongs to the T3 Connect relay
+ * and is issued by a different Clerk instance. A remote environment running the
+ * fork verifies this one against its own Clerk secret, so pairing can bind the
+ * operator to the session it creates.
+ *
+ * Read it with `Effect.serviceOption` — clients outside team mode never provide it.
+ */
+export class EnvironmentIdentity extends Context.Service<
+  EnvironmentIdentity,
+  {
+    readonly identityToken: Effect.Effect<Option.Option<string>>;
+  }
+>()("@t3tools/client-runtime/platform/capabilities/EnvironmentIdentity") {}
+// T3-CUSTOM(expbkt3): END
+
 export class PrimaryEnvironmentAuth extends Context.Service<
   PrimaryEnvironmentAuth,
   {

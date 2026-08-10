@@ -37,6 +37,8 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { resolveClerkBrowserIdentity } from "./ClerkBrowserIdentity.ts";
+// T3-CUSTOM(expbkt3): direct-vs-relay identity policy for the token exchange.
+import { resolveExchangeIdentity } from "./ExchangeIdentity.ts";
 import { ClerkDirectory } from "./ClerkDirectory.ts";
 import * as ClerkIdentityVerifier from "./ClerkIdentityVerifier.ts";
 import * as EnvironmentUserService from "./EnvironmentUserService.ts";
@@ -286,6 +288,22 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         ),
       );
 
+    // T3-CUSTOM(expbkt3): BEGIN — identity for the `/oauth/token` exchange. Policy
+    // and its rationale live in `ExchangeIdentity.ts`; this binds it to the two
+    // verifiers already built above.
+    //
+    // A verified non-member fails as `invalid_identity` rather than the 403 that
+    // `clerkSession` returns: this endpoint's declared error union has no forbidden
+    // member, and widening it would ripple through every remote client's error type.
+    const resolveTokenExchangeIdentity = (token: string | undefined) =>
+      resolveExchangeIdentity({
+        token,
+        verifyDirect: resolveDirectClerkIdentity,
+        verifyRelayAudience: resolveIdentity,
+        onNotOrgMember: () => failEnvironmentAuthInvalid("invalid_identity"),
+      });
+    // T3-CUSTOM(expbkt3): END
+
     // T3-CUSTOM(expbkt3): BEGIN — revoke the caller and expire its HttpOnly browser cookie.
     const logoutHandler = Effect.fn("environment.auth.logout")(
       function* () {
@@ -491,7 +509,11 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                   ),
                 )
               : undefined;
-            const identity = yield* resolveIdentity(args.payload.identity_token);
+            // T3-CUSTOM(expbkt3): accept a direct Clerk browser token here too, so a
+            // remote client can pair against `environmentUserIdentityMode: "required"`.
+            const { identity, administrativeGrant } = yield* resolveTokenExchangeIdentity(
+              args.payload.identity_token,
+            );
             yield* appendCredentialResponseHeaders;
             const result = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
@@ -519,7 +541,9 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             );
             yield* persistIdentity(
               identity,
-              result.scope.split(" ").includes(AuthAccessWriteScope),
+              // T3-CUSTOM(expbkt3): a Clerk org admin is admitted as an environment
+              // admin, matching `bindIdentity`.
+              administrativeGrant || result.scope.split(" ").includes(AuthAccessWriteScope),
             ).pipe(
               Effect.tapError(() =>
                 sessions.verify(result.access_token).pipe(

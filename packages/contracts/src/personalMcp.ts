@@ -9,7 +9,6 @@ import * as Schema from "effect/Schema";
 
 import { IsoDateTime, TrimmedNonEmptyString, TrimmedString, UserId } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { DEFAULT_T3_CONDUCTOR_PERSONALITY, T3ConductorSettings } from "./settings.ts";
 
 export const PersonalMcpAuthMode = Schema.Literals([
   "bearer",
@@ -52,24 +51,8 @@ export const PersonalMcpIntegrationUpdate = Schema.Struct({
 });
 export type PersonalMcpIntegrationUpdate = typeof PersonalMcpIntegrationUpdate.Type;
 
-export const DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS = T3ConductorSettings.make({
-  enabled: false,
-  threadId: "",
-  workspacePath: "",
-  linearIssueUrl: "",
-  modelSelection: {
-    instanceId: ProviderInstanceId.make("codex"),
-    model: "gpt-5.6-sol",
-    options: [{ id: "effort", value: "high" }],
-  },
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  personalityInstructions: DEFAULT_T3_CONDUCTOR_PERSONALITY,
-});
-
 export const PersonalMcpProfile = Schema.Struct({
   userId: UserId,
-  conductor: T3ConductorSettings,
   externalAccessEnabled: Schema.Boolean,
   externalTokenConfigured: Schema.Boolean,
   externalTokenPrefix: TrimmedString,
@@ -79,7 +62,6 @@ export const PersonalMcpProfile = Schema.Struct({
 export type PersonalMcpProfile = typeof PersonalMcpProfile.Type;
 
 export const PersonalMcpProfileUpdate = Schema.Struct({
-  conductor: T3ConductorSettings,
   externalAccessEnabled: Schema.Boolean,
   integrations: Schema.Array(PersonalMcpIntegrationUpdate),
 });
@@ -102,7 +84,6 @@ export class PersonalMcpSettingsError extends Schema.TaggedErrorClass<PersonalMc
 
 export const emptyPersonalMcpProfile = (userId: UserId, updatedAt: string): PersonalMcpProfile => ({
   userId,
-  conductor: DEFAULT_PERSONAL_T3_CONDUCTOR_SETTINGS,
   externalAccessEnabled: false,
   externalTokenConfigured: false,
   externalTokenPrefix: "",

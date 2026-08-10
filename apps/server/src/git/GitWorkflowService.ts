@@ -84,6 +84,8 @@ export class GitWorkflowService extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
+    readonly pruneWorktrees: (cwd: string) => Effect.Effect<void, GitCommandError>;
+    readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
@@ -318,6 +320,14 @@ export const make = Effect.gen(function* () {
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(git.removeWorktree(input)),
+      ),
+    pruneWorktrees: (cwd) =>
+      ensureGitCommand("GitWorkflowService.pruneWorktrees", cwd).pipe(
+        Effect.andThen(git.pruneWorktrees(cwd)),
+      ),
+    listLocalBranchNames: (cwd) =>
+      ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
+        Effect.andThen(git.listLocalBranchNames(cwd)),
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(

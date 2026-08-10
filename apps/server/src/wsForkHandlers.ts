@@ -19,6 +19,7 @@ import {
   EnvironmentAuthorizationError,
   OrchestrationGetSnapshotError,
   PlanReviewError,
+  SessionArchiveError,
   SourceControlProfileError,
   type AuthSessionId,
   type OrchestrationEvent,
@@ -218,6 +219,20 @@ export const makeForkWsHandlers = ({
       observeRpcEffect(WS_METHODS.sessionArchiveReclaim, sessionArchive.reclaim(input), {
         "rpc.aggregate": "session-archive",
       }),
+    // Context handoff: thread-scoped read, so it applies per-thread access
+    // where the archive batch RPCs above rely on the operate scope alone.
+    [WS_METHODS.threadContextExport]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.threadContextExport,
+        requireThreadAccess(input.threadId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new SessionArchiveError({ operation: "context-export", message: cause.message }),
+          ),
+          Effect.andThen(sessionArchive.exportContext(input.threadId)),
+        ),
+        { "rpc.aggregate": "session-archive" },
+      ),
     // T3-CUSTOM(expbkt3): END
     [WS_METHODS.sourceControlProfilesList]: (_input) =>
       observeRpcEffect(WS_METHODS.sourceControlProfilesList, sourceControlProfiles.list, {

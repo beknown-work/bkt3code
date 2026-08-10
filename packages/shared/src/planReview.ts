@@ -28,28 +28,27 @@ export interface PlanReviewFeedbackInput {
   readonly planTitle: string;
   readonly globalComment: string;
   readonly comments: ReadonlyArray<PlanReviewAnchoredComment>;
-  /** Unified diff of reviewer edits, empty when the plan was not edited. */
-  readonly editDiff: string;
-  readonly fromRevision: number | null;
-  readonly toRevision: number | null;
-  readonly editAuthorLabel: string | null;
   /**
-   * Set when the edit was too large to express as a diff. The full document is
-   * sent instead, and the UI says so.
+   * Set whenever the reviewer edited the plan. Plate normalizes Markdown
+   * source, so the complete document is the only formatting-independent
+   * representation of the reviewer's intent.
    */
   readonly fullDocument: string | null;
 }
 
 export interface PlanReviewApprovalInput {
+  readonly documentId: string;
+  readonly planTitle: string;
   readonly notes: string;
+  readonly comments: ReadonlyArray<PlanReviewAnchoredComment>;
   /**
-   * Full plan body. Only present when the policy decided the model cannot see
-   * the plan any more — normally null, which is the whole point of the feature.
+   * One complete approved document. Present after any reviewer edit, because
+   * Markdown editors normalize source formatting and a source diff can lie
+   * about what the reviewer changed. Also present when context was lost.
    */
-  readonly resendPlanMarkdown: string | null;
-  readonly resendReason: string | null;
-  /** Diff from the agent's last version to the approved one, when edited. */
-  readonly approvedEditDiff: string;
+  readonly fullPlanMarkdown: string | null;
+  readonly fullPlanReason: string | null;
+  readonly wasEdited: boolean;
 }
 
 function escapeAttribute(value: string): string {
@@ -130,24 +129,10 @@ export function buildPlanReviewFeedbackPrompt(input: PlanReviewFeedbackInput): s
     sections.push(
       [
         `<plan_edit filePath="${escapeAttribute(`${input.planTitle}.md`)}" mode="full">`,
-        "The reviewer's edits changed most of the plan, so the full edited document follows.",
+        "The complete reviewer-edited document follows. Use it as the source of truth.",
         planReviewFence("markdown", input.fullDocument),
         "</plan_edit>",
       ].join("\n"),
-    );
-  } else if (input.editDiff.trim().length > 0) {
-    const attributes = [
-      `filePath="${escapeAttribute(`${input.planTitle}.md`)}"`,
-      ...(input.fromRevision !== null ? [`fromVersion="${input.fromRevision}"`] : []),
-      ...(input.toRevision !== null ? [`toVersion="${input.toRevision}"`] : []),
-      ...(input.editAuthorLabel !== null
-        ? [`author="${escapeAttribute(input.editAuthorLabel)}"`]
-        : []),
-    ].join(" ");
-    sections.push(
-      [`<plan_edit ${attributes}>`, planReviewFence("diff", input.editDiff), "</plan_edit>"].join(
-        "\n",
-      ),
     );
   }
 
@@ -155,29 +140,31 @@ export function buildPlanReviewFeedbackPrompt(input: PlanReviewFeedbackInput): s
 }
 
 /**
- * Builds the approval prompt. Normally one line: the plan is already in the
- * model's context, so re-sending it is pure waste.
+ * Builds the approval prompt. The context-efficient policy has three shapes:
+ * one line for an unchanged plan, only comments/notes for feedback without an
+ * edit, or one complete source-of-truth plan after a reviewer edit. A raw diff
+ * is never sent because Markdown normalization makes it untrustworthy.
  */
 export function buildPlanReviewApprovalPrompt(input: PlanReviewApprovalInput): string {
   const sections: string[] = [];
   const notes = input.notes.trim();
 
-  if (input.resendPlanMarkdown !== null) {
-    sections.push("PLEASE IMPLEMENT THIS APPROVED PLAN:");
-    sections.push(input.resendPlanMarkdown.trim());
-    if (input.resendReason !== null) {
-      sections.push(`(The full plan is repeated because ${input.resendReason}.)`);
+  if (input.fullPlanMarkdown !== null) {
+    sections.push(
+      input.wasEdited
+        ? "Plan approved with reviewer edits. Implement this complete revised plan:"
+        : "PLEASE IMPLEMENT THIS APPROVED PLAN:",
+    );
+    sections.push(planReviewFence("markdown", input.fullPlanMarkdown));
+    if (input.fullPlanReason !== null) {
+      sections.push(`(The full plan is repeated because ${input.fullPlanReason}.)`);
     }
   } else {
     sections.push("Plan approved. Implement the plan you proposed above, exactly as written.");
-    if (input.approvedEditDiff.trim().length > 0) {
-      sections.push(
-        [
-          "The reviewer edited the plan before approving. Apply these changes to it:",
-          planReviewFence("diff", input.approvedEditDiff),
-        ].join("\n"),
-      );
-    }
+  }
+
+  for (const comment of input.comments) {
+    sections.push(formatPlanReviewComment(input.documentId, input.planTitle, comment));
   }
 
   if (notes.length > 0) {

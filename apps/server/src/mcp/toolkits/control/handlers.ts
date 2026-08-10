@@ -134,9 +134,9 @@ const hasUserWideScope = (scope: McpInvocationContext.McpInvocationScope): boole
  *   otherwise                      → root session
  *
  * The principal check is load-bearing independently of the flag: an
- * external-user token's threadId is that user's *conductor* thread, not a
- * session they are working in, so defaulting to it would file every session the
- * user creates under one synthetic root.
+ * external-user token has a synthetic threadId rather than a session the user
+ * is working in, so defaulting to it would file every session the user creates
+ * under one synthetic root.
  */
 const resolveCreatedSessionParent = Effect.fn("T3ControlToolkit.resolveCreatedSessionParent")(
   function* (input: {

@@ -32,6 +32,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { decideWorktreeRecovery, describeWorktreeRecreation } from "../threadWorktreeRecovery.ts";
 import {
   durableExecutionGuardedContinuationsTotal,
   durableExecutions,
@@ -115,7 +116,19 @@ export function durableRecoveryFailure(
   const tag =
     typeof cause === "object" && cause !== null && "_tag" in cause ? String(cause._tag) : "";
   const detail = String(cause);
-  const normalized = detail.toLowerCase();
+  // Adapter errors bury the decisive message (an ENOENT from a spawn, a
+  // permission failure) in nested `cause`s that String() never surfaces, so
+  // classify against the whole chain.
+  let normalized = detail.toLowerCase();
+  const seen = new Set<unknown>();
+  let nested: unknown = cause;
+  while (typeof nested === "object" && nested !== null && "cause" in nested && !seen.has(nested)) {
+    seen.add(nested);
+    nested = (nested as { readonly cause?: unknown }).cause;
+    if (nested !== undefined && nested !== null) {
+      normalized += ` ${String(nested).toLowerCase()}`;
+    }
+  }
   const permanentTag =
     tag === "ProviderAdapterValidationError" ||
     tag === "ProviderValidationError" ||
@@ -612,6 +625,79 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // T3-CUSTOM(expbkt3): a worktree deleted out from under a live thread —
+  // external cleanup, a disk incident, a manual `git worktree remove` — would
+  // otherwise fail every session start with the same ENOENT until a human
+  // rebuilds the directory by hand.
+  const ensureThreadWorktree = Effect.fn("ensureThreadWorktree")(function* (input: {
+    readonly thread: OrchestrationThread;
+    readonly workspaceRoot: string | null;
+    readonly createdAt: string;
+  }) {
+    const worktreePath = input.thread.worktreePath;
+    if (worktreePath === null) {
+      return;
+    }
+    if (yield* fileSystem.exists(worktreePath)) {
+      return;
+    }
+    const branch = input.thread.branch;
+    const branchExists =
+      input.workspaceRoot !== null && branch !== null
+        ? (yield* gitWorkflow.listLocalBranchNames(input.workspaceRoot)).includes(branch)
+        : false;
+    const decision = decideWorktreeRecovery({
+      worktreePath,
+      branch,
+      branchExists,
+      workspaceRoot: input.workspaceRoot,
+    });
+    if (decision.kind === "unrecoverable") {
+      return yield* new ProviderAdapterRequestError({
+        provider: providerErrorLabelFromInstanceHint({
+          instanceId: String(input.thread.modelSelection.instanceId),
+        }),
+        method: "thread.turn.start",
+        detail: decision.detail,
+      });
+    }
+    // An `rm -rf` deletion leaves a stale `.git/worktrees/` registration that
+    // keeps the branch "checked out" and blocks re-adding it at this path.
+    yield* gitWorkflow.pruneWorktrees(decision.workspaceRoot);
+    yield* gitWorkflow.createWorktree({
+      cwd: decision.workspaceRoot,
+      refName: decision.branch,
+      path: decision.worktreePath,
+    });
+    yield* Effect.all({
+      commandId: serverCommandId("worktree-recreated-activity"),
+      eventId: serverEventId(),
+    }).pipe(
+      Effect.flatMap(({ commandId, eventId }) =>
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId,
+          threadId: input.thread.id,
+          activity: {
+            id: eventId,
+            tone: "info",
+            kind: "worktree.recreated",
+            summary: `Recreated missing worktree from branch '${decision.branch}'`,
+            payload: {
+              detail: describeWorktreeRecreation({
+                worktreePath: decision.worktreePath,
+                branch: decision.branch,
+              }),
+            },
+            turnId: null,
+            createdAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+  });
+
   const ensureSessionForThread = Effect.fn("ensureSessionForThread")(function* (
     threadId: ThreadId,
     createdAt: string,
@@ -748,6 +834,11 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
+    yield* ensureThreadWorktree({
+      thread,
+      workspaceRoot: project?.workspaceRoot ?? null,
+      createdAt,
+    });
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
       projects: project ? [project] : [],
@@ -1386,13 +1477,15 @@ const make = Effect.gen(function* () {
       actorUserId: message.sentByUserId ?? thread.ownerUserId,
       createdAt: event.payload.createdAt,
     }).pipe(
-      Effect.map(Option.some),
-      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+      // T3-CUSTOM(expbkt3): record the failure for the user, then re-fail with
+      // the original cause so the durable dispatcher can classify it. Swallowing
+      // it here reported every session-start failure as a retryable missing
+      // acknowledgement, which burned all recovery attempts on permanent errors
+      // like a deleted worktree.
+      Effect.catchCause((cause) =>
+        recoverTurnStartFailure(cause).pipe(Effect.andThen(Effect.failCause(cause))),
+      ),
     );
-
-    if (Option.isNone(sendTurnRequest)) {
-      return undefined;
-    }
 
     const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
       thread,
@@ -1416,7 +1509,7 @@ const make = Effect.gen(function* () {
         Effect.flatMap((canContinue) =>
           canContinue
             ? providerService.sendTurn(
-                { ...sendTurnRequest.value, clientExecutionId: executionId },
+                { ...sendTurnRequest, clientExecutionId: executionId },
                 sourceControlExecutionOptions,
               )
             : Effect.succeed(undefined),

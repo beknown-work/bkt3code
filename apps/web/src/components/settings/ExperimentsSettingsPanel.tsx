@@ -6,15 +6,11 @@ import { SessionSummarySettingsSection } from "./SessionSummarySettingsSection";
 // T3-CUSTOM(expbkt3): session work summary + progress assessment.
 import { SessionWorkSummarySettingsSection } from "./SessionWorkSummarySettingsSection";
 import { ExternalMcpSettingsSection } from "./ExternalMcpSettingsSection";
-import { T3ConductorSettingsSection } from "./T3ConductorSettingsSection";
 // T3-CUSTOM(expbkt3): session title maintenance.
 import { ThreadTitleMaintenanceSettingsSection } from "./ThreadTitleMaintenanceSettingsSection";
 // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
 import { SessionArchiveSettingsSection } from "./SessionArchiveSettingsSection";
-import {
-  EXPERIMENTAL_CONTROL_CENTER_ENABLED,
-  T3_CONDUCTOR_ENABLED,
-} from "../../experimentalFeatures";
+import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -114,12 +110,7 @@ export function ExperimentsSettingsPanel() {
         ) : null}
       </SettingsSection>
       {/* T3-CUSTOM(expbkt3): BEGIN — experimental operator MCP settings seam. */}
-      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
-        <>
-          {T3_CONDUCTOR_ENABLED ? <T3ConductorSettingsSection /> : null}
-          <ExternalMcpSettingsSection />
-        </>
-      ) : null}
+      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? <ExternalMcpSettingsSection /> : null}
       {/* T3-CUSTOM(expbkt3): END */}
       <SessionSummarySettingsSection />
       {/* T3-CUSTOM(expbkt3): BEGIN — session work summary + progress assessment. */}

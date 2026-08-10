@@ -48,10 +48,7 @@ import {
   type PlanVersionRecord,
 } from "../persistence/PlanReviewDocuments.ts";
 import { buildUnifiedDiff, toRenderableFileDiff } from "./planReviewDiff.ts";
-import {
-  decidePlanResend,
-  shouldSendFullDocumentInsteadOfDiff,
-} from "./PlanReviewContextPolicy.ts";
+import { decidePlanResend } from "./PlanReviewContextPolicy.ts";
 
 export class PlanReviewNotFoundError extends Schema.TaggedErrorClass<PlanReviewNotFoundError>()(
   "PlanReviewNotFoundError",
@@ -741,7 +738,14 @@ export const make = Effect.gen(function* () {
 
       let prompt: string;
       let resentPlan = false;
-      let sentDiscussionIds: ReadonlyArray<string> = [];
+      const anchored = buildAnchoredComments(
+        agentBaseline.contentMarkdown,
+        snapshot.discussions,
+        snapshot.comments,
+        resolveLabel,
+      );
+      const sentDiscussionIds = anchored.discussionIds;
+      const hasReviewerEdits = editResult.diff.trim().length > 0;
 
       if (input.decision === "approved") {
         const latestCompactionAt =
@@ -761,34 +765,22 @@ export const make = Effect.gen(function* () {
         resentPlan = resend.shouldResend;
 
         prompt = buildPlanReviewApprovalPrompt({
+          documentId: document.documentId,
+          planTitle: document.title,
           notes: input.globalComment,
-          resendPlanMarkdown: resend.shouldResend ? approvedVersion.contentMarkdown : null,
-          resendReason: resend.reason,
-          approvedEditDiff: editResult.diff,
+          comments: anchored.comments,
+          fullPlanMarkdown:
+            hasReviewerEdits || resend.shouldResend ? approvedVersion.contentMarkdown : null,
+          fullPlanReason: hasReviewerEdits ? null : resend.reason,
+          wasEdited: hasReviewerEdits,
         });
       } else {
-        const anchored = buildAnchoredComments(
-          agentBaseline.contentMarkdown,
-          snapshot.discussions,
-          snapshot.comments,
-          resolveLabel,
-        );
-        sentDiscussionIds = anchored.discussionIds;
-        const sendFullDocument = shouldSendFullDocumentInsteadOfDiff(editResult.stats.changeRatio);
-
         prompt = buildPlanReviewFeedbackPrompt({
           documentId: document.documentId,
           planTitle: document.title,
           globalComment: input.globalComment,
           comments: anchored.comments,
-          editDiff: editResult.diff,
-          fromRevision: agentBaseline.revision,
-          toRevision: approvedVersion.revision,
-          editAuthorLabel: input.actorLabel,
-          fullDocument:
-            sendFullDocument && editResult.diff.trim().length > 0
-              ? approvedVersion.contentMarkdown
-              : null,
+          fullDocument: hasReviewerEdits ? approvedVersion.contentMarkdown : null,
         });
       }
 
@@ -855,9 +847,10 @@ export const make = Effect.gen(function* () {
         .pipe(asInvariant("submit.setStatus"));
       yield* repository.clearDraft(document.documentId).pipe(asInvariant("submit.clearDraft"));
 
-      // Anything already handed to the agent is spent. Leaving it open would
-      // re-send the same comments on every later round.
-      if (input.decision === "changes-requested") {
+      // Anything already handed to the agent is spent. This applies to an
+      // approval too: implementation comments must not remain falsely open in
+      // the resolved review history.
+      if (sentDiscussionIds.length > 0) {
         yield* Effect.forEach(
           sentDiscussionIds,
           (discussionId) =>

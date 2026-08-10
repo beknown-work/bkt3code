@@ -90,6 +90,7 @@ import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
+import { ComposerQueuedMessages, type ComposerQueuedMessage } from "./ComposerQueuedMessages";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
@@ -434,6 +435,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   sendDisabledReason: string | null;
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
+  sendQueuesWhileUnavailable?: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
@@ -462,6 +464,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         sendDisabledReason={props.sendDisabledReason}
         isConnecting={props.isConnecting}
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
+        sendQueuesWhileUnavailable={props.sendQueuesWhileUnavailable ?? false}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
@@ -546,6 +549,14 @@ export interface ChatComposerProps {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
   } | null;
+  /**
+   * Messages persisted in the durable outbox for the active thread, shown in
+   * a panel above the input and auto-sent once the environment reconnects.
+   */
+  queuedMessages?: ReadonlyArray<ComposerQueuedMessage>;
+  onDiscardQueuedMessage?: (messageId: string) => void;
+  /** Sends queue durably while disconnected (false for draft threads). */
+  queuedSendAllowed?: boolean;
 
   // Pending approvals / inputs
   activePendingApproval: PendingApproval | null;
@@ -653,6 +664,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sendDisabledReason,
     isPreparingWorktree,
     environmentUnavailable,
+    queuedMessages,
+    onDiscardQueuedMessage,
+    queuedSendAllowed,
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
@@ -861,6 +875,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [providerInstanceEntries, selectedInstanceId],
   );
   const noProviderAvailable = selectedProviderEntry === undefined;
+  // A lost connection alone must not block the send button: the message is
+  // queued durably and auto-sent on reconnect. Missing providers or project
+  // selection still block, and draft threads still need a live connection.
+  const sendQueuesWhileEnvironmentUnavailable =
+    (queuedSendAllowed ?? false) &&
+    environmentUnavailable !== null &&
+    !noProviderAvailable &&
+    !projectSelectionRequired;
   // The driver kind follows the instance that will actually run the turn,
   // which can differ from the persisted selection when that selection is
   // disabled.
@@ -1273,7 +1295,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    (environmentUnavailable !== null && !sendQueuesWhileEnvironmentUnavailable) ||
     !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
@@ -2767,6 +2789,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
                 />
               </div>
+            ) : queuedMessages !== undefined && queuedMessages.length > 0 ? (
+              <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+                <ComposerQueuedMessages
+                  messages={queuedMessages}
+                  environmentConnected={environmentUnavailable === null}
+                  onDiscard={onDiscardQueuedMessage ?? (() => undefined)}
+                />
+              </div>
             ) : null)}
 
           {isComposerCollapsedMobile && activePendingApproval ? (
@@ -3249,6 +3279,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     noProviderAvailable ||
                     projectSelectionRequired
                   }
+                  sendQueuesWhileUnavailable={sendQueuesWhileEnvironmentUnavailable}
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
                   preserveComposerFocusOnPointerDown={isMobileViewport}

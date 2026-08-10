@@ -7,7 +7,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { Thread, ThreadShell } from "../types";
 import {
@@ -21,8 +21,11 @@ import {
   buildLoadingThreadFromShell,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveOutboxSendGate,
   dismissBranchMismatchForSession,
+  ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
+  hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   reconcileMountedPlannotatorThreadIds,
@@ -31,6 +34,7 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveSendWorkspaceContext,
+  scheduleEnvironmentReconnectWarning,
   shouldPrepareWorktreeForFirstTurn,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
@@ -41,6 +45,42 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
+
+describe("environment reconnect warning grace", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a persistent reconnect after the grace period", () => {
+    vi.useFakeTimers();
+    const showWarning = vi.fn();
+
+    scheduleEnvironmentReconnectWarning(showWarning);
+    vi.advanceTimersByTime(ENVIRONMENT_RECONNECT_WARNING_GRACE_MS - 1);
+    expect(showWarning).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(showWarning).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the warning when the connection recovers during the grace period", () => {
+    vi.useFakeTimers();
+    const showWarning = vi.fn();
+
+    const cancel = scheduleEnvironmentReconnectWarning(showWarning);
+    cancel();
+    vi.advanceTimersByTime(ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
+
+    expect(showWarning).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse elapsed grace from another environment", () => {
+    const anotherEnvironmentId = EnvironmentId.make("environment-remote");
+
+    expect(hasEnvironmentReconnectWarningGraceElapsed(environmentId, environmentId)).toBe(true);
+    expect(hasEnvironmentReconnectWarningGraceElapsed(anotherEnvironmentId, environmentId)).toBe(
+      false,
+    );
+  });
+});
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -241,6 +281,48 @@ describe("buildStopExecutionInput", () => {
     expect(buildStopExecutionInput(makeThread({ execution: null }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("deriveOutboxSendGate", () => {
+  it("keeps the composer free while disconnected so messages can queue up", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: true,
+        environmentConnected: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("latches while connected with a pending item (dispatch/drain in flight)", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: true,
+        environmentConnected: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("always latches during the synchronous local dispatch window", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: true,
+        hasPendingOutboxItem: false,
+        environmentConnected: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays open with nothing pending", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: false,
+        environmentConnected: true,
+      }),
+    ).toBe(false);
   });
 });
 
