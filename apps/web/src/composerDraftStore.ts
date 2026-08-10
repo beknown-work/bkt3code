@@ -216,9 +216,11 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // T3-CUSTOM(expbkt3): a draft seeded from another session's context can be
-  // promoted as a child of that session; the lineage must survive reloads.
+  // T3-CUSTOM(expbkt3): BEGIN — a draft seeded from another session's context
+  // can be promoted as a child of that session; the lineage must survive
+  // reloads.
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): END
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -298,8 +300,10 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  // T3-CUSTOM(expbkt3): BEGIN
   /** When set, the promoted thread is created as a child of this thread. */
   parentThreadId?: ThreadId | null;
+  // T3-CUSTOM(expbkt3): END
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -364,7 +368,9 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      // T3-CUSTOM(expbkt3): BEGIN
       parentThreadId?: ThreadId | null;
+      // T3-CUSTOM(expbkt3): END
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -380,7 +386,9 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      // T3-CUSTOM(expbkt3): BEGIN
       parentThreadId?: ThreadId | null;
+      // T3-CUSTOM(expbkt3): END
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -395,7 +403,9 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      // T3-CUSTOM(expbkt3): BEGIN
       parentThreadId?: ThreadId | null;
+      // T3-CUSTOM(expbkt3): END
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1346,7 +1356,9 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    // T3-CUSTOM(expbkt3): BEGIN
     parentThreadId?: ThreadId | null;
+    // T3-CUSTOM(expbkt3): END
   },
 ): DraftThreadState {
   // A project change (including switching environments within a logical

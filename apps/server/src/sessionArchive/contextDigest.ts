@@ -118,7 +118,8 @@ export function selectTranscriptMessages(messages: ReadonlyArray<ContextTranscri
   const pinnedFirstPrompt =
     firstPrompt !== null && clamped.indexOf(firstPrompt) < tailStart ? true : false;
 
-  const kept = pinnedFirstPrompt && firstPrompt !== null ? [firstPrompt, ...keptFromTail] : keptFromTail;
+  const kept =
+    pinnedFirstPrompt && firstPrompt !== null ? [firstPrompt, ...keptFromTail] : keptFromTail;
   return {
     kept,
     omittedCount: clamped.length - kept.length,

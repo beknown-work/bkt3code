@@ -99,9 +99,7 @@ describe("renderThreadContextDigest", () => {
     const filler = "x".repeat(5_000);
     const messages: Array<ContextTranscriptMessage> = [
       message("user", "ORIGINAL GOAL: make resume work"),
-      ...Array.from({ length: 30 }, (_, index) =>
-        message("assistant", `${filler} step ${index}`),
-      ),
+      ...Array.from({ length: 30 }, (_, index) => message("assistant", `${filler} step ${index}`)),
       message("assistant", "FINAL STATE: nearly done"),
     ];
     const { markdown, truncated } = renderThreadContextDigest(digestInput({ messages }));

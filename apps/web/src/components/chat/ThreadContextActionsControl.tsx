@@ -13,7 +13,12 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadContextExportResult, ThreadId } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { ClipboardCopyIcon, FileOutputIcon, GitForkIcon, MessageSquarePlusIcon } from "lucide-react";
+import {
+  ClipboardCopyIcon,
+  FileOutputIcon,
+  GitForkIcon,
+  MessageSquarePlusIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
