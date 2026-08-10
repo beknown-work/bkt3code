@@ -39,6 +39,8 @@ import {
   FilterIcon,
   FolderGit2Icon,
   FolderPlusIcon,
+  // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
+  GitPullRequestIcon,
   Link2Icon,
   LaptopIcon,
   PlusIcon,
@@ -140,6 +142,8 @@ import {
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
+  // T3-CUSTOM(expbkt3): PR number + colour-only state in the row.
+  resolvePhaseSidebarChangeRequestBadge,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
@@ -985,6 +989,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
+  // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
+  // state, number as the label.
+  const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(vcsStatus);
   // T3-CUSTOM(expbkt3): worktree codename replaces the generic "Worktree" label.
   const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus, {
     codename: worktreeCodename,
@@ -1067,6 +1074,26 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           title: `Failed to open ${linearIssue.identifier}`,
           description:
             error instanceof Error ? error.message : "The Linear issue could not be opened.",
+        }),
+      );
+    });
+  };
+
+  // T3-CUSTOM(expbkt3): same affordance as the Linear tag — the badge opens the
+  // change request rather than routing to the thread.
+  const openChangeRequest = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!changeRequestBadge) return;
+    const api = readLocalApi();
+    if (!api) return;
+    void api.shell.openExternal(changeRequestBadge.url).catch((error: unknown) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to open ${changeRequestBadge.label}`,
+          description:
+            error instanceof Error ? error.message : "The change request could not be opened.",
         }),
       );
     });
@@ -1487,6 +1514,36 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   {linearIssue.identifier} (
                   {linearIssueStatus?.status ?? linearIssueStatus?.error ?? "syncing…"})
                 </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* T3-CUSTOM(expbkt3): PR badge — number only, state by colour. */}
+            {changeRequestBadge ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      data-testid={`phase-thread-change-request-${row.thread.id}`}
+                      data-change-request-state={changeRequestBadge.state}
+                      aria-label={`Open ${changeRequestBadge.label} (${changeRequestBadge.statusText})`}
+                      className={cn(
+                        "inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                        changeRequestBadge.colorClassName,
+                      )}
+                      onClick={openChangeRequest}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        openChangeRequest(event);
+                      }}
+                    />
+                  }
+                >
+                  <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                  <span className="tabular-nums">{changeRequestBadge.label}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">{changeRequestBadge.tooltip}</TooltipPopup>
               </Tooltip>
             ) : null}
           </span>

@@ -5,6 +5,7 @@ import {
   effectiveSnoozed,
   type ChangeRequestStateLike,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { resolveChangeRequestPresentation } from "@t3tools/shared/sourceControl";
 // T3-CUSTOM(expbkt3): memorable worktree codenames.
 import {
   disambiguateWorktreeCodenames,
@@ -304,6 +305,64 @@ export function resolvePhaseSidebarLinearIssue(
   };
 }
 
+/**
+ * T3-CUSTOM(expbkt3): The row's change request, rendered beside the Linear tag
+ * so the two trackers a session answers to read as one line: ticket, then PR.
+ *
+ * The number is the whole label. State is carried by COLOR ALONE — the row's
+ * metadata lane is already the densest text in the app, and "#1234 (merged)"
+ * spends a third of the lane restating what the hue says. Hues match
+ * `prStatusIndicator` so a PR never reads one colour here and another in the
+ * thread header: green open, violet merged, red closed. Draft, checks, and
+ * review state stay in the tooltip — they are modifiers on "open", not states,
+ * and giving each its own hue would make the lane unreadable.
+ */
+export interface PhaseSidebarChangeRequestBadge {
+  /** "#1234" — the visible label. */
+  readonly label: string;
+  readonly url: string;
+  readonly state: ChangeRequestStateLike;
+  /** Static Tailwind classes; Tailwind cannot scan interpolated hues. */
+  readonly colorClassName: string;
+  /** Full state in words, for the tooltip and the accessible name. */
+  readonly statusText: string;
+  readonly tooltip: string;
+}
+
+const PHASE_SIDEBAR_CHANGE_REQUEST_TONES = {
+  open: "text-emerald-600 dark:text-emerald-300/90",
+  merged: "text-violet-600 dark:text-violet-300/90",
+  closed: "text-red-600 dark:text-red-300/90",
+} satisfies Record<ChangeRequestStateLike, string>;
+
+export function resolvePhaseSidebarChangeRequestBadge(
+  vcsStatus: Pick<VcsStatusResult, "pr" | "sourceControlProvider"> | null | undefined,
+): PhaseSidebarChangeRequestBadge | null {
+  const pr = vcsStatus?.pr;
+  if (!pr) return null;
+  const shortName = resolveChangeRequestPresentation(vcsStatus?.sourceControlProvider).shortName;
+
+  const modifiers: string[] = [];
+  if (pr.state === "open") {
+    if (pr.isDraft === true) modifiers.push("draft");
+    if (pr.mergeability === "conflicting") modifiers.push("conflicting");
+    if (pr.reviewDecision === "approved") modifiers.push("approved");
+    if (pr.reviewDecision === "changes-requested") modifiers.push("changes requested");
+    if (pr.checksStatus === "fail") modifiers.push("checks failing");
+    if (pr.checksStatus === "pending") modifiers.push("checks running");
+  }
+  const statusText = modifiers.length === 0 ? pr.state : `${pr.state} · ${modifiers.join(" · ")}`;
+
+  return {
+    label: `#${pr.number}`,
+    url: pr.url,
+    state: pr.state,
+    colorClassName: PHASE_SIDEBAR_CHANGE_REQUEST_TONES[pr.state],
+    statusText,
+    tooltip: `${shortName} #${pr.number} — ${statusText} · ${pr.title}`,
+  };
+}
+
 /** T3-CUSTOM(expbkt3): compact sidebar timestamps, including zero minutes. */
 export function compactPhaseSidebarTimeLabel(label: string): string {
   return label === "just now" ? "0m" : label.replace(" ago", "");
@@ -386,7 +445,8 @@ export interface PhaseSidebarRow {
       "Create new thread" on the row's context menu. */
   readonly threadBootstrapSupported?: boolean;
   /** The row's pull-request state, when its VCS probe has reported one: a
-      merged or closed change request auto-settles an idle thread. */
+      closed (abandoned) change request auto-settles the thread, an open one
+      holds it active, and a merge leaves the inactivity window in charge. */
   readonly changeRequestState: ChangeRequestStateLike | null;
 }
 

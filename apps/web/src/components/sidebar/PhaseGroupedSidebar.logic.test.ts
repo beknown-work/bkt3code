@@ -42,6 +42,8 @@ import {
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarCheckoutMetadata,
+  // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
+  resolvePhaseSidebarChangeRequestBadge,
   // T3-CUSTOM(expbkt3): worktree codenames.
   resolvePhaseSidebarWorktreeView,
   phaseSidebarWorktreeRowProps,
@@ -276,6 +278,76 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
   });
   // T3-CUSTOM(expbkt3): END
 });
+
+// T3-CUSTOM(expbkt3): BEGIN — PR badge beside the Linear tag.
+describe("resolvePhaseSidebarChangeRequestBadge", () => {
+  const pr = {
+    number: 76,
+    title: "Name worktrees after cities",
+    url: "https://github.com/beknown-work/bkt3code/pull/76",
+    baseRef: "bkmain",
+    headRef: "t3code/cities",
+  } as const;
+
+  it("labels the badge with the number alone and carries state in the colour", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: { ...pr, state: "open" } });
+
+    expect(badge?.label).toBe("#76");
+    // The number is the whole label: no state word rides along with it.
+    expect(badge?.label).not.toContain("open");
+    expect(badge?.colorClassName).toContain("emerald");
+  });
+
+  it("gives each state its own hue, matching the thread header's PR indicator", () => {
+    const tone = (state: "open" | "merged" | "closed") =>
+      resolvePhaseSidebarChangeRequestBadge({ pr: { ...pr, state } })?.colorClassName ?? "";
+
+    expect(tone("open")).toContain("emerald");
+    expect(tone("merged")).toContain("violet");
+    expect(tone("closed")).toContain("red");
+    expect(new Set([tone("open"), tone("merged"), tone("closed")]).size).toBe(3);
+  });
+
+  it("keeps the words in the tooltip: state, open-PR modifiers, and the title", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({
+      pr: {
+        ...pr,
+        state: "open",
+        isDraft: true,
+        checksStatus: "fail",
+        reviewDecision: "changes-requested",
+      },
+    });
+
+    expect(badge?.statusText).toBe("open · draft · changes requested · checks failing");
+    expect(badge?.tooltip).toBe(`PR #76 — ${badge?.statusText} · ${pr.title}`);
+  });
+
+  it("uses the provider's own term for a change request", () => {
+    expect(
+      resolvePhaseSidebarChangeRequestBadge({
+        pr: { ...pr, state: "merged" },
+        sourceControlProvider: { kind: "gitlab", name: "GitLab", baseUrl: "https://gitlab.com" },
+      })?.tooltip,
+    ).toContain("MR #76");
+  });
+
+  it("renders nothing without a probed change request", () => {
+    expect(resolvePhaseSidebarChangeRequestBadge(null)).toBeNull();
+    expect(resolvePhaseSidebarChangeRequestBadge({ pr: null })).toBeNull();
+  });
+
+  it("says nothing about draft or checks once the PR is merged", () => {
+    // Those modifiers only describe an open PR; repeating them after the merge
+    // would read as unfinished work.
+    expect(
+      resolvePhaseSidebarChangeRequestBadge({
+        pr: { ...pr, state: "merged", isDraft: true, checksStatus: "fail" },
+      })?.statusText,
+    ).toBe("merged");
+  });
+});
+// T3-CUSTOM(expbkt3): END
 
 // T3-CUSTOM(expbkt3): BEGIN — shared-worktree awareness.
 describe("resolvePhaseSidebarWorktreeView", () => {
