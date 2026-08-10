@@ -10,6 +10,7 @@
  * a failed export aborts that session's reclaim rather than proceeding.
  */
 import {
+  CommandId,
   SessionArchiveError,
   type ProjectId,
   type SessionArchiveEntry,
@@ -22,6 +23,7 @@ import {
   type SessionArchiveReclaimResult,
   type SessionArchiveScanResult,
   type OrchestrationThreadShell,
+  type ThreadContextExportResult,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -35,6 +37,7 @@ import * as Path from "effect/Path";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -44,6 +47,7 @@ import {
   SESSION_HISTORY_README_FILENAME,
   sessionHistoryPaths,
 } from "./archivePaths.ts";
+import { renderThreadContextDigest } from "./contextDigest.ts";
 import { readWorktreeGitFacts, UNKNOWN_GIT_FACTS } from "./gitFacts.ts";
 import {
   renderSessionHistoryDigest,
@@ -77,6 +81,11 @@ export interface SessionArchiveServiceShape {
   readonly reclaim: (
     input: SessionArchiveReclaimInput,
   ) => Effect.Effect<SessionArchiveReclaimResult, SessionArchiveError>;
+  // T3-CUSTOM(expbkt3): render a handoff digest for a live or archived thread.
+  // Pure read — nothing is written to the history directory.
+  readonly exportContext: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadContextExportResult, SessionArchiveError>;
   /** Retention-gated batch used by the sweeper; returns what it reclaimed. */
   readonly sweep: (input: {
     readonly mode: SessionArchiveReclaimMode;
@@ -106,6 +115,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const snapshots = yield* ProjectionSnapshotQuery;
+  const orchestrationEngine = yield* OrchestrationEngineService;
   const messages = yield* ProjectionThreadMessageRepository;
   const gitWorkflow = yield* GitWorkflowService;
   const fs = yield* FileSystem.FileSystem;
@@ -386,6 +396,84 @@ export const make = Effect.gen(function* () {
         messageCount: threadMessages.length,
       } satisfies SessionArchiveExportedFile;
     });
+
+  /**
+   * Render the handoff digest for one thread, live or archived.
+   *
+   * Deliberately writes nothing: the caller pastes the digest into a clipboard
+   * or a new thread's composer, and a read should never mutate the history
+   * directory as a side effect.
+   */
+  const exportContext = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const liveOption = yield* snapshots.getThreadShellById(threadId);
+      let thread: OrchestrationThreadShell;
+      if (Option.isSome(liveOption)) {
+        thread = liveOption.value;
+      } else {
+        const archived = yield* snapshots.getArchivedShellSnapshot();
+        const match = archived.threads.find((candidate) => candidate.id === threadId);
+        if (match === undefined) {
+          return yield* new SessionArchiveError({
+            operation: "context-export",
+            message: "No session with this id.",
+          });
+        }
+        thread = match;
+      }
+
+      const context = yield* readContext;
+      const projectName = context.projectNames.get(thread.projectId) ?? "unknown-project";
+
+      const [threadMessages, details, git] = yield* Effect.all([
+        messages.listByThreadId({ threadId: thread.id }),
+        snapshots.getSessionListDetails([thread.id]),
+        readGitFacts(thread.worktreePath),
+      ]);
+
+      const digest = renderThreadContextDigest({
+        threadId: thread.id,
+        title: thread.title,
+        projectName,
+        workspaceRoot: context.projectRoots.get(thread.projectId) ?? "",
+        worktreePath: thread.worktreePath,
+        branch: git?.branch ?? thread.branch,
+        providerInstanceId: thread.modelSelection.instanceId,
+        model: thread.modelSelection.model,
+        createdAt: thread.createdAt,
+        rollingSummary: details[0]?.rollingSummary ?? null,
+        git:
+          git === null
+            ? null
+            : {
+                branch: git.branch ?? thread.branch,
+                baseRef: git.baseRef,
+                headSha: git.headSha,
+                hasUncommittedChanges: git.hasUncommittedChanges,
+                hasUntrackedFiles: git.hasUntrackedFiles,
+                hasUnpushedCommits: git.hasUnpushedCommits,
+                changedFiles: git.changedFiles,
+              },
+        messages: threadMessages.map((message) => ({
+          role: message.role,
+          text: message.text,
+          createdAt: message.createdAt,
+        })),
+      });
+
+      return {
+        threadId: thread.id,
+        projectId: thread.projectId,
+        title: thread.title,
+        markdown: digest.markdown,
+        messageCount: threadMessages.length,
+        truncated: digest.truncated,
+      } satisfies ThreadContextExportResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "SessionArchiveError" ? cause : fail("context-export", cause),
+      ),
+    );
 
   const scan = () =>
     Effect.gen(function* () {
@@ -669,6 +757,27 @@ export const make = Effect.gen(function* () {
         return skipped(`git worktree remove failed: ${removal.message}`);
       }
 
+      // Clear the thread's pointer at the deleted directory. Left dangling, an
+      // archived-then-resumed thread would try to start sessions in a path that
+      // no longer exists. The worktree is already gone either way, so a failed
+      // clear must not un-reclaim the outcome.
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make(`session-archive:worktree-clear:${thread.id}:${input.nowMs}`),
+          threadId: thread.id,
+          worktreePath: null,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("session archive could not clear the reclaimed worktree path", {
+              threadId: thread.id,
+              worktreePath,
+              cause: describeCause(cause),
+            }),
+          ),
+        );
+
       return {
         threadId: thread.id,
         reclaimed: true,
@@ -722,6 +831,7 @@ export const make = Effect.gen(function* () {
   return {
     scan: () => withPlatform(scan()),
     exportHistory: (threadIds) => withPlatform(exportHistory(threadIds)),
+    exportContext: (threadId) => withPlatform(exportContext(threadId)),
     reclaim: (input) =>
       withPlatform(
         runReclaim({

@@ -24,6 +24,13 @@ interface ComposerPrimaryActionsProps {
   sendDisabledReason: string | null;
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
+  /**
+   * When true, the plain send button stays enabled while the environment is
+   * unavailable: the message is queued durably and auto-sends on reconnect.
+   * Pending-input submits and plan follow-up actions still require the
+   * connection and keep honoring isEnvironmentUnavailable.
+   */
+  sendQueuesWhileUnavailable?: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
@@ -65,6 +72,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   sendDisabledReason,
   isConnecting,
   isEnvironmentUnavailable,
+  sendQueuesWhileUnavailable = false,
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
@@ -220,11 +228,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         isSendBusy ||
         isSendDisabled ||
         isConnecting ||
-        isEnvironmentUnavailable ||
+        (isEnvironmentUnavailable && !sendQueuesWhileUnavailable) ||
         !hasSendableContent
       }
       aria-label={
-        isEnvironmentUnavailable
+        isEnvironmentUnavailable && !sendQueuesWhileUnavailable
           ? "Environment disconnected"
           : sendDisabledReason
             ? sendDisabledReason

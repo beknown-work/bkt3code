@@ -13,7 +13,7 @@ This deployment serves the Beknown-maintained T3 Code branch at
 - Persistent state: `/home/ubuntu/.t3/bkt3-dev`
 - Swarm proxy: `bkt3-proxy`
 - Automatic deployment timer: `t3-bkmain-deploy.timer`
-- Web build: experimental control-center and MCP surfaces enabled; T3 Conductor disabled
+- Web build: experimental control-center and MCP surfaces enabled
 
 `start.sh` refuses to run unless the worktree is currently on `bkmain`.
 

@@ -6,7 +6,7 @@
  * plan-review logic inline. That keeps the next upstream merge cheap.
  */
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { lazy } from "react";
+import { lazy, useEffect, useRef } from "react";
 
 import { useClientSettings } from "../hooks/useSettings";
 import { planReviewEnvironment } from "../state/planReview";
@@ -25,13 +25,26 @@ export const PlanReviewPanel = lazy(() => import("../components/planreview/PlanR
 export function useOpenPlanReviewDocumentId(
   environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
+  activePlanId: string | null = null,
 ): string | null {
   const enabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
-  const { data } = useEnvironmentQuery(
+  const { data, refresh } = useEnvironmentQuery(
     !enabled || environmentId === null || threadId === null
       ? null
       : planReviewEnvironment.list({ environmentId, input: { threadId } }),
   );
+  const refreshedPlanKeyRef = useRef<string | null>(null);
+
+  // The thread can be open before its proposed plan arrives. Refresh when that
+  // plan first becomes actionable so listForThread can capture it immediately;
+  // otherwise the empty query result remains cached until a page reload.
+  useEffect(() => {
+    if (!enabled || environmentId === null || threadId === null || activePlanId === null) return;
+    const planKey = `${environmentId}:${threadId}:${activePlanId}`;
+    if (refreshedPlanKeyRef.current === planKey) return;
+    refreshedPlanKeyRef.current = planKey;
+    refresh();
+  }, [activePlanId, enabled, environmentId, refresh, threadId]);
 
   return data?.documents.find((document) => document.status === "open")?.documentId ?? null;
 }

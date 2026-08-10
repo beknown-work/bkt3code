@@ -202,3 +202,30 @@ export class SessionArchiveError extends Schema.TaggedErrorClass<SessionArchiveE
     message: TrimmedNonEmptyString,
   },
 ) {}
+
+/**
+ * T3-CUSTOM(expbkt3): On-demand context handoff for a single thread.
+ *
+ * Unlike the archive export above, this never touches disk: the server renders
+ * a provider-neutral markdown digest of the session — metadata, rolling
+ * summary, git state, and the transcript — and returns it as a string, so a
+ * client can copy it or seed a new session's first prompt with it. Works for
+ * live and archived threads alike; a session whose provider is erroring can
+ * still be exported because nothing here consults the provider.
+ */
+export const ThreadContextExportInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ThreadContextExportInput = typeof ThreadContextExportInput.Type;
+
+export const ThreadContextExportResult = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: Schema.String,
+  /** The rendered handoff digest, ready to paste into any provider. */
+  markdown: Schema.String,
+  messageCount: NonNegativeInt,
+  /** True when the transcript section was elided to fit the size cap. */
+  truncated: Schema.Boolean,
+});
+export type ThreadContextExportResult = typeof ThreadContextExportResult.Type;
