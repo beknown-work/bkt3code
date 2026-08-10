@@ -15,6 +15,14 @@ import { useEnvironmentQuery } from "../state/query";
 /** Plate is ~200 kB gzip — it must only load when a review is actually opened. */
 export const PlanReviewPanel = lazy(() => import("../components/planreview/PlanReviewPanel"));
 
+export function resolveOpenPlanReviewDocumentId(
+  documents: ReadonlyArray<{ readonly documentId: string; readonly status: string }> | undefined,
+  activePlanId: string | null,
+): string | null {
+  if (activePlanId === null) return null;
+  return documents?.find((document) => document.status === "open")?.documentId ?? null;
+}
+
 /**
  * The thread's reviewable plan, or null when there is none.
  *
@@ -46,5 +54,5 @@ export function useOpenPlanReviewDocumentId(
     refresh();
   }, [activePlanId, enabled, environmentId, refresh, threadId]);
 
-  return data?.documents.find((document) => document.status === "open")?.documentId ?? null;
+  return resolveOpenPlanReviewDocumentId(data?.documents, activePlanId);
 }
