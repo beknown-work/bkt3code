@@ -349,6 +349,18 @@ export function cloneComposerImageForRetry(
   }
 }
 
+export function deriveOutboxSendGate(options: {
+  isLocalSendBusy: boolean;
+  hasPendingOutboxItem: boolean;
+  environmentConnected: boolean;
+}): boolean {
+  // While the environment is disconnected the outbox is a queue, not an
+  // in-flight turn: further sends must stay possible so messages can line up
+  // behind it. Once connected, a pending item means a dispatch/drain is
+  // actively running and the composer stays latched as before.
+  return options.isLocalSendBusy || (options.hasPendingOutboxItem && options.environmentConnected);
+}
+
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;

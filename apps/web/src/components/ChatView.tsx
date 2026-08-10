@@ -307,6 +307,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveOutboxSendGate,
   dismissBranchMismatchForSession,
   hasEnvironmentReconnectWarningGraceElapsed,
   scheduleEnvironmentReconnectWarning,
@@ -2150,7 +2151,7 @@ function ChatViewContent(props: ChatViewProps) {
           title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusTitle(unavailableConnection)}`,
           description:
             unavailableConnection.error ??
-            "Reconnect this environment before sending messages or running actions.",
+            "Messages you send will be queued and delivered when it reconnects.",
           actions: (
             <>
               <Button
@@ -2381,10 +2382,39 @@ function ChatViewContent(props: ChatViewProps) {
   });
   // T3-CUSTOM(expbkt3): IndexedDB survives reloads; memory state is only the
   // synchronous pre-persist paint used to meet the sub-100ms feedback target.
-  const hasDurableOutboxItem = durableOutboxItems.some(
-    (item) => item.threadId === activeThread?.id && item.deliveryState !== "failed",
+  const queuedOutboxItems = useMemo(
+    () =>
+      durableOutboxItems
+        .filter((item) => item.threadId === activeThread?.id && item.deliveryState !== "failed")
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    [durableOutboxItems, activeThread?.id],
   );
-  const isSendBusy = isLocalSendBusy || hasDurableOutboxItem;
+  const hasDurableOutboxItem = queuedOutboxItems.length > 0;
+  const isSendBusy = deriveOutboxSendGate({
+    isLocalSendBusy,
+    hasPendingOutboxItem: hasDurableOutboxItem,
+    environmentConnected: outboxEnvironmentConnectionPhase === "connected",
+  });
+  const composerQueuedMessages = useMemo(
+    () => queuedOutboxItems.map((item) => ({ messageId: item.messageId, text: item.text })),
+    [queuedOutboxItems],
+  );
+  const onDiscardQueuedOutboxItem = useCallback(
+    (messageId: string) => {
+      const item = queuedOutboxItems.find((queued) => queued.messageId === messageId);
+      if (item === undefined) return;
+      void discardDurableOutbox(item);
+      setOptimisticUserMessages((existing) => {
+        const removed = existing.filter((message) => message.id === messageId);
+        for (const message of removed) {
+          revokeUserMessagePreviewUrls(message);
+        }
+        const next = existing.filter((message) => message.id !== messageId);
+        return next.length === existing.length ? existing : next;
+      });
+    },
+    [discardDurableOutbox, queuedOutboxItems],
+  );
   const outboxReplayInFlightRef = useRef(new Set<MessageId>());
   const outboxReplayAttemptRef = useRef(new Map<MessageId, number>());
   const outboxReplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2399,10 +2429,15 @@ function ChatViewContent(props: ChatViewProps) {
     if (isLocalSendBusy || outboxEnvironmentConnectionPhase !== "connected") {
       return;
     }
-    const queued = durableOutboxItems.find(
-      (item) =>
-        item.deliveryState !== "failed" && !outboxReplayInFlightRef.current.has(item.messageId),
-    );
+    // Oldest first: IndexedDB iterates by messageId (a random UUID), so an
+    // unsorted pick would flush the queue in arbitrary order.
+    const queued = durableOutboxItems
+      .filter(
+        (item) =>
+          item.deliveryState !== "failed" && !outboxReplayInFlightRef.current.has(item.messageId),
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .at(0);
     if (queued === undefined) return;
     outboxReplayInFlightRef.current.add(queued.messageId);
     void startThreadTurn({
@@ -2695,16 +2730,38 @@ function ChatViewContent(props: ChatViewProps) {
             return changed ? { ...message, attachments } : message;
           });
 
-    if (optimisticUserMessages.length === 0) {
+    // Queued outbox items survive reloads (IndexedDB) while optimistic
+    // messages do not — merge them in so a queued message stays visible in the
+    // timeline after a refresh.
+    const queuedTimelineMessages: ChatMessage[] = queuedOutboxItems.map((item) => ({
+      id: item.messageId,
+      role: "user",
+      text: item.text,
+      turnId: null,
+      sentByUserId: null,
+      createdAt: item.createdAt,
+      updatedAt: item.createdAt,
+      streaming: false,
+    }));
+    if (optimisticUserMessages.length === 0 && queuedTimelineMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    const optimisticIds = new Set(optimisticUserMessages.map((message) => message.id));
+    const pendingMessages = [
+      ...optimisticUserMessages,
+      ...queuedTimelineMessages.filter((message) => !optimisticIds.has(message.id)),
+    ].filter((message) => !serverIds.has(message.id));
     if (pendingMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
+  }, [
+    attachmentPreviewHandoffByMessageId,
+    displayServerMessages,
+    optimisticUserMessages,
+    queuedOutboxItems,
+  ]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -5336,11 +5393,15 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
-    if (activeEnvironmentUnavailable) {
+    // Sends into an existing thread queue durably while disconnected (the
+    // outbox delivers them on reconnect); only brand-new draft threads still
+    // need a live connection, because their route promotion requires the
+    // server's creation acknowledgement.
+    if (activeEnvironmentUnavailable && isLocalDraftThread) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Not connected: message not sent",
+          title: "Not connected: thread not started",
           description: "Reconnecting to the environment. Try again once it is connected.",
         }),
       );
@@ -5814,7 +5875,14 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
-    if (failure !== null) {
+    // A retryable transport failure means the message is safely queued in the
+    // durable outbox and will auto-send on reconnect — keep its optimistic
+    // timeline entry and skip the error toast.
+    const queuedForRedelivery =
+      failure !== null &&
+      !isAtomCommandInterrupted(failure) &&
+      shouldRetryThreadOutboxDelivery(squashAtomCommandFailure(failure));
+    if (failure !== null && !queuedForRedelivery) {
       if (
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
@@ -6963,6 +7031,9 @@ function ChatViewContent(props: ChatViewProps) {
                             sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
                             isPreparingWorktree={isPreparingWorktree}
                             environmentUnavailable={activeEnvironmentUnavailableState}
+                            queuedMessages={composerQueuedMessages}
+                            onDiscardQueuedMessage={onDiscardQueuedOutboxItem}
+                            queuedSendAllowed={!isLocalDraftThread}
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}
                             pendingUserInputs={pendingUserInputs}

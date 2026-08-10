@@ -21,6 +21,7 @@ import {
   buildLoadingThreadFromShell,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveOutboxSendGate,
   dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
@@ -280,6 +281,48 @@ describe("buildStopExecutionInput", () => {
     expect(buildStopExecutionInput(makeThread({ execution: null }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("deriveOutboxSendGate", () => {
+  it("keeps the composer free while disconnected so messages can queue up", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: true,
+        environmentConnected: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("latches while connected with a pending item (dispatch/drain in flight)", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: true,
+        environmentConnected: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("always latches during the synchronous local dispatch window", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: true,
+        hasPendingOutboxItem: false,
+        environmentConnected: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays open with nothing pending", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: false,
+        environmentConnected: true,
+      }),
+    ).toBe(false);
   });
 });
 
