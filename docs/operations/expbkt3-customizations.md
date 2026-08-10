@@ -104,6 +104,7 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Durable thread bootstrap  | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                                                                                                                                                    | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams                                                         |
 | Notification alerts       | `apps/web/src/notifications/`, `NotificationsSettingsPanel.tsx`, `settings.notifications.tsx`                                                                                                                                                      | `__root.tsx` mount, `settingsSearch.ts` path/label, `SettingsSidebarNav.tsx` icon                                                                       |
 | Session title maintenance | `apps/server/src/thread-title/`, `ThreadTitleMaintenanceSettingsSection.tsx`                                                                                                                                                                       | `ProviderCommandReactor.ts` turn-start seam, experimental settings schema, Experiments panel                                                            |
+| Row change-request badge  | `PhaseGroupedSidebar.logic.ts` (`resolvePhaseSidebarChangeRequestBadge`)                                                                                                                                                                           | `PhaseGroupedSidebar.tsx` row metadata lane, `threadSettled.ts` merge rule                                                                              |
 | Sidebar people filters    | `PhaseGroupedSidebar.logic.ts` facets, `phaseSidebarFilterStore.ts`                                                                                                                                                                                | `PhaseGroupedSidebar.tsx` popover, chips, row projection                                                                                                |
 | Execution resume resync   | none — two marked seams only                                                                                                                                                                                                                       | `ws.ts` shell/thread resume, `client-runtime/state/shellReducer.ts` overlay merge                                                                       |
 | Native plan review        | `apps/server/src/planreview/`, `persistence/PlanReviewDocuments.ts`, migration 1009, `packages/shared/src/planReview.ts`, `packages/contracts/src/planReview.ts`, `apps/web/src/components/planreview/`, `apps/web/src/fork/planReviewSurface.tsx` | fork RPC group + scopes + handlers, one `ws.ts` dep, right-panel store/tabs, `ChatView.tsx` branch, `ProposedPlanCard.tsx` button, Beta settings toggle |
@@ -226,6 +227,28 @@ with the UI in `PhaseGroupedSidebar.tsx`:
 Both persist in the existing `t3code:phase-sidebar-filters:v1` blob; the
 sanitizer defaults them off for blobs written before they existed, so the
 storage version stays v1.
+
+## Row change-request badge and settle-on-merge
+
+The experimental sidebar row shows its PR next to the Linear tag:
+`resolvePhaseSidebarChangeRequestBadge` in `PhaseGroupedSidebar.logic.ts` builds
+it, `PhaseGroupedSidebar.tsx` renders it in the metadata lane.
+
+- **The number is the whole label.** State is carried by colour alone — green
+  open, violet merged, red closed — reusing the hues `prStatusIndicator` already
+  applies in the thread header, so one PR never reads as two colours in one app.
+- **Draft, mergeability, review, and checks stay in the tooltip** and the
+  accessible name. They are modifiers on "open", not states; a hue each would
+  make the densest lane in the app unreadable, and keeping them in the
+  accessible name means state is never conveyed by colour alone.
+
+The settle rule in `client-runtime/state/threadSettled.ts` is upstream-owned and
+carries one fork edit: **a merge no longer auto-settles a thread.** Landing the
+diff is usually where the follow-up starts — watch the deploy, close the ticket,
+answer review fallout — so settling at merge time buried work the operator still
+had in hand. A merge now only releases the open-PR block, leaving the ordinary
+inactivity window in charge. Closing a change request unmerged still settles
+immediately: nothing is shipping, so there is no follow-up to bury.
 
 ## Execution state is live-only — keep the resume seams
 
