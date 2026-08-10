@@ -9,6 +9,8 @@ import type {
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { detectSourceControlProviderFromRemoteUrl } from "./sourceControl.ts";
+// T3-CUSTOM(expbkt3): temporary worktree branches carry the worktree's codename.
+import { worktreeCodenameFromDirectoryName } from "./worktreeCodename.ts";
 
 export const WORKTREE_BRANCH_PREFIX = "t3code";
 // Canonical form is `t3code/<8 hex>`. Older mobile builds generated `t3code/<uuid>`
@@ -104,8 +106,36 @@ export function buildTemporaryWorktreeBranchName(
   return `${WORKTREE_BRANCH_PREFIX}/${token}`;
 }
 
+/**
+ * T3-CUSTOM(expbkt3): The temporary branch for a worktree named `narvik` is
+ * `t3code/narvik`, so the sidebar chip, the directory, and the branch are one
+ * name. The first-turn auto-rename still replaces it with something descriptive
+ * — this only decides what you live with until then, and what lands on a PR when
+ * that rename never fires.
+ */
+export function buildCodenameWorktreeBranchName(codename: string): string {
+  return `${WORKTREE_BRANCH_PREFIX}/${codename}`;
+}
+
+/**
+ * Whether a ref is a placeholder the first-turn rename may replace.
+ *
+ * Matches the legacy hex and UUID forms, plus `t3code/<codename>`. Codenames are
+ * matched by **pool membership**, not by shape: the auto-rename also emits
+ * `t3code/<fragment>` names, so a shape test would read a generated branch like
+ * `t3code/cleanup` as a placeholder and suppress branch-drift adoption for it.
+ */
 export function isTemporaryWorktreeBranch(refName: string): boolean {
-  return TEMP_WORKTREE_BRANCH_PATTERN.test(refName.trim().toLowerCase());
+  const normalized = refName.trim().toLowerCase();
+  if (TEMP_WORKTREE_BRANCH_PATTERN.test(normalized)) {
+    return true;
+  }
+
+  const prefix = `${WORKTREE_BRANCH_PREFIX}/`;
+  if (!normalized.startsWith(prefix)) {
+    return false;
+  }
+  return worktreeCodenameFromDirectoryName(normalized.slice(prefix.length)) !== null;
 }
 
 /**

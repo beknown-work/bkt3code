@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyGitStatusStreamEvent,
+  // T3-CUSTOM(expbkt3): codename temporary branches.
+  buildCodenameWorktreeBranchName,
   buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
   normalizeGitRemoteUrl,
@@ -82,6 +84,31 @@ describe("isTemporaryWorktreeBranch", () => {
       isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12`),
     ).toBe(true);
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN — codename-shaped temporary branches.
+  it("matches a codename temporary branch", () => {
+    expect(isTemporaryWorktreeBranch(buildCodenameWorktreeBranchName("narvik"))).toBe(true);
+    expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/narvik`)).toBe(true);
+    expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/NARVIK`)).toBe(true);
+    // A directory that lost a name race keeps its suffix, and so does its branch.
+    expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/narvik-2`)).toBe(true);
+  });
+
+  it("builds the branch that matches the worktree directory", () => {
+    expect(buildCodenameWorktreeBranchName("narvik")).toBe(`${WORKTREE_BRANCH_PREFIX}/narvik`);
+  });
+
+  it("does not read an auto-generated descriptive branch as temporary", () => {
+    // The first-turn rename also emits `t3code/<fragment>`, so membership in the
+    // codename pool — not shape — is what separates the two. Misreading these
+    // would suppress branch-drift adoption for real work.
+    expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/cleanup`)).toBe(false);
+    expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/authfix`)).toBe(false);
+    expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/worktree-codenames`)).toBe(false);
+    expect(isTemporaryWorktreeBranch("feature/narvik")).toBe(false);
+    expect(isTemporaryWorktreeBranch("narvik")).toBe(false);
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it("rejects UUID-shaped refs that are not RFC 4122 v4", () => {
     // version nibble is not 4
