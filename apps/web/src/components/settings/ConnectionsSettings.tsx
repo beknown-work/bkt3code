@@ -38,6 +38,10 @@ import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
+// T3-CUSTOM(expbkt3): BEGIN — per-environment identity.
+import { EnvironmentAppearanceEditor } from "../environment/EnvironmentAppearanceEditor";
+import { EnvironmentBadge } from "../environment/EnvironmentBadge";
+// T3-CUSTOM(expbkt3): END
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
@@ -122,6 +126,8 @@ import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslS
 import {
   type EnvironmentPresentation,
   useEnvironments,
+  // T3-CUSTOM(expbkt3): per-environment identity.
+  useEnvironmentAppearance,
   usePrimaryEnvironment,
 } from "~/state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -1399,6 +1405,10 @@ function SavedBackendListRow({
   const metadataBits = [
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
     environment.relayManaged ? "T3 Connect" : null,
+    // T3-CUSTOM(expbkt3): name the machine this environment actually runs on.
+    // Without it two attached environments are told apart only by a label the
+    // operator may not have set yet.
+    environment.displayUrl,
   ].filter((value): value is string => value !== null);
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
@@ -1406,6 +1416,8 @@ function SavedBackendListRow({
   // environment you connect to or remove here — its lifecycle is driven by the
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  // T3-CUSTOM(expbkt3): resolved identity for this environment.
+  const environmentAppearance = useEnvironmentAppearance(environment.environmentId);
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1421,11 +1433,33 @@ function SavedBackendListRow({
                   : null
               }
             />
+            {/* T3-CUSTOM(expbkt3): BEGIN — show the environment's own identity here,
+                so what you pick below is what you recognise elsewhere. */}
+            <EnvironmentBadge environmentId={environment.environmentId} variant="icon" />
             <h3 className="text-sm font-medium text-foreground">{environment.label}</h3>
+            {/* T3-CUSTOM(expbkt3): END */}
           </div>
           {metadataBits.length > 0 ? (
             <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
           ) : null}
+          {/* T3-CUSTOM(expbkt3): BEGIN — nickname, colour and icon for this machine. */}
+          {environmentAppearance ? (
+            <details className="group/appearance pt-1">
+              <summary className="w-fit cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
+                Appearance
+              </summary>
+              <div className="max-w-md pt-2">
+                <EnvironmentAppearanceEditor
+                  environmentId={environment.environmentId}
+                  appearance={environmentAppearance}
+                  // T3-CUSTOM(expbkt3): the connection's own name, not the nickname
+                  // — otherwise the placeholder echoes what you just typed.
+                  fallbackName={environment.connectionLabel}
+                />
+              </div>
+            </details>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {serverUpdateState.status !== "idle" ? (
             <div className="max-w-md">
               <ServerUpdateProgress state={serverUpdateState} />
@@ -3007,6 +3041,36 @@ export function ConnectionsSettings() {
 
   return (
     <SettingsPageContainer>
+      {/* T3-CUSTOM(expbkt3): BEGIN — the environment you are running on needs a
+          nickname and colour as much as an attached one does; without this it is
+          the only environment you cannot tell apart from the others. Its own
+          section because the "This environment" blocks below are conditional on
+          how the backend is managed. */}
+      {primaryEnvironment !== null ? (
+        <SettingsSection title="Environment appearance">
+          <div className="px-3.5 py-3">
+            <div className="flex items-center gap-2 pb-3">
+              <EnvironmentBadge environmentId={primaryEnvironment.environmentId} variant="icon" />
+              <span className="text-sm font-medium text-foreground">
+                {primaryEnvironment.label}
+              </span>
+              {primaryEnvironment.displayUrl ? (
+                <span className="truncate text-xs text-muted-foreground">
+                  {primaryEnvironment.displayUrl}
+                </span>
+              ) : null}
+            </div>
+            <div className="max-w-md">
+              <EnvironmentAppearanceEditor
+                environmentId={primaryEnvironment.environmentId}
+                appearance={primaryEnvironment.appearance}
+                fallbackName={primaryEnvironment.connectionLabel}
+              />
+            </div>
+          </div>
+        </SettingsSection>
+      ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="This environment">

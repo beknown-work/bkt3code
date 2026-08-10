@@ -639,6 +639,8 @@ function OpenCommandPaletteDialog(props: {
     [clientSettings],
   );
 
+  // T3-CUSTOM(expbkt3): `environment.label` is already the nickname when one is
+  // set, so the palette names environments the same way the sidebar does.
   const environmentLabelById = useMemo(
     () =>
       new Map(

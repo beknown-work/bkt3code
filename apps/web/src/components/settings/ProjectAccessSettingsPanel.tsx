@@ -12,7 +12,10 @@ import type { EnvironmentId, OrchestrationUser, ProjectId, UserId } from "@t3too
 import { useMemo, useState } from "react";
 
 import { useProjects } from "../../state/entities";
+// T3-CUSTOM(expbkt3): identify which machine each project lives on.
+import { hasMultipleEnvironments, useEnvironmentAppearances } from "../../state/environments";
 import { useIsTeamAdmin, useOrgMembers } from "../../state/orgMembers";
+import { EnvironmentBadgeView } from "../environment/EnvironmentBadge";
 import { ProjectMembersDialog } from "../members/ProjectMembersDialog";
 import { AvatarStack } from "../ui/avatar";
 import { Button } from "../ui/button";
@@ -29,10 +32,19 @@ export function ProjectAccessSettingsPanel() {
   const { resolveUser } = useOrgMembers();
   const [target, setTarget] = useState<ProjectMembersTarget | null>(null);
 
+  // T3-CUSTOM(expbkt3): BEGIN — two environments contributing the same repository
+  // render as identical rows (same title, same path). Sort by environment first so
+  // the pairs sit together, and badge them so they are told apart.
+  const appearances = useEnvironmentAppearances();
+  const showEnvironment = hasMultipleEnvironments(projects);
   const sortedProjects = useMemo(
-    () => [...projects].sort((a, b) => a.title.localeCompare(b.title)),
+    () =>
+      [...projects].sort(
+        (a, b) => a.title.localeCompare(b.title) || a.environmentId.localeCompare(b.environmentId),
+      ),
     [projects],
   );
+  // T3-CUSTOM(expbkt3): END
 
   if (!isAdmin) {
     return (
@@ -69,6 +81,10 @@ export function ProjectAccessSettingsPanel() {
                 description={project.workspaceRoot}
                 control={
                   <div className="flex items-center gap-2">
+                    {/* T3-CUSTOM(expbkt3): which machine this project lives on. */}
+                    {showEnvironment && appearances.has(project.environmentId) ? (
+                      <EnvironmentBadgeView appearance={appearances.get(project.environmentId)!} />
+                    ) : null}
                     {memberUsers.length > 0 ? <AvatarStack users={memberUsers} size="sm" /> : null}
                     <Button
                       variant="outline"

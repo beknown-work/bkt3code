@@ -39,6 +39,8 @@ import {
   FilterIcon,
   FolderGit2Icon,
   FolderPlusIcon,
+  // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
+  GitPullRequestIcon,
   Link2Icon,
   LaptopIcon,
   PlusIcon,
@@ -84,7 +86,15 @@ import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { usePhaseSidebarFilterStore } from "../phaseSidebarFilterStore";
 import { useShortcutModifierState } from "../shortcutModifierState";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import {
+  useEnvironmentAppearances,
+  useEnvironments,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
+// T3-CUSTOM(expbkt3): BEGIN — per-environment identity in a multi-environment sidebar.
+import type { ResolvedEnvironmentAppearance } from "../state/environmentAppearance";
+import { EnvironmentBadgeView } from "./environment/EnvironmentBadge";
+// T3-CUSTOM(expbkt3): END
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
@@ -133,9 +143,15 @@ import {
   // T3-CUSTOM(expbkt3): Session priority badge tone.
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
+  // T3-CUSTOM(expbkt3): memorable worktree codenames.
+  phaseSidebarCheckoutToneClassName,
+  phaseSidebarWorktreeRowProps,
+  resolvePhaseSidebarWorktreeView,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
+  // T3-CUSTOM(expbkt3): PR number + colour-only state in the row.
+  resolvePhaseSidebarChangeRequestBadge,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
@@ -827,7 +843,16 @@ interface PhaseThreadRowProps {
   readonly row: PhaseSidebarRow;
   readonly section: PhaseSidebarSection;
   readonly project: Project | null;
+  // T3-CUSTOM(expbkt3): set only when the rendered rows span more than one
+  // environment; a single-environment sidebar stays exactly as it was.
+  readonly environmentAppearance?: ResolvedEnvironmentAppearance | undefined;
   readonly vcsStatus: VcsStatusResult | null;
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codename, flattened to primitives so
+  // this memo'd row still compares by value.
+  readonly worktreeCodename: string | null;
+  readonly worktreeSharedCount: number;
+  readonly worktreeSharedSummary: string | null;
+  // T3-CUSTOM(expbkt3): END
   readonly active: boolean;
   readonly orderedThreadKeys: ReadonlyArray<string>;
   readonly jumpLabel: string | null;
@@ -906,7 +931,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     row,
     section,
     project,
+    // T3-CUSTOM(expbkt3): present only in a multi-environment sidebar.
+    environmentAppearance,
     vcsStatus,
+    // T3-CUSTOM(expbkt3): worktree codename.
+    worktreeCodename,
+    worktreeSharedCount,
+    worktreeSharedSummary,
     active,
     orderedThreadKeys,
     jumpLabel,
@@ -971,7 +1002,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
-  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus);
+  // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
+  // state, number as the label.
+  const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(vcsStatus);
+  // T3-CUSTOM(expbkt3): worktree codename replaces the generic "Worktree" label.
+  const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus, {
+    codename: worktreeCodename,
+    sharing:
+      worktreeSharedCount > 1
+        ? { count: worktreeSharedCount, summary: worktreeSharedSummary ?? "" }
+        : null,
+  });
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
@@ -1046,6 +1087,26 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           title: `Failed to open ${linearIssue.identifier}`,
           description:
             error instanceof Error ? error.message : "The Linear issue could not be opened.",
+        }),
+      );
+    });
+  };
+
+  // T3-CUSTOM(expbkt3): same affordance as the Linear tag — the badge opens the
+  // change request rather than routing to the thread.
+  const openChangeRequest = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!changeRequestBadge) return;
+    const api = readLocalApi();
+    if (!api) return;
+    void api.shell.openExternal(changeRequestBadge.url).catch((error: unknown) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to open ${changeRequestBadge.label}`,
+          description:
+            error instanceof Error ? error.message : "The change request could not be opened.",
         }),
       );
     });
@@ -1388,6 +1449,18 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <TooltipPopup side="top">Started by {treeParentTitle}</TooltipPopup>
               </Tooltip>
             ) : null}
+            {/* T3-CUSTOM(expbkt3): BEGIN — which machine this session runs on. Sits
+                with the repository label because that is the pair that becomes
+                ambiguous once two environments contribute the same repo. */}
+            {environmentAppearance ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" />}>
+                  <EnvironmentBadgeView appearance={environmentAppearance} variant="dot" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">{environmentAppearance.name}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* T3-CUSTOM(expbkt3): END */}
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
@@ -1403,7 +1476,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
               {/* T3-CUSTOM(expbkt3): END */}
-              <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
+              <TooltipPopup side="top">
+                {environmentAppearance
+                  ? `${row.repositoryLabel} · ${environmentAppearance.name}`
+                  : row.repositoryLabel}
+              </TooltipPopup>
             </Tooltip>
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
@@ -1411,11 +1488,24 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 render={<span className="inline-flex max-w-full shrink-0 items-center gap-1" />}
               >
                 {checkoutMetadata.kind === "worktree" ? (
-                  <FolderGit2Icon aria-hidden className="size-2.5 shrink-0" />
+                  <FolderGit2Icon
+                    aria-hidden
+                    className={cn(
+                      "size-2.5 shrink-0",
+                      phaseSidebarCheckoutToneClassName(checkoutMetadata.toneIndex),
+                    )}
+                  />
                 ) : (
                   <LaptopIcon aria-hidden className="size-2.5 shrink-0" />
                 )}
-                <span className="min-w-0 truncate">{checkoutMetadata.label}</span>
+                <span
+                  className={cn(
+                    "min-w-0 truncate",
+                    phaseSidebarCheckoutToneClassName(checkoutMetadata.toneIndex),
+                  )}
+                >
+                  {checkoutMetadata.label}
+                </span>
               </TooltipTrigger>
               {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
@@ -1453,6 +1543,36 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   {linearIssue.identifier} (
                   {linearIssueStatus?.status ?? linearIssueStatus?.error ?? "syncing…"})
                 </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* T3-CUSTOM(expbkt3): PR badge — number only, state by colour. */}
+            {changeRequestBadge ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      role="link"
+                      tabIndex={0}
+                      data-testid={`phase-thread-change-request-${row.thread.id}`}
+                      data-change-request-state={changeRequestBadge.state}
+                      aria-label={`Open ${changeRequestBadge.label} (${changeRequestBadge.statusText})`}
+                      className={cn(
+                        "inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                        changeRequestBadge.colorClassName,
+                      )}
+                      onClick={openChangeRequest}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        openChangeRequest(event);
+                      }}
+                    />
+                  }
+                >
+                  <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                  <span className="tabular-nums">{changeRequestBadge.label}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">{changeRequestBadge.tooltip}</TooltipPopup>
               </Tooltip>
             ) : null}
           </span>
@@ -1995,6 +2115,11 @@ export function PhaseGroupedSidebar() {
       vcsStatusByThreadKey,
     ],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codenames. Resolved across the whole
+  // thread set rather than per row, because both answers are properties of the
+  // set: codenames disambiguate against each other, and occupancy is a count.
+  const worktreeView = useMemo(() => resolvePhaseSidebarWorktreeView(threads), [threads]);
+  // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): BEGIN — split the inbox from the parked shelves.
   // Filtering happens once, before the partition, so a filter chip means the
   // same thing in the lifecycle groups and on both shelves.
@@ -2152,6 +2277,16 @@ export function PhaseGroupedSidebar() {
     () => [...activeVisibleRows, ...renderedSnoozedRows, ...renderedSettledRows],
     [activeVisibleRows, renderedSnoozedRows, renderedSettledRows],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — environment markers are conditional on what is
+  // actually rendered, not on how many environments are configured. With one
+  // environment (the normal case) the sidebar is byte-for-byte unchanged.
+  const environmentAppearances = useEnvironmentAppearances();
+  const sidebarSpansEnvironments = useMemo(() => {
+    const first = visibleRows[0]?.thread.environmentId;
+    if (first === undefined) return false;
+    return visibleRows.some((candidate) => candidate.thread.environmentId !== first);
+  }, [visibleRows]);
+  // T3-CUSTOM(expbkt3): END
   const linearIssueStatusRequests = useMemo(() => {
     const identifiersByEnvironment = new Map<EnvironmentId, Set<string>>();
     for (const row of visibleRows) {
@@ -2809,7 +2944,14 @@ export function PhaseGroupedSidebar() {
         row={row}
         section={section}
         project={project}
+        // T3-CUSTOM(expbkt3): only when the sessions on screen actually span more
+        // than one environment — a second environment with nothing in view is not
+        // a reason to mark every row.
+        {...(sidebarSpansEnvironments
+          ? { environmentAppearance: environmentAppearances.get(row.thread.environmentId) }
+          : {})}
         vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
+        {...phaseSidebarWorktreeRowProps(worktreeView, row.thread.worktreePath)}
         active={routeThreadKey === key}
         orderedThreadKeys={visibleThreadKeys}
         jumpLabel={jumpLabelByKey.get(key) ?? null}
