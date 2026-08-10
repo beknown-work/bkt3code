@@ -232,6 +232,24 @@ from parent**.
 Lineage always stays a tree. A session cannot be filed under itself or under any of its own
 descendants; the server rejects such a link rather than storing a cycle.
 
+### Side-by-side sessions
+
+The same context menu starts one. **Create new thread** offers two workspaces:
+
+| Choice                  | Where the new session runs                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------------- |
+| **Using same worktree** | The worktree the session you clicked is using, or its project checkout when it is not in a worktree |
+| **Using new worktree**  | A fresh worktree, created immediately from the project's own base ref and setup script              |
+
+Either choice creates the session on the spot, files it under the one you started it from, and opens
+it with an empty composer. It is a real session before a single word is typed, so switching to
+another row and back returns to it with whatever you had written still there — the sidebar tree is
+the tab strip. It inherits the parent's provider and model; Build/Plan and the runtime mode come
+from the project's defaults. The first message you send retitles it, as in any other session.
+
+The **New thread** button in the sidebar header is unchanged: it still starts a single scratch draft
+per project rather than a durable session.
+
 ## Recommended triage loop
 
 1. Call `t3_list_sessions` with `attentionOnly: true`.
