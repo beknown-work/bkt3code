@@ -13,6 +13,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { useEnvironmentAppearanceStore } from "../environmentAppearanceStore";
 import {
   resolveEnvironmentAppearance,
+  type EnvironmentAppearance,
   type ResolvedEnvironmentAppearance,
 } from "./environmentAppearance";
 import { environmentPresentations, useEnvironmentPresentation } from "./presentation";
@@ -23,7 +24,16 @@ import { usePreparedConnection } from "./session";
 
 export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly environmentId: EnvironmentId;
+  /**
+   * What to show the operator. T3-CUSTOM(expbkt3): this is the nickname when one
+   * is set, so every existing consumer displays it without being touched. Use
+   * `connectionLabel` when you need the underlying connection's own name.
+   */
   readonly label: string;
+  // T3-CUSTOM(expbkt3): BEGIN — the connection's own label, before any nickname.
+  readonly connectionLabel: string;
+  readonly appearance: ResolvedEnvironmentAppearance;
+  // T3-CUSTOM(expbkt3): END
   readonly displayUrl: string | null;
   readonly relayManaged: boolean;
 }
@@ -31,11 +41,21 @@ export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
 function projectEnvironmentPresentation(
   environmentId: EnvironmentId,
   presentation: BaseEnvironmentPresentation,
+  // T3-CUSTOM(expbkt3): resolved so `label` carries the nickname everywhere.
+  appearance: EnvironmentAppearance | undefined,
 ): EnvironmentPresentation {
+  const connectionLabel = presentation.entry.target.label;
+  const resolved = resolveEnvironmentAppearance({
+    environmentId,
+    label: connectionLabel,
+    appearance,
+  });
   return {
     ...presentation,
     environmentId,
-    label: presentation.entry.target.label,
+    label: resolved.name,
+    connectionLabel,
+    appearance: resolved,
     displayUrl: connectionCatalogDisplayUrl(presentation.entry),
     relayManaged: presentation.entry.target._tag === "RelayConnectionTarget",
   };
@@ -45,13 +65,22 @@ export function useEnvironments() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
   const presentationById = useAtomValue(environmentPresentations.presentationsAtom);
+  // T3-CUSTOM(expbkt3): subscribe so renaming an environment re-renders every
+  // surface that shows it, without each of them knowing the store exists.
+  const storedAppearances = useEnvironmentAppearanceStore(
+    (state) => state.appearanceByEnvironmentId,
+  );
 
   const environments = useMemo(
     () =>
       [...presentationById.entries()].map(([environmentId, presentation]) =>
-        projectEnvironmentPresentation(environmentId, presentation),
+        projectEnvironmentPresentation(
+          environmentId,
+          presentation,
+          storedAppearances[environmentId],
+        ),
       ),
-    [presentationById],
+    [presentationById, storedAppearances],
   );
 
   return {
@@ -70,12 +99,16 @@ export function useEnvironment(
   environmentId: EnvironmentId | null,
 ): EnvironmentPresentation | null {
   const { presentation } = useEnvironmentPresentation(environmentId);
+  // T3-CUSTOM(expbkt3): same nickname resolution as the list hook.
+  const stored = useEnvironmentAppearanceStore((state) =>
+    environmentId === null ? undefined : state.appearanceByEnvironmentId[environmentId],
+  );
   return useMemo(
     () =>
       environmentId === null || presentation === null
         ? null
-        : projectEnvironmentPresentation(environmentId, presentation),
-    [environmentId, presentation],
+        : projectEnvironmentPresentation(environmentId, presentation, stored),
+    [environmentId, presentation, stored],
   );
 }
 
@@ -107,20 +140,7 @@ export function useEnvironmentAppearance(
   environmentId: EnvironmentId | null,
 ): ResolvedEnvironmentAppearance | null {
   const environment = useEnvironment(environmentId);
-  const stored = useEnvironmentAppearanceStore((state) =>
-    environmentId === null ? undefined : state.appearanceByEnvironmentId[environmentId],
-  );
-  return useMemo(
-    () =>
-      environmentId === null
-        ? null
-        : resolveEnvironmentAppearance({
-            environmentId,
-            label: environment?.label ?? "Environment",
-            appearance: stored,
-          }),
-    [environmentId, environment?.label, stored],
-  );
+  return environment?.appearance ?? null;
 }
 
 /**
@@ -129,20 +149,12 @@ export function useEnvironmentAppearance(
  */
 export function useEnvironmentAppearances(): ReadonlyMap<string, ResolvedEnvironmentAppearance> {
   const { environments } = useEnvironments();
-  const stored = useEnvironmentAppearanceStore((state) => state.appearanceByEnvironmentId);
   return useMemo(
     () =>
       new Map(
-        environments.map((environment) => [
-          environment.environmentId,
-          resolveEnvironmentAppearance({
-            environmentId: environment.environmentId,
-            label: environment.label,
-            appearance: stored[environment.environmentId],
-          }),
-        ]),
+        environments.map((environment) => [environment.environmentId, environment.appearance]),
       ),
-    [environments, stored],
+    [environments],
   );
 }
 
