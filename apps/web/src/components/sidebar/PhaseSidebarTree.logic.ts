@@ -77,6 +77,14 @@ export interface PhaseSidebarTreeNode {
   /** True when any descendant is planning or implementing (see BUSY_PHASE_IDS). */
   readonly hasBusyDescendant: boolean;
   /**
+   * How many descendants finished a turn the user has not read yet, and how
+   * many have an agent working. Counts rather than the booleans above: a parent
+   * with a wide fan-out needs to know whether one child or nine are waiting to
+   * be read, and the number is the whole reason to open the subtree.
+   */
+  readonly descendantUnreadCount: number;
+  readonly descendantRunningCount: number;
+  /**
    * The most blocking thing any descendant is waiting on, or null. Drives both
    * the parent's group placement and its derived badge: work buried in a
    * collapsed subtree is invisible, so the parent has to raise its hand.
@@ -114,6 +122,8 @@ interface MutableNode {
   depth: number;
   descendantCount: number;
   hasBusyDescendant: boolean;
+  descendantUnreadCount: number;
+  descendantRunningCount: number;
   descendantAttention: PhaseSidebarAttentionKind | null;
   orphanedFrom: { readonly key: string; readonly title: string } | null;
 }
@@ -161,11 +171,15 @@ function finalize(node: MutableNode, depth: number): void {
   node.depth = depth;
   let descendantCount = 0;
   let hasBusyDescendant = false;
+  let descendantUnreadCount = 0;
+  let descendantRunningCount = 0;
   let descendantAttention: PhaseSidebarAttentionKind | null = null;
   for (const child of node.children) {
     finalize(child, depth + 1);
     descendantCount += 1 + child.descendantCount;
     hasBusyDescendant = hasBusyDescendant || isBusy(child.row) || child.hasBusyDescendant;
+    descendantUnreadCount += (child.row.isUnreadCompletion ? 1 : 0) + child.descendantUnreadCount;
+    descendantRunningCount += (isBusy(child.row) ? 1 : 0) + child.descendantRunningCount;
     descendantAttention = moreUrgent(
       descendantAttention,
       moreUrgent(attentionKindOf(child.row), child.descendantAttention),
@@ -173,6 +187,8 @@ function finalize(node: MutableNode, depth: number): void {
   }
   node.descendantCount = descendantCount;
   node.hasBusyDescendant = hasBusyDescendant;
+  node.descendantUnreadCount = descendantUnreadCount;
+  node.descendantRunningCount = descendantRunningCount;
   node.descendantAttention = descendantAttention;
 }
 
@@ -184,6 +200,8 @@ function freeze(node: MutableNode): PhaseSidebarTreeNode {
     depth: node.depth,
     descendantCount: node.descendantCount,
     hasBusyDescendant: node.hasBusyDescendant,
+    descendantUnreadCount: node.descendantUnreadCount,
+    descendantRunningCount: node.descendantRunningCount,
     descendantAttention: node.descendantAttention,
     orphanedFrom: node.orphanedFrom,
   };
@@ -212,6 +230,8 @@ export function buildPhaseSidebarTree(
     depth: 0,
     descendantCount: 0,
     hasBusyDescendant: false,
+    descendantUnreadCount: 0,
+    descendantRunningCount: 0,
     descendantAttention: null,
     orphanedFrom: null,
   }));

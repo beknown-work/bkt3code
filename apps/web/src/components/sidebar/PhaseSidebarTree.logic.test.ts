@@ -78,6 +78,7 @@ function makeRow(
     readonly repositoryKey?: string;
     readonly archived?: boolean;
     readonly pendingApproval?: boolean;
+    readonly unread?: boolean;
   } = {},
 ): PhaseSidebarRow {
   const thread = makeThread(id, {
@@ -98,7 +99,7 @@ function makeRow(
     isOwnedByMe: false,
     participantUserIds: [],
     attentionPriority: 5,
-    isUnreadCompletion: false,
+    isUnreadCompletion: options.unread === true,
     settlementSupported: true,
     snoozeSupported: true,
     prioritySupported: true,
@@ -139,6 +140,36 @@ describe("buildPhaseSidebarTree", () => {
     expect(tree[0]?.descendantCount).toBe(3);
     expect(tree[0]?.children[0]?.descendantCount).toBe(1);
     expect(tree[0]?.children[0]?.children[0]?.depth).toBe(2);
+  });
+
+  it("counts unread and working descendants over the whole subtree", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("root", { unread: true }),
+        makeRow("child-a", { parent: "root", unread: true }),
+        makeRow("child-b", { parent: "root", phaseId: "implementing" }),
+        makeRow("grandchild", { parent: "child-a", unread: true, phaseId: "planning" }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    // The root's own unread state is not part of its subtree counters.
+    expect(tree[0]?.descendantUnreadCount).toBe(2);
+    expect(tree[0]?.descendantRunningCount).toBe(2);
+    expect(tree[0]?.children[0]?.descendantUnreadCount).toBe(1);
+    expect(tree[0]?.children[0]?.descendantRunningCount).toBe(1);
+    expect(tree[0]?.children[1]?.descendantUnreadCount).toBe(0);
+    expect(tree[0]?.children[1]?.descendantRunningCount).toBe(0);
+  });
+
+  it("reports zero subtree counters for a leaf", () => {
+    const tree = buildPhaseSidebarTree(
+      [makeRow("solo", { unread: true, phaseId: "implementing" })],
+      { compareSiblings: byId },
+    );
+
+    expect(tree[0]?.descendantUnreadCount).toBe(0);
+    expect(tree[0]?.descendantRunningCount).toBe(0);
   });
 
   it("promotes a row to the top level when its parent is not in this section", () => {

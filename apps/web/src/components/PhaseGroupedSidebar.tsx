@@ -27,6 +27,8 @@ import {
 } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import {
+  // T3-CUSTOM(expbkt3): subtree running counter.
+  ActivityIcon,
   AlarmClockIcon,
   ArchiveIcon,
   CheckIcon,
@@ -861,6 +863,10 @@ interface PhaseThreadRowProps {
   readonly treeDepth?: number;
   readonly treeDescendantCount?: number;
   readonly treeHasBusyDescendant?: boolean;
+  // Exact subtree counts, shown open or closed: the number is what tells you
+  // whether the fan-out needs attention now or later.
+  readonly treeDescendantUnreadCount?: number;
+  readonly treeDescendantRunningCount?: number;
   readonly treeDescendantAttention?: PhaseSidebarAttentionKind | null;
   readonly treeExpanded?: boolean;
   readonly treeParentKey?: string | null;
@@ -878,6 +884,8 @@ type PhaseThreadRowTreeProps = Pick<
   | "treeDepth"
   | "treeDescendantCount"
   | "treeHasBusyDescendant"
+  | "treeDescendantUnreadCount"
+  | "treeDescendantRunningCount"
   | "treeDescendantAttention"
   | "treeExpanded"
   | "treeParentKey"
@@ -925,6 +933,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     treeDepth,
     treeDescendantCount,
     treeHasBusyDescendant,
+    treeDescendantUnreadCount,
+    treeDescendantRunningCount,
     treeDescendantAttention,
     treeExpanded,
     treeParentKey,
@@ -975,6 +985,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   // of its descendants is stuck, or the group placement reads as a glitch.
   const collapsedDescendantAttention =
     hasChildren && treeExpanded !== true ? (treeDescendantAttention ?? null) : null;
+  // Unlike the signals above, the two counters stay visible while the subtree is
+  // open: a fan-out is often taller than the viewport, so "3 unread below me"
+  // still says something the visible children cannot.
+  const descendantUnreadCount = hasChildren ? (treeDescendantUnreadCount ?? 0) : 0;
+  const descendantRunningCount = hasChildren ? (treeDescendantRunningCount ?? 0) : 0;
   // T3-CUSTOM(expbkt3): END
   const recoveryExhausted = row.thread.execution?.intent?.phase === "recovery-exhausted";
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze affordances.
@@ -1444,6 +1459,59 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         </span>
         {/* T3-CUSTOM(expbkt3): status/time own a fixed top-right lane. */}
         <span className="absolute top-2 right-2 flex max-w-[55%] shrink-0 items-center gap-1">
+          {/* T3-CUSTOM(expbkt3): BEGIN — exact subtree counters. Bare icon plus a
+              tabular number, no pill chrome: they share the lane with the
+              attention badges and the timestamp, and this row is already the
+              densest surface in the app. The glyphs are deliberately the ones
+              the child rows use for the same state — the emerald dot is the
+              unread indicator, sky is the working colour — so the counter reads
+              as "N of those, below me" without a legend. */}
+          {descendantRunningCount > 0 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="status"
+                    aria-label={`${descendantRunningCount} child sessions working`}
+                    data-testid={`phase-thread-subtree-running-count-${row.thread.id}`}
+                    className="inline-flex shrink-0 items-center gap-0.5 text-[9px] font-semibold leading-none tabular-nums text-sky-600 dark:text-sky-300"
+                  />
+                }
+              >
+                <ActivityIcon aria-hidden className="size-2.5 shrink-0" />
+                {descendantRunningCount}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {descendantRunningCount} child session
+                {descendantRunningCount === 1 ? "" : "s"} working
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {descendantUnreadCount > 0 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="status"
+                    aria-label={`${descendantUnreadCount} unread child sessions`}
+                    data-testid={`phase-thread-subtree-unread-count-${row.thread.id}`}
+                    className="inline-flex shrink-0 items-center gap-0.5 text-[9px] font-semibold leading-none tabular-nums text-emerald-600 dark:text-emerald-300/90"
+                  />
+                }
+              >
+                <span
+                  aria-hidden
+                  className="size-[7px] shrink-0 rounded-full bg-emerald-500 dark:bg-emerald-300/90"
+                />
+                {descendantUnreadCount}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {descendantUnreadCount} unread child session
+                {descendantUnreadCount === 1 ? "" : "s"}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {workBadge && attentionKind === null ? (
             <span
               role="status"
@@ -1475,22 +1543,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               ↳ {collapsedDescendantAttention.toUpperCase()}
             </span>
           ) : null}
-          {/* T3-CUSTOM(expbkt3): Work happening BELOW this row, not in it.
-              Outlined rather than filled, with a ↳ glyph: the same grammar
-              distinguishes "mine" from "my subtree's" everywhere on the row. */}
-          {hasCollapsedBusyDescendant &&
-          workBadge === null &&
-          attentionKind === null &&
-          collapsedDescendantAttention === null ? (
-            <span
-              role="status"
-              aria-label="A child session is working"
-              data-testid={`phase-thread-subtree-working-${row.thread.id}`}
-              className="rounded-sm border border-sky-500/40 px-1 py-0.5 text-[8px] font-black tracking-wide text-sky-700 dark:border-sky-400/40 dark:text-sky-300"
-            >
-              ↳ WORKING
-            </span>
-          ) : null}
+          {/* T3-CUSTOM(expbkt3): the "↳ WORKING" badge that used to live here is
+              gone — the running counter above says the same thing with the exact
+              number, in both open and closed states, for less width. The
+              collapsed sweep still runs, since that is about work the closed
+              subtree hides rather than about how much of it there is. */}
           {attentionKind === "input" ? (
             <span
               aria-label="Awaiting input"
@@ -2801,6 +2858,8 @@ export function PhaseGroupedSidebar() {
           treeDepth: node.depth,
           treeDescendantCount: node.descendantCount,
           treeHasBusyDescendant: node.hasBusyDescendant,
+          treeDescendantUnreadCount: node.descendantUnreadCount,
+          treeDescendantRunningCount: node.descendantRunningCount,
           treeDescendantAttention: node.descendantAttention,
           treeExpanded: expanded,
           treeParentKey: node.orphanedFrom?.key ?? null,

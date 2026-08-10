@@ -204,6 +204,17 @@ A session created by another session records that session as its parent, and the
 phase-grouped sidebar files it under that parent as a collapsible subtree. This keeps a fan-out —
 typically cross-repo work — readable as one unit of work instead of several unrelated rows.
 
+A parent row reports what its subtree is doing without being opened. Next to the timestamp it
+carries two counters, each covering every level beneath it, and each shown whether the subtree is
+open or closed:
+
+- a green dot with a number — that many child sessions finished a turn you have not read
+- a pulse glyph with a number — that many child sessions have an agent working
+
+They use the same glyphs the child rows use for the same state, so the number reads as "this many of
+those, below me". A parent whose subtree is waiting on a human also flies a `↳ INPUT`, `↳ APPROVAL`,
+or `↳ ERROR` badge while it is collapsed.
+
 Nesting is the calling agent's choice:
 
 | Field                             | Effect                                                                                                                                             |
