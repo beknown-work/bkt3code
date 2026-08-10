@@ -57,7 +57,11 @@ import {
   type SessionHistoryIndexEntry,
 } from "./historyMarkdown.ts";
 import { collectWorktreeUsage, serverOwnedWorktrees } from "./liveWorktrees.ts";
-import { describeBlockedReason, evaluateReclaimEligibility } from "./reclaimEligibility.ts";
+import {
+  describeBlockedReason,
+  evaluateReclaimEligibility,
+  isWorktreeProtected,
+} from "./reclaimEligibility.ts";
 import { scanWorktree, slimWorktree } from "./worktreeScan.ts";
 
 /**
@@ -169,6 +173,31 @@ export const make = Effect.gen(function* () {
           (project) => [project.id, project.workspaceRoot] as const,
         ),
       ),
+    };
+  });
+
+  /**
+   * Re-read just the two protection sets, as late as possible.
+   *
+   * A batch reclaim runs sequentially and each entry is heavy IO, so the sets
+   * captured when the batch started can be minutes stale by the time a given
+   * worktree is actually deleted — long enough for someone to unarchive a
+   * session or start one on that worktree. This is cheap next to the delete it
+   * guards, so it runs immediately before every destructive step.
+   */
+  const readWorktreeUsage = Effect.gen(function* () {
+    const [archived, full] = yield* Effect.all([
+      snapshots.getArchivedShellSnapshot(),
+      snapshots.getShellSnapshot(),
+    ]);
+    const usage = collectWorktreeUsage([...full.threads, ...archived.threads]);
+    const serverOwned = serverOwnedWorktrees({
+      serverCwd: config.cwd,
+      worktreesDir: config.worktreesDir,
+    });
+    return {
+      liveWorktreePaths: new Set([...usage.liveWorktreePaths, ...serverOwned]),
+      activeThreadWorktreePaths: usage.activeThreadWorktreePaths,
     };
   });
 
@@ -708,6 +737,29 @@ export const make = Effect.gen(function* () {
       const digestInfo = yield* fs.stat(exported.value.digestPath).pipe(Effect.option);
       if (digestInfo._tag === "None" || Number(digestInfo.value.size) === 0) {
         return skipped("History export produced no file, so nothing was deleted.");
+      }
+
+      // Last check before anything is destroyed. The sets this batch started
+      // with may be minutes old by now; a session unarchived or started on this
+      // worktree in the meantime must still be respected. Re-read rather than
+      // trust the snapshot taken when the batch began.
+      const freshUsage = yield* readWorktreeUsage.pipe(
+        Effect.map((usage) => ({ _tag: "ok" as const, usage })),
+        Effect.catchCause((cause) =>
+          Effect.succeed({ _tag: "failed" as const, message: describeCause(cause) }),
+        ),
+      );
+      if (freshUsage._tag === "failed") {
+        // Cannot prove it is safe, so treat it as unsafe.
+        return skipped(
+          `Could not re-check whether this worktree is in use, so it was left alone: ${freshUsage.message}`,
+        );
+      }
+      if (isWorktreeProtected(worktreePath, freshUsage.usage.liveWorktreePaths)) {
+        return skipped(describeBlockedReason("worktree-live"));
+      }
+      if (isWorktreeProtected(worktreePath, freshUsage.usage.activeThreadWorktreePaths)) {
+        return skipped(describeBlockedReason("worktree-shared"));
       }
 
       if (mode === "slim") {

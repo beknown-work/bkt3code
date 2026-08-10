@@ -10,6 +10,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   evaluateReclaimEligibility,
   isPastRetention,
+  isWorktreeProtected,
   normalizeWorktreePath,
   type ReclaimEligibilityInput,
 } from "./reclaimEligibility.ts";
@@ -230,5 +231,110 @@ describe("per-mode reporting the scan relies on", () => {
   it("only ever reports a forceable reason for the remove mode", () => {
     const bad = { hasUncommittedChanges: true, hasUntrackedFiles: true, hasUnpushedCommits: true };
     expect(evaluateReclaimEligibility(input({ mode: "slim", git: bad })).blockedReason).toBeNull();
+  });
+});
+
+describe("protecting worktrees used by non-archived sessions", () => {
+  const ACTIVE = "/home/ubuntu/.t3/dev/worktrees/proj/active";
+
+  it("refuses a worktree an active session uses, whatever the mode", () => {
+    for (const mode of ["slim", "remove"] as const) {
+      const result = evaluateReclaimEligibility(
+        input({
+          mode,
+          thread: { threadId: "t", worktreePath: ACTIVE, archivedAt: ARCHIVED_LONG_AGO },
+          activeThreadWorktreePaths: new Set([ACTIVE]),
+        }),
+      );
+      expect(result.blockedReason).toBe("worktree-shared");
+    }
+  });
+
+  it("matches despite a trailing slash on either side", () => {
+    expect(
+      evaluateReclaimEligibility(
+        input({
+          thread: { threadId: "t", worktreePath: `${ACTIVE}/`, archivedAt: ARCHIVED_LONG_AGO },
+          activeThreadWorktreePaths: new Set([ACTIVE]),
+        }),
+      ).blockedReason,
+    ).toBe("worktree-shared");
+
+    expect(
+      evaluateReclaimEligibility(
+        input({
+          thread: { threadId: "t", worktreePath: ACTIVE, archivedAt: ARCHIVED_LONG_AGO },
+          activeThreadWorktreePaths: new Set([`${ACTIVE}/`]),
+        }),
+      ).blockedReason,
+    ).toBe("worktree-shared");
+  });
+
+  it("matches despite duplicated separators", () => {
+    expect(
+      evaluateReclaimEligibility(
+        input({
+          thread: {
+            threadId: "t",
+            worktreePath: "/home/ubuntu//.t3/dev/worktrees/proj/active",
+            archivedAt: ARCHIVED_LONG_AGO,
+          },
+          activeThreadWorktreePaths: new Set([ACTIVE]),
+        }),
+      ).blockedReason,
+    ).toBe("worktree-shared");
+  });
+
+  it("refuses a parent whose removal would take an active worktree with it", () => {
+    const parent = "/home/ubuntu/.t3/dev/worktrees/proj";
+    const result = evaluateReclaimEligibility(
+      input({
+        thread: { threadId: "t", worktreePath: parent, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([`${parent}/nested`]),
+      }),
+    );
+    expect(result.blockedReason).toBe("worktree-shared");
+  });
+
+  it("refuses a subdirectory of an active worktree", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        thread: { threadId: "t", worktreePath: `${ACTIVE}/apps`, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([ACTIVE]),
+      }),
+    );
+    expect(result.blockedReason).toBe("worktree-shared");
+  });
+
+  it("does not mistake a sibling sharing a name prefix for the same worktree", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        thread: { threadId: "t", worktreePath: `${ACTIVE}-backup`, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([ACTIVE]),
+      }),
+    );
+    expect(result.eligible).toBe(true);
+  });
+
+  it("cannot be forced past", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        mode: "remove",
+        force: true,
+        thread: { threadId: "t", worktreePath: ACTIVE, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([ACTIVE]),
+      }),
+    );
+    expect(result.blockedReason).toBe("worktree-shared");
+  });
+});
+
+describe("isWorktreeProtected", () => {
+  it("is false when nothing is protected", () => {
+    expect(isWorktreeProtected("/w/a", new Set())).toBe(false);
+  });
+
+  it("ignores blank entries in the protected set", () => {
+    expect(isWorktreeProtected("/w/a", new Set(["", "   "]))).toBe(false);
   });
 });

@@ -72,10 +72,59 @@ const blocked = (blockedReason: SessionArchiveBlockedReason): ReclaimEligibility
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/** Normalize the way `worktreeCleanup.ts` does, so both tiers compare alike. */
+/**
+ * Normalize the way `worktreeCleanup.ts` does, so both tiers compare alike.
+ *
+ * Also collapses duplicate separators and strips a trailing one. Protection is
+ * a string comparison, so `/w/proj/a/` failing to match `/w/proj/a` would be a
+ * silent hole rather than a visible bug — the paths come from different writers
+ * (thread creation, provisioning, hand-edited project files) and need not agree
+ * on cosmetics.
+ */
 export function normalizeWorktreePath(path: string | null | undefined): string | null {
   const trimmed = path?.trim();
-  return trimmed ? trimmed : null;
+  if (!trimmed) {
+    return null;
+  }
+  const collapsed = trimmed.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  return collapsed.length > 0 ? collapsed : "/";
+}
+
+/**
+ * Whether reclaiming `worktreePath` would touch a protected worktree.
+ *
+ * Exact equality is not enough in either direction:
+ *
+ * - a protected worktree *nested inside* the candidate would be destroyed along
+ *   with its parent;
+ * - a candidate nested inside a protected worktree is a subdirectory of
+ *   something in use.
+ *
+ * Both are rejected. Comparison is on path segments so `/w/proj/a` never
+ * matches the unrelated sibling `/w/proj/a-backup`.
+ */
+export function isWorktreeProtected(
+  worktreePath: string,
+  protectedPaths: ReadonlySet<string>,
+): boolean {
+  const candidate = normalizeWorktreePath(worktreePath);
+  if (candidate === null) {
+    return false;
+  }
+  for (const raw of protectedPaths) {
+    const guarded = normalizeWorktreePath(raw);
+    if (guarded === null) {
+      continue;
+    }
+    if (
+      guarded === candidate ||
+      guarded.startsWith(`${candidate}/`) ||
+      candidate.startsWith(`${guarded}/`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -122,10 +171,11 @@ export function evaluateReclaimEligibility(input: ReclaimEligibilityInput): Recl
   }
 
   // Un-overridable: these protect work that is not the operator's to discard.
-  if (input.liveWorktreePaths.has(worktreePath)) {
+  // Containment-aware, so a nested worktree on either side still counts.
+  if (isWorktreeProtected(worktreePath, input.liveWorktreePaths)) {
     return blocked("worktree-live");
   }
-  if (input.activeThreadWorktreePaths.has(worktreePath)) {
+  if (isWorktreeProtected(worktreePath, input.activeThreadWorktreePaths)) {
     return blocked("worktree-shared");
   }
 
