@@ -2197,84 +2197,98 @@ describe("ProviderCommandReactor", () => {
 
   // T3-CUSTOM(expbkt3): a worktree deleted out from under a live thread must
   // self-heal on the next turn start instead of failing with ENOENT forever.
-  it("recreates a missing worktree from its surviving branch before starting the session", async () => {
-    const tmpRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"));
-    const worktreePath = NodePath.join(tmpRoot, "t3code-recovered");
-    const listLocalBranchNames = vi.fn(() => Effect.succeed(["main", "t3code/recovered"]));
-    const pruneWorktrees = vi.fn(() => Effect.void);
-    const createWorktree = vi.fn(() => {
-      NodeFS.mkdirSync(worktreePath, { recursive: true });
-      return Effect.succeed({ worktree: { path: worktreePath, refName: "t3code/recovered" } });
-    });
-    const harness = await createHarness({
-      gitWorkflow: { listLocalBranchNames, pruneWorktrees, createWorktree },
-    });
-    const now = "2026-01-01T00:00:00.000Z";
+  effectIt.effect(
+    "recreates a missing worktree from its surviving branch before starting the session",
+    () =>
+      Effect.gen(function* () {
+        const tmpRoot = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"),
+        );
+        const worktreePath = NodePath.join(tmpRoot, "t3code-recovered");
+        const listLocalBranchNames = vi.fn(() => Effect.succeed(["main", "t3code/recovered"]));
+        const pruneWorktrees = vi.fn(() => Effect.void);
+        const createWorktree = vi.fn(() => {
+          NodeFS.mkdirSync(worktreePath, { recursive: true });
+          return Effect.succeed({ worktree: { path: worktreePath, refName: "t3code/recovered" } });
+        });
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            gitWorkflow: { listLocalBranchNames, pruneWorktrees, createWorktree },
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-worktree-recovery-meta"),
-        threadId: ThreadId.make("thread-1"),
-        branch: "t3code/recovered",
-        worktreePath,
+        yield* harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-worktree-recovery-meta"),
+          threadId: ThreadId.make("thread-1"),
+          branch: "t3code/recovered",
+          worktreePath,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-worktree-recovery"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-worktree-recovery"),
+            role: "user",
+            text: "turn against a deleted worktree",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+        expect(listLocalBranchNames).toHaveBeenCalledWith("/tmp/provider-project");
+        expect(pruneWorktrees).toHaveBeenCalledWith("/tmp/provider-project");
+        expect(createWorktree).toHaveBeenCalledWith({
+          cwd: "/tmp/provider-project",
+          refName: "t3code/recovered",
+          path: worktreePath,
+        });
+        expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: worktreePath });
+
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const readModel = await harness.readModel();
+            const thread = readModel.threads.find(
+              (entry) => entry.id === ThreadId.make("thread-1"),
+            );
+            return (
+              thread?.activities.some((activity) => activity.kind === "worktree.recreated") ?? false
+            );
+          }),
+        );
       }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-worktree-recovery"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-worktree-recovery"),
-          role: "user",
-          text: "turn against a deleted worktree",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
+  );
 
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    expect(listLocalBranchNames).toHaveBeenCalledWith("/tmp/provider-project");
-    expect(pruneWorktrees).toHaveBeenCalledWith("/tmp/provider-project");
-    expect(createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/provider-project",
-      refName: "t3code/recovered",
-      path: worktreePath,
-    });
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: worktreePath });
+  effectIt.effect("fails a turn permanently when both the worktree and its branch are gone", () =>
+    Effect.gen(function* () {
+      const tmpRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"),
+      );
+      const worktreePath = NodePath.join(tmpRoot, "t3code-unrecoverable");
+      const listLocalBranchNames = vi.fn(() => Effect.succeed(["main"]));
+      const createWorktree = vi.fn(() =>
+        Effect.die("createWorktree must not run without a branch"),
+      );
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          gitWorkflow: { listLocalBranchNames, createWorktree },
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return thread?.activities.some((activity) => activity.kind === "worktree.recreated") ?? false;
-    });
-  });
-
-  it("fails a turn permanently when both the worktree and its branch are gone", async () => {
-    const tmpRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"));
-    const worktreePath = NodePath.join(tmpRoot, "t3code-unrecoverable");
-    const listLocalBranchNames = vi.fn(() => Effect.succeed(["main"]));
-    const createWorktree = vi.fn(() => Effect.die("createWorktree must not run without a branch"));
-    const harness = await createHarness({
-      gitWorkflow: { listLocalBranchNames, createWorktree },
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      yield* harness.engine.dispatch({
         type: "thread.meta.update",
         commandId: CommandId.make("cmd-worktree-unrecoverable-meta"),
         threadId: ThreadId.make("thread-1"),
         branch: "t3code/deleted-branch",
         worktreePath,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      });
+      yield* harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-worktree-unrecoverable"),
         threadId: ThreadId.make("thread-1"),
@@ -2287,20 +2301,22 @@ describe("ProviderCommandReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
-      }),
-    );
+      });
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+          return thread?.session?.status === "error";
+        }),
+      );
+      const readModel = yield* Effect.promise(() => harness.readModel());
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return thread?.session?.status === "error";
-    });
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.session?.lastError).toContain("no longer exists");
-    expect(harness.startSession).not.toHaveBeenCalled();
-    expect(createWorktree).not.toHaveBeenCalled();
-  });
+      expect(thread?.session?.lastError).toContain("no longer exists");
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(createWorktree).not.toHaveBeenCalled();
+    }),
+  );
 
   it("restarts claude sessions when claude effort changes", async () => {
     const harness = await createHarness({
