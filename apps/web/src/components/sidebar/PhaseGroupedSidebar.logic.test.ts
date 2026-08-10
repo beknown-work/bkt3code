@@ -10,6 +10,11 @@ import {
   type ThreadExecutionSnapshot,
   type VcsStatusResult,
 } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): worktree codenames.
+import {
+  resolveWorktreeCodename,
+  worktreeCodenameToneIndex,
+} from "@t3tools/shared/worktreeCodename";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Project, ThreadShell } from "../../types";
@@ -37,6 +42,11 @@ import {
   reconcilePhaseSidebarFilters,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarCheckoutMetadata,
+  // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
+  resolvePhaseSidebarChangeRequestBadge,
+  // T3-CUSTOM(expbkt3): worktree codenames.
+  resolvePhaseSidebarWorktreeView,
+  phaseSidebarWorktreeRowProps,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarPhase,
@@ -192,20 +202,35 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
       kind: "current",
       label: "dev",
       tooltip: "Current checkout on dev",
+      toneIndex: null,
     });
   });
 
-  it("shows a worktree's recorded starting ref instead of its current branch", () => {
+  // T3-CUSTOM(expbkt3): BEGIN — worktree codenames.
+  it("names the worktree instead of restating its kind", () => {
+    const worktreePath = "/repo/worktrees/t3code-2d633e64";
+    const codename = resolveWorktreeCodename(worktreePath);
+
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "t3code/generated-feature", worktreePath },
+      { refName: "t3code/generated-feature", baseRef: "main", pr: null },
+    );
+
+    expect(metadata.kind).toBe("worktree");
+    expect(metadata.label).toBe(codename);
+    expect(metadata.label).not.toBe("Worktree");
+    expect(metadata.toneIndex).toBe(worktreeCodenameToneIndex(codename));
+  });
+
+  it("keeps the starting ref and the path in the tooltip", () => {
+    const worktreePath = "/repo/worktrees/t3code-2d633e64";
+
     expect(
       resolvePhaseSidebarCheckoutMetadata(
-        { branch: "t3code/generated-feature", worktreePath: "/repo/worktrees/feature" },
+        { branch: "t3code/generated-feature", worktreePath },
         { refName: "t3code/generated-feature", baseRef: "main", pr: null },
-      ),
-    ).toEqual({
-      kind: "worktree",
-      label: "from main",
-      tooltip: "Worktree started from main",
-    });
+      ).tooltip,
+    ).toBe(`Worktree ${resolveWorktreeCodename(worktreePath)} · from main · ${worktreePath}`);
   });
 
   it("prefers a pull request base when one is available", () => {
@@ -224,10 +249,182 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
             state: "open",
           },
         },
+      ).tooltip,
+    ).toContain("from release");
+  });
+
+  it("marks a shared worktree on the label and names the occupants", () => {
+    const worktreePath = "/repo/worktrees/t3code-2d633e64";
+    const codename = resolveWorktreeCodename(worktreePath);
+
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "t3code/generated-feature", worktreePath },
+      { refName: "t3code/generated-feature", baseRef: null, pr: null },
+      { sharing: { count: 2, summary: "Fix login, Refactor auth" } },
+    );
+
+    expect(metadata.label).toBe(`${codename} ×2`);
+    expect(metadata.tooltip).toContain("Shared by 2 threads: Fix login, Refactor auth");
+  });
+
+  it("uses the view's disambiguated codename when one is supplied", () => {
+    expect(
+      resolvePhaseSidebarCheckoutMetadata(
+        { branch: null, worktreePath: "/repo/worktrees/t3code-2d633e64" },
+        null,
+        { codename: "lisbon·a4" },
       ).label,
-    ).toBe("from release");
+    ).toBe("lisbon·a4");
+  });
+  // T3-CUSTOM(expbkt3): END
+});
+
+// T3-CUSTOM(expbkt3): BEGIN — PR badge beside the Linear tag.
+describe("resolvePhaseSidebarChangeRequestBadge", () => {
+  const pr = {
+    number: 76,
+    title: "Name worktrees after cities",
+    url: "https://github.com/beknown-work/bkt3code/pull/76",
+    baseRef: "bkmain",
+    headRef: "t3code/cities",
+  } as const;
+
+  it("labels the badge with the number alone and carries state in the colour", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: { ...pr, state: "open" } });
+
+    expect(badge?.label).toBe("#76");
+    // The number is the whole label: no state word rides along with it.
+    expect(badge?.label).not.toContain("open");
+    expect(badge?.colorClassName).toContain("emerald");
+  });
+
+  it("gives each state its own hue, matching the thread header's PR indicator", () => {
+    const tone = (state: "open" | "merged" | "closed") =>
+      resolvePhaseSidebarChangeRequestBadge({ pr: { ...pr, state } })?.colorClassName ?? "";
+
+    expect(tone("open")).toContain("emerald");
+    expect(tone("merged")).toContain("violet");
+    expect(tone("closed")).toContain("red");
+    expect(new Set([tone("open"), tone("merged"), tone("closed")]).size).toBe(3);
+  });
+
+  it("keeps the words in the tooltip: state, open-PR modifiers, and the title", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({
+      pr: {
+        ...pr,
+        state: "open",
+        isDraft: true,
+        checksStatus: "fail",
+        reviewDecision: "changes-requested",
+      },
+    });
+
+    expect(badge?.statusText).toBe("open · draft · changes requested · checks failing");
+    expect(badge?.tooltip).toBe(`PR #76 — ${badge?.statusText} · ${pr.title}`);
+  });
+
+  it("uses the provider's own term for a change request", () => {
+    expect(
+      resolvePhaseSidebarChangeRequestBadge({
+        pr: { ...pr, state: "merged" },
+        sourceControlProvider: { kind: "gitlab", name: "GitLab", baseUrl: "https://gitlab.com" },
+      })?.tooltip,
+    ).toContain("MR #76");
+  });
+
+  it("renders nothing without a probed change request", () => {
+    expect(resolvePhaseSidebarChangeRequestBadge(null)).toBeNull();
+    expect(resolvePhaseSidebarChangeRequestBadge({ pr: null })).toBeNull();
+  });
+
+  it("says nothing about draft or checks once the PR is merged", () => {
+    // Those modifiers only describe an open PR; repeating them after the merge
+    // would read as unfinished work.
+    expect(
+      resolvePhaseSidebarChangeRequestBadge({
+        pr: { ...pr, state: "merged", isDraft: true, checksStatus: "fail" },
+      })?.statusText,
+    ).toBe("merged");
   });
 });
+// T3-CUSTOM(expbkt3): END
+
+// T3-CUSTOM(expbkt3): BEGIN — shared-worktree awareness.
+describe("resolvePhaseSidebarWorktreeView", () => {
+  function thread(title: string, worktreePath: string | null, archivedAt: string | null = null) {
+    return { title, worktreePath, archivedAt };
+  }
+
+  it("reports no sharing when every thread has its own worktree", () => {
+    const view = resolvePhaseSidebarWorktreeView([
+      thread("A", "/w/one"),
+      thread("B", "/w/two"),
+      thread("C", null),
+    ]);
+
+    expect(view.sharingByPath.size).toBe(0);
+    expect(view.codenameByPath.get("/w/one")).toBe(resolveWorktreeCodename("/w/one"));
+  });
+
+  it("counts and names the threads occupying one worktree", () => {
+    const view = resolvePhaseSidebarWorktreeView([
+      thread("Fix login", "/w/shared"),
+      thread("Refactor auth", "/w/shared"),
+      thread("Elsewhere", "/w/other"),
+    ]);
+
+    expect(view.sharingByPath.get("/w/shared")).toEqual({
+      count: 2,
+      summary: "Fix login, Refactor auth",
+    });
+    expect(view.sharingByPath.has("/w/other")).toBe(false);
+  });
+
+  it("does not let archived threads inflate a worktree's occupancy", () => {
+    const view = resolvePhaseSidebarWorktreeView([
+      thread("Live", "/w/shared"),
+      thread("Archived", "/w/shared", "2026-01-01T00:00:00.000Z"),
+    ]);
+
+    expect(view.sharingByPath.size).toBe(0);
+  });
+});
+
+describe("phaseSidebarWorktreeRowProps", () => {
+  it("flattens to primitives so the memo'd row compares by value", () => {
+    const view = resolvePhaseSidebarWorktreeView([
+      { title: "A", worktreePath: "/w/shared", archivedAt: null },
+      { title: "B", worktreePath: "/w/shared", archivedAt: null },
+    ]);
+
+    const props = phaseSidebarWorktreeRowProps(view, "/w/shared");
+    expect(props).toEqual({
+      worktreeCodename: resolveWorktreeCodename("/w/shared"),
+      worktreeSharedCount: 2,
+      worktreeSharedSummary: "A, B",
+    });
+    // Same inputs, equal values — this is what keeps the memo intact.
+    expect(phaseSidebarWorktreeRowProps(view, "/w/shared")).toEqual(props);
+  });
+
+  it("still names a worktree the view never saw, such as an archived thread's", () => {
+    const view = resolvePhaseSidebarWorktreeView([]);
+    expect(phaseSidebarWorktreeRowProps(view, "/w/gone")).toEqual({
+      worktreeCodename: resolveWorktreeCodename("/w/gone"),
+      worktreeSharedCount: 0,
+      worktreeSharedSummary: null,
+    });
+  });
+
+  it("reports nothing for a thread without a worktree", () => {
+    expect(phaseSidebarWorktreeRowProps(resolvePhaseSidebarWorktreeView([]), null)).toEqual({
+      worktreeCodename: null,
+      worktreeSharedCount: 0,
+      worktreeSharedSummary: null,
+    });
+  });
+});
+// T3-CUSTOM(expbkt3): END
 
 function makeExecution(overrides: Partial<ThreadExecutionSnapshot> = {}): ThreadExecutionSnapshot {
   return {

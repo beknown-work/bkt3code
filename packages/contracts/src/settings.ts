@@ -580,41 +580,6 @@ export const ExternalMcpSettings = Schema.Struct({
 });
 export type ExternalMcpSettings = typeof ExternalMcpSettings.Type;
 
-export const DEFAULT_T3_CONDUCTOR_PERSONALITY =
-  "Be calm, decisive, and concise. Keep an operator-level view of every T3 session, surface blocked work early, and help turn a crowded workspace into a clear daily plan.";
-
-/**
- * T3-CUSTOM(expbkt3): Settings for the permanent experimental orchestration
- * agent. The durable thread id is server-scoped so every client converges on
- * one Conductor rather than independently creating its own.
- */
-export const T3ConductorSettings = Schema.Struct({
-  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  threadId: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  workspacePath: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  // T3-CUSTOM(expbkt3): Optional durable Linear ticket for the Conductor's
-  // cross-session coordination work. The UI accepts an identifier or URL and
-  // persists a canonical Linear URL here.
-  linearIssueUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  modelSelection: ModelSelection.pipe(
-    Schema.withDecodingDefault(
-      Effect.succeed({
-        instanceId: ProviderInstanceId.make("codex"),
-        model: DEFAULT_MODEL,
-        options: [{ id: "effort", value: "high" }],
-      }),
-    ),
-  ),
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
-  personalityInstructions: TrimmedString.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_T3_CONDUCTOR_PERSONALITY)),
-  ),
-});
-export type T3ConductorSettings = typeof T3ConductorSettings.Type;
-
 /**
  * T3-CUSTOM(expbkt3): Keep a session's title describing what it actually became.
  *
@@ -688,7 +653,6 @@ export const ExperimentalSettings = Schema.Struct({
   ),
   // T3-CUSTOM(expbkt3): END
   externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  t3Conductor: T3ConductorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // T3-CUSTOM(expbkt3): periodic title refresh.
   threadTitleMaintenance: ThreadTitleMaintenanceSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1004,19 +968,6 @@ export const ServerSettingsPatch = Schema.Struct({
           refreshEveryUserPrompts: Schema.optionalKey(
             Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 20 })),
           ),
-        }),
-      ),
-      // T3-CUSTOM(expbkt3): Keep the permanent Conductor independently patchable.
-      t3Conductor: Schema.optionalKey(
-        Schema.Struct({
-          enabled: Schema.optionalKey(Schema.Boolean),
-          threadId: Schema.optionalKey(TrimmedString),
-          workspacePath: Schema.optionalKey(TrimmedString),
-          linearIssueUrl: Schema.optionalKey(TrimmedString),
-          modelSelection: Schema.optionalKey(ModelSelectionPatch),
-          runtimeMode: Schema.optionalKey(RuntimeMode),
-          interactionMode: Schema.optionalKey(ProviderInteractionMode),
-          personalityInstructions: Schema.optionalKey(TrimmedString),
         }),
       ),
       sessionSummary: Schema.optionalKey(

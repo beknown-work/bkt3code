@@ -17,6 +17,23 @@ Retry is safe after a partial run.
 Only one action is used automatically. If older project data flags more than one action, T3 uses
 the first and shows a warning until you save a single selection.
 
+## Ship the setup action in the repository
+
+A repository can declare its setup action in a `t3.json` file at the repository root, so everyone
+who opens it gets a prepared worktree without configuring anything:
+
+```json
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [{ "name": "Bootstrap", "command": "./tools/setup.sh", "runOnWorktreeCreate": true }]
+}
+```
+
+The checked-in action runs on every new worktree, with no import step, on every machine and server
+where the repository is opened. A worktree setup action configured under **Settings → Projects**
+always wins; the checked-in one is the fallback. T3 uses the first `t3.json` script flagged
+`runOnWorktreeCreate`, and a missing or invalid `t3.json` simply means no setup action runs.
+
 ## Choose app and project defaults
 
 The **New threads** app settings define the environment-local defaults for:

@@ -16,6 +16,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
+// T3-CUSTOM(expbkt3): worktree directories are named after their codename.
+import { isWorktreeCodename } from "@t3tools/shared/worktreeCodename";
 import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
@@ -760,6 +762,50 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     );
   });
 
+  describe("worktree recovery", () => {
+    it.effect("prunes a stale registration so the worktree can be recreated in place", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const worktreesRoot = yield* makeTmpDir("git-vcs-driver-worktrees-");
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = pathService.join(worktreesRoot, "recovered");
+
+        yield* driver.initRepo({ cwd });
+        yield* git(cwd, ["config", "user.email", "test@test.com"]);
+        yield* git(cwd, ["config", "user.name", "Test"]);
+        yield* writeTextFile(cwd, "README.md", "# test\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "initial commit"]);
+        yield* driver.createWorktree({
+          cwd,
+          refName: "HEAD",
+          newRefName: "feature/recovered",
+          path: worktreePath,
+        });
+
+        // An externally deleted directory leaves its `.git/worktrees/`
+        // registration behind, which keeps the branch "checked out" and
+        // blocks re-adding it at the same path until pruned.
+        yield* fileSystem.remove(worktreePath, { recursive: true });
+        const blocked = yield* driver
+          .createWorktree({ cwd, refName: "feature/recovered", path: worktreePath })
+          .pipe(Effect.flip);
+        assert.equal(blocked._tag, "GitCommandError");
+
+        yield* driver.pruneWorktrees(cwd);
+        const recreated = yield* driver.createWorktree({
+          cwd,
+          refName: "feature/recovered",
+          path: worktreePath,
+        });
+        assert.equal(recreated.worktree.path, worktreePath);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/recovered");
+      }),
+    );
+  });
+
   describe("review diff previews", () => {
     it.effect("drops an unterminated path from truncated NUL-separated git output", () =>
       Effect.sync(() => {
@@ -1363,6 +1409,80 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
+
+    // T3-CUSTOM(expbkt3): BEGIN — worktree directories carry their codename.
+    it.effect("names the directory after its codename when no path is given", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const created = yield* driver.createWorktree({
+          cwd,
+          refName: initialBranch,
+          newRefName: "t3code/2d633e64",
+          path: null,
+        });
+
+        const directoryName = pathService.basename(created.worktree.path);
+        assert.equal(isWorktreeCodename(directoryName), true);
+        // The old shape was the branch with its slashes swapped.
+        assert.notEqual(directoryName, "t3code-2d633e64");
+        assert.equal(
+          yield* git(created.worktree.path, ["branch", "--show-current"]),
+          "t3code/2d633e64",
+        );
+      }),
+    );
+
+    it.effect("gives two worktrees in one project two different codenames", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const first = yield* driver.createWorktree({
+          cwd,
+          refName: initialBranch,
+          newRefName: "t3code/aaaaaaaa",
+          path: null,
+        });
+        const second = yield* driver.createWorktree({
+          cwd,
+          refName: initialBranch,
+          newRefName: "t3code/bbbbbbbb",
+          path: null,
+        });
+
+        const firstName = pathService.basename(first.worktree.path);
+        const secondName = pathService.basename(second.worktree.path);
+        assert.equal(isWorktreeCodename(firstName), true);
+        assert.equal(isWorktreeCodename(secondName), true);
+        assert.notEqual(firstName, secondName);
+      }),
+    );
+
+    it.effect("still honors an explicit path, which is how the durable bootstrap creates one", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const explicitPath = pathService.join(yield* makeTmpDir("git-worktrees-"), "lisbon");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const created = yield* driver.createWorktree({
+          cwd,
+          path: explicitPath,
+          refName: initialBranch,
+          newRefName: "t3code/2d633e64",
+        });
+
+        assert.equal(created.worktree.path, explicitPath);
+      }),
+    );
+    // T3-CUSTOM(expbkt3): END
   });
 
   describe("remote operations", () => {

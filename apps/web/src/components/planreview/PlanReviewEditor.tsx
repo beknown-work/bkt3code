@@ -85,7 +85,12 @@ import {
   TaskListElement,
 } from "./plate/PlanReviewNodes";
 import { CommentLeaf, SuggestionLeaf } from "./plate/PlanReviewReviewMarks";
-import { normalizeQuotedText } from "./planReviewMarkdown";
+import {
+  hasPlanReviewEditorChange,
+  normalizeQuotedText,
+  resolveSubmittedPlanMarkdown,
+} from "./planReviewMarkdown";
+import { replacePlanReviewEditorValue } from "./planReviewEditorValue";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
@@ -216,6 +221,8 @@ function PlanReviewEditorImpl({
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
   const [commentBody, setCommentBody] = useState("");
   const loadedMarkdownRef = useRef<string | null>(null);
+  const baselineEditorMarkdownRef = useRef<string | null>(null);
+  const hasReviewerEditsRef = useRef(false);
   // Loading a version fires Plate's onChange; that is not a reviewer edit.
   const loadingRef = useRef(false);
   const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -230,17 +237,19 @@ function PlanReviewEditorImpl({
     try {
       loadingRef.current = true;
       const value = editor.api.markdown.deserialize(markdown);
-      editor.tf.setValue(value);
+      const once = editor.api.markdown.serialize({ value });
+      const twice = editor.api.markdown.serialize({
+        value: editor.api.markdown.deserialize(once),
+      });
+      baselineEditorMarkdownRef.current = once;
+      hasReviewerEditsRef.current = false;
+      replacePlanReviewEditorValue(editor, value);
       requestAnimationFrame(() => {
         loadingRef.current = false;
       });
 
       // Round-trip check: an unstable document would make every later diff
       // full of formatting noise the reviewer never typed.
-      const once = editor.api.markdown.serialize({ value });
-      const twice = editor.api.markdown.serialize({
-        value: editor.api.markdown.deserialize(once),
-      });
       if (once !== twice) onRoundTripUnstable();
     } catch {
       loadingRef.current = false;
@@ -259,7 +268,12 @@ function PlanReviewEditorImpl({
     () => ({
       getMarkdown: () => {
         try {
-          return editor.api.markdown.serialize();
+          const editorMarkdown = editor.api.markdown.serialize();
+          return resolveSubmittedPlanMarkdown({
+            canonicalMarkdown: loadedMarkdownRef.current ?? markdown,
+            editorMarkdown,
+            hasReviewerEdits: hasReviewerEditsRef.current,
+          });
         } catch {
           // A tree mid-edit can be transiently invalid; the caller falls back
           // to the last known good document rather than saving nonsense.
@@ -267,13 +281,31 @@ function PlanReviewEditorImpl({
         }
       },
     }),
-    [editor],
+    [editor, markdown],
   );
 
   const handleChange = useCallback(() => {
     if (loadingRef.current) return;
+    if (!hasReviewerEditsRef.current) {
+      try {
+        const baselineEditorMarkdown = baselineEditorMarkdownRef.current;
+        if (
+          baselineEditorMarkdown !== null &&
+          !hasPlanReviewEditorChange({
+            baselineEditorMarkdown,
+            editorMarkdown: editor.api.markdown.serialize(),
+          })
+        ) {
+          return;
+        }
+      } catch {
+        // Treat an editor tree that cannot be serialized as changed so the
+        // existing save path can retain its last known good markdown.
+      }
+      hasReviewerEditsRef.current = true;
+    }
     onChanged();
-  }, [onChanged]);
+  }, [editor, onChanged]);
 
   const startComment = useCallback(() => {
     const quote = normalizeQuotedText(window.getSelection()?.toString() ?? "");

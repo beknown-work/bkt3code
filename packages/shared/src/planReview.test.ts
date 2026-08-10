@@ -121,10 +121,6 @@ describe("buildPlanReviewFeedbackPrompt", () => {
     planTitle: "Auth rewrite",
     globalComment: "",
     comments: [],
-    editDiff: "",
-    fromRevision: null,
-    toRevision: null,
-    editAuthorLabel: null,
     fullDocument: null,
   };
 
@@ -149,24 +145,9 @@ describe("buildPlanReviewFeedbackPrompt", () => {
     expect(prompt).not.toContain("3. Flip the flag");
   });
 
-  it("attaches reviewer edits as a diff with version attribution", () => {
+  it("attaches reviewer edits as one complete source-of-truth document", () => {
     const prompt = buildPlanReviewFeedbackPrompt({
       ...base,
-      editDiff: "@@ -1,1 +1,1 @@\n-old\n+new",
-      fromRevision: 1,
-      toRevision: 2,
-      editAuthorLabel: "Tushar",
-    });
-
-    expect(prompt).toContain('<plan_edit filePath="Auth rewrite.md" fromVersion="1" toVersion="2"');
-    expect(prompt).toContain('author="Tushar"');
-    expect(prompt).toContain("```diff");
-  });
-
-  it("falls back to the full document when the edit rewrote most of the plan", () => {
-    const prompt = buildPlanReviewFeedbackPrompt({
-      ...base,
-      editDiff: "@@ -1,1 +1,1 @@\n-old\n+new",
       fullDocument: "# Rewritten\n\nEverything changed.",
     });
 
@@ -184,13 +165,18 @@ describe("buildPlanReviewFeedbackPrompt", () => {
 });
 
 describe("buildPlanReviewApprovalPrompt", () => {
+  const base = {
+    documentId: "doc-1",
+    planTitle: "Auth rewrite",
+    notes: "",
+    comments: [],
+    fullPlanMarkdown: null,
+    fullPlanReason: null,
+    wasEdited: false,
+  };
+
   it("sends one short line when the plan is still in context", () => {
-    const prompt = buildPlanReviewApprovalPrompt({
-      notes: "",
-      resendPlanMarkdown: null,
-      resendReason: null,
-      approvedEditDiff: "",
-    });
+    const prompt = buildPlanReviewApprovalPrompt(base);
 
     expect(prompt).toBe(
       "Plan approved. Implement the plan you proposed above, exactly as written.",
@@ -199,34 +185,51 @@ describe("buildPlanReviewApprovalPrompt", () => {
 
   it("appends reviewer notes without the plan body", () => {
     const prompt = buildPlanReviewApprovalPrompt({
+      ...base,
       notes: "Start with the migration.",
-      resendPlanMarkdown: null,
-      resendReason: null,
-      approvedEditDiff: "",
     });
 
     expect(prompt).toContain("Reviewer notes:\nStart with the migration.");
     expect(prompt).not.toContain("PLEASE IMPLEMENT");
   });
 
-  it("carries the edit diff when the reviewer changed the plan before approving", () => {
+  it("carries one complete plan when the reviewer changed it before approving", () => {
     const prompt = buildPlanReviewApprovalPrompt({
-      notes: "",
-      resendPlanMarkdown: null,
-      resendReason: null,
-      approvedEditDiff: "@@ -1,1 +1,1 @@\n-old\n+new",
+      ...base,
+      fullPlanMarkdown: PLAN.replace("Flip the flag", "Flip the flag safely"),
+      wasEdited: true,
     });
 
-    expect(prompt).toContain("The reviewer edited the plan before approving.");
-    expect(prompt).toContain("```diff");
+    expect(prompt).toContain("Plan approved with reviewer edits.");
+    expect(prompt).toContain("3. Flip the flag safely");
+    expect(prompt).not.toContain("```diff");
+    expect(prompt.split("# Auth rewrite")).toHaveLength(2);
+  });
+
+  it("includes anchored comments without repeating an unchanged plan", () => {
+    const prompt = buildPlanReviewApprovalPrompt({
+      ...base,
+      comments: [
+        {
+          startIndex: 5,
+          endIndex: 5,
+          quotedText: "2. Backfill the rows",
+          body: "Keep this safe for a rolling deploy.",
+          authorLabel: "Tushar",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("<review_comment ");
+    expect(prompt).toContain("Keep this safe for a rolling deploy.");
+    expect(prompt).not.toContain("3. Flip the flag");
   });
 
   it("repeats the plan and explains why when the policy demands it", () => {
     const prompt = buildPlanReviewApprovalPrompt({
-      notes: "",
-      resendPlanMarkdown: PLAN,
-      resendReason: "this session compacted its context after the plan was written",
-      approvedEditDiff: "",
+      ...base,
+      fullPlanMarkdown: PLAN,
+      fullPlanReason: "this session compacted its context after the plan was written",
     });
 
     expect(prompt).toContain("PLEASE IMPLEMENT THIS APPROVED PLAN:");

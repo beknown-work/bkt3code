@@ -5,7 +5,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { DEFAULT_SERVER_SETTINGS, type ScopedProjectRef } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ScopedProjectRef, type ThreadId } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -49,6 +49,8 @@ export function useNewThreadHandler() {
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
         replace?: boolean;
+        /** Promote the eventual thread as a child of this thread. */
+        parentThreadId?: ThreadId | null;
       },
     ): Promise<void> => {
       const {
@@ -88,6 +90,7 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const hasParentThreadIdOption = options?.parentThreadId !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -113,7 +116,8 @@ export function useNewThreadHandler() {
             hasBranchOption ||
             hasWorktreePathOption ||
             hasEnvModeOption ||
-            hasStartFromOriginOption;
+            hasStartFromOriginOption ||
+            hasParentThreadIdOption;
           // Resurrecting a stored draft must not resurrect its stale context:
           // explicit workspace options win outright; otherwise the env context
           // resets to the configured defaults so drafts seeded before a
@@ -128,6 +132,9 @@ export function useNewThreadHandler() {
                 ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
                 ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
                 ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
+                // Always written alongside explicit options so a resurrected
+                // draft never keeps a stale parent from a previous seeding.
+                parentThreadId: options?.parentThreadId ?? null,
               }
             : isDraftAlreadyOpen
               ? null
@@ -136,6 +143,7 @@ export function useNewThreadHandler() {
                   worktreePath: null,
                   envMode: inheritedEnvMode,
                   startFromOrigin: inheritedStartFromOrigin,
+                  parentThreadId: null,
                 };
           if (workspaceContext) {
             setDraftThreadContext(reusableStoredDraftThread.draftId, {
@@ -183,13 +191,15 @@ export function useNewThreadHandler() {
           hasBranchOption ||
           hasWorktreePathOption ||
           hasEnvModeOption ||
-          hasStartFromOriginOption
+          hasStartFromOriginOption ||
+          hasParentThreadIdOption
         ) {
           setDraftThreadContext(currentRouteTarget.draftId, {
             ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
             ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
             ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
             ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
+            ...(hasParentThreadIdOption ? { parentThreadId: options?.parentThreadId ?? null } : {}),
           });
         }
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, currentRouteTarget.draftId, {
@@ -201,6 +211,7 @@ export function useNewThreadHandler() {
           ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
           ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
           ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
+          ...(hasParentThreadIdOption ? { parentThreadId: options?.parentThreadId ?? null } : {}),
         });
         return Promise.resolve();
       }
@@ -215,6 +226,7 @@ export function useNewThreadHandler() {
           createdAt,
           branch: options?.branch ?? inheritedBranch,
           worktreePath: options?.worktreePath ?? null,
+          parentThreadId: options?.parentThreadId ?? null,
           envMode: initialEnvMode,
           startFromOrigin:
             options?.startFromOrigin ??

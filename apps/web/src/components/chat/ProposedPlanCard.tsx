@@ -200,9 +200,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-card/95 via-card/80 to-transparent" />
           ) : null}
         </div>
-        {canCollapse ||
-        (reviewable && onOpenPlannotator) ||
-        (reviewable && onOpenPlanReview && planReviewDocumentId) ? (
+        {canCollapse || (reviewable && onOpenPlannotator) || (reviewable && onOpenPlanReview) ? (
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {canCollapse ? (
               <Button
@@ -215,17 +213,30 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               </Button>
             ) : null}
             {/* T3-CUSTOM(expbkt3): BEGIN — native timeline plan review entry point. */}
-            {reviewable && onOpenPlanReview && planReviewDocumentId ? (
-              <Button
-                size="sm"
-                data-scroll-anchor-ignore
-                data-plan-review-trigger
-                aria-label="Open the plan in the review panel"
-                onClick={() => onOpenPlanReview(planReviewDocumentId)}
-              >
-                Preview
-                <ArrowRightIcon className="size-4" />
-              </Button>
+            {reviewable && onOpenPlanReview ? (
+              planReviewDocumentId ? (
+                <Button
+                  size="sm"
+                  data-scroll-anchor-ignore
+                  data-plan-review-trigger
+                  aria-label="Open the plan in the review panel"
+                  onClick={() => onOpenPlanReview(planReviewDocumentId)}
+                >
+                  Preview
+                  <ArrowRightIcon className="size-4" />
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled
+                  data-scroll-anchor-ignore
+                  data-plan-review-pending
+                  aria-label="Preparing plan preview"
+                >
+                  Preview
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                </Button>
+              )
             ) : null}
             {reviewable && onOpenPlannotator ? (
               plannotatorUrl ? (

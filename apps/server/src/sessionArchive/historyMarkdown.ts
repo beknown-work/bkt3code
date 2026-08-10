@@ -72,7 +72,7 @@ function orDash(value: string | null | undefined): string {
  * Prompts routinely contain fenced code, so a fixed three-backtick fence would
  * terminate early and corrupt every following section of the digest.
  */
-function fencedBlock(text: string): string {
+export function fencedBlock(text: string): string {
   const longestRun = [...text.matchAll(/`+/g)].reduce(
     (longest, match) => Math.max(longest, match[0].length),
     0,
@@ -81,7 +81,7 @@ function fencedBlock(text: string): string {
   return `${fence}text\n${text.trimEnd()}\n${fence}`;
 }
 
-function renderGitSection(git: HistoryGitState | null): ReadonlyArray<string> {
+export function renderGitSection(git: HistoryGitState | null): ReadonlyArray<string> {
   if (git === null) {
     return ["## Git state", "", "No git information was captured for this session.", ""];
   }

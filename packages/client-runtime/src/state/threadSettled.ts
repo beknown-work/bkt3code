@@ -221,9 +221,10 @@ export function threadWokeAt(
  * queued turn) are checked first and hold a thread active regardless of any
  * override. Past the blockers, the explicit user override (thread.settle /
  * thread.unsettle commands, projected into settledOverride + settledAt)
- * wins in both directions; without one, a thread auto-settles on a
- * merged/closed PR immediately or on inactivity past the window — except
- * that an open PR blocks the inactivity path entirely. The server
+ * wins in both directions; without one, a thread auto-settles on a closed
+ * (abandoned) PR immediately or on inactivity past the window — except that
+ * an open PR blocks the inactivity path entirely. A merged PR settles
+ * nothing on its own: it only releases the open-PR block. The server
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
  */
@@ -258,12 +259,19 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
-  if (options.changeRequestState === "merged" || options.changeRequestState === "closed") {
-    return true;
-  }
+  // An abandoned change request is a decision: nothing is shipping from this
+  // thread, so it settles immediately.
+  if (options.changeRequestState === "closed") return true;
+  // A MERGE deliberately does not auto-settle. Landing the diff is usually
+  // where the follow-up starts — verify the deploy, close the ticket, answer
+  // review fallout — and vanishing the thread at merge time buried exactly
+  // the work the user still had in hand. Merging only stops BLOCKING the
+  // inactivity path below: the thread settles once it actually goes quiet,
+  // or the moment the user settles it by hand.
+  //
   // An open PR is unfinished business regardless of how long the thread has
   // been quiet: review can take days, and hiding the thread would bury the
-  // work waiting on it. Only merge/close (above) or an explicit user settle
+  // work waiting on it. Only a close (above) or an explicit user settle
   // resolves it.
   if (options.changeRequestState === "open") return false;
   if (options.autoSettleAfterDays === null) return false;

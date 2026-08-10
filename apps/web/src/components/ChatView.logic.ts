@@ -27,8 +27,21 @@ export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by
 export const MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS = 3;
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
+export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
+  const timeoutId = globalThis.setTimeout(showWarning, ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
+  return () => globalThis.clearTimeout(timeoutId);
+}
+
+export function hasEnvironmentReconnectWarningGraceElapsed(
+  activeEnvironmentId: EnvironmentId | null,
+  elapsedEnvironmentId: EnvironmentId | null,
+): boolean {
+  return activeEnvironmentId !== null && activeEnvironmentId === elapsedEnvironmentId;
+}
 
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,
@@ -334,6 +347,18 @@ export function cloneComposerImageForRetry(
   } catch {
     return image;
   }
+}
+
+export function deriveOutboxSendGate(options: {
+  isLocalSendBusy: boolean;
+  hasPendingOutboxItem: boolean;
+  environmentConnected: boolean;
+}): boolean {
+  // While the environment is disconnected the outbox is a queue, not an
+  // in-flight turn: further sends must stay possible so messages can line up
+  // behind it. Once connected, a pending item means a dispatch/drain is
+  // actively running and the composer stays latched as before.
+  return options.isLocalSendBusy || (options.hasPendingOutboxItem && options.environmentConnected);
 }
 
 export function deriveComposerSendState(options: {
