@@ -78,16 +78,20 @@ export const make = Effect.gen(function* () {
     let lastPongAtMillis: number | null = null;
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      onPong: Effect.sync(() => {
-        lastPongAtMillis = Date.now();
-      }),
-      onPingTimeout: Effect.suspend(() =>
+      onPong: Effect.clockWith((clock) =>
+        Effect.sync(() => {
+          lastPongAtMillis = clock.currentTimeMillisUnsafe();
+        }),
+      ),
+      onPingTimeout: Effect.clockWith((clock) =>
         Effect.logWarning("Connection closed by client ping timeout.").pipe(
           Effect.annotateLogs({
             "connection.label": connection.label,
             "connection.environment.id": connection.environmentId,
             "connection.ms_since_last_pong":
-              lastPongAtMillis === null ? "never" : Date.now() - lastPongAtMillis,
+              lastPongAtMillis === null
+                ? "never"
+                : clock.currentTimeMillisUnsafe() - lastPongAtMillis,
           }),
         ),
       ),
