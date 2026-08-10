@@ -5,6 +5,12 @@ import {
   effectiveSnoozed,
   type ChangeRequestStateLike,
 } from "@t3tools/client-runtime/state/thread-settled";
+// T3-CUSTOM(expbkt3): memorable worktree codenames.
+import {
+  disambiguateWorktreeCodenames,
+  resolveWorktreeCodename,
+  worktreeCodenameToneIndex,
+} from "@t3tools/shared/worktreeCodename";
 
 import { deriveLogicalProjectKey } from "../../logicalProject";
 import type { Project, ThreadShell } from "../../types";
@@ -26,23 +32,62 @@ export interface PhaseSidebarCheckoutMetadata {
   readonly kind: "current" | "worktree";
   readonly label: string;
   readonly tooltip: string;
+  /**
+   * Color bucket for the codename, or `null` for a current checkout. Consumers
+   * map this through a static class table — see `PHASE_SIDEBAR_CHECKOUT_TONES`.
+   */
+  readonly toneIndex: number | null;
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Other threads sharing this thread's worktree. Two agents
+ * editing one directory at the same time is a real hazard, and without this it
+ * is invisible.
+ */
+export interface PhaseSidebarWorktreeSharing {
+  /** Threads occupying the worktree. Always >= 2 when present. */
+  readonly count: number;
+  /**
+   * Pre-joined thread titles for the tooltip. A string rather than an array so
+   * it can cross the memo'd row boundary as a prop without defeating the memo.
+   */
+  readonly summary: string;
 }
 
 /**
  * T3-CUSTOM(expbkt3): Keep checkout semantics explicit in the experimental
  * sidebar. Current checkouts show their live branch; dedicated worktrees show
- * the ref they were created from, never their generated feature branch.
+ * their codename — a short, memorable name derived from the worktree path, so
+ * that two rows in the same worktree read identically and two rows in different
+ * worktrees read differently at a glance. The ref the worktree was created from
+ * moves into the tooltip, which is where it was actually being read anyway.
  */
 export function resolvePhaseSidebarCheckoutMetadata(
   thread: Pick<ThreadShell, "branch" | "worktreePath">,
   vcsStatus: Pick<VcsStatusResult, "refName" | "baseRef" | "pr"> | null | undefined,
+  options?: {
+    /** Label from `disambiguateWorktreeCodenames`, when the view resolved one. */
+    readonly codename?: string | null;
+    readonly sharing?: PhaseSidebarWorktreeSharing | null;
+  },
 ): PhaseSidebarCheckoutMetadata {
   if (thread.worktreePath) {
     const baseRef = vcsStatus?.pr?.baseRef ?? vcsStatus?.baseRef ?? null;
+    const codename = options?.codename ?? resolveWorktreeCodename(thread.worktreePath);
+    const sharing = options?.sharing ?? null;
+
+    const tooltipParts = [`Worktree ${codename}`];
+    if (baseRef) tooltipParts.push(`from ${baseRef}`);
+    tooltipParts.push(thread.worktreePath);
+    if (sharing) {
+      tooltipParts.push(`Shared by ${sharing.count} threads: ${sharing.summary}`);
+    }
+
     return {
       kind: "worktree",
-      label: baseRef ? `from ${baseRef}` : "Worktree",
-      tooltip: baseRef ? `Worktree started from ${baseRef}` : "Dedicated worktree",
+      label: sharing ? `${codename} ×${sharing.count}` : codename,
+      tooltip: tooltipParts.join(" · "),
+      toneIndex: worktreeCodenameToneIndex(codename),
     };
   }
 
@@ -51,6 +96,95 @@ export function resolvePhaseSidebarCheckoutMetadata(
     kind: "current",
     label: branch ?? "Current checkout",
     tooltip: branch ? `Current checkout on ${branch}` : "Current checkout",
+    toneIndex: null,
+  };
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Static tone table for worktree codenames. Tailwind scans
+ * source for literal class names, so these cannot be interpolated hues.
+ */
+export const PHASE_SIDEBAR_CHECKOUT_TONES: readonly string[] = [
+  "text-rose-600 dark:text-rose-300/90",
+  "text-orange-600 dark:text-orange-300/90",
+  "text-amber-600 dark:text-amber-300/90",
+  "text-lime-600 dark:text-lime-300/90",
+  "text-emerald-600 dark:text-emerald-300/90",
+  "text-teal-600 dark:text-teal-300/90",
+  "text-cyan-600 dark:text-cyan-300/90",
+  "text-sky-600 dark:text-sky-300/90",
+  "text-indigo-600 dark:text-indigo-300/90",
+  "text-violet-600 dark:text-violet-300/90",
+  "text-fuchsia-600 dark:text-fuchsia-300/90",
+  "text-pink-600 dark:text-pink-300/90",
+];
+
+export function phaseSidebarCheckoutToneClassName(toneIndex: number | null): string {
+  if (toneIndex === null) return "";
+  return PHASE_SIDEBAR_CHECKOUT_TONES[toneIndex % PHASE_SIDEBAR_CHECKOUT_TONES.length] ?? "";
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Codename label and shared-worktree state for every thread
+ * on screen, resolved together because both answers depend on the whole visible
+ * set: codenames disambiguate against each other, and sharing is a count across
+ * rows. Archived threads do not participate — the rest of the UI hides them, so
+ * they must not inflate a worktree's occupancy.
+ */
+export interface PhaseSidebarWorktreeView {
+  readonly codenameByPath: ReadonlyMap<string, string>;
+  readonly sharingByPath: ReadonlyMap<string, PhaseSidebarWorktreeSharing>;
+}
+
+export function resolvePhaseSidebarWorktreeView(
+  threads: ReadonlyArray<Pick<ThreadShell, "title" | "worktreePath" | "archivedAt">>,
+): PhaseSidebarWorktreeView {
+  const titlesByPath = new Map<string, string[]>();
+  for (const thread of threads) {
+    const worktreePath = thread.worktreePath?.trim();
+    if (!worktreePath || thread.archivedAt != null) continue;
+    titlesByPath.set(worktreePath, [...(titlesByPath.get(worktreePath) ?? []), thread.title]);
+  }
+
+  const sharingByPath = new Map<string, PhaseSidebarWorktreeSharing>();
+  for (const [worktreePath, titles] of titlesByPath) {
+    if (titles.length < 2) continue;
+    sharingByPath.set(worktreePath, { count: titles.length, summary: titles.join(", ") });
+  }
+
+  return {
+    codenameByPath: disambiguateWorktreeCodenames([...titlesByPath.keys()]),
+    sharingByPath,
+  };
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Flatten one thread's worktree state into primitives. The
+ * row is memo'd and the sidebar re-renders on every shell event, so the props
+ * crossing that boundary have to compare by value.
+ */
+export interface PhaseSidebarWorktreeRowProps {
+  readonly worktreeCodename: string | null;
+  /** 0 when the worktree is not shared. */
+  readonly worktreeSharedCount: number;
+  readonly worktreeSharedSummary: string | null;
+}
+
+export function phaseSidebarWorktreeRowProps(
+  view: PhaseSidebarWorktreeView,
+  worktreePath: string | null,
+): PhaseSidebarWorktreeRowProps {
+  const path = worktreePath?.trim();
+  if (!path) {
+    return { worktreeCodename: null, worktreeSharedCount: 0, worktreeSharedSummary: null };
+  }
+  const sharing = view.sharingByPath.get(path) ?? null;
+  return {
+    // An archived thread is absent from the view but still renders on the
+    // shelf, so fall back to deriving its codename directly.
+    worktreeCodename: view.codenameByPath.get(path) ?? resolveWorktreeCodename(path),
+    worktreeSharedCount: sharing?.count ?? 0,
+    worktreeSharedSummary: sharing?.summary ?? null,
   };
 }
 

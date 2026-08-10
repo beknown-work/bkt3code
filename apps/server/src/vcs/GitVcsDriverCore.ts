@@ -27,6 +27,11 @@ import {
   type VcsRef,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+// T3-CUSTOM(expbkt3): worktree directories are named after their codename.
+import {
+  allocateWorktreeDirectoryName,
+  legacyWorktreeDirectoryName,
+} from "../worktreeNaming/allocateWorktreeDirectory.ts";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
@@ -2773,9 +2778,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     "createWorktree",
   )(function* (input) {
     const targetBranch = input.newRefName ?? input.refName;
-    const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    // T3-CUSTOM(expbkt3): BEGIN — name the directory after the worktree's
+    // codename when the caller did not dictate a path. The durable bootstrap
+    // always supplies one (allocated in the coordinator), so this covers the
+    // branch-toolbar and mobile paths that create a worktree directly.
+    const projectWorktreesDir = path.join(worktreesDir, repoName);
+    const legacyName = legacyWorktreeDirectoryName(targetBranch);
+    const worktreePath =
+      input.path ??
+      path.join(
+        projectWorktreesDir,
+        yield* allocateWorktreeDirectoryName({
+          projectWorktreesDir,
+          seed: targetBranch,
+          legacyName,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.orElseSucceed(() => legacyName),
+        ),
+      );
+    // T3-CUSTOM(expbkt3): END
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
