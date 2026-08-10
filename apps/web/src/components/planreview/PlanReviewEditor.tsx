@@ -90,6 +90,7 @@ import {
   normalizeQuotedText,
   resolveSubmittedPlanMarkdown,
 } from "./planReviewMarkdown";
+import { replacePlanReviewEditorValue } from "./planReviewEditorValue";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
@@ -242,7 +243,7 @@ function PlanReviewEditorImpl({
       });
       baselineEditorMarkdownRef.current = once;
       hasReviewerEditsRef.current = false;
-      editor.tf.setValue(value);
+      replacePlanReviewEditorValue(editor, value);
       requestAnimationFrame(() => {
         loadingRef.current = false;
       });
