@@ -233,35 +233,8 @@ export function applyServerSettingsPatch(
       }
     : nextWithReplacements;
 
-  // T3-CUSTOM(expbkt3): Conductor provider/model switches must replace stale
-  // provider traits, matching the semantics of every other model picker.
-  const conductorSelectionPatch = patch.experimental?.t3Conductor?.modelSelection;
-  const withConductorSelection = conductorSelectionPatch
-    ? {
-        ...withSummarySelection,
-        experimental: {
-          ...withSummarySelection.experimental,
-          t3Conductor: {
-            ...withSummarySelection.experimental.t3Conductor,
-            modelSelection: createModelSelection(
-              conductorSelectionPatch.instanceId ??
-                current.experimental.t3Conductor.modelSelection.instanceId,
-              conductorSelectionPatch.model ??
-                current.experimental.t3Conductor.modelSelection.model,
-              shouldReplaceTextGenerationModelSelection(conductorSelectionPatch)
-                ? conductorSelectionPatch.options
-                : mergeModelSelectionOptionsById({
-                    current: current.experimental.t3Conductor.modelSelection.options,
-                    patch: conductorSelectionPatch.options,
-                  }),
-            ),
-          },
-        },
-      }
-    : withSummarySelection;
-
   if (!selectionPatch) {
-    return withConductorSelection;
+    return withSummarySelection;
   }
 
   const instanceId = selectionPatch.instanceId ?? current.textGenerationModelSelection.instanceId;
@@ -274,7 +247,7 @@ export function applyServerSettingsPatch(
       });
 
   return {
-    ...withConductorSelection,
+    ...withSummarySelection,
     textGenerationModelSelection: createModelSelection(instanceId, model, options),
   };
 }

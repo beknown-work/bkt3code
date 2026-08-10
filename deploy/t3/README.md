@@ -14,7 +14,7 @@ free of Beknown feature flags.
 - Persistent state: `/home/ubuntu/.t3/beknown-dev`
 - Swarm proxy: `t3-proxy`
 - Automatic deployment timer: `t3-beknown-deploy.timer`
-- Web build: no fork flags (no experimental control center, no T3 Conductor)
+- Web build: no fork flags
 
 `start.sh` refuses to run unless the worktree is currently on `t3main`.
 

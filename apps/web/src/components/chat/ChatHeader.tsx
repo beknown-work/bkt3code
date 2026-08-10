@@ -22,10 +22,6 @@ import { ThreadMembersControl } from "../members/ThreadMembersControl";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
-import { T3_CONDUCTOR_ENABLED } from "../../experimentalFeatures";
-// T3-CUSTOM(expbkt3): BEGIN — isolated Conductor header action.
-import { T3ConductorLinearIssueControl } from "./T3ConductorLinearIssueControl";
-// T3-CUSTOM(expbkt3): END
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -153,14 +149,6 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
-        {/* T3-CUSTOM(expbkt3): BEGIN — Conductor-only Linear action. */}
-        {T3_CONDUCTOR_ENABLED ? (
-          <T3ConductorLinearIssueControl
-            activeThreadEnvironmentId={activeThreadEnvironmentId}
-            activeThreadId={activeThreadId}
-          />
-        ) : null}
-        {/* T3-CUSTOM(expbkt3): END */}
         {/* T3-CUSTOM(expbkt3): the member avatars represent thread ownership;
             GitHub identity stays implicit and follows the durable owner. */}
         <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />

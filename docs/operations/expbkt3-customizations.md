@@ -2,7 +2,7 @@
 
 The `expbkt3` deployment extends upstream T3 Code with an experimental operations
 layer: lifecycle counters, external MCP control, native-plan Plannotator review,
-Active Projects administration, and the permanent T3 Conductor.
+and Active Projects administration.
 
 These changes are structured to keep upstream merges predictable:
 
@@ -101,7 +101,6 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Urgent pending input      | `PhaseGroupedSidebar.logic.ts`                                                                                                                                                                                                                     | `PhaseGroupedSidebar.tsx`                                                                                                                               |
 | Lifecycle parking shelves | `PhaseGroupedSidebar.logic.ts` (`partitionPhaseSidebarRows`), `PhaseGroupedSidebar.tsx`                                                                                                                                                            | `useThreadActions.ts`, `Sidebar.snooze.ts`, `Sidebar.logic.ts` (all read-only)                                                                          |
 | Thread Linear tags        | `LinearIssueResolver.ts`, `LinearIssueTagDialog.tsx`, `linearIssue.ts`, migration 1004                                                                                                                                                             | orchestration/contracts projections, `ws.ts`, `PhaseGroupedSidebar.tsx`                                                                                 |
-| T3 Conductor              | `T3ConductorCard*`, `T3Conductor.logic*`, `T3ConductorLinearIssueControl.tsx`, `T3ConductorSettingsSection.tsx`                                                                                                                                    | experimental settings schema, `PhaseGroupedSidebar.tsx`, and one `ChatHeader.tsx` mount                                                                 |
 | Durable thread bootstrap  | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                                                                                                                                                    | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams                                                         |
 | Notification alerts       | `apps/web/src/notifications/`, `NotificationsSettingsPanel.tsx`, `settings.notifications.tsx`                                                                                                                                                      | `__root.tsx` mount, `settingsSearch.ts` path/label, `SettingsSidebarNav.tsx` icon                                                                       |
 | Session title maintenance | `apps/server/src/thread-title/`, `ThreadTitleMaintenanceSettingsSection.tsx`                                                                                                                                                                       | `ProviderCommandReactor.ts` turn-start seam, experimental settings schema, Experiments panel                                                            |
@@ -112,34 +111,6 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
 markers; they are regenerated from marked route sources.
-
-## T3 Conductor lifecycle
-
-T3 Conductor is one durable primary-environment thread per authenticated user.
-Its settings and thread ID live in that user's `user_mcp_profiles` row; the old
-server-wide `experimental.t3Conductor` object remains only as a migration/default
-compatibility seam. When enabled, its fixed sidebar controller:
-
-- provisions the configured workspace as a normal T3 project when needed;
-- initializes the agent with its permanent coordination identity and native T3
-  MCP mission;
-- reserves one deterministic installation/workspace identity before provisioning,
-  so delayed projections and concurrent browser tabs cannot create duplicates;
-- keeps provider/model traits, runtime access, and interaction mode synchronized
-  with Experimental settings;
-- removes the thread from ordinary lifecycle groups and archive affordances;
-- restores an archived thread, resumes a stopped session, and recreates a
-  deleted thread;
-- retires the previous runtime before moving to a different home workspace.
-
-Disabling the feature hides its command-deck card and stops the live provider
-session while preserving the durable conversation for the next enable.
-
-An optional dedicated Linear coordination ticket is stored as the canonical URL
-in the personal Conductor profile. The Experimental settings field
-accepts either `TEAM-123` or a complete `linear.app` issue URL. While the
-Conductor thread is open, its isolated top-bar control can link, update, open,
-or remove that ticket; ordinary session headers are unchanged.
 
 ## Durable Plannotator reviews
 

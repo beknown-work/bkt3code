@@ -215,8 +215,8 @@ Nesting is the calling agent's choice:
 `t3_list_sessions` and `t3_get_session` report `parentSessionId`, so an agent can inspect its own
 subtree instead of re-spawning work it already delegated.
 
-Sessions created through a personal external token are never parented automatically: that token is
-scoped to the user's conductor thread rather than to a session they are working in.
+Sessions created through a personal external token are never parented automatically: that token
+has a synthetic request scope rather than a session the user is working in.
 
 Lineage is editable after creation, so an agent can reorganise a workspace it did not lay out
 itself:
