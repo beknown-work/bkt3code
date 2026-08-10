@@ -77,7 +77,8 @@ import {
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { cn, isMacPlatform } from "../lib/utils";
+// T3-CUSTOM(expbkt3): side-by-side sessions need their own thread id up front.
+import { cn, isMacPlatform, newThreadId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { usePhaseSidebarFilterStore } from "../phaseSidebarFilterStore";
@@ -90,6 +91,9 @@ import { allEnvironmentShellsLiveAtom } from "../state/shell";
 import { linearIssueStatusesEnvironment } from "../state/linearIssues";
 // T3-CUSTOM(expbkt3): pending IndexedDB sends drive sidebar state before acknowledgement.
 import { durableThreadOutbox, threadEnvironment, useEnvironmentThread } from "../state/threads";
+// T3-CUSTOM(expbkt3): a thread created from the sidebar is only navigable once
+// its shell row exists locally.
+import { waitForThreadShell } from "../state/threadShellArrival";
 import { useEnvironmentQuery } from "../state/query";
 import { vcsEnvironment } from "../state/vcs";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -167,6 +171,11 @@ import {
 } from "./sidebar/PhaseSidebarTree.logic";
 import { usePhaseSidebarTreeStore } from "../phaseSidebarTreeStore";
 import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
+// T3-CUSTOM(expbkt3): "Create new thread" from a row, as a side-by-side session.
+import {
+  buildNewThreadFromRowBootstrapInput,
+  type NewThreadWorkspaceChoice,
+} from "./sidebar/NewThreadFromRow.logic";
 // T3-CUSTOM(expbkt3): END
 import { useCurrentUserId } from "../state/identity";
 // T3-CUSTOM(expbkt3): directory for the co-participant filter facet.
@@ -844,6 +853,9 @@ interface PhaseThreadRowProps {
   // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
   readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
   readonly linearIssueStatus: LinearIssueStatusSummary | null;
+  // T3-CUSTOM(expbkt3): start a side-by-side session from this row. Offered on
+  // shelf rows too — a parked session is a perfectly good place to branch from.
+  readonly onCreateThread: (row: PhaseSidebarRow, choice: NewThreadWorkspaceChoice) => void;
   // T3-CUSTOM(expbkt3): BEGIN — session tree. Deliberately flat primitives plus
   // one stable actions object rather than a per-row object: this row is memo'd
   // and the sidebar re-renders on every shell event, so a fresh object per
@@ -912,6 +924,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onSetPriority,
     onSetLinearIssueUrl,
     linearIssueStatus,
+    onCreateThread,
     treeActions,
     treeDepth,
     treeDescendantCount,
@@ -1122,9 +1135,26 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             : []),
         ]
       : [];
+    // Side-by-side sessions. First in the menu because it is the one item that
+    // starts work rather than tidying up after it, and because the whole point
+    // is opening a second session without leaving the one you are reading.
+    const newThreadItems = row.threadBootstrapSupported
+      ? [
+          {
+            id: "new-thread",
+            label: "Create new thread",
+            children: [
+              { id: "new-thread:same-worktree", label: "Using same worktree" },
+              { id: "new-thread:new-worktree", label: "Using new worktree" },
+            ],
+          },
+        ]
+      : [];
     // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
+        // T3-CUSTOM(expbkt3): side-by-side sessions.
+        ...newThreadItems,
         { id: "rename", label: "Rename" },
         { id: "mark-unread", label: "Mark unread" },
         ...priorityItems,
@@ -1159,6 +1189,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "rename") onStartRename(row);
     if (action === "mark-unread") markThreadUnread(threadKey, row.thread.latestTurn?.completedAt);
     // T3-CUSTOM(expbkt3): BEGIN
+    if (action === "new-thread:same-worktree") onCreateThread(row, "same-worktree");
+    if (action === "new-thread:new-worktree") onCreateThread(row, "new-worktree");
     if (action === "settle") onSettle(row);
     if (action === "unsettle") onUnsettle(row);
     if (action === "unsnooze") onUnsnooze(row);
@@ -1700,6 +1732,10 @@ export function PhaseGroupedSidebar() {
     reportFailure: false,
   });
   const forceStopThreadSession = useAtomCommand(threadEnvironment.stopSession, "force stop agent");
+  // T3-CUSTOM(expbkt3): side-by-side sessions started from a row's context menu.
+  const requestThreadBootstrap = useAtomCommand(threadEnvironment.requestBootstrap, {
+    reportFailure: false,
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
@@ -1900,6 +1936,8 @@ export function PhaseGroupedSidebar() {
             snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
             prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
             linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
+            threadBootstrapSupported:
+              serverConfig?.environment.capabilities.durableThreadBootstrap === true,
             changeRequestState: vcsStatus?.pr?.state ?? null,
             // T3-CUSTOM(expbkt3): END
           };
@@ -2428,6 +2466,56 @@ export function PhaseGroupedSidebar() {
     (row: PhaseSidebarRow) => setThreadParent(row, null),
     [setThreadParent],
   );
+  // Side-by-side sessions. The thread is created before there is a prompt, so
+  // it survives navigating away: the row stays in the tree under the session it
+  // was started from, and coming back reopens the same empty composer with
+  // whatever was typed into it. Navigation waits for the row to exist locally,
+  // because the chat route bounces to "/" for a thread its shell has not seen.
+  const createThreadFromRow = useCallback(
+    (row: PhaseSidebarRow, choice: NewThreadWorkspaceChoice) => {
+      const threadId = newThreadId();
+      const parentKey = scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id));
+      void (async () => {
+        const result = await requestThreadBootstrap({
+          environmentId: row.thread.environmentId,
+          input: buildNewThreadFromRowBootstrapInput({
+            parent: row.thread,
+            threadId,
+            choice,
+            createdAt: new Date().toISOString(),
+          }),
+        });
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) return;
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return;
+        }
+        // The new row renders inside the parent's subtree, so a collapsed
+        // parent would swallow it.
+        setTreeKeysExpanded(parentKey, true);
+        const threadRef = scopeThreadRef(row.thread.environmentId, threadId);
+        if (!(await waitForThreadShell(threadRef))) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Created the thread, but it has not appeared yet",
+              description: "It will show up in the sidebar once this client catches up.",
+            }),
+          );
+          return;
+        }
+        navigateToRow(threadRef);
+      })();
+    },
+    [navigateToRow, requestThreadBootstrap, setTreeKeysExpanded],
+  );
   const openMoveUnderDialog = useCallback((row: PhaseSidebarRow) => setMoveUnderRow(row), []);
   const subtreeKeysByThreadKey = useMemo(() => {
     const map = new Map<string, ReadonlyArray<string>>();
@@ -2702,6 +2790,7 @@ export function PhaseGroupedSidebar() {
         onUnsnooze={attemptUnsnooze}
         onSetPriority={setThreadPriority}
         onSetLinearIssueUrl={setThreadLinearIssueUrl}
+        onCreateThread={createThreadFromRow}
         linearIssueStatus={(() => {
           const issue = resolvePhaseSidebarLinearIssue(
             row.thread.branch,
