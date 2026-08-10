@@ -22,6 +22,8 @@ import { ThreadMembersControl } from "../members/ThreadMembersControl";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
+// T3-CUSTOM(expbkt3): isolated context-handoff header action.
+import { ThreadContextActionsControl } from "./ThreadContextActionsControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -149,6 +151,14 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        {/* T3-CUSTOM(expbkt3): context handoff — hidden for drafts, which have
+            no server-side history to export yet. */}
+        {!draftId ? (
+          <ThreadContextActionsControl
+            activeThreadEnvironmentId={activeThreadEnvironmentId}
+            activeThreadId={activeThreadId}
+          />
+        ) : null}
         {/* T3-CUSTOM(expbkt3): the member avatars represent thread ownership;
             GitHub identity stays implicit and follows the durable owner. */}
         <ThreadMembersControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />

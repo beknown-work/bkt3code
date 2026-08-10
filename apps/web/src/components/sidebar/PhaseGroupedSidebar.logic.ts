@@ -248,6 +248,9 @@ export interface PhaseSidebarRow {
   readonly prioritySupported: boolean;
   /** Same version-skew contract for manual Linear tags on thread.meta.update. */
   readonly linearIssueSupported?: boolean;
+  /** Same version-skew contract for thread.bootstrap.request, which backs
+      "Create new thread" on the row's context menu. */
+  readonly threadBootstrapSupported?: boolean;
   /** The row's pull-request state, when its VCS probe has reported one: a
       merged or closed change request auto-settles an idle thread. */
   readonly changeRequestState: ChangeRequestStateLike | null;
