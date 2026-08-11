@@ -73,12 +73,7 @@ import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
-import {
-  // T3-CUSTOM(expbkt3): per-environment nicknames in the palette.
-  useEnvironmentAppearances,
-  useEnvironments,
-  usePrimaryEnvironmentId,
-} from "../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -644,24 +639,15 @@ function OpenCommandPaletteDialog(props: {
     [clientSettings],
   );
 
-  // T3-CUSTOM(expbkt3): BEGIN — the palette names environments in several places
-  // (project groups, the "add project to…" picker). Resolve the nickname once here
-  // so all of them agree with the sidebar and settings.
-  const environmentAppearances = useEnvironmentAppearances();
+  // T3-CUSTOM(expbkt3): `environment.label` is already the nickname when one is
+  // set, so the palette names environments the same way the sidebar does.
   const environmentLabelById = useMemo(
     () =>
       new Map(
-        environments.map(
-          (environment) =>
-            [
-              environment.environmentId,
-              environmentAppearances.get(environment.environmentId)?.name ?? environment.label,
-            ] as const,
-        ),
+        environments.map((environment) => [environment.environmentId, environment.label] as const),
       ),
-    [environmentAppearances, environments],
+    [environments],
   );
-  // T3-CUSTOM(expbkt3): END
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -746,9 +732,7 @@ function OpenCommandPaletteDialog(props: {
         label: resolveEnvironmentOptionLabel({
           isPrimary,
           environmentId: environment.environmentId,
-          // T3-CUSTOM(expbkt3): prefer the operator's nickname for this machine.
-          runtimeLabel:
-            environmentAppearances.get(environment.environmentId)?.name ?? environment.label,
+          runtimeLabel: environment.label,
         }),
         isPrimary,
         isConnected: canCreateProjectInEnvironment(environment.connection.phase),

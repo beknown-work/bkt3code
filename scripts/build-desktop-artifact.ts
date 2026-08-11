@@ -16,6 +16,9 @@ import {
   resolveWebAssetBrandForChannel,
   type WebAssetBrand,
 } from "./lib/brand-assets.ts";
+// T3-CUSTOM(expbkt3): BEGIN - fork desktop brand (bundle id, name, icon, artifact).
+import { resolveBkDesktopBrand } from "./lib/bk-desktop-brand.ts";
+// T3-CUSTOM(expbkt3): END
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
@@ -38,6 +41,16 @@ const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.t3tools.t3code";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
+// T3-CUSTOM(expbkt3): BEGIN - fork brand lookup shared by the call sites below.
+// Returns undefined unless T3CODE_BRAND=bk, so upstream builds keep every
+// original value and the upstream tests for them keep passing.
+function resolveDesktopBrandOverride(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+) {
+  return resolveBkDesktopBrand(env);
+}
+
+// T3-CUSTOM(expbkt3): END
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 
@@ -818,7 +831,9 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    // T3-CUSTOM(expbkt3): BEGIN - fork builds sign against the fork bundle id.
+    appId: resolveDesktopBrandOverride(env)?.appId ?? DESKTOP_APP_ID,
+    // T3-CUSTOM(expbkt3): END
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -1483,6 +1498,20 @@ export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
 }
 
 export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
+  // T3-CUSTOM(expbkt3): BEGIN - the fork icon wins over the nightly icon, because
+  // every fork build is nightly-versioned to reach the nightly updater channel.
+  // The upstream signature is left untouched; the brand comes from the build
+  // environment, which is what the packager sets.
+  const brand = resolveDesktopBrandOverride();
+  if (brand) {
+    return {
+      macIconPng: brand.macIconPng,
+      linuxIconPng: brand.linuxIconPng,
+      windowsIconIco: brand.windowsIconIco,
+    };
+  }
+
+  // T3-CUSTOM(expbkt3): END
   if (resolveDesktopUpdateChannel(version) === "nightly") {
     return {
       macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
@@ -1516,6 +1545,13 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  // T3-CUSTOM(expbkt3): BEGIN - the fork name wins over the nightly name, so fork
+  // builds are not labelled "T3 Code (Nightly)". The upstream signature is left
+  // untouched; the brand comes from the build environment.
+  const brandProductName = resolveDesktopBrandOverride()?.productName;
+  if (brandProductName) return brandProductName;
+
+  // T3-CUSTOM(expbkt3): END
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
@@ -1535,10 +1571,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       }
     | undefined,
 ) {
+  // T3-CUSTOM(expbkt3): BEGIN - fork brand identity; undefined for upstream builds.
+  const brand = resolveDesktopBrandOverride();
+  // T3-CUSTOM(expbkt3): END
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    // T3-CUSTOM(expbkt3): BEGIN - fork bundle id, name and artifact name.
+    appId: brand?.appId ?? DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: brand?.artifactName ?? "T3-Code-${version}-${arch}.${ext}",
+    // T3-CUSTOM(expbkt3): END
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [...DESKTOP_FILE_EXCLUSIONS],
     directories: {
@@ -1586,7 +1627,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      // T3-CUSTOM(expbkt3): BEGIN - fork builds get their own executable name.
+      executableName: brand?.linuxExecutableName ?? "t3code",
+      // T3-CUSTOM(expbkt3): END
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;

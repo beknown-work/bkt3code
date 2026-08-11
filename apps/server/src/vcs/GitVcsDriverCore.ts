@@ -26,10 +26,18 @@ import {
   type ReviewDiffPreviewSource,
   type VcsRef,
 } from "@t3tools/contracts";
-import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+// T3-CUSTOM(expbkt3): BEGIN — recognize generated worktree branches at allocation.
+import {
+  dedupeRemoteBranchesWithLocalMatches,
+  isTemporaryWorktreeBranch,
+  normalizeGitRemoteUrl,
+  WORKTREE_BRANCH_PREFIX,
+} from "@t3tools/shared/git";
+// T3-CUSTOM(expbkt3): END
 // T3-CUSTOM(expbkt3): worktree directories are named after their codename.
 import {
   allocateWorktreeDirectoryName,
+  allocateWorktreeIdentity,
   legacyWorktreeDirectoryName,
 } from "../worktreeNaming/allocateWorktreeDirectory.ts";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
@@ -1314,6 +1322,47 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     runGitStdout("GitVcsDriver.listRemoteNames", cwd, ["remote"]).pipe(
       Effect.map(parseRemoteNamesInGitOrder),
     );
+
+  // T3-CUSTOM(expbkt3): BEGIN — Git refs are the registry for generated
+  // worktree branch names. Query configured remotes directly so a stale or
+  // missing remote-tracking ref cannot make us reuse an existing branch.
+  const listWorktreeBranchNames = Effect.fn("GitVcsDriver.listWorktreeBranchNames")(function* (
+    cwd: string,
+  ) {
+    const localNames = yield* runGitStdout("GitVcsDriver.listWorktreeBranchNames.local", cwd, [
+      "for-each-ref",
+      "--format=%(refname:strip=2)",
+      `refs/heads/${WORKTREE_BRANCH_PREFIX}`,
+    ]).pipe(Effect.map((stdout) => stdout.split("\n").filter(Boolean)));
+    const remoteNames = yield* listRemoteNames(cwd);
+    const remoteBranches = yield* Effect.forEach(
+      remoteNames,
+      (remoteName) =>
+        executeGit(
+          "GitVcsDriver.listWorktreeBranchNames.remote",
+          cwd,
+          ["ls-remote", "--heads", "--refs", remoteName, `refs/heads/${WORKTREE_BRANCH_PREFIX}/*`],
+          {
+            env: STATUS_UPSTREAM_REFRESH_ENV,
+            timeoutMs: 10_000,
+            fallbackErrorDetail: `git ls-remote ${remoteName} failed`,
+          },
+        ).pipe(
+          Effect.map((result) =>
+            result.stdout.split("\n").flatMap((line) => {
+              const marker = "\trefs/heads/";
+              const markerIndex = line.indexOf(marker);
+              return markerIndex === -1
+                ? []
+                : [`${remoteName}/${line.slice(markerIndex + marker.length)}`];
+            }),
+          ),
+        ),
+      { concurrency: 2 },
+    );
+    return [...localNames, ...remoteBranches.flat()];
+  });
+  // T3-CUSTOM(expbkt3): END
 
   const resolvePublishBranchName = Effect.fn("resolvePublishBranchName")(function* (
     cwd: string,
@@ -2777,30 +2826,43 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input) {
-    const targetBranch = input.newRefName ?? input.refName;
+    // T3-CUSTOM(expbkt3): BEGIN — generated branches and directories share one
+    // codename. Explicit branches and paths retain their existing behavior.
+    const shouldAllocateIdentity =
+      input.path === null &&
+      input.newRefName !== undefined &&
+      isTemporaryWorktreeBranch(input.newRefName);
     const repoName = path.basename(input.cwd);
-    // T3-CUSTOM(expbkt3): BEGIN — name the directory after the worktree's
-    // codename when the caller did not dictate a path. The durable bootstrap
-    // always supplies one (allocated in the coordinator), so this covers the
-    // branch-toolbar and mobile paths that create a worktree directly.
     const projectWorktreesDir = path.join(worktreesDir, repoName);
-    const legacyName = legacyWorktreeDirectoryName(targetBranch);
+    const requestedBranch = input.newRefName ?? input.refName;
+    const legacyName = legacyWorktreeDirectoryName(requestedBranch);
+    const allocatedIdentity = shouldAllocateIdentity
+      ? yield* allocateWorktreeIdentity({
+          projectWorktreesDir,
+          seed: requestedBranch,
+          legacyName,
+          takenBranchNames: new Set(yield* listWorktreeBranchNames(input.cwd)),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem))
+      : null;
+    const targetBranch = allocatedIdentity?.branchName ?? requestedBranch;
     const worktreePath =
       input.path ??
       path.join(
         projectWorktreesDir,
-        yield* allocateWorktreeDirectoryName({
-          projectWorktreesDir,
-          seed: targetBranch,
-          legacyName,
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.orElseSucceed(() => legacyName),
-        ),
+        allocatedIdentity?.directoryName ??
+          (yield* allocateWorktreeDirectoryName({
+            projectWorktreesDir,
+            seed: targetBranch,
+            legacyName,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.orElseSucceed(() => legacyName),
+          )),
       );
     // T3-CUSTOM(expbkt3): END
+    // T3-CUSTOM(expbkt3): generated branches use the allocated codename.
     const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+      ? ["worktree", "add", "-b", targetBranch, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
@@ -2816,7 +2878,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
       yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
         "config",
-        `branch.${input.newRefName}.gh-merge-base`,
+        // T3-CUSTOM(expbkt3): generated branches use the allocated codename.
+        `branch.${targetBranch}.gh-merge-base`,
         baseBranch,
       ]);
     }
@@ -3153,5 +3216,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     switchRef: (input) => withListRefsInvalidation(input.cwd, switchRef(input)),
     initRepo: initRepoWithListRefsInvalidation,
     listLocalBranchNames,
+    // T3-CUSTOM(expbkt3): generated worktree names are reserved across local + remote refs.
+    listWorktreeBranchNames,
   });
 });

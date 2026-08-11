@@ -29,18 +29,25 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { cn } from "../../lib/utils";
 import {
+  advanceProgress,
   applySelectionScope,
+  describeProgress,
   describeReclaimResult,
   describeReclaimState,
   describeScanSummary,
+  estimateActionBytes,
   formatBytes,
+  initialProgress,
   isEntryActionable,
+  progressPercent,
   projectGroups,
   selectionTargets,
   sortEntriesForDisplay,
   stateGroups,
   summarizeSelection,
+  type ReclaimProgress,
   type SelectionScope,
 } from "./SessionArchiveReclaimSection.logic";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -60,6 +67,9 @@ export function SessionArchiveReclaimSection({
   const [selectedThreadIds, setSelectedThreadIds] = useState<ReadonlySet<string>>(new Set());
   const [isBusy, setIsBusy] = useState(false);
   const [showOrphans, setShowOrphans] = useState(false);
+  // Null except while a reclaim is running, and for the summary immediately
+  // after it finishes — cleared by the next scan.
+  const [progress, setProgress] = useState<ReclaimProgress | null>(null);
 
   const scan = useAtomCommand(sessionArchiveEnvironment.scan, {
     label: "session archive scan",
@@ -101,6 +111,9 @@ export function SessionArchiveReclaimSection({
       return;
     }
     setIsBusy(true);
+    // The previous run's summary describes numbers this scan is about to
+    // replace, so it goes before the new results arrive.
+    setProgress(null);
     const result = await scan({ environmentId, input: {} });
     setIsBusy(false);
     if (result._tag === "Success") {
@@ -140,32 +153,78 @@ export function SessionArchiveReclaimSection({
       }
 
       setIsBusy(true);
-      const result = await reclaim({
-        environmentId,
-        input: { threadIds: targetIds, mode, force },
+
+      // One call per session rather than one for the batch. The RPC answers
+      // only when it is finished, so a single batched call would show nothing
+      // at all until every worktree was gone; per-session calls are what make
+      // the progress bar — and a meaningful partial result — possible. The
+      // server re-checks its safety gates on every call, so this is no less
+      // safe, only chattier.
+      const byThreadId = new Map(entries.map((item) => [item.threadId, item] as const));
+      const base = initialProgress({
+        action,
+        total: targetIds.length,
+        estimatedBytes: estimateActionBytes(entries, targetIds, action),
       });
+      // Folded through `advanceProgress` but held in one binding rather than
+      // rebuilt per iteration, so the loop does not spread an accumulator.
+      let running: ReclaimProgress = base;
+      const publish = (next: ReclaimProgress) => {
+        running = next;
+        setProgress(next);
+      };
+      publish(base);
+
+      let firstSkipReason: string | null = null;
+      let failureCount = 0;
+
+      for (const threadId of targetIds) {
+        publish({ ...running, currentTitle: byThreadId.get(threadId)?.title ?? null });
+
+        const step = await reclaim({
+          environmentId,
+          input: { threadIds: [threadId], mode, force },
+        });
+
+        if (step._tag !== "Success") {
+          failureCount += 1;
+          publish(advanceProgress(running, { reclaimed: false, freedBytes: 0 }));
+          continue;
+        }
+
+        const outcome = step.value.outcomes[0];
+        publish(
+          advanceProgress(running, {
+            reclaimed: outcome?.reclaimed ?? false,
+            freedBytes: step.value.totalFreedBytes,
+          }),
+        );
+        if (firstSkipReason === null && outcome?.skippedReason != null) {
+          firstSkipReason = outcome.skippedReason;
+        }
+      }
+
+      publish({ ...running, currentTitle: null, finished: true });
       setIsBusy(false);
 
-      if (result._tag !== "Success") {
-        reportFailure("Reclaim failed", result);
+      if (failureCount === running.total) {
+        reportFailure("Reclaim failed", { _tag: "Failure" });
         return;
       }
 
-      const reclaimedCount = result.value.outcomes.filter((outcome) => outcome.reclaimed).length;
-      const skipped = result.value.outcomes.filter((outcome) => !outcome.reclaimed);
       toastManager.add(
         stackedThreadToast({
-          type: skipped.length > 0 && reclaimedCount === 0 ? "error" : "success",
+          type: running.reclaimedCount === 0 ? "error" : "success",
           title: "Archived sessions reclaimed",
           description: [
             describeReclaimResult({
               mode,
-              reclaimedCount,
-              skippedCount: skipped.length,
-              freedBytes: result.value.totalFreedBytes,
+              reclaimedCount: running.reclaimedCount,
+              skippedCount: running.skippedCount,
+              freedBytes: running.freedBytes,
             }),
             // The first skip reason is far more useful than a count alone.
-            skipped[0]?.skippedReason ?? "",
+            firstSkipReason ?? "",
           ]
             .filter(Boolean)
             .join(" "),
@@ -248,6 +307,7 @@ export function SessionArchiveReclaimSection({
         />
       ) : (
         <>
+          {progress !== null ? <ReclaimProgressRow progress={progress} /> : null}
           <SettingsRow
             title="Scan results"
             description={describeScanSummary(scanResult)}
@@ -458,6 +518,64 @@ export function SessionArchiveReclaimSection({
 }
 
 /**
+ * Live progress of a running reclaim.
+ *
+ * A horizontal bar rather than a radial one: this sits in a full-width settings
+ * row where the bar pairs naturally with a text line beside it, and it matches
+ * the meter idiom already used elsewhere in the app. A radial gauge would suit
+ * a square dashboard tile, not a list row.
+ *
+ * The freed figure is the headline because it is the question being asked —
+ * how much space is coming back — and it is real, summed from what the server
+ * reported actually deleting, not from the estimate.
+ */
+function ReclaimProgressRow({ progress }: { readonly progress: ReclaimProgress }) {
+  const percent = progressPercent(progress);
+  return (
+    <SettingsRow
+      title={
+        <span className="inline-flex items-center gap-2">
+          {progress.finished ? (
+            <HardDriveIcon className="size-3.5 text-muted-foreground" />
+          ) : (
+            <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+          )}
+          <span className="tabular-nums">{formatBytes(progress.freedBytes)} freed</span>
+          {progress.estimatedBytes !== null && !progress.finished ? (
+            <span className="text-muted-foreground">
+              of ~{formatBytes(progress.estimatedBytes)} expected
+            </span>
+          ) : null}
+        </span>
+      }
+      description={
+        <div className="flex flex-col gap-1.5 pt-0.5">
+          <div
+            className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(percent)}
+            aria-label="Reclaim progress"
+          >
+            <div
+              className={cn(
+                "h-full rounded-full transition-[width] duration-300 ease-out",
+                progress.finished ? "bg-success" : "bg-primary/70",
+              )}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+          <span className="truncate tabular-nums text-muted-foreground">
+            {describeProgress(progress)}
+          </span>
+        </div>
+      }
+    />
+  );
+}
+
+/**
  * Badge for one row.
  *
  * Three states, not two: an entry a plain remove refuses but a forced one would
@@ -493,6 +611,8 @@ function blockedText(reason: string): string {
       return "Held — archived too recently.";
     case "no-worktree":
       return "Nothing on disk to reclaim.";
+    case "not-a-managed-worktree":
+      return "Held — works in a main checkout, not a T3-provisioned worktree.";
     default:
       return "Held.";
   }

@@ -463,4 +463,211 @@ layer("DurableExecutionIntentRepository", (it) => {
         );
       }),
   );
+
+  // T3-CUSTOM(expbkt3): BEGIN — an uncertain setup step must not be a dead end.
+  //
+  // Observed on expbkt3: a new-worktree session whose worktree was created
+  // fine, whose setup step went "uncertain" when the server authority changed
+  // under it, and which then sat forever behind "Setup delivery is uncertain
+  // and cannot be launched again automatically". Retry could not move it,
+  // because it reset only "failed" — while clearing the recorded detail, so
+  // each press made the message less useful than the last.
+  const seedUncertainSetup = Effect.fnUntraced(function* (suffix: string, sequence: number) {
+    const repository = yield* DurableExecutionIntentRepository;
+    const at = "2026-02-01T00:00:00.000Z";
+    const threadId = ThreadId.make(`thread-${suffix}`);
+    const workItemId = `command-${suffix}`;
+    const event = {
+      type: "thread.turn-start-requested" as const,
+      sequence,
+      eventId: EventId.make(`event-${suffix}`),
+      aggregateKind: "thread" as const,
+      aggregateId: threadId,
+      occurredAt: at,
+      commandId: CommandId.make(workItemId),
+      causationEventId: null,
+      correlationId: CorrelationId.make(workItemId),
+      metadata: {},
+      payload: {
+        threadId,
+        messageId: MessageId.make(`message-${suffix}`),
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        bootstrap: {
+          runSetupScript: true,
+          resolvedRequest: {
+            bootstrapId: `bootstrap-${suffix}`,
+            threadId,
+            projectId: ProjectId.make("project-uncertain"),
+            title: "Worktree session",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5.6-sol",
+            },
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            workspace: {
+              mode: "new-worktree" as const,
+              projectCwd: "/workspace/project",
+              baseRef: { kind: "repository-default" as const, source: "origin" as const },
+              newBranch: `t3code/${suffix}`,
+              intendedPath: `/workspace/worktrees/${suffix}`,
+            },
+            initialTurn: {
+              messageId: MessageId.make(`message-${suffix}`),
+              text: "start the session",
+              attachments: [],
+            },
+            sourceControlProfileId: null,
+            priority: null,
+            createdAt: at,
+          },
+        },
+        createdAt: at,
+      },
+    };
+    yield* repository.acceptFromEvent({
+      event,
+      message: {
+        messageId: event.payload.messageId,
+        threadId,
+        turnId: null,
+        role: "user" as const,
+        text: "start the session",
+        attachments: [],
+        isStreaming: false,
+        sentByUserId: null,
+        createdAt: at,
+        updatedAt: at,
+      },
+    });
+
+    const claim = yield* repository.claim({
+      workItemId,
+      owner: "worker-uncertain",
+      now: at,
+      expiresAt: "2026-02-01T00:01:00.000Z",
+    });
+    const generation = claim._tag === "Some" ? claim.value.claimGeneration : 0;
+    // The worktree half succeeded: on the real incident the worktree existed
+    // and was healthy on its branch.
+    yield* repository.beginBootstrapStep({
+      workItemId,
+      owner: "worker-uncertain",
+      generation,
+      step: "worktree",
+      at,
+    });
+    yield* repository.acknowledgeBootstrapStep({
+      workItemId,
+      owner: "worker-uncertain",
+      generation,
+      step: "worktree",
+      worktreePath: `/workspace/worktrees/${suffix}`,
+      at,
+    });
+    // The setup half started and then could not be proven either way.
+    yield* repository.beginBootstrapStep({
+      workItemId,
+      owner: "worker-uncertain",
+      generation,
+      step: "setup",
+      at,
+    });
+    yield* repository.markBootstrapStepFailed({
+      workItemId,
+      owner: "worker-uncertain",
+      generation,
+      step: "setup",
+      phase: "uncertain",
+      detail: "Setup launch or completion could not be proven.",
+      at,
+    });
+    yield* repository.markFailedAttention({
+      workItemId,
+      owner: "worker-uncertain",
+      generation,
+      failureType: "bootstrap-setup-uncertain",
+      detail: "Setup launch or completion could not be proven.",
+      at,
+    });
+    return { threadId, workItemId, generation };
+  });
+
+  it.effect("lets an explicit retry clear an uncertain setup so the session can start", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const { threadId, workItemId } = yield* seedUncertainSetup("uncertain-retry", 90);
+
+      const parked = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(parked._tag === "Some");
+      if (parked._tag === "None") return;
+      assert.strictEqual(parked.value.phase, "recovery-exhausted");
+      assert.isFalse(parked.value.runnable);
+
+      assert.isTrue(yield* repository.retryExhausted({ threadId, at: "2026-02-01T00:05:00.000Z" }));
+
+      const bootstrap = yield* repository.getBootstrapOperation({ workItemId });
+      assert.isTrue(bootstrap._tag === "Some");
+      if (bootstrap._tag === "None") return;
+      // The step the human authorised is runnable again; the half that already
+      // succeeded is left exactly as it was, so the worktree is not rebuilt.
+      assert.strictEqual(bootstrap.value.setupPhase, "pending");
+      assert.strictEqual(bootstrap.value.worktreePhase, "acknowledged");
+
+      const retried = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(retried._tag === "Some");
+      if (retried._tag === "None") return;
+      assert.strictEqual(retried.value.phase, "recovering");
+      assert.isTrue(retried.value.runnable);
+
+      // The proof that the session is no longer a dead end: it can be claimed
+      // and its setup step begins rather than reporting "uncertain" again.
+      const claim = yield* repository.claim({
+        workItemId,
+        owner: "worker-after-retry",
+        now: "2026-02-01T00:05:01.000Z",
+        expiresAt: "2026-02-01T00:06:00.000Z",
+      });
+      assert.isTrue(claim._tag === "Some");
+      if (claim._tag === "None") return;
+      const step = yield* repository.beginBootstrapStep({
+        workItemId,
+        owner: "worker-after-retry",
+        generation: claim.value.claimGeneration,
+        step: "setup",
+        at: "2026-02-01T00:05:01.000Z",
+      });
+      assert.isTrue(step._tag === "Some");
+      if (step._tag === "None") return;
+      assert.strictEqual(step.value, "pending");
+    }),
+  );
+
+  it.effect("never clears an uncertain setup without a human asking", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const { workItemId } = yield* seedUncertainSetup("uncertain-auto", 91);
+
+      // Everything automatic: a server restart reconciling in-flight work, and
+      // the coordinator's own claim. At-most-once must survive both.
+      yield* repository.reconcileStartup({ at: "2026-02-01T00:06:00.000Z" });
+      yield* repository.claim({
+        workItemId,
+        owner: "worker-auto",
+        now: "2026-02-01T00:06:01.000Z",
+        expiresAt: "2026-02-01T00:07:00.000Z",
+      });
+
+      const bootstrap = yield* repository.getBootstrapOperation({ workItemId });
+      assert.isTrue(bootstrap._tag === "Some");
+      if (bootstrap._tag === "None") return;
+      assert.strictEqual(bootstrap.value.setupPhase, "uncertain");
+      assert.strictEqual(
+        bootstrap.value.lastFailureDetail,
+        "Setup launch or completion could not be proven.",
+      );
+    }),
+  );
+  // T3-CUSTOM(expbkt3): END
 });

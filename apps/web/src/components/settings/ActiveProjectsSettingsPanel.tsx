@@ -137,24 +137,17 @@ export function ActiveProjectsSettingsPanel() {
   const [nicknameDrafts, setNicknameDrafts] = useState<Record<string, string>>({});
   const [busyProjectKey, setBusyProjectKey] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
-  // T3-CUSTOM(expbkt3): BEGIN — search and display both use the nickname when one
-  // is set, so typing the name you gave a machine finds its projects.
+  // T3-CUSTOM(expbkt3): `environment.label` is the nickname when one is set, so
+  // typing the name you gave a machine also finds its projects.
   const appearances = useEnvironmentAppearances();
   const showEnvironment = useHasMultipleEnvironments();
   const environmentLabelById = useMemo(
     () =>
       new Map(
-        environments.map(
-          (environment) =>
-            [
-              environment.environmentId,
-              appearances.get(environment.environmentId)?.name ?? environment.label,
-            ] as const,
-        ),
+        environments.map((environment) => [environment.environmentId, environment.label] as const),
       ),
-    [appearances, environments],
+    [environments],
   );
-  // T3-CUSTOM(expbkt3): END
   const allRows = useMemo(
     () =>
       buildActiveProjectSettingsRows({

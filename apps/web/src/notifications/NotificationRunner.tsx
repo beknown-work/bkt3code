@@ -16,7 +16,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
 import { hasUnseenCompletion } from "../components/Sidebar.logic";
-import { useThreadShells } from "../state/entities";
+import { useEnvironmentShellReadiness, useThreadShells } from "../state/entities";
 import { useUiStateStore } from "../uiStateStore";
 import { claimAlert, pruneAlertClaims } from "./alertDedupe";
 import { showBrowserNotification } from "./browserNotifications";
@@ -33,8 +33,19 @@ import { playTone } from "./notificationSound";
 /** Claim keys accumulate one entry per alert; sweep them on a slow timer. */
 const CLAIM_PRUNE_INTERVAL_MS = 60_000;
 
+/**
+ * A turn that has finished, whatever you did about it. Distinguishing this from
+ * "unread" is what tells a row you have already read apart from a row whose
+ * next turn is still running — they both report `unreadCompletion: false`.
+ */
+function hasCompletedTurn(completedAt: string | null | undefined): boolean {
+  if (!completedAt) return false;
+  return !Number.isNaN(Date.parse(completedAt));
+}
+
 export function NotificationRunner() {
   const threads = useThreadShells();
+  const environments = useEnvironmentShellReadiness();
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const preferences = useNotificationPreferences();
   const navigate = useNavigate();
@@ -62,6 +73,7 @@ export function NotificationRunner() {
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       return {
         threadKey,
+        environmentId: thread.environmentId,
         title: thread.title,
         needsInput:
           thread.hasPendingUserInput || thread.execution?.turn?.state === "waiting-for-input",
@@ -71,10 +83,11 @@ export function NotificationRunner() {
           ...thread,
           lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
         }),
+        hasCompletedTurn: hasCompletedTurn(thread.latestTurn?.completedAt),
       };
     });
-    const next = buildNotificationSnapshot(states);
     const previous = previousRef.current;
+    const next = buildNotificationSnapshot({ previous, threads: states, environments });
     previousRef.current = next;
 
     if (!current.enabled) return;
@@ -131,7 +144,7 @@ export function NotificationRunner() {
         },
       });
     }
-  }, [lastVisitedAtByThreadKey, openEnvironmentId, openThreadId, threads]);
+  }, [environments, lastVisitedAtByThreadKey, openEnvironmentId, openThreadId, threads]);
 
   return null;
 }

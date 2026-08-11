@@ -23,6 +23,8 @@ import {
 } from "./commandInvariants.ts";
 // T3-CUSTOM(expbkt3): session lineage must stay acyclic.
 import { requireThreadLineageAcyclic } from "./threadLineage.ts";
+// T3-CUSTOM(expbkt3): a session created from a session inherits its audience.
+import { resolveCreatedThreadMemberUserIds } from "./inheritedThreadMembers.ts";
 // T3-CUSTOM(expbkt3): fork command decisions
 import { decideForkOrchestrationCommand, isForkOrchestrationCommand } from "./deciderForkCases.ts";
 import { projectEvent } from "./projector.ts";
@@ -419,6 +421,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // create: the thread does not exist yet, so it cannot be an ancestor
           // of anything.
           parentThreadId: command.parentThreadId ?? null,
+          // T3-CUSTOM(expbkt3): BEGIN — inherited tags. The creator is tagged by
+          // the projector; these are the extra people the creator is bringing,
+          // defaulting to the parent session's audience.
+          memberUserIds: resolveCreatedThreadMemberUserIds({
+            threads: readModel.threads,
+            parentThreadId: command.parentThreadId,
+            createdByUserId: actor ?? command.ownerUserId ?? null,
+            explicitMemberUserIds: command.memberUserIds,
+          }),
+          // T3-CUSTOM(expbkt3): END
         },
       };
     }
@@ -1068,6 +1080,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 priority: bootstrapCreate.priority ?? null,
                 // T3-CUSTOM(expbkt3): session lineage carried through bootstrap.
                 parentThreadId: bootstrapCreate.parentThreadId ?? null,
+                // T3-CUSTOM(expbkt3): BEGIN — inherited tags carried through bootstrap.
+                memberUserIds: resolveCreatedThreadMemberUserIds({
+                  threads: readModel.threads,
+                  parentThreadId: bootstrapCreate.parentThreadId,
+                  createdByUserId: actor ?? bootstrapCreate.ownerUserId ?? null,
+                  explicitMemberUserIds: bootstrapCreate.memberUserIds,
+                }),
+                // T3-CUSTOM(expbkt3): END
               },
             }
           : null;

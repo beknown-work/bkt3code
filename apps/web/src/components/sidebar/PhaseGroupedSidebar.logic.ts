@@ -577,6 +577,13 @@ export function phaseSidebarRowClassName(
   );
 }
 
+export function phaseSidebarRowActionsClassName(isSurfaceOpen: boolean): string {
+  return cn(
+    "absolute top-1/2 right-1 z-10 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/70 bg-background/95 p-0.5 shadow-sm backdrop-blur-sm group-hover/phase-row:flex group-focus-visible/phase-row:flex group-has-[:focus-visible]/phase-row:flex",
+    isSurfaceOpen && "flex",
+  );
+}
+
 /** A stopped projection can still hide a live provider, so any recorded session remains stoppable. */
 export function phaseSidebarCanForceStopAgent(session: ThreadShell["session"]): boolean {
   return session !== null;

@@ -53,8 +53,6 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { describeThreadExecution } from "@t3tools/shared/threadExecution";
-// T3-CUSTOM(expbkt3): honest Sending/Queued/Recovering state shared with mobile.
-import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -332,6 +330,8 @@ import {
   startNewThreadForProject,
   waitForStartedServerThread,
 } from "./ChatView.logic";
+// T3-CUSTOM(expbkt3): Routed chat reads the sidebar's live execution authority.
+import { deriveChatThreadExecutionPresentation } from "./sidebar/RunningSessionPresentation.logic";
 import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
@@ -2488,12 +2488,14 @@ function ChatViewContent(props: ChatViewProps) {
     outboxReplayTick,
     startThreadTurn,
   ]);
-  // T3-CUSTOM(expbkt3): desired work is active before a provider process exists.
-  const executionPresentation = deriveThreadExecutionPresentation({
+  // T3-CUSTOM(expbkt3): BEGIN — share live shell execution truth with the sidebar.
+  const executionPresentation = deriveChatThreadExecutionPresentation({
     hasPendingOutboxItem: isSendBusy,
-    intent: activeThread?.execution?.intent ?? null,
-    providerActivity: activeThread?.execution?.activity ?? "idle",
+    isServerThread,
+    threadExecution: activeThread?.execution,
+    shellExecution: routeServerThreadShell?.execution,
   });
+  // T3-CUSTOM(expbkt3): END
   const isWorking = executionPresentation.active || isConnecting || isRevertingCheckpoint;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
@@ -3648,7 +3650,9 @@ function ChatViewContent(props: ChatViewProps) {
   const planReviewDocumentId = useOpenPlanReviewDocumentId(
     activeThreadRef?.environmentId ?? null,
     activeThreadRef?.threadId ?? null,
-    activeProposedPlan?.id ?? null,
+    activeProposedPlan !== null && hasActionableProposedPlan(activeProposedPlan)
+      ? activeProposedPlan.id
+      : null,
   );
   // T3-CUSTOM(expbkt3): END
   const togglePreviewPanel = useCallback(() => {

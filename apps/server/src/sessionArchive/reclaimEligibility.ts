@@ -44,6 +44,15 @@ export interface ReclaimEligibilityInput {
   /** Worktree paths referenced by at least one thread that is *not* archived. */
   readonly activeThreadWorktreePaths: ReadonlySet<string>;
   /**
+   * Root under which T3 provisions worktrees.
+   *
+   * Anything outside it is not a disposable worktree — a thread created in
+   * non-worktree mode carries the project's *workspace root*, which is a main
+   * checkout someone works in and, for the deployments on this host, the very
+   * directory a server runs from.
+   */
+  readonly worktreesDir: string;
+  /**
    * Retention floor, in days, applied to `archivedAt`. Zero disables it. The
    * panel passes zero (the operator is looking right at the session); the
    * sweeper passes the configured window.
@@ -72,10 +81,89 @@ const blocked = (blockedReason: SessionArchiveBlockedReason): ReclaimEligibility
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/** Normalize the way `worktreeCleanup.ts` does, so both tiers compare alike. */
+/**
+ * Normalize the way `worktreeCleanup.ts` does, so both tiers compare alike.
+ *
+ * Also collapses duplicate separators and strips a trailing one. Protection is
+ * a string comparison, so `/w/proj/a/` failing to match `/w/proj/a` would be a
+ * silent hole rather than a visible bug — the paths come from different writers
+ * (thread creation, provisioning, hand-edited project files) and need not agree
+ * on cosmetics.
+ */
 export function normalizeWorktreePath(path: string | null | undefined): string | null {
   const trimmed = path?.trim();
-  return trimmed ? trimmed : null;
+  if (!trimmed) {
+    return null;
+  }
+  const collapsed = trimmed.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  return collapsed.length > 0 ? collapsed : "/";
+}
+
+/**
+ * Whether a path is a worktree T3 provisioned, rather than a checkout someone
+ * merely opened a session against.
+ *
+ * A thread created in non-worktree mode stores the project's workspace root as
+ * its `worktreePath`. Those are main checkouts — on the deployment host, the
+ * directories the running servers are started from — and slimming one deletes
+ * the live application's dependencies. Restricting every action to
+ * `<worktreesDir>/<project>/<worktree>` is the invariant that makes the whole
+ * feature safe by construction rather than by enumerating what to avoid.
+ *
+ * Requires at least two segments below the root, so the root itself and a bare
+ * project directory are both rejected.
+ */
+export function isManagedWorktree(worktreePath: string, worktreesDir: string): boolean {
+  const candidate = normalizeWorktreePath(worktreePath);
+  const root = normalizeWorktreePath(worktreesDir);
+  if (candidate === null || root === null) {
+    return false;
+  }
+  if (!candidate.startsWith(`${root}/`)) {
+    return false;
+  }
+  const segments = candidate
+    .slice(root.length + 1)
+    .split("/")
+    .filter(Boolean);
+  return segments.length >= 2;
+}
+
+/**
+ * Whether reclaiming `worktreePath` would touch a protected worktree.
+ *
+ * Exact equality is not enough in either direction:
+ *
+ * - a protected worktree *nested inside* the candidate would be destroyed along
+ *   with its parent;
+ * - a candidate nested inside a protected worktree is a subdirectory of
+ *   something in use.
+ *
+ * Both are rejected. Comparison is on path segments so `/w/proj/a` never
+ * matches the unrelated sibling `/w/proj/a-backup`.
+ */
+export function isWorktreeProtected(
+  worktreePath: string,
+  protectedPaths: ReadonlySet<string>,
+): boolean {
+  const candidate = normalizeWorktreePath(worktreePath);
+  if (candidate === null) {
+    return false;
+  }
+  for (const raw of protectedPaths) {
+    const guarded = normalizeWorktreePath(raw);
+    if (guarded === null) {
+      continue;
+    }
+    if (
+      guarded === candidate ||
+      guarded.startsWith(`${candidate}/`) ||
+      candidate.startsWith(`${guarded}/`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -121,11 +209,21 @@ export function evaluateReclaimEligibility(input: ReclaimEligibilityInput): Recl
     return blocked("no-worktree");
   }
 
+  // The strongest gate, and the first: only ever touch a directory T3 itself
+  // provisioned as a worktree. A thread created in non-worktree mode points at
+  // the project's workspace root — a main checkout, which on this host is also
+  // where the deployed servers run from. Slimming one of those deletes the
+  // running application's `node_modules`.
+  if (!isManagedWorktree(worktreePath, input.worktreesDir)) {
+    return blocked("not-a-managed-worktree");
+  }
+
   // Un-overridable: these protect work that is not the operator's to discard.
-  if (input.liveWorktreePaths.has(worktreePath)) {
+  // Containment-aware, so a nested worktree on either side still counts.
+  if (isWorktreeProtected(worktreePath, input.liveWorktreePaths)) {
     return blocked("worktree-live");
   }
-  if (input.activeThreadWorktreePaths.has(worktreePath)) {
+  if (isWorktreeProtected(worktreePath, input.activeThreadWorktreePaths)) {
     return blocked("worktree-shared");
   }
 
@@ -176,5 +274,7 @@ export function describeBlockedReason(reason: SessionArchiveBlockedReason): stri
       return "Commits here are not on any remote yet.";
     case "no-worktree":
       return "This session has no worktree on disk.";
+    case "not-a-managed-worktree":
+      return "This session works in a main checkout, not a T3-provisioned worktree.";
   }
 }
