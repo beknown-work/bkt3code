@@ -15,7 +15,12 @@
  * not a git repository on the target branch. Reserving a name by pre-creating an
  * empty directory would therefore break every bootstrap that used it.
  */
-import { WORKTREE_CODENAMES, worktreeCodenameHash } from "@t3tools/shared/worktreeCodename";
+import { WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import {
+  WORKTREE_CODENAMES,
+  worktreeCodenameFromDirectoryName,
+  worktreeCodenameHash,
+} from "@t3tools/shared/worktreeCodename";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
@@ -65,6 +70,13 @@ export const allocateWorktreeDirectoryName = Effect.fn("allocateWorktreeDirector
     readonly projectWorktreesDir: string;
     readonly seed: string;
     readonly legacyName: string;
+    /**
+     * Names that are unavailable for a reason the directory listing cannot show
+     * — chiefly a lingering `t3code/<codename>` branch whose worktree was already
+     * reclaimed. `git worktree add -b` fails outright on those, so a caller that
+     * can see refs passes them here.
+     */
+    readonly reservedNames?: ReadonlySet<string>;
   }) {
     const fileSystem = yield* FileSystem.FileSystem;
     const entries = yield* fileSystem
@@ -74,10 +86,27 @@ export const allocateWorktreeDirectoryName = Effect.fn("allocateWorktreeDirector
     return chooseWorktreeDirectoryName({
       seed: input.seed,
       legacyName: input.legacyName,
-      taken: new Set(entries),
+      taken: new Set([...entries, ...(input.reservedNames ?? [])]),
     });
   },
 );
+
+/**
+ * Codenames already claimed by a `t3code/<codename>` branch. Best effort by
+ * design: the ref listing is paginated, and a name this misses simply behaves
+ * the way it did before reserved names existed.
+ */
+export function reservedCodenamesFromRefNames(refNames: Iterable<string>): ReadonlySet<string> {
+  const reserved = new Set<string>();
+  const prefix = `${WORKTREE_BRANCH_PREFIX}/`;
+  for (const refName of refNames) {
+    const normalized = refName.trim().toLowerCase();
+    if (!normalized.startsWith(prefix)) continue;
+    const codename = worktreeCodenameFromDirectoryName(normalized.slice(prefix.length));
+    if (codename !== null) reserved.add(codename);
+  }
+  return reserved;
+}
 
 /** The pre-codename directory name: the branch with its slashes swapped. */
 export function legacyWorktreeDirectoryName(branch: string): string {

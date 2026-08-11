@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   chooseWorktreeDirectoryName,
   legacyWorktreeDirectoryName,
+  reservedCodenamesFromRefNames,
 } from "./allocateWorktreeDirectory.ts";
 
 const LEGACY = legacyWorktreeDirectoryName("t3code/2d633e64");
@@ -20,6 +21,27 @@ describe("legacyWorktreeDirectoryName", () => {
   it("is the pre-codename shape the reactor's pure recompute still produces", () => {
     expect(legacyWorktreeDirectoryName("t3code/2d633e64")).toBe("t3code-2d633e64");
     expect(legacyWorktreeDirectoryName("feature/a/b")).toBe("feature-a-b");
+  });
+});
+
+describe("reservedCodenamesFromRefNames", () => {
+  it("reserves the codename behind a t3code branch", () => {
+    const reserved = reservedCodenamesFromRefNames([
+      "t3code/narvik",
+      "t3code/lisbon-2",
+      "t3code/2d633e64",
+      "t3code/worktree-codenames",
+      "feature/narvik",
+      "main",
+    ]);
+
+    expect([...reserved].toSorted()).toEqual(["lisbon-2", "narvik"]);
+  });
+
+  it("ignores refs that hold no codename", () => {
+    expect(reservedCodenamesFromRefNames(["main", "t3code/fix-the-thing", "origin/x"]).size).toBe(
+      0,
+    );
   });
 });
 

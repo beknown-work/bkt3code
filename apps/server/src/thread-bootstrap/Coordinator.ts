@@ -13,7 +13,14 @@ import {
   type UserId,
   type WorktreeBaseRef,
 } from "@t3tools/contracts";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import {
+  buildTemporaryWorktreeBranchName,
+  // T3-CUSTOM(expbkt3): the temporary branch carries the worktree's codename.
+  buildCodenameWorktreeBranchName,
+  WORKTREE_BRANCH_PREFIX,
+} from "@t3tools/shared/git";
+// T3-CUSTOM(expbkt3): worktree codenames.
+import { worktreeCodenameFromDirectoryName } from "@t3tools/shared/worktreeCodename";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -43,6 +50,7 @@ import { resolveAvailableWorktreeBase } from "./WorktreeBaseResolver.ts";
 import {
   allocateWorktreeDirectoryName,
   legacyWorktreeDirectoryName,
+  reservedCodenamesFromRefNames,
 } from "../worktreeNaming/allocateWorktreeDirectory.ts";
 
 export class ThreadBootstrapCoordinatorError extends Data.TaggedError(
@@ -567,8 +575,22 @@ const make = Effect.gen(function* () {
         );
       if (resolved.workspace.mode === "new-worktree") {
         let allocatedBranch = resolved.workspace.newBranch;
-        if (!allocatedBranch) {
-          const uuid = yield* crypto.randomUUIDv4.pipe(
+        // T3-CUSTOM(expbkt3): BEGIN — one codename becomes the directory AND the
+        // temporary branch, so the sidebar chip, `pwd`, and `git branch` all read
+        // the same word. The filesystem is the registry, so this is the one place
+        // that can guarantee uniqueness; the reactor's pure recompute keeps the
+        // legacy branch-derived formula and only runs when no intendedPath was
+        // persisted.
+        const projectWorktreesDir = path.join(
+          serverConfig.worktreesDir,
+          path.basename(resolved.workspace.projectCwd),
+        );
+
+        // A caller-supplied branch wins — the codename then only names the
+        // directory, seeded by that branch.
+        let seed = allocatedBranch;
+        if (!seed) {
+          seed = yield* crypto.randomUUIDv4.pipe(
             Effect.mapError(
               (cause) =>
                 new ThreadBootstrapCoordinatorError({
@@ -577,27 +599,43 @@ const make = Effect.gen(function* () {
                 }),
             ),
           );
-          allocatedBranch = buildTemporaryWorktreeBranchName(() => uuid);
         }
-        // T3-CUSTOM(expbkt3): BEGIN — name the directory after the worktree's
-        // codename. The filesystem is the registry, so this is the one place
-        // that can guarantee uniqueness; the reactor's pure recompute keeps the
-        // legacy branch-derived formula and only runs when no intendedPath was
-        // persisted.
-        const projectWorktreesDir = path.join(
-          serverConfig.worktreesDir,
-          path.basename(resolved.workspace.projectCwd),
+        const legacyName = legacyWorktreeDirectoryName(
+          allocatedBranch ?? buildTemporaryWorktreeBranchName(() => seed),
         );
-        const legacyName = legacyWorktreeDirectoryName(allocatedBranch);
+        // A `t3code/<codename>` branch can outlive its worktree — the directory
+        // gets reclaimed while the branch stays — and `git worktree add -b` fails
+        // outright on a name that is still a branch. Best effort: one page of
+        // matching refs, and a miss just behaves the way it did before.
+        const reservedNames = yield* gitWorkflow
+          .listRefs({
+            cwd: resolved.workspace.projectCwd,
+            query: `${WORKTREE_BRANCH_PREFIX}/`,
+            refKind: "local",
+            limit: 200,
+          })
+          .pipe(
+            Effect.map((result) => reservedCodenamesFromRefNames(result.refs.map((r) => r.name))),
+            Effect.orElseSucceed(() => new Set<string>() as ReadonlySet<string>),
+          );
         const directoryName = yield* allocateWorktreeDirectoryName({
           projectWorktreesDir,
-          seed: allocatedBranch,
+          seed,
           legacyName,
+          reservedNames,
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           // Naming must never be what stops a thread from starting.
           Effect.orElseSucceed(() => legacyName),
         );
+        if (!allocatedBranch) {
+          // `lisbon-2` is a codename too, so match on the directory-name form
+          // rather than exact pool membership.
+          allocatedBranch =
+            worktreeCodenameFromDirectoryName(directoryName) !== null
+              ? buildCodenameWorktreeBranchName(directoryName)
+              : buildTemporaryWorktreeBranchName(() => seed);
+        }
         resolved = {
           ...resolved,
           workspace: {
