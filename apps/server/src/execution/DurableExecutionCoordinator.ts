@@ -619,14 +619,22 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
             }
             const intent = claimed.value;
             if (intent.phase !== "recovering") {
-              // A queued item has no delivered turn to be stalled, so there is
-              // nothing to charge a retry for. Hand the claim straight back.
-              yield* repository.deferClaim({
+              // The row turned queued between the observation and the claim, so
+              // there is no delivered turn to charge a retry for. Hand it back
+              // runnable and due now rather than deferring it: deferring clears
+              // `runnable`, and re-arming that depends on a *previous* work item
+              // completing — which would park the very thing being rescued.
+              // Delivery certainty is left alone; nothing was sent.
+              yield* repository.markOriginalDispatchFailed({
                 workItemId,
                 owner: options.ownerId,
                 generation: intent.claimGeneration,
+                failureType,
+                detail,
+                deliveryUncertain: false,
                 at: yield* now(),
               });
+              yield* Queue.offer(wakeQueue, workItemId);
               return;
             }
             const attempted = yield* repository.beginRecoveryAttempt({

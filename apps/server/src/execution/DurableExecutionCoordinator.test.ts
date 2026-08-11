@@ -509,6 +509,40 @@ layer("DurableExecutionCoordinator", (it) => {
       assert.deepStrictEqual(yield* Ref.get(terminated), [workItemId]);
     }),
   );
+  it.effect("hands a not-yet-delivered work item back runnable instead of parking it", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("queued-stall", 43, "queued-stall");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-queued",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () => Effect.die("dispatch must not run"),
+        recover: () => Effect.die("recovery must not run"),
+      });
+
+      // Nothing was delivered, so there is no attempt to charge — but the item
+      // must stay claimable by the coordinator's own loop.
+      yield* coordinator.failObserved({
+        workItemId,
+        failureType: "provider-output-silent",
+        detail: "No output from the agent for 94 minutes.",
+      });
+
+      const intent = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(intent._tag === "Some");
+      if (intent._tag === "None") return;
+      assert.strictEqual(intent.value.recoveryAttempts, 0);
+      assert.strictEqual(intent.value.runnable, true);
+      assert.strictEqual(intent.value.claimOwner, null);
+      assert.strictEqual(intent.value.deliveryCertainty, "never-delivered");
+
+      const due = yield* repository.listRunnable({ now: event.occurredAt, limit: 10 });
+      assert.isTrue(due.some((candidate) => candidate.workItemId === workItemId));
+    }),
+  );
   // T3-CUSTOM(expbkt3): END
 });
 
