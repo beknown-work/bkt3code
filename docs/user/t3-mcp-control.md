@@ -243,6 +243,34 @@ from parent**.
 Lineage always stays a tree. A session cannot be filed under itself or under any of its own
 descendants; the server rejects such a link rather than storing a cycle.
 
+### Who sees a session an agent creates
+
+A session created from another session is born tagged with that session's audience: the parent
+session's owner plus everyone tagged on it. Delegated work therefore stays in the sidebar of the
+person who asked for it, even when someone else prompted the parent and ends up owning the new
+session — before this, a session spawned during a shared conversation vanished from every watcher's
+sidebar except the last person to type.
+
+Inheritance follows the session that created the work, not the sidebar tree, so `createAsChild:
+false` still keeps the same audience. The same rule covers a person starting a side-by-side session
+from a sidebar row.
+
+The calling agent can override the audience:
+
+| Field                              | Effect                                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------- |
+| omitted                            | Inherits the calling session's owner and tags. The default.               |
+| `tagUserIds`                       | Tags exactly these users instead. Accepts T3 user IDs or email addresses. |
+| `tagUserIds` + `inheritParentTags` | Tags these users **on top of** the inherited audience.                    |
+| `inheritParentTags: false`         | Tags nobody: the session is private to its owner.                         |
+
+An email or ID that matches no user in the workspace fails the call rather than silently tagging
+nobody. `t3_create_session` returns `ownerUserId` and `taggedUserIds` so the agent can report who
+can see the session it just made.
+
+Tagging stays editable afterwards: `thread.member.add` and `thread.member.remove` change a session's
+audience at any time, and reach an agent through `t3_dispatch_command`.
+
 ### Side-by-side sessions
 
 The same context menu starts one. **Create new thread** offers two workspaces:

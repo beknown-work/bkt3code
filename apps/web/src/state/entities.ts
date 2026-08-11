@@ -23,7 +23,11 @@ import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
-import { allEnvironmentShellsBootstrappedAtom } from "./shell";
+import {
+  allEnvironmentShellsBootstrappedAtom,
+  environmentShellReadinessAtom,
+  type EnvironmentShellReadiness,
+} from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
@@ -122,6 +126,11 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
+}
+
+// T3-CUSTOM(expbkt3): which environments this client can currently see rows for.
+export function useEnvironmentShellReadiness(): EnvironmentShellReadiness {
+  return useAtomValue(environmentShellReadinessAtom);
 }
 
 export function useThreadShellsForProjectRefs(

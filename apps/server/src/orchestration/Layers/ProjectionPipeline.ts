@@ -776,6 +776,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               addedAt: event.payload.createdAt,
             });
           }
+          // Tags the session was born with (a child session inheriting its
+          // parent's audience) land in the same transaction as the creator tag.
+          for (const memberUserId of new Set(event.payload.memberUserIds ?? [])) {
+            if (memberUserId === event.payload.createdByUserId) continue;
+            yield* projectionMembershipRepository.upsertThreadMember({
+              threadId: event.payload.threadId,
+              userId: memberUserId,
+              addedByUserId: event.payload.createdByUserId ?? null,
+              addedAt: event.payload.createdAt,
+            });
+          }
           // T3-CUSTOM(expbkt3): END
           return;
 
