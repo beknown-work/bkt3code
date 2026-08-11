@@ -44,6 +44,15 @@ export interface ReclaimEligibilityInput {
   /** Worktree paths referenced by at least one thread that is *not* archived. */
   readonly activeThreadWorktreePaths: ReadonlySet<string>;
   /**
+   * Root under which T3 provisions worktrees.
+   *
+   * Anything outside it is not a disposable worktree — a thread created in
+   * non-worktree mode carries the project's *workspace root*, which is a main
+   * checkout someone works in and, for the deployments on this host, the very
+   * directory a server runs from.
+   */
+  readonly worktreesDir: string;
+  /**
    * Retention floor, in days, applied to `archivedAt`. Zero disables it. The
    * panel passes zero (the operator is looking right at the session); the
    * sweeper passes the configured window.
@@ -88,6 +97,36 @@ export function normalizeWorktreePath(path: string | null | undefined): string |
   }
   const collapsed = trimmed.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
   return collapsed.length > 0 ? collapsed : "/";
+}
+
+/**
+ * Whether a path is a worktree T3 provisioned, rather than a checkout someone
+ * merely opened a session against.
+ *
+ * A thread created in non-worktree mode stores the project's workspace root as
+ * its `worktreePath`. Those are main checkouts — on the deployment host, the
+ * directories the running servers are started from — and slimming one deletes
+ * the live application's dependencies. Restricting every action to
+ * `<worktreesDir>/<project>/<worktree>` is the invariant that makes the whole
+ * feature safe by construction rather than by enumerating what to avoid.
+ *
+ * Requires at least two segments below the root, so the root itself and a bare
+ * project directory are both rejected.
+ */
+export function isManagedWorktree(worktreePath: string, worktreesDir: string): boolean {
+  const candidate = normalizeWorktreePath(worktreePath);
+  const root = normalizeWorktreePath(worktreesDir);
+  if (candidate === null || root === null) {
+    return false;
+  }
+  if (!candidate.startsWith(`${root}/`)) {
+    return false;
+  }
+  const segments = candidate
+    .slice(root.length + 1)
+    .split("/")
+    .filter(Boolean);
+  return segments.length >= 2;
 }
 
 /**
@@ -170,6 +209,15 @@ export function evaluateReclaimEligibility(input: ReclaimEligibilityInput): Recl
     return blocked("no-worktree");
   }
 
+  // The strongest gate, and the first: only ever touch a directory T3 itself
+  // provisioned as a worktree. A thread created in non-worktree mode points at
+  // the project's workspace root — a main checkout, which on this host is also
+  // where the deployed servers run from. Slimming one of those deletes the
+  // running application's `node_modules`.
+  if (!isManagedWorktree(worktreePath, input.worktreesDir)) {
+    return blocked("not-a-managed-worktree");
+  }
+
   // Un-overridable: these protect work that is not the operator's to discard.
   // Containment-aware, so a nested worktree on either side still counts.
   if (isWorktreeProtected(worktreePath, input.liveWorktreePaths)) {
@@ -226,5 +274,7 @@ export function describeBlockedReason(reason: SessionArchiveBlockedReason): stri
       return "Commits here are not on any remote yet.";
     case "no-worktree":
       return "This session has no worktree on disk.";
+    case "not-a-managed-worktree":
+      return "This session works in a main checkout, not a T3-provisioned worktree.";
   }
 }

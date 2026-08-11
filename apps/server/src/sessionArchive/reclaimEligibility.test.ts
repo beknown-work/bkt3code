@@ -9,6 +9,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   evaluateReclaimEligibility,
+  isManagedWorktree,
   isPastRetention,
   isWorktreeProtected,
   normalizeWorktreePath,
@@ -17,7 +18,8 @@ import {
 
 const NOW_MS = Date.parse("2026-08-07T00:00:00.000Z");
 const ARCHIVED_LONG_AGO = "2026-01-01T00:00:00.000Z";
-const WORKTREE = "/home/ubuntu/.t3/dev/worktrees/proj/feature";
+const WORKTREES_DIR = "/home/ubuntu/.t3/dev/worktrees";
+const WORKTREE = `${WORKTREES_DIR}/proj/feature`;
 
 const CLEAN_GIT = {
   hasUncommittedChanges: false,
@@ -34,6 +36,7 @@ const input = (overrides: Partial<ReclaimEligibilityInput> = {}): ReclaimEligibi
   minArchivedDays: 0,
   nowMs: NOW_MS,
   force: false,
+  worktreesDir: WORKTREES_DIR,
   ...overrides,
 });
 
@@ -235,7 +238,7 @@ describe("per-mode reporting the scan relies on", () => {
 });
 
 describe("protecting worktrees used by non-archived sessions", () => {
-  const ACTIVE = "/home/ubuntu/.t3/dev/worktrees/proj/active";
+  const ACTIVE = `${WORKTREES_DIR}/proj/active`;
 
   it("refuses a worktree an active session uses, whatever the mode", () => {
     for (const mode of ["slim", "remove"] as const) {
@@ -286,7 +289,8 @@ describe("protecting worktrees used by non-archived sessions", () => {
   });
 
   it("refuses a parent whose removal would take an active worktree with it", () => {
-    const parent = "/home/ubuntu/.t3/dev/worktrees/proj";
+    // Must itself be a managed worktree, or the stricter gate fires first.
+    const parent = `${WORKTREES_DIR}/proj/wt`;
     const result = evaluateReclaimEligibility(
       input({
         thread: { threadId: "t", worktreePath: parent, archivedAt: ARCHIVED_LONG_AGO },
@@ -336,5 +340,86 @@ describe("isWorktreeProtected", () => {
 
   it("ignores blank entries in the protected set", () => {
     expect(isWorktreeProtected("/w/a", new Set(["", "   "]))).toBe(false);
+  });
+});
+
+describe("only T3-provisioned worktrees may be reclaimed", () => {
+  // Regression: a thread created in non-worktree mode carries the project's
+  // workspace root as its worktreePath. On the deployment host that is the
+  // directory a running server was started from, and slimming it deleted the
+  // live application's node_modules. Nothing else protected it, because
+  // `serverOwnedWorktrees` only guarded paths beneath the worktrees root.
+  const DEPLOY_CHECKOUT = "/home/ubuntu/repos/t3code-expbkt3";
+
+  it("refuses a main checkout outside the worktrees root", () => {
+    for (const mode of ["slim", "remove"] as const) {
+      const result = evaluateReclaimEligibility(
+        input({
+          mode,
+          thread: { threadId: "t", worktreePath: DEPLOY_CHECKOUT, archivedAt: ARCHIVED_LONG_AGO },
+        }),
+      );
+      expect(result.blockedReason).toBe("not-a-managed-worktree");
+    }
+  });
+
+  it("cannot be forced past", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        mode: "remove",
+        force: true,
+        thread: { threadId: "t", worktreePath: DEPLOY_CHECKOUT, archivedAt: ARCHIVED_LONG_AGO },
+      }),
+    );
+    expect(result.blockedReason).toBe("not-a-managed-worktree");
+  });
+
+  it("refuses the worktrees root itself and a bare project directory", () => {
+    for (const worktreePath of [WORKTREES_DIR, `${WORKTREES_DIR}/proj`]) {
+      const result = evaluateReclaimEligibility(
+        input({ thread: { threadId: "t", worktreePath, archivedAt: ARCHIVED_LONG_AGO } }),
+      );
+      expect(result.blockedReason).toBe("not-a-managed-worktree");
+    }
+  });
+
+  it("still allows a genuine provisioned worktree", () => {
+    expect(evaluateReclaimEligibility(input()).eligible).toBe(true);
+  });
+
+  it("is checked before the gates that depend on git", () => {
+    // Git facts are unavailable for a path we should not have looked at.
+    const result = evaluateReclaimEligibility(
+      input({
+        mode: "remove",
+        git: null,
+        thread: { threadId: "t", worktreePath: DEPLOY_CHECKOUT, archivedAt: ARCHIVED_LONG_AGO },
+      }),
+    );
+    expect(result.blockedReason).toBe("not-a-managed-worktree");
+  });
+});
+
+describe("isManagedWorktree", () => {
+  it("accepts <root>/<project>/<worktree>", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj/wt`, WORKTREES_DIR)).toBe(true);
+  });
+
+  it("accepts a deeper path inside a worktree", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj/wt/apps`, WORKTREES_DIR)).toBe(true);
+  });
+
+  it("rejects the root, a bare project, and anything outside", () => {
+    expect(isManagedWorktree(WORKTREES_DIR, WORKTREES_DIR)).toBe(false);
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj`, WORKTREES_DIR)).toBe(false);
+    expect(isManagedWorktree("/home/ubuntu/repos/t3code", WORKTREES_DIR)).toBe(false);
+  });
+
+  it("is not fooled by a sibling root sharing a prefix", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}-backup/proj/wt`, WORKTREES_DIR)).toBe(false);
+  });
+
+  it("tolerates trailing slashes on either side", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj/wt/`, `${WORKTREES_DIR}/`)).toBe(true);
   });
 });

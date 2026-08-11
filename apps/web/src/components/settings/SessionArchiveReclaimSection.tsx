@@ -611,6 +611,8 @@ function blockedText(reason: string): string {
       return "Held — archived too recently.";
     case "no-worktree":
       return "Nothing on disk to reclaim.";
+    case "not-a-managed-worktree":
+      return "Held — works in a main checkout, not a T3-provisioned worktree.";
     default:
       return "Held.";
   }

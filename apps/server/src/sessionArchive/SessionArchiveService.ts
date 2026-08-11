@@ -541,6 +541,7 @@ export const make = Effect.gen(function* () {
               minArchivedDays: 0,
               nowMs,
               force: false,
+              worktreesDir: config.worktreesDir,
             } as const;
             const eligibility = evaluateReclaimEligibility({ ...gateInput, mode: "slim" });
             const removeEligibility = evaluateReclaimEligibility({
@@ -680,6 +681,7 @@ export const make = Effect.gen(function* () {
     readonly activeThreadWorktreePaths: ReadonlySet<string>;
     /** The project's main checkout; `git worktree remove` must run from it. */
     readonly workspaceRoot: string | null;
+    readonly worktreesDir: string;
   }) =>
     Effect.gen(function* () {
       const { thread, mode } = input;
@@ -706,6 +708,7 @@ export const make = Effect.gen(function* () {
         minArchivedDays: input.minArchivedDays,
         nowMs: input.nowMs,
         force: input.force,
+        worktreesDir: input.worktreesDir,
       });
 
       if (!eligibility.eligible) {
@@ -870,6 +873,7 @@ export const make = Effect.gen(function* () {
             liveWorktreePaths: context.liveWorktreePaths,
             activeThreadWorktreePaths: context.activeThreadWorktreePaths,
             workspaceRoot: context.projectRoots.get(thread.projectId) ?? null,
+            worktreesDir: config.worktreesDir,
           }),
         { concurrency: 1 },
       );
