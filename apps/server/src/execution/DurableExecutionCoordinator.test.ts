@@ -1,8 +1,11 @@
 import { CommandId, CorrelationId, EventId, MessageId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import {
@@ -360,6 +363,153 @@ layer("DurableExecutionCoordinator", (it) => {
       ]);
     }),
   );
+
+  // T3-CUSTOM(expbkt3): BEGIN — bounds on a delivery that never answers.
+  it.effect("charges a delivery that never acknowledges to the retry budget", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("timeout", 40, "timeout");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-timeout",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        // The stuck shape this exists for: a dispatch that neither fails nor
+        // returns, holding its claim alive by renewing the lease forever.
+        dispatchOriginal: () => Effect.never,
+        recover: () => Effect.die("recovery must not run"),
+        dispatchDeadlineMs: () => Effect.succeed(300_000),
+      });
+
+      const running = yield* coordinator
+        .run(workItemId)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("5 minutes");
+      yield* Fiber.join(running);
+
+      const intent = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(intent._tag === "Some");
+      if (intent._tag === "None") return;
+      assert.strictEqual(intent.value.phase, "recovering");
+      assert.strictEqual(intent.value.lastFailureType, "provider-dispatch-timeout");
+      assert.include(intent.value.lastFailureDetail ?? "", "The agent never started");
+      // Delivery may have happened after the deadline, so the retry has to
+      // inspect and adopt rather than replay the prompt.
+      assert.strictEqual(intent.value.deliveryCertainty, "uncertain");
+    }),
+  );
+
+  it.effect("does not count worktree bootstrap against the delivery deadline", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("bootstrap", 41, "bootstrap");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-bootstrap",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        // A real worktree clone plus install honestly takes this long.
+        prepare: () => Effect.sleep("12 minutes"),
+        dispatchOriginal: () =>
+          Effect.succeed({ providerTurnId: "provider-turn-slow", providerInstanceId: "codex" }),
+        recover: () => Effect.die("recovery must not run"),
+        dispatchDeadlineMs: () => Effect.succeed(300_000),
+      });
+
+      const running = yield* coordinator
+        .run(workItemId)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("13 minutes");
+      yield* Fiber.join(running);
+
+      const intent = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(intent._tag === "Some");
+      if (intent._tag === "None") return;
+      assert.strictEqual(intent.value.phase, "running");
+      assert.strictEqual(intent.value.lastFailureType, null);
+    }),
+  );
+
+  it.effect("spends the shared budget on observed stalls and then fails the execution", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("observed", 42, "observed");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const clock = yield* Ref.make(event.occurredAt);
+      const exhausted = yield* Ref.make<Array<string>>([]);
+      const terminated = yield* Ref.make<Array<string>>([]);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-observed",
+        now: () => Ref.get(clock),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () =>
+          Effect.succeed({ providerTurnId: "provider-turn-observed", providerInstanceId: "codex" }),
+        recover: () => Effect.die("recovery must not run in this test"),
+        onExhausted: ({ detail }) => Ref.update(exhausted, (all) => [...all, detail]),
+        terminateObserved: (intent) => Ref.update(terminated, (all) => [...all, intent.workItemId]),
+      });
+
+      // Deliver once so the work item is acknowledged and the coordinator is
+      // finished with it — the state nothing else watches.
+      yield* coordinator.run(workItemId);
+      const acknowledged = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(acknowledged._tag === "Some");
+      if (acknowledged._tag === "None") return;
+      assert.strictEqual(acknowledged.value.phase, "running");
+
+      const report = (index: number) =>
+        Effect.gen(function* () {
+          // Each report is separated by more than any backoff step, the way a
+          // once-a-minute sweep with a ninety-minute backstop would be.
+          yield* Ref.set(
+            clock,
+            DateTime.formatIso(
+              DateTime.makeUnsafe(Date.parse(event.occurredAt) + index * 3_600_000),
+            ),
+          );
+          yield* coordinator.failObserved({
+            workItemId,
+            failureType: "provider-output-silent",
+            detail: "No output from the agent for 94 minutes.",
+          });
+        });
+
+      yield* report(1);
+      const afterFirst = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(afterFirst._tag === "Some");
+      if (afterFirst._tag === "None") return;
+      // One unit of the existing budget, and back in the coordinator's queue.
+      assert.strictEqual(afterFirst.value.recoveryAttempts, 1);
+      assert.strictEqual(afterFirst.value.phase, "retry-wait");
+      assert.strictEqual(afterFirst.value.desiredState, "running");
+      assert.strictEqual(afterFirst.value.lastFailureType, "provider-output-silent");
+      assert.deepStrictEqual(yield* Ref.get(exhausted), []);
+
+      for (let index = 2; index <= 10; index += 1) yield* report(index);
+
+      const final = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(final._tag === "Some");
+      if (final._tag === "None") return;
+      assert.strictEqual(final.value.recoveryAttempts, 10);
+      assert.strictEqual(final.value.phase, "recovery-exhausted");
+      assert.strictEqual(final.value.desiredState, "stopped");
+      assert.strictEqual(final.value.runnable, false);
+
+      // Exactly one terminal error, readable, and the provider is stopped after
+      // the execution has been failed rather than before it.
+      const details = yield* Ref.get(exhausted);
+      assert.strictEqual(details.length, 1);
+      assert.include(details[0] ?? "", "No output from the agent for 94 minutes.");
+      assert.include(details[0] ?? "", "Automatic recovery gave up after 10 attempts.");
+      assert.deepStrictEqual(yield* Ref.get(terminated), [workItemId]);
+    }),
+  );
+  // T3-CUSTOM(expbkt3): END
 });
 
 it("uses the deterministic fast-then-patient ten-attempt schedule", () => {
