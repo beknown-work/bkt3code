@@ -86,7 +86,15 @@ import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { usePhaseSidebarFilterStore } from "../phaseSidebarFilterStore";
 import { useShortcutModifierState } from "../shortcutModifierState";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import {
+  useEnvironmentAppearances,
+  useEnvironments,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
+// T3-CUSTOM(expbkt3): BEGIN — per-environment identity in a multi-environment sidebar.
+import type { ResolvedEnvironmentAppearance } from "../state/environmentAppearance";
+import { EnvironmentBadgeView } from "./environment/EnvironmentBadge";
+// T3-CUSTOM(expbkt3): END
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
@@ -835,6 +843,9 @@ interface PhaseThreadRowProps {
   readonly row: PhaseSidebarRow;
   readonly section: PhaseSidebarSection;
   readonly project: Project | null;
+  // T3-CUSTOM(expbkt3): set only when the rendered rows span more than one
+  // environment; a single-environment sidebar stays exactly as it was.
+  readonly environmentAppearance?: ResolvedEnvironmentAppearance | undefined;
   readonly vcsStatus: VcsStatusResult | null;
   // T3-CUSTOM(expbkt3): BEGIN — worktree codename, flattened to primitives so
   // this memo'd row still compares by value.
@@ -920,6 +931,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     row,
     section,
     project,
+    // T3-CUSTOM(expbkt3): present only in a multi-environment sidebar.
+    environmentAppearance,
     vcsStatus,
     // T3-CUSTOM(expbkt3): worktree codename.
     worktreeCodename,
@@ -1436,6 +1449,18 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <TooltipPopup side="top">Started by {treeParentTitle}</TooltipPopup>
               </Tooltip>
             ) : null}
+            {/* T3-CUSTOM(expbkt3): BEGIN — which machine this session runs on. Sits
+                with the repository label because that is the pair that becomes
+                ambiguous once two environments contribute the same repo. */}
+            {environmentAppearance ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" />}>
+                  <EnvironmentBadgeView appearance={environmentAppearance} variant="glyph" />
+                </TooltipTrigger>
+                <TooltipPopup side="top">{environmentAppearance.name}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* T3-CUSTOM(expbkt3): END */}
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
               <TooltipTrigger
@@ -1451,7 +1476,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 <span className="min-w-0 truncate">{row.repositoryLabel}</span>
               </TooltipTrigger>
               {/* T3-CUSTOM(expbkt3): END */}
-              <TooltipPopup side="top">{row.repositoryLabel}</TooltipPopup>
+              <TooltipPopup side="top">
+                {environmentAppearance
+                  ? `${row.repositoryLabel} · ${environmentAppearance.name}`
+                  : row.repositoryLabel}
+              </TooltipPopup>
             </Tooltip>
             <Tooltip>
               {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
@@ -2248,6 +2277,16 @@ export function PhaseGroupedSidebar() {
     () => [...activeVisibleRows, ...renderedSnoozedRows, ...renderedSettledRows],
     [activeVisibleRows, renderedSnoozedRows, renderedSettledRows],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — environment markers are conditional on what is
+  // actually rendered, not on how many environments are configured. With one
+  // environment (the normal case) the sidebar is byte-for-byte unchanged.
+  const environmentAppearances = useEnvironmentAppearances();
+  const sidebarSpansEnvironments = useMemo(() => {
+    const first = visibleRows[0]?.thread.environmentId;
+    if (first === undefined) return false;
+    return visibleRows.some((candidate) => candidate.thread.environmentId !== first);
+  }, [visibleRows]);
+  // T3-CUSTOM(expbkt3): END
   const linearIssueStatusRequests = useMemo(() => {
     const identifiersByEnvironment = new Map<EnvironmentId, Set<string>>();
     for (const row of visibleRows) {
@@ -2905,6 +2944,12 @@ export function PhaseGroupedSidebar() {
         row={row}
         section={section}
         project={project}
+        // T3-CUSTOM(expbkt3): only when the sessions on screen actually span more
+        // than one environment — a second environment with nothing in view is not
+        // a reason to mark every row.
+        {...(sidebarSpansEnvironments
+          ? { environmentAppearance: environmentAppearances.get(row.thread.environmentId) }
+          : {})}
         vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
         {...phaseSidebarWorktreeRowProps(worktreeView, row.thread.worktreePath)}
         active={routeThreadKey === key}

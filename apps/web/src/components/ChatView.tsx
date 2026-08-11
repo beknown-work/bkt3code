@@ -3648,7 +3648,9 @@ function ChatViewContent(props: ChatViewProps) {
   const planReviewDocumentId = useOpenPlanReviewDocumentId(
     activeThreadRef?.environmentId ?? null,
     activeThreadRef?.threadId ?? null,
-    activeProposedPlan?.id ?? null,
+    activeProposedPlan !== null && hasActionableProposedPlan(activeProposedPlan)
+      ? activeProposedPlan.id
+      : null,
   );
   // T3-CUSTOM(expbkt3): END
   const togglePreviewPanel = useCallback(() => {

@@ -35,7 +35,16 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { nextProjectScriptId } from "../../projectScripts";
-import { useEnvironments } from "../../state/environments";
+import {
+  useEnvironmentAppearances,
+  useEnvironments,
+  // T3-CUSTOM(expbkt3): per-environment identity.
+  useHasMultipleEnvironments,
+} from "../../state/environments";
+// T3-CUSTOM(expbkt3): BEGIN — environment identity badge.
+import type { ResolvedEnvironmentAppearance } from "../../state/environmentAppearance";
+import { EnvironmentBadgeView } from "../environment/EnvironmentBadge";
+// T3-CUSTOM(expbkt3): END
 import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -74,7 +83,15 @@ function commandFailureDescription(result: Parameters<typeof squashAtomCommandFa
   return error instanceof Error ? error.message : "An unexpected error occurred.";
 }
 
-function ProjectHealthBadges({ row }: { row: ProjectRow }) {
+function ProjectHealthBadges({
+  row,
+  // T3-CUSTOM(expbkt3): resolved once by the panel, so a long list does not
+  // subscribe per row.
+  environmentAppearance,
+}: {
+  row: ProjectRow;
+  environmentAppearance?: ResolvedEnvironmentAppearance | undefined;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Badge variant="outline">
@@ -92,10 +109,18 @@ function ProjectHealthBadges({ row }: { row: ProjectRow }) {
           {row.attentionCount} need attention
         </Badge>
       ) : null}
-      <Badge variant="secondary">
-        <ServerIcon />
-        {row.environmentLabel}
-      </Badge>
+      {/* T3-CUSTOM(expbkt3): BEGIN — carry the environment's own icon and colour so
+          the same machine reads identically here and in the sidebar. Falls back to
+          the plain badge when this client only knows one environment. */}
+      {environmentAppearance ? (
+        <EnvironmentBadgeView appearance={environmentAppearance} />
+      ) : (
+        <Badge variant="secondary">
+          <ServerIcon />
+          {row.environmentLabel}
+        </Badge>
+      )}
+      {/* T3-CUSTOM(expbkt3): END */}
     </div>
   );
 }
@@ -112,6 +137,10 @@ export function ActiveProjectsSettingsPanel() {
   const [nicknameDrafts, setNicknameDrafts] = useState<Record<string, string>>({});
   const [busyProjectKey, setBusyProjectKey] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
+  // T3-CUSTOM(expbkt3): `environment.label` is the nickname when one is set, so
+  // typing the name you gave a machine also finds its projects.
+  const appearances = useEnvironmentAppearances();
+  const showEnvironment = useHasMultipleEnvironments();
   const environmentLabelById = useMemo(
     () =>
       new Map(
@@ -441,7 +470,14 @@ export function ActiveProjectsSettingsPanel() {
                         </Button>
                       </div>
 
-                      <ProjectHealthBadges row={row} />
+                      <ProjectHealthBadges
+                        row={row}
+                        // T3-CUSTOM(expbkt3): only badge the machine when there is
+                        // more than one to distinguish.
+                        {...(showEnvironment
+                          ? { environmentAppearance: appearances.get(row.project.environmentId) }
+                          : {})}
+                      />
 
                       <p className="text-xs text-muted-foreground">
                         Last activity {formatRelativeTimeLabel(row.lastActivityAt)}

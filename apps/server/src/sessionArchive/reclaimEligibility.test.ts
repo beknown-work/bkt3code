@@ -9,14 +9,17 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   evaluateReclaimEligibility,
+  isManagedWorktree,
   isPastRetention,
+  isWorktreeProtected,
   normalizeWorktreePath,
   type ReclaimEligibilityInput,
 } from "./reclaimEligibility.ts";
 
 const NOW_MS = Date.parse("2026-08-07T00:00:00.000Z");
 const ARCHIVED_LONG_AGO = "2026-01-01T00:00:00.000Z";
-const WORKTREE = "/home/ubuntu/.t3/dev/worktrees/proj/feature";
+const WORKTREES_DIR = "/home/ubuntu/.t3/dev/worktrees";
+const WORKTREE = `${WORKTREES_DIR}/proj/feature`;
 
 const CLEAN_GIT = {
   hasUncommittedChanges: false,
@@ -33,6 +36,7 @@ const input = (overrides: Partial<ReclaimEligibilityInput> = {}): ReclaimEligibi
   minArchivedDays: 0,
   nowMs: NOW_MS,
   force: false,
+  worktreesDir: WORKTREES_DIR,
   ...overrides,
 });
 
@@ -230,5 +234,192 @@ describe("per-mode reporting the scan relies on", () => {
   it("only ever reports a forceable reason for the remove mode", () => {
     const bad = { hasUncommittedChanges: true, hasUntrackedFiles: true, hasUnpushedCommits: true };
     expect(evaluateReclaimEligibility(input({ mode: "slim", git: bad })).blockedReason).toBeNull();
+  });
+});
+
+describe("protecting worktrees used by non-archived sessions", () => {
+  const ACTIVE = `${WORKTREES_DIR}/proj/active`;
+
+  it("refuses a worktree an active session uses, whatever the mode", () => {
+    for (const mode of ["slim", "remove"] as const) {
+      const result = evaluateReclaimEligibility(
+        input({
+          mode,
+          thread: { threadId: "t", worktreePath: ACTIVE, archivedAt: ARCHIVED_LONG_AGO },
+          activeThreadWorktreePaths: new Set([ACTIVE]),
+        }),
+      );
+      expect(result.blockedReason).toBe("worktree-shared");
+    }
+  });
+
+  it("matches despite a trailing slash on either side", () => {
+    expect(
+      evaluateReclaimEligibility(
+        input({
+          thread: { threadId: "t", worktreePath: `${ACTIVE}/`, archivedAt: ARCHIVED_LONG_AGO },
+          activeThreadWorktreePaths: new Set([ACTIVE]),
+        }),
+      ).blockedReason,
+    ).toBe("worktree-shared");
+
+    expect(
+      evaluateReclaimEligibility(
+        input({
+          thread: { threadId: "t", worktreePath: ACTIVE, archivedAt: ARCHIVED_LONG_AGO },
+          activeThreadWorktreePaths: new Set([`${ACTIVE}/`]),
+        }),
+      ).blockedReason,
+    ).toBe("worktree-shared");
+  });
+
+  it("matches despite duplicated separators", () => {
+    expect(
+      evaluateReclaimEligibility(
+        input({
+          thread: {
+            threadId: "t",
+            worktreePath: "/home/ubuntu//.t3/dev/worktrees/proj/active",
+            archivedAt: ARCHIVED_LONG_AGO,
+          },
+          activeThreadWorktreePaths: new Set([ACTIVE]),
+        }),
+      ).blockedReason,
+    ).toBe("worktree-shared");
+  });
+
+  it("refuses a parent whose removal would take an active worktree with it", () => {
+    // Must itself be a managed worktree, or the stricter gate fires first.
+    const parent = `${WORKTREES_DIR}/proj/wt`;
+    const result = evaluateReclaimEligibility(
+      input({
+        thread: { threadId: "t", worktreePath: parent, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([`${parent}/nested`]),
+      }),
+    );
+    expect(result.blockedReason).toBe("worktree-shared");
+  });
+
+  it("refuses a subdirectory of an active worktree", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        thread: { threadId: "t", worktreePath: `${ACTIVE}/apps`, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([ACTIVE]),
+      }),
+    );
+    expect(result.blockedReason).toBe("worktree-shared");
+  });
+
+  it("does not mistake a sibling sharing a name prefix for the same worktree", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        thread: { threadId: "t", worktreePath: `${ACTIVE}-backup`, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([ACTIVE]),
+      }),
+    );
+    expect(result.eligible).toBe(true);
+  });
+
+  it("cannot be forced past", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        mode: "remove",
+        force: true,
+        thread: { threadId: "t", worktreePath: ACTIVE, archivedAt: ARCHIVED_LONG_AGO },
+        activeThreadWorktreePaths: new Set([ACTIVE]),
+      }),
+    );
+    expect(result.blockedReason).toBe("worktree-shared");
+  });
+});
+
+describe("isWorktreeProtected", () => {
+  it("is false when nothing is protected", () => {
+    expect(isWorktreeProtected("/w/a", new Set())).toBe(false);
+  });
+
+  it("ignores blank entries in the protected set", () => {
+    expect(isWorktreeProtected("/w/a", new Set(["", "   "]))).toBe(false);
+  });
+});
+
+describe("only T3-provisioned worktrees may be reclaimed", () => {
+  // Regression: a thread created in non-worktree mode carries the project's
+  // workspace root as its worktreePath. On the deployment host that is the
+  // directory a running server was started from, and slimming it deleted the
+  // live application's node_modules. Nothing else protected it, because
+  // `serverOwnedWorktrees` only guarded paths beneath the worktrees root.
+  const DEPLOY_CHECKOUT = "/home/ubuntu/repos/t3code-expbkt3";
+
+  it("refuses a main checkout outside the worktrees root", () => {
+    for (const mode of ["slim", "remove"] as const) {
+      const result = evaluateReclaimEligibility(
+        input({
+          mode,
+          thread: { threadId: "t", worktreePath: DEPLOY_CHECKOUT, archivedAt: ARCHIVED_LONG_AGO },
+        }),
+      );
+      expect(result.blockedReason).toBe("not-a-managed-worktree");
+    }
+  });
+
+  it("cannot be forced past", () => {
+    const result = evaluateReclaimEligibility(
+      input({
+        mode: "remove",
+        force: true,
+        thread: { threadId: "t", worktreePath: DEPLOY_CHECKOUT, archivedAt: ARCHIVED_LONG_AGO },
+      }),
+    );
+    expect(result.blockedReason).toBe("not-a-managed-worktree");
+  });
+
+  it("refuses the worktrees root itself and a bare project directory", () => {
+    for (const worktreePath of [WORKTREES_DIR, `${WORKTREES_DIR}/proj`]) {
+      const result = evaluateReclaimEligibility(
+        input({ thread: { threadId: "t", worktreePath, archivedAt: ARCHIVED_LONG_AGO } }),
+      );
+      expect(result.blockedReason).toBe("not-a-managed-worktree");
+    }
+  });
+
+  it("still allows a genuine provisioned worktree", () => {
+    expect(evaluateReclaimEligibility(input()).eligible).toBe(true);
+  });
+
+  it("is checked before the gates that depend on git", () => {
+    // Git facts are unavailable for a path we should not have looked at.
+    const result = evaluateReclaimEligibility(
+      input({
+        mode: "remove",
+        git: null,
+        thread: { threadId: "t", worktreePath: DEPLOY_CHECKOUT, archivedAt: ARCHIVED_LONG_AGO },
+      }),
+    );
+    expect(result.blockedReason).toBe("not-a-managed-worktree");
+  });
+});
+
+describe("isManagedWorktree", () => {
+  it("accepts <root>/<project>/<worktree>", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj/wt`, WORKTREES_DIR)).toBe(true);
+  });
+
+  it("accepts a deeper path inside a worktree", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj/wt/apps`, WORKTREES_DIR)).toBe(true);
+  });
+
+  it("rejects the root, a bare project, and anything outside", () => {
+    expect(isManagedWorktree(WORKTREES_DIR, WORKTREES_DIR)).toBe(false);
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj`, WORKTREES_DIR)).toBe(false);
+    expect(isManagedWorktree("/home/ubuntu/repos/t3code", WORKTREES_DIR)).toBe(false);
+  });
+
+  it("is not fooled by a sibling root sharing a prefix", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}-backup/proj/wt`, WORKTREES_DIR)).toBe(false);
+  });
+
+  it("tolerates trailing slashes on either side", () => {
+    expect(isManagedWorktree(`${WORKTREES_DIR}/proj/wt/`, `${WORKTREES_DIR}/`)).toBe(true);
   });
 });

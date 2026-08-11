@@ -183,6 +183,91 @@ const resolveCreatedSessionParent = Effect.fn("T3ControlToolkit.resolveCreatedSe
   },
 );
 
+/**
+ * T3-CUSTOM(expbkt3): resolve tag targets written as T3 user IDs or emails.
+ *
+ * An agent knows the humans in a session by email far more reliably than by
+ * Clerk ID, so both are accepted and an unknown entry fails loudly rather than
+ * silently tagging nobody.
+ */
+const resolveTagUserIds = Effect.fn("T3ControlToolkit.resolveTagUserIds")(function* (
+  operation: string,
+  entries: ReadonlyArray<string>,
+) {
+  const wanted = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  if (wanted.length === 0) return [] as ReadonlyArray<UserId>;
+  const clerkDirectory = yield* ClerkDirectory;
+  const users = yield* clerkDirectory.listOrgMembers().pipe(mapControlError(operation));
+  const resolved: Array<UserId> = [];
+  for (const entry of wanted) {
+    const match = users.find(
+      (user) =>
+        user.id === entry ||
+        (user.email !== null && user.email.toLowerCase() === entry.toLowerCase()),
+    );
+    if (match === undefined) {
+      return yield* new T3ControlToolError({
+        operation,
+        message: `'${entry}' does not match a T3 user. Pass a T3 user ID or the email address of a user in this workspace.`,
+      });
+    }
+    resolved.push(match.id);
+  }
+  return Array.from(new Set(resolved)) as ReadonlyArray<UserId>;
+});
+
+/**
+ * T3-CUSTOM(expbkt3): decide who a newly created session is tagged with.
+ *
+ * A session an agent creates is work a human asked for, so the audience of the
+ * session that asked is the audience that needs to see the result: the new
+ * session is born tagged with its source session's owner and everyone tagged
+ * there. Without this, delegated work lands owned by whoever happened to send
+ * the last prompt and disappears from every other watcher's sidebar.
+ *
+ *   tagUserIds given            → exactly those users (the override)
+ *   tagUserIds + inherit: true  → both sets
+ *   inheritParentTags: false    → nobody but the new owner
+ *   otherwise                   → source owner + source tags
+ *
+ * The source is the calling session, and only falls back to the resolved parent
+ * for callers that have no session of their own: an external-user token's
+ * threadId is synthetic, so it has no audience to inherit. Following the caller
+ * rather than the lineage link is deliberate — `createAsChild: false` files the
+ * session at top level, but the people who asked for it still want to see it.
+ *
+ * The new owner is dropped from the result: ownership already implies access,
+ * and the projector tags the creator on its own.
+ */
+const resolveCreatedSessionTags = (input: {
+  readonly scope: McpInvocationContext.McpInvocationScope;
+  readonly threads: ReadonlyArray<{
+    readonly id: ThreadId;
+    readonly ownerUserId: UserId | null;
+    readonly memberUserIds: ReadonlyArray<UserId>;
+  }>;
+  readonly parentThreadId: ThreadId | null;
+  readonly ownerUserId: UserId | null;
+  readonly explicitTagUserIds: ReadonlyArray<UserId>;
+  readonly inheritParentTags: boolean | undefined;
+}): ReadonlyArray<UserId> => {
+  const explicit = input.explicitTagUserIds;
+  const inherit = input.inheritParentTags ?? explicit.length === 0;
+  const sourceThreadId =
+    input.scope.principal === "provider-session" ? input.scope.threadId : input.parentThreadId;
+  const source =
+    inherit && sourceThreadId !== null
+      ? input.threads.find((candidate) => candidate.id === sourceThreadId)
+      : undefined;
+  const inherited =
+    source === undefined
+      ? []
+      : [...(source.ownerUserId === null ? [] : [source.ownerUserId]), ...source.memberUserIds];
+  return Array.from(new Set([...inherited, ...explicit])).filter(
+    (userId) => userId !== input.ownerUserId,
+  );
+};
+
 const resolveConfiguredOwnerUserId = Effect.fn("T3ControlToolkit.resolveConfiguredOwnerUserId")(
   function* (operation: string) {
     const config = yield* ServerConfig;
@@ -1022,6 +1107,16 @@ const handlers = {
     const sessionId = ThreadId.make(`mcp:${uuid}`);
     const ownerUserId =
       scope.actorUserId ?? project.ownerUserId ?? (yield* resolveConfiguredOwnerUserId(operation));
+    // T3-CUSTOM(expbkt3): the new session inherits the calling session's audience.
+    const memberUserIds = resolveCreatedSessionTags({
+      scope,
+      threads: shell.threads,
+      parentThreadId,
+      ownerUserId,
+      explicitTagUserIds:
+        input.tagUserIds === undefined ? [] : yield* resolveTagUserIds(operation, input.tagUserIds),
+      inheritParentTags: input.inheritParentTags,
+    });
     const title =
       input.title?.trim() ||
       input.prompt?.trim().split(/\s+/).slice(0, 10).join(" ").slice(0, 80) ||
@@ -1073,6 +1168,10 @@ const handlers = {
       // T3-CUSTOM(expbkt3): session lineage.
       parentThreadId,
       ...(ownerUserId ? { ownerUserId } : {}),
+      // T3-CUSTOM(expbkt3): always stated, never omitted: the audience is
+      // resolved from the calling session here, so an empty list has to read as
+      // "tag nobody" rather than letting the lineage default tag the parent's.
+      memberUserIds,
       createdAt,
     } as const;
     const result = yield* dispatcher
@@ -1106,6 +1205,8 @@ const handlers = {
               // T3-CUSTOM(expbkt3): session lineage.
               parentThreadId: bootstrapRequest.parentThreadId,
               ...(ownerUserId ? { ownerUserId } : {}),
+              // T3-CUSTOM(expbkt3): inherited session tags (see above).
+              memberUserIds,
               createdAt,
             },
         { actorUserId: ownerUserId },
@@ -1121,6 +1222,10 @@ const handlers = {
       bootstrapId: `mcp-bootstrap:${bootstrapUuid}`,
       bootstrapStatus: "queued",
       ...(messageId ? { messageId } : {}),
+      // T3-CUSTOM(expbkt3): who can see this session, so the caller can say so
+      // instead of guessing.
+      ownerUserId,
+      taggedUserIds: [...(ownerUserId ? [ownerUserId] : []), ...memberUserIds],
       sequence: result.sequence,
     };
   }),
@@ -1269,4 +1374,7 @@ export const __testing = {
   listSessions: handlers.t3_list_sessions,
   // T3-CUSTOM(expbkt3): session lineage resolution for created sessions.
   resolveCreatedSessionParent,
+  // T3-CUSTOM(expbkt3): inherited tagging for created sessions.
+  resolveCreatedSessionTags,
+  resolveTagUserIds,
 };

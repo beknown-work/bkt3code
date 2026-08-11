@@ -88,6 +88,12 @@ export function serverOwnedWorktrees(input: {
   if (cwd === null) {
     return owned;
   }
+  // The server's own directory is protected whether or not it sits under the
+  // worktrees root. On this host the deployed servers run from main checkouts
+  // outside it, and an earlier version of this function returned an empty set
+  // for exactly that case — which let a reclaim delete the running
+  // application's `node_modules`.
+  owned.add(cwd);
   const root = normalizeWorktreePath(input.worktreesDir);
   if (root === null || !cwd.startsWith(`${root}/`)) {
     return owned;

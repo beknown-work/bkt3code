@@ -17,7 +17,13 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  // T3-CUSTOM(expbkt3): environment identity in the header.
+  useHasMultipleEnvironments,
+  usePrimaryEnvironmentId,
+} from "../../state/environments";
+// T3-CUSTOM(expbkt3): environment identity badge.
+import { EnvironmentBadge } from "../environment/EnvironmentBadge";
 import { ThreadMembersControl } from "../members/ThreadMembersControl";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -97,9 +103,23 @@ export const ChatHeader = memo(function ChatHeader({
   });
   const selectedSourceControlProfile =
     sourceControlProfiles.find((profile) => profile.id === sourceControlProfileId) ?? null;
+  // T3-CUSTOM(expbkt3): only worth the header space once there is a second machine.
+  const showEnvironmentBadge = useHasMultipleEnvironments();
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
+        {/* T3-CUSTOM(expbkt3): BEGIN — which machine this session runs on. Leads the
+            header because with two environments attached the project name alone no
+            longer identifies the session; suppressed on a single-environment client
+            so the ordinary header is unchanged. */}
+        {showEnvironmentBadge ? (
+          <EnvironmentBadge
+            environmentId={activeThreadEnvironmentId}
+            variant="full"
+            className="shrink-0"
+          />
+        ) : null}
+        {/* T3-CUSTOM(expbkt3): END */}
         {/* The project always leads the header: knowing which project a
             thread lives in is priority zero, and the thread title alone
             doesn't answer it. */}
