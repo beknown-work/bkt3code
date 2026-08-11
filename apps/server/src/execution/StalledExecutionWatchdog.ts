@@ -118,16 +118,18 @@ export const makeStalledExecutionWatchdog = Effect.fn("makeStalledExecutionWatch
 
   const runtimeFor = (threadId: ThreadId) =>
     provider.inspectSession(threadId).pipe(
-      Effect.map((inspection): StalledExecutionRuntime | null =>
-        inspection === null ? "absent" : inspection.runtimeAlive ? "alive" : "dead",
+      Effect.map(
+        (inspection): StalledExecutionRuntime =>
+          inspection === null ? "absent" : inspection.runtimeAlive ? "alive" : "dead",
       ),
       Effect.catchCause((cause) =>
-        // An adapter that cannot answer is not evidence of anything. Skipping
-        // costs one sweep; guessing could cost a working turn.
+        // An adapter that cannot answer contributes "unknown", not a skip. This
+        // signal may only shorten a bound; letting it decide whether a
+        // candidate is examined at all would hand it a veto it has not earned.
         Effect.logWarning("stalled execution liveness check failed", {
           threadId,
           cause: Cause.pretty(cause),
-        }).pipe(Effect.as(null)),
+        }).pipe(Effect.as<StalledExecutionRuntime>("unknown")),
       ),
     );
 
@@ -139,17 +141,17 @@ export const makeStalledExecutionWatchdog = Effect.fn("makeStalledExecutionWatch
     // Supervisor memory is the authority; the projection can lag it by
     // milliseconds, which is exactly long enough to fail a settled turn.
     const snapshot = yield* supervisor.getSnapshot(threadId);
-    const runtime = yield* runtimeFor(threadId);
-    if (runtime === null) return;
     const verdict = classifyStalledExecution({
       activity: snapshot.activity,
       turnState: snapshot.turn?.state ?? null,
+      providerSessionState: snapshot.providerSession.state,
       stopRequestedAt: snapshot.turn?.stopRequestedAt ?? null,
       turnStartedAt: snapshot.turn?.startedAt ?? null,
       lastOutputAt: yield* lastOutputAt(threadId),
-      runtime,
+      runtime: yield* runtimeFor(threadId),
       nowMs: yield* now(),
       bounds: {
+        startedButNotTakenMs: settings.startedButNotTakenMs,
         deadRuntimeGraceMs: settings.deadRuntimeGraceMs,
         silentTurnMs: settings.silentTurnMs,
       },
@@ -167,7 +169,7 @@ export const makeStalledExecutionWatchdog = Effect.fn("makeStalledExecutionWatch
       workItemId: candidate.workItemId,
       phase: candidate.phase,
       failureType: verdict.failureType,
-      quietForMs: verdict.quietForMs,
+      stalledForMs: verdict.stalledForMs,
     });
     yield* increment(stalledExecutionRevivalsTotal, { reason: verdict.failureType });
     yield* options.failObserved({

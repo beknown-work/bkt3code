@@ -1,5 +1,5 @@
 /**
- * StalledExecutionPolicy - when silence becomes evidence.
+ * StalledExecutionPolicy - when a turn that claims to be working is not.
  *
  * Execution activity only moves inside a transition, and every caller of that
  * transition is an event: an admitted turn, a provider runtime event, a stop. A
@@ -8,31 +8,39 @@
  * decision that closes the gap, kept pure so the rules can be read and tested
  * without a provider, a database, or a clock.
  *
- * ## Liveness first, silence as a long backstop
+ * ## The strongest signal is our own state machine, not the operating system
  *
- * The two signals available are not equally trustworthy, and that asymmetry is
- * the whole policy.
+ * `turn.state = "starting"` means the supervisor admitted the turn and has not
+ * seen `turn.started`. `providerSession.state = "ready"` means the provider
+ * handshake completed. Together they say something unambiguous: **the provider
+ * is up and simply never took the turn.** Seconds in that combination are
+ * normal. Ninety of them are not, and no amount of waiting fixes it.
  *
- * `runtimeAlive` is bookkeeping, not an operating-system probe: the adapters
- * derive it from their in-memory session map (`status !== "closed"`), which is
- * also why the stop path's own error says process-tree termination "could not be
- * *verified*". So:
+ * This was learned the expensive way. Three sessions launched at once into one
+ * directory: one answered in seven seconds, two sat at starting+ready for over
+ * fifteen minutes. Their provider processes were alive the whole time — idle in
+ * `ep_poll` at 0% CPU, children parked in `futex_do_wait`. Every process-level
+ * signal said "healthy".
  *
- *   - A missing or dead runtime is **proof of absence**. Nothing exists that
- *     could produce output, whatever the projection says. It is cheap to check
- *     and cannot be a false positive, so it acts on a short grace — long enough
- *     only to stay off the 15-second invariant audit's and startup's toes.
+ * ## Liveness is evidence, never a gate
+ *
+ * That incident is why `runtime` may only ever *shorten* a bound, never suppress
+ * a verdict, and why `"unknown"` is a first-class value rather than a reason to
+ * skip:
+ *
+ *   - A missing or dead runtime is **proof of absence** — nothing exists that
+ *     could produce output — so it fires on a short grace, long enough only to
+ *     stay off the 15-second invariant audit's and startup's toes.
  *   - A live runtime proves only that the adapter still holds a record. It
- *     cannot tell a wedged CLI from a long quiet tool call; a forty-minute test
- *     run appends nothing to the thread and is perfectly healthy. Pure silence
- *     therefore gets a much longer backstop, and it is measured against real
- *     appended output rather than the execution projection.
+ *     cannot tell a wedged CLI from a long quiet tool call, and as above it
+ *     cannot even tell a wedged CLI from a working one. So it buys nothing and
+ *     blocks nothing.
  *
- * Requiring a dead process would miss the hung-but-alive case entirely; acting
- * on silence alone would kill long quiet turns. Liveness gates the fast path,
- * silence only ever arms the slow one — and because the verdict is "revive",
- * which inspects and re-adopts a turn that is genuinely progressing, a false
- * positive costs a retry rather than the user's work.
+ * Silence keeps its long backstop for the mid-turn shape, and it is measured
+ * against real appended output rather than the execution projection.
+ * `provider_last_observed_at` only moves on provider *lifecycle* events, so a
+ * healthy Codex turn streaming for two hours leaves it two hours stale; keying
+ * on it would kill working sessions. See `StalledExecutionWatchdog`.
  *
  * ## Never on a session that is waiting for a human
  *
@@ -46,25 +54,38 @@
  */
 import type { ThreadExecutionSnapshot } from "@t3tools/contracts";
 
-/** What the provider adapter says about the session behind this turn. */
+/**
+ * What the provider adapter says about the session behind this turn. Optional
+ * evidence: it can shorten a bound, never lengthen one, and never suppress a
+ * verdict. `"unknown"` is what an adapter that cannot answer contributes.
+ */
 export type StalledExecutionRuntime =
   /** A session record exists and reports itself open. */
   | "alive"
   /** A session record exists and reports itself closed. */
   | "dead"
   /** No session record at all. */
-  | "absent";
+  | "absent"
+  /** The adapter could not answer. Not evidence of anything, either way. */
+  | "unknown";
 
 export interface StalledExecutionBounds {
+  /**
+   * How long a turn may sit at "starting" while its provider session is already
+   * up. This is the primary detector and the shortest bound, because the state
+   * pair it keys on cannot occur in a healthy turn for long.
+   */
+  readonly startedButNotTakenMs: number;
   /** Grace after turn start before a missing runtime counts as a stall. */
   readonly deadRuntimeGraceMs: number;
-  /** How long a live runtime may append nothing before it counts as a stall. */
+  /** How long a running turn may append nothing before it counts as a stall. */
   readonly silentTurnMs: number;
 }
 
 export interface StalledExecutionInput {
   readonly activity: ThreadExecutionSnapshot["activity"];
   readonly turnState: NonNullable<ThreadExecutionSnapshot["turn"]>["state"] | null;
+  readonly providerSessionState: ThreadExecutionSnapshot["providerSession"]["state"];
   readonly stopRequestedAt: string | null;
   /** When the turn was admitted. */
   readonly turnStartedAt: string | null;
@@ -81,7 +102,7 @@ export type StalledExecutionVerdict =
       readonly kind: "revive";
       readonly failureType: string;
       readonly detail: string;
-      readonly quietForMs: number;
+      readonly stalledForMs: number;
     };
 
 /** Bounds are milliseconds, but a person reads an error message in minutes. */
@@ -90,11 +111,23 @@ export function describeMinutes(millis: number): string {
   return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }
 
+/** Sub-minute bounds read as nonsense in minutes, so say seconds below one. */
+export function describeElapsed(millis: number): string {
+  if (millis < 60_000) {
+    const seconds = Math.max(1, Math.round(millis / 1_000));
+    return seconds === 1 ? "1 second" : `${seconds} seconds`;
+  }
+  return describeMinutes(millis);
+}
+
 const parsedMillis = (iso: string | null): number | null => {
   if (iso === null) return null;
   const parsed = Date.parse(iso);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+const runtimeIsGone = (runtime: StalledExecutionRuntime) =>
+  runtime === "absent" || runtime === "dead";
 
 export function classifyStalledExecution(input: StalledExecutionInput): StalledExecutionVerdict {
   // Rule one, and it stays rule one: only a session that claims to be working
@@ -125,28 +158,52 @@ export function classifyStalledExecution(input: StalledExecutionInput): StalledE
     return { kind: "ignore", reason: "turn-start-unknown" };
   }
   const sinceTurnStartMs = Math.max(0, input.nowMs - turnStartedMs);
+  const runtimeGone = runtimeIsGone(input.runtime);
 
-  if (input.runtime !== "alive") {
-    if (sinceTurnStartMs <= input.bounds.deadRuntimeGraceMs) {
-      return { kind: "ignore", reason: "dead-runtime-grace" };
+  if (input.turnState === "starting") {
+    // Liveness may shorten: a runtime that is provably gone needs no patience.
+    if (runtimeGone && sinceTurnStartMs > input.bounds.deadRuntimeGraceMs) {
+      return {
+        kind: "revive",
+        failureType: "provider-never-started",
+        detail: `The agent never started: no provider session exists ${describeElapsed(sinceTurnStartMs)} after the turn was admitted.`,
+        stalledForMs: sinceTurnStartMs,
+      };
     }
-    return input.turnState === "starting"
-      ? {
-          kind: "revive",
-          failureType: "provider-never-started",
-          detail: `The agent never started: no provider session exists ${describeMinutes(sinceTurnStartMs)} after the turn was admitted.`,
-          quietForMs: sinceTurnStartMs,
-        }
-      : {
-          kind: "revive",
-          failureType: "provider-runtime-gone",
-          detail: `The provider session disappeared ${describeMinutes(sinceTurnStartMs)} into the turn without reporting an exit.`,
-          quietForMs: sinceTurnStartMs,
-        };
+    // The primary detector. "ready" is the whole live set here: the supervisor
+    // normalises an adapter reporting "running" to "ready"
+    // (`inspectionProviderState`), so a session that is up is exactly this.
+    //
+    // Deliberately not extended to a provider session that is itself still
+    // "starting": a slow launch is the durable dispatch deadline's job, and
+    // charging the same failure twice would burn two retry budgets for one
+    // fault.
+    if (
+      input.providerSessionState === "ready" &&
+      sinceTurnStartMs > input.bounds.startedButNotTakenMs
+    ) {
+      return {
+        kind: "revive",
+        failureType: "provider-turn-never-started",
+        detail: `The provider session was ready but never started the turn, ${describeElapsed(sinceTurnStartMs)} after it was admitted.`,
+        stalledForMs: sinceTurnStartMs,
+      };
+    }
+    return { kind: "ignore", reason: `starting:${input.providerSessionState}` };
   }
 
-  // A live runtime: fall back to the turn start when the thread has no events
-  // of its own, so a turn that has never said anything is still measurable.
+  // A running turn. A runtime that is gone is proof; otherwise fall back to how
+  // long the thread has actually appended nothing.
+  if (runtimeGone && sinceTurnStartMs > input.bounds.deadRuntimeGraceMs) {
+    return {
+      kind: "revive",
+      failureType: "provider-runtime-gone",
+      detail: `The provider session disappeared ${describeElapsed(sinceTurnStartMs)} into the turn without reporting an exit.`,
+      stalledForMs: sinceTurnStartMs,
+    };
+  }
+  // Fall back to the turn start when the thread has no events of its own, so a
+  // turn that has never said anything is still measurable.
   const lastOutputMs = parsedMillis(input.lastOutputAt);
   const quietSinceMs =
     lastOutputMs === null ? turnStartedMs : Math.max(lastOutputMs, turnStartedMs);
@@ -157,7 +214,7 @@ export function classifyStalledExecution(input: StalledExecutionInput): StalledE
   return {
     kind: "revive",
     failureType: "provider-output-silent",
-    detail: `No output from the agent for ${describeMinutes(quietForMs)} while its provider session was still open.`,
-    quietForMs,
+    detail: `No output from the agent for ${describeElapsed(quietForMs)} while its provider session was still open.`,
+    stalledForMs: quietForMs,
   };
 }

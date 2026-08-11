@@ -612,8 +612,11 @@ export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettin
 export const StalledExecutionWatchdogSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   pollIntervalMs: Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })).pipe(
-    Schema.withDecodingDefault(Effect.succeed(60_000)),
+    Schema.withDecodingDefault(Effect.succeed(30_000)),
   ),
+  startedButNotTakenMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 30_000, maximum: 3_600_000 }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(90_000))),
   dispatchDeadlineMs: Schema.Int.check(
     Schema.isBetween({ minimum: 60_000, maximum: 3_600_000 }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(300_000))),
@@ -1010,6 +1013,9 @@ export const ServerSettingsPatch = Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
           pollIntervalMs: Schema.optionalKey(
             Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })),
+          ),
+          startedButNotTakenMs: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 30_000, maximum: 3_600_000 })),
           ),
           dispatchDeadlineMs: Schema.optionalKey(
             Schema.Int.check(Schema.isBetween({ minimum: 60_000, maximum: 3_600_000 })),

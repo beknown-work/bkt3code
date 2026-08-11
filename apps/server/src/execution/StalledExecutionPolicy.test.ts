@@ -5,11 +5,16 @@
 // interrupts an agent mid-thought. So the "never fires" cases below carry as
 // much weight as the ones that do, and the blocked case carries the most: a
 // session waiting for a human is quiet because it is correct.
+//
+// Two cases are named after the production rows that produced them. Neither is
+// hypothetical, and both encode a decision a future reader would otherwise be
+// tempted to simplify away.
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
 import {
   classifyStalledExecution,
+  describeElapsed,
   describeMinutes,
   type StalledExecutionInput,
 } from "./StalledExecutionPolicy.ts";
@@ -17,12 +22,19 @@ import {
 const nowMs = Date.parse("2026-01-01T12:00:00.000Z");
 const minutesAgo = (minutes: number) =>
   DateTime.formatIso(DateTime.makeUnsafe(nowMs - minutes * 60_000));
+const secondsAgo = (seconds: number) =>
+  DateTime.formatIso(DateTime.makeUnsafe(nowMs - seconds * 1_000));
 
-const bounds = { deadRuntimeGraceMs: 60_000, silentTurnMs: 90 * 60_000 };
+const bounds = {
+  startedButNotTakenMs: 90_000,
+  deadRuntimeGraceMs: 60_000,
+  silentTurnMs: 90 * 60_000,
+};
 
 const input = (overrides: Partial<StalledExecutionInput> = {}): StalledExecutionInput => ({
   activity: "active",
   turnState: "running",
+  providerSessionState: "ready",
   stopRequestedAt: null,
   turnStartedAt: minutesAgo(10),
   lastOutputAt: minutesAgo(1),
@@ -33,16 +45,66 @@ const input = (overrides: Partial<StalledExecutionInput> = {}): StalledExecution
 });
 
 describe("classifyStalledExecution", () => {
-  it("reports a turn that was admitted and never got a provider session", () => {
+  describe("the provider was ready and never took the turn", () => {
+    // expbkt3, three sessions launched at once into one directory: one answered
+    // in seven seconds, two sat here for fifteen minutes. Their processes were
+    // alive and idle the whole time, which is why liveness cannot gate this.
+    const stalledStart = (overrides: Partial<StalledExecutionInput> = {}) =>
+      input({
+        turnState: "starting",
+        providerSessionState: "ready",
+        turnStartedAt: minutesAgo(15),
+        lastOutputAt: minutesAgo(15),
+        ...overrides,
+      });
+
+    it("reports it once the short bound passes", () => {
+      const verdict = classifyStalledExecution(stalledStart());
+      expect(verdict.kind).toBe("revive");
+      if (verdict.kind !== "revive") return;
+      expect(verdict.failureType).toBe("provider-turn-never-started");
+      expect(verdict.detail).toBe(
+        "The provider session was ready but never started the turn, 15 minutes after it was admitted.",
+      );
+    });
+
+    it("reports it whatever the provider process is doing", () => {
+      // Alive and idle, dead, or unanswerable: none of these may change the
+      // verdict. Liveness is evidence, never a gate.
+      for (const runtime of ["alive", "dead", "absent", "unknown"] as const) {
+        expect(classifyStalledExecution(stalledStart({ runtime })).kind).toBe("revive");
+      }
+    });
+
+    it("leaves a turn that has only just been admitted alone", () => {
+      expect(classifyStalledExecution(stalledStart({ turnStartedAt: secondsAgo(30) }))).toEqual({
+        kind: "ignore",
+        reason: "starting:ready",
+      });
+    });
+
+    it("leaves a provider that is still starting to the dispatch deadline", () => {
+      // Charging this here would spend a second retry budget on one fault.
+      expect(
+        classifyStalledExecution(
+          stalledStart({ providerSessionState: "starting", runtime: "alive" }),
+        ),
+      ).toEqual({ kind: "ignore", reason: "starting:starting" });
+    });
+  });
+
+  it("reports a turn admitted against a provider session that never existed", () => {
     const verdict = classifyStalledExecution(
-      input({ turnState: "starting", runtime: "absent", turnStartedAt: minutesAgo(6) }),
+      input({
+        turnState: "starting",
+        providerSessionState: "starting",
+        runtime: "absent",
+        turnStartedAt: minutesAgo(6),
+      }),
     );
     expect(verdict.kind).toBe("revive");
     if (verdict.kind !== "revive") return;
     expect(verdict.failureType).toBe("provider-never-started");
-    expect(verdict.detail).toBe(
-      "The agent never started: no provider session exists 6 minutes after the turn was admitted.",
-    );
   });
 
   it("reports a runtime that disappeared mid-turn without reporting an exit", () => {
@@ -55,15 +117,21 @@ describe("classifyStalledExecution", () => {
   });
 
   it("gives a missing runtime a grace period so it does not race the audit or startup", () => {
-    const verdict = classifyStalledExecution(
-      input({ turnState: "starting", runtime: "absent", turnStartedAt: minutesAgo(0.5) }),
-    );
-    expect(verdict).toEqual({ kind: "ignore", reason: "dead-runtime-grace" });
+    expect(
+      classifyStalledExecution(
+        input({
+          turnState: "starting",
+          providerSessionState: "starting",
+          runtime: "absent",
+          turnStartedAt: secondsAgo(30),
+        }),
+      ),
+    ).toEqual({ kind: "ignore", reason: "starting:starting" });
   });
 
   it("reports a live session that has appended nothing for longer than the backstop", () => {
     const verdict = classifyStalledExecution(
-      input({ runtime: "alive", turnStartedAt: minutesAgo(120), lastOutputAt: minutesAgo(94) }),
+      input({ turnStartedAt: minutesAgo(120), lastOutputAt: minutesAgo(94) }),
     );
     expect(verdict.kind).toBe("revive");
     if (verdict.kind !== "revive") return;
@@ -76,35 +144,27 @@ describe("classifyStalledExecution", () => {
   it("never fires on a session waiting for a human, however long it has been quiet", () => {
     // Waiting for approval, silent for five hours: the correct behaviour is to
     // keep waiting. This is the case that must not regress.
-    expect(
-      classifyStalledExecution(
-        input({
-          activity: "blocked",
-          turnState: "waiting-for-approval",
-          turnStartedAt: minutesAgo(300),
-          lastOutputAt: minutesAgo(300),
-        }),
-      ),
-    ).toEqual({ kind: "ignore", reason: "activity:blocked" });
+    for (const turnState of ["waiting-for-approval", "waiting-for-input"] as const) {
+      expect(
+        classifyStalledExecution(
+          input({
+            activity: "blocked",
+            turnState,
+            turnStartedAt: minutesAgo(300),
+            lastOutputAt: minutesAgo(300),
+          }),
+        ),
+      ).toEqual({ kind: "ignore", reason: "activity:blocked" });
+    }
 
+    // Activity is checked before anything else, so no combination of liveness,
+    // provider state or elapsed time can reach a verdict behind it.
     expect(
       classifyStalledExecution(
         input({
           activity: "blocked",
-          turnState: "waiting-for-input",
-          turnStartedAt: minutesAgo(300),
-          lastOutputAt: minutesAgo(300),
-        }),
-      ),
-    ).toEqual({ kind: "ignore", reason: "activity:blocked" });
-
-    // Liveness is checked after activity, never before: a blocked session whose
-    // runtime has vanished is still not this module's business.
-    expect(
-      classifyStalledExecution(
-        input({
-          activity: "blocked",
-          turnState: "waiting-for-approval",
+          turnState: "starting",
+          providerSessionState: "ready",
           runtime: "absent",
           turnStartedAt: minutesAgo(300),
         }),
@@ -126,12 +186,15 @@ describe("classifyStalledExecution", () => {
     ).toEqual({ kind: "ignore", reason: "stop-in-flight" });
   });
 
-  it("leaves a long turn alone while it is still producing output", () => {
-    // The shape that proved the projection's own `provider_last_observed_at` is
-    // useless here: a Codex turn three hours in, streaming as it goes.
+  it("leaves a long turn alone while it is still producing output (thread 89654a8e)", () => {
+    // The production row that decided where silence is measured from. Its
+    // `provider_last_observed_at` was 112 minutes stale while the event log had
+    // provider output six seconds old, because that column only moves on
+    // provider *lifecycle* events. Anyone tempted to simplify the watchdog back
+    // to the projection column fails here.
     expect(
       classifyStalledExecution(
-        input({ turnStartedAt: minutesAgo(180), lastOutputAt: minutesAgo(0.5) }),
+        input({ turnStartedAt: minutesAgo(180), lastOutputAt: secondsAgo(6) }),
       ),
     ).toEqual({ kind: "ignore", reason: "output-recent" });
   });
@@ -141,10 +204,9 @@ describe("classifyStalledExecution", () => {
       classifyStalledExecution(input({ lastOutputAt: null, turnStartedAt: minutesAgo(5) })),
     ).toEqual({ kind: "ignore", reason: "output-recent" });
 
-    const stalled = classifyStalledExecution(
-      input({ lastOutputAt: null, turnStartedAt: minutesAgo(95) }),
-    );
-    expect(stalled.kind).toBe("revive");
+    expect(
+      classifyStalledExecution(input({ lastOutputAt: null, turnStartedAt: minutesAgo(95) })).kind,
+    ).toBe("revive");
   });
 
   it("ignores output timestamps older than the turn that is running now", () => {
@@ -185,10 +247,12 @@ describe("classifyStalledExecution", () => {
   });
 });
 
-describe("describeMinutes", () => {
-  it("reads as a sentence rather than a duration literal", () => {
+describe("describeElapsed", () => {
+  it("reads as a sentence at both scales", () => {
+    expect(describeElapsed(90_000)).toBe("2 minutes");
+    expect(describeElapsed(30_000)).toBe("30 seconds");
+    expect(describeElapsed(1_000)).toBe("1 second");
     expect(describeMinutes(60_000)).toBe("1 minute");
     expect(describeMinutes(300_000)).toBe("5 minutes");
-    expect(describeMinutes(1_000)).toBe("1 minute");
   });
 });

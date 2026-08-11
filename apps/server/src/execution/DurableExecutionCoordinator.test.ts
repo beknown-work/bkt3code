@@ -488,6 +488,16 @@ layer("DurableExecutionCoordinator", (it) => {
       assert.strictEqual(afterFirst.value.phase, "retry-wait");
       assert.strictEqual(afterFirst.value.desiredState, "running");
       assert.strictEqual(afterFirst.value.lastFailureType, "provider-output-silent");
+      // Re-armed, not parked. A stalled revive that left `next_attempt_at`
+      // null and the phase at "running" is how the production sessions became
+      // dead ends: nothing scheduled, nothing watching, nothing to try again.
+      assert.isTrue(afterFirst.value.runnable);
+      assert.isNotNull(afterFirst.value.nextAttemptAt);
+      assert.isNull(afterFirst.value.claimOwner);
+      assert.strictEqual(
+        afterFirst.value.lastFailureDetail,
+        "No output from the agent for 94 minutes.",
+      );
       assert.deepStrictEqual(yield* Ref.get(exhausted), []);
 
       for (let index = 2; index <= 10; index += 1) yield* report(index);

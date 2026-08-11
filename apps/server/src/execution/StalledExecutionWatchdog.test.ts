@@ -41,7 +41,8 @@ const instanceId = ProviderInstanceId.make("codex");
 
 const settings = {
   enabled: true,
-  pollIntervalMs: 60_000,
+  pollIntervalMs: 30_000,
+  startedButNotTakenMs: 90_000,
   dispatchDeadlineMs: 300_000,
   deadRuntimeGraceMs: 60_000,
   silentTurnMs: 90 * 60_000,
@@ -161,6 +162,7 @@ const makeSnapshot = (
   overrides: {
     readonly activity?: ThreadExecutionSnapshot["activity"];
     readonly turnState?: NonNullable<ThreadExecutionSnapshot["turn"]>["state"];
+    readonly providerSessionState?: ThreadExecutionSnapshot["providerSession"]["state"];
     readonly turnStartedAt?: string;
     readonly stopRequestedAt?: string | null;
   } = {},
@@ -172,7 +174,7 @@ const makeSnapshot = (
   activity: overrides.activity ?? "active",
   canStop: true,
   providerSession: {
-    state: "ready",
+    state: overrides.providerSessionState ?? "ready",
     generation: 1,
     providerInstanceId: instanceId,
     startedAt: minutesAgo(120),
@@ -193,7 +195,8 @@ const makeSnapshot = (
 interface HarnessInput {
   readonly snapshot: ThreadExecutionSnapshot;
   readonly workItemId: string;
-  readonly runtimeAlive: boolean | null;
+  /** "error" makes `inspectSession` fail, which must not skip the candidate. */
+  readonly runtimeAlive: boolean | null | "error";
   readonly enabled?: boolean;
 }
 
@@ -209,17 +212,19 @@ const runSweep = Effect.fnUntraced(function* (input: HarnessInput) {
   const underTest = String(input.snapshot.threadId);
   const provider = {
     inspectSession: (threadId: ThreadId) =>
-      Effect.succeed(
-        String(threadId) !== underTest || input.runtimeAlive === null
-          ? null
-          : {
-              threadId,
-              generation: 1,
-              state: "ready" as const,
-              activeProviderTurnId: null,
-              runtimeAlive: input.runtimeAlive,
-            },
-      ),
+      input.runtimeAlive === "error" && String(threadId) === underTest
+        ? Effect.die(new Error("adapter cannot answer"))
+        : Effect.succeed(
+            String(threadId) !== underTest || input.runtimeAlive === null
+              ? null
+              : {
+                  threadId,
+                  generation: 1,
+                  state: "ready" as const,
+                  activeProviderTurnId: null,
+                  runtimeAlive: input.runtimeAlive === true,
+                },
+          ),
   } as unknown as typeof ProviderService.Service;
   const supervisor = {
     getSnapshot: (threadId: ThreadId) =>
@@ -244,6 +249,92 @@ const runSweep = Effect.fnUntraced(function* (input: HarnessInput) {
 });
 
 layer("StalledExecutionWatchdog", (it) => {
+  it.effect("revives a ready provider that never took the turn, which no queue can reach", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const { threadId, workItemId } = yield* seedIntent("ready-never-took", 20);
+      // The production shape: recovery already ran once and acknowledged, so
+      // the intent sits at phase "running" with no next attempt scheduled.
+      yield* setIntentPhase(workItemId, "running");
+      yield* seedExecutionRow({
+        threadId,
+        activity: "active",
+        turnState: "starting",
+        turnStartedAt: minutesAgo(15),
+      });
+
+      // This is the crux of the whole bug: `listRunnable` excludes phase
+      // "running", so the coordinator's own loop can never pick this up. If a
+      // future change makes the queue cover it, this assertion is the warning
+      // that the detector below is no longer the only thing standing here.
+      const due = yield* repository.listRunnable({ now: nowIso, limit: 50 });
+      assert.isFalse(due.some((candidate) => candidate.workItemId === workItemId));
+
+      const reported = yield* runSweep({
+        workItemId,
+        snapshot: makeSnapshot(threadId, {
+          turnState: "starting",
+          providerSessionState: "ready",
+          turnStartedAt: minutesAgo(15),
+        }),
+        // Alive and idle, exactly as the stuck processes were.
+        runtimeAlive: true,
+      });
+      assert.strictEqual(reported.length, 1);
+      assert.strictEqual(reported[0]?.failureType, "provider-turn-never-started");
+      assert.include(reported[0]?.detail ?? "", "was ready but never started the turn");
+    }),
+  );
+
+  it.effect("still reports when the adapter cannot say whether the runtime is alive", () =>
+    Effect.gen(function* () {
+      const { threadId, workItemId } = yield* seedIntent("liveness-unknown", 21);
+      yield* setIntentPhase(workItemId, "running");
+      yield* seedExecutionRow({
+        threadId,
+        activity: "active",
+        turnState: "starting",
+        turnStartedAt: minutesAgo(15),
+      });
+
+      const reported = yield* runSweep({
+        workItemId,
+        snapshot: makeSnapshot(threadId, {
+          turnState: "starting",
+          providerSessionState: "ready",
+          turnStartedAt: minutesAgo(15),
+        }),
+        runtimeAlive: "error",
+      });
+      assert.strictEqual(reported.length, 1);
+      assert.strictEqual(reported[0]?.failureType, "provider-turn-never-started");
+    }),
+  );
+
+  it.effect("leaves a turn that was only just admitted alone", () =>
+    Effect.gen(function* () {
+      const { threadId, workItemId } = yield* seedIntent("just-admitted", 22);
+      yield* setIntentPhase(workItemId, "starting");
+      yield* seedExecutionRow({
+        threadId,
+        activity: "active",
+        turnState: "starting",
+        turnStartedAt: minutesAgo(0.5),
+      });
+
+      const reported = yield* runSweep({
+        workItemId,
+        snapshot: makeSnapshot(threadId, {
+          turnState: "starting",
+          providerSessionState: "ready",
+          turnStartedAt: minutesAgo(0.5),
+        }),
+        runtimeAlive: true,
+      });
+      assert.deepStrictEqual(reported, []);
+    }),
+  );
+
   it.effect("reports a delivered turn that has gone silent", () =>
     Effect.gen(function* () {
       const { threadId, workItemId } = yield* seedIntent("silent", 11);
