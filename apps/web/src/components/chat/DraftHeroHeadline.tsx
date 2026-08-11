@@ -1,7 +1,7 @@
-// T3-CUSTOM(expbkt3): BEGIN — environment identity in the new-thread picker.
+// T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker imports.
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
-// T3-CUSTOM(expbkt3): END
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+// T3-CUSTOM(expbkt3): END
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
@@ -9,12 +9,11 @@ import { openCommandPalette } from "~/commandPaletteBus";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
+// T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker dependencies.
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
-  // T3-CUSTOM(expbkt3): BEGIN — per-environment rows in the project picker.
   type SidebarProjectGroupMember,
-  // T3-CUSTOM(expbkt3): END
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 // T3-CUSTOM(expbkt3): BEGIN — environment identity in the new-thread picker.
@@ -194,7 +193,6 @@ export function DraftHeroHeadline({
               });
               return;
             }
-            // T3-CUSTOM(expbkt3): END
             const entry = projectEntryByKey.get(value as string);
             if (!entry) {
               return;
@@ -203,6 +201,7 @@ export function DraftHeroHeadline({
             void handleNewThread(scopeProjectRef(project.environmentId, project.id), {
               replace: true,
             });
+            // T3-CUSTOM(expbkt3): END
           }}
         >
           {/* T3-CUSTOM(expbkt3): BEGIN — render per-environment project rows. */}

@@ -23,23 +23,21 @@ import { useEnvironmentQuery } from "./query";
 import { relayEnvironmentDiscovery } from "./relay";
 import { usePreparedConnection } from "./session";
 
+// T3-CUSTOM(expbkt3): BEGIN — resolved appearance travels with every environment view.
 export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly environmentId: EnvironmentId;
-  // T3-CUSTOM(expbkt3): BEGIN — resolved environment identity.
   /**
    * What to show the operator. T3-CUSTOM(expbkt3): this is the nickname when one
    * is set, so every existing consumer displays it without being touched. Use
    * `connectionLabel` when you need the underlying connection's own name.
    */
   readonly label: string;
-  // T3-CUSTOM(expbkt3): BEGIN — the connection's own label, before any nickname.
   readonly connectionLabel: string;
   readonly appearance: ResolvedEnvironmentAppearance;
-  // T3-CUSTOM(expbkt3): END
-  // T3-CUSTOM(expbkt3): END
   readonly displayUrl: string | null;
   readonly relayManaged: boolean;
 }
+// T3-CUSTOM(expbkt3): END
 
 // T3-CUSTOM(expbkt3): BEGIN — resolve environment identity into presentations.
 function projectEnvironmentPresentation(
@@ -71,7 +69,7 @@ export function useEnvironments() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
   const presentationById = useAtomValue(environmentPresentations.presentationsAtom);
-  // T3-CUSTOM(expbkt3): subscribe so renaming an environment re-renders every
+  // Subscribe so renaming an environment re-renders every
   // surface that shows it, without each of them knowing the store exists.
   const storedAppearances = useEnvironmentAppearanceStore(
     (state) => state.appearanceByEnvironmentId,
@@ -88,7 +86,6 @@ export function useEnvironments() {
       ),
     [presentationById, storedAppearances],
   );
-
   return {
     isReady: catalog.isReady,
     networkStatus,
@@ -107,7 +104,7 @@ export function useEnvironment(
   environmentId: EnvironmentId | null,
 ): EnvironmentPresentation | null {
   const { presentation } = useEnvironmentPresentation(environmentId);
-  // T3-CUSTOM(expbkt3): same nickname resolution as the list hook.
+  // Use the same nickname resolution as the list hook.
   const stored = useEnvironmentAppearanceStore((state) =>
     environmentId === null ? undefined : state.appearanceByEnvironmentId[environmentId],
   );
