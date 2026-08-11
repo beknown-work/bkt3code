@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import {
@@ -560,6 +561,63 @@ layer("DurableExecutionCoordinator", (it) => {
       const details = yield* Ref.get(exhausted);
       assert.strictEqual(details.length, 1);
       assert.include(details[0] ?? "", "Retry to run it again.");
+    }),
+  );
+
+  it.effect("fails a work item whose every revive was acknowledged and then stalled", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("spent", 45, "spent");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const exhausted = yield* Ref.make<Array<string>>([]);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-spent",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () =>
+          Effect.succeed({ providerTurnId: "provider-turn-spent", providerInstanceId: "codex" }),
+        recover: () => Effect.die("recovery must not run"),
+        onExhausted: ({ detail }) => Ref.update(exhausted, (all) => [...all, detail]),
+      });
+
+      yield* coordinator.run(workItemId);
+      // Every revive succeeded, so nothing ever failed an attempt — the budget
+      // is spent without the ordinary exhaustion path ever being reached, and
+      // `claim` refuses at the ceiling.
+      yield* Effect.flatMap(
+        SqlClient.SqlClient,
+        (sql) => sql`
+          UPDATE projection_thread_execution_intents
+          SET recovery_attempts = maximum_recovery_attempts
+          WHERE work_item_id = ${workItemId}
+        `,
+      ).pipe(Effect.orDie);
+      const unclaimable = yield* repository.claim({
+        workItemId,
+        owner: "coordinator-spent",
+        now: event.occurredAt,
+        expiresAt: "2026-01-01T01:00:00.000Z",
+      });
+      assert.isTrue(unclaimable._tag === "None");
+
+      yield* coordinator.failObserved({
+        workItemId,
+        failureType: "provider-turn-never-started",
+        detail: "The provider session was ready but never started the turn.",
+      });
+
+      const parked = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(parked._tag === "Some");
+      if (parked._tag === "None") return;
+      assert.strictEqual(parked.value.phase, "recovery-exhausted");
+      assert.strictEqual(parked.value.desiredState, "stopped");
+      assert.isFalse(parked.value.runnable);
+
+      const details = yield* Ref.get(exhausted);
+      assert.strictEqual(details.length, 1);
+      assert.include(details[0] ?? "", "never started the turn");
+      assert.include(details[0] ?? "", "gave up after 10 attempts");
     }),
   );
 

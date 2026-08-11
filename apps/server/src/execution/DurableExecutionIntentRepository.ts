@@ -359,6 +359,21 @@ export interface DurableExecutionIntentRepositoryShape {
     readonly detail: string;
     readonly at: string;
   }) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  /**
+   * Park a work item whose retry budget is spent but which never failed an
+   * attempt outright — every revive was acknowledged and then stalled again.
+   * Deliberately claim-free: `claim` requires `recovery_attempts <
+   * maximum_recovery_attempts`, so at the ceiling nothing can take a claim and
+   * the ordinary exhaustion path is unreachable. Without this the item would
+   * sit at phase "running" forever, which is the state this whole feature
+   * exists to end.
+   */
+  readonly exhaustSpentBudget: (input: {
+    readonly workItemId: string;
+    readonly failureType: string;
+    readonly detail: string;
+    readonly at: string;
+  }) => Effect.Effect<boolean, ProjectionRepositoryError>;
   readonly stopThread: (input: {
     readonly threadId: ThreadId;
     readonly reason: string;
@@ -1289,6 +1304,46 @@ const make = Effect.gen(function* () {
         ),
       );
 
+  const exhaustSpentBudget: DurableExecutionIntentRepositoryShape["exhaustSpentBudget"] = ({
+    workItemId,
+    failureType,
+    detail,
+    at,
+  }) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{ readonly threadId: ThreadId; readonly attempt: number }>`
+          UPDATE projection_thread_execution_intents
+          SET desired_state = 'stopped', phase = 'recovery-exhausted', runnable = 0,
+              next_attempt_at = NULL, claim_owner = NULL, claim_expires_at = NULL,
+              last_failure_type = ${failureType}, last_failure_detail = ${detail},
+              exhausted_at = ${at}, terminal_at = ${at}, updated_at = ${at}
+          WHERE work_item_id = ${workItemId}
+            AND desired_state = 'running'
+            AND dismissed_at IS NULL
+            AND recovery_attempts >= maximum_recovery_attempts
+            AND (claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ${at})
+          RETURNING thread_id AS "threadId", recovery_attempts AS attempt
+        `;
+          const row = rows[0];
+          if (row === undefined) return false;
+          yield* sql`
+          UPDATE session_recovery_state
+          SET desired_state = 'stopped', reason = ${failureType}, next_attempt_at = NULL,
+              attempts = ${row.attempt}, last_attempt_at = ${at},
+              gave_up_at = ${at}, updated_at = ${at}
+          WHERE thread_id = ${row.threadId}
+        `;
+          return true;
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          persistenceError("DurableExecutionIntentRepository.exhaustSpentBudget", cause),
+        ),
+      );
+
   const stopThread: DurableExecutionIntentRepositoryShape["stopThread"] = ({
     threadId,
     reason,
@@ -1548,6 +1603,7 @@ const make = Effect.gen(function* () {
     markOriginalDispatchFailed,
     markRecoveryAttemptFailed,
     markFailedAttention,
+    exhaustSpentBudget,
     stopThread,
     retryExhausted,
     dismissExhausted,

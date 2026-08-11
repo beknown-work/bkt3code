@@ -611,10 +611,58 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
               expiresAt: addMillis(at, LEASE_MS),
             });
             if (Option.isNone(claimed)) {
-              yield* Effect.logDebug("durable execution stall not claimable", {
+              // A claim is refused once the budget is spent, so a work item
+              // whose every revive was acknowledged and then stalled again can
+              // never fail an attempt and would sit at "running" for good.
+              // Close it out here instead: same terminal state, same banner,
+              // reached by the only route still open.
+              const current = yield* repository.getByWorkItemId({ workItemId });
+              const spent =
+                Option.isSome(current) &&
+                current.value.desiredState === "running" &&
+                current.value.recoveryAttempts >= current.value.maximumRecoveryAttempts;
+              if (!spent) {
+                yield* Effect.logDebug("durable execution stall not claimable", {
+                  workItemId,
+                  failureType,
+                });
+                return;
+              }
+              const exhaustedDetail = `${detail} Automatic recovery gave up after ${current.value.recoveryAttempts} attempts.`;
+              const parked = yield* repository.exhaustSpentBudget({
                 workItemId,
                 failureType,
+                detail: exhaustedDetail,
+                at: yield* now(),
               });
+              if (!parked) return;
+              yield* notifyExhausted(current.value, exhaustedDetail);
+              yield* (
+                options.terminateObserved?.(current.value).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to terminate provider while exhausting recovery", {
+                      threadId: current.value.threadId,
+                      workItemId,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                ) ?? Effect.void
+              );
+              if (options.onRecoveryActivity) {
+                yield* options.onRecoveryActivity({
+                  intent: current.value,
+                  kind: "exhausted",
+                  attempt: current.value.recoveryAttempts,
+                  detail,
+                });
+              }
+              yield* increment(durableExecutionRecoveryAttemptsTotal, {
+                providerInstanceId: current.value.providerInstanceId ?? "unknown",
+                reason: failureType,
+                outcome: "exhausted",
+                attempt: current.value.recoveryAttempts,
+              });
+              yield* notifyTransition(current.value);
               return;
             }
             const intent = claimed.value;
