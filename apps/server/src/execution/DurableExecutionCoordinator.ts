@@ -138,6 +138,17 @@ export interface DurableExecutionCoordinatorOptions {
     readonly intent: DurableExecutionIntent;
     readonly detail: string;
   }) => Effect.Effect<void>;
+  /**
+   * Called when a recovery attempt concludes, from the provider's own history,
+   * that the turn already completed. The durable item is finished at that
+   * point, but the execution is not: if the events that would have settled it
+   * never arrived, it is still sitting at "starting" and the session still
+   * renders as running. Whoever implements this owns reconciling that.
+   */
+  readonly onCompletedFromHistory?: (input: {
+    readonly intent: DurableExecutionIntent;
+    readonly providerTurnId: string;
+  }) => Effect.Effect<void>;
 }
 
 export interface DurableExecutionCoordinatorShape {
@@ -425,6 +436,19 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
                 providerInstanceId: result.providerInstanceId,
                 at: yield* now(),
               });
+              if (reconciled && options.onCompletedFromHistory) {
+                yield* options
+                  .onCompletedFromHistory({ intent, providerTurnId: result.providerTurnId })
+                  .pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("failed to settle execution completed from history", {
+                        threadId: intent.threadId,
+                        workItemId: intent.workItemId,
+                        cause: Cause.pretty(cause),
+                      }),
+                    ),
+                  );
+              }
               if (reconciled && recovery && options.onRecoveryActivity) {
                 yield* options.onRecoveryActivity({
                   intent,
