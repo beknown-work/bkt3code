@@ -13,11 +13,16 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  advanceProgress,
   applySelectionScope,
+  describeProgress,
   describeReclaimResult,
   describeReclaimState,
   describeScanSummary,
+  estimateActionBytes,
   formatBytes,
+  initialProgress,
+  progressPercent,
   projectGroups,
   selectionTargets,
   sortEntriesForDisplay,
@@ -385,5 +390,123 @@ describe("selection groups", () => {
     const groups = stateGroups(entries);
     expect(groups[0]).toMatchObject({ id: "present", label: "Worktree on disk", count: 2 });
     expect(groups[1]).toMatchObject({ id: "slimmed", label: "Already slim", count: 1 });
+  });
+});
+
+describe("reclaim progress", () => {
+  const start = (over: Partial<Parameters<typeof initialProgress>[0]> = {}) =>
+    initialProgress({ action: "slim", total: 4, estimatedBytes: 1000, ...over });
+
+  it("starts empty", () => {
+    expect(start()).toMatchObject({ completed: 0, freedBytes: 0, finished: false });
+  });
+
+  it("accumulates freed bytes and reclaimed counts", () => {
+    let p = start();
+    p = advanceProgress(p, { reclaimed: true, freedBytes: 250 });
+    p = advanceProgress(p, { reclaimed: true, freedBytes: 250 });
+    expect(p).toMatchObject({ completed: 2, freedBytes: 500, reclaimedCount: 2, skippedCount: 0 });
+  });
+
+  it("counts a skipped session without adding bytes", () => {
+    const p = advanceProgress(start(), { reclaimed: false, freedBytes: 0 });
+    expect(p).toMatchObject({ completed: 1, skippedCount: 1, reclaimedCount: 0, freedBytes: 0 });
+  });
+
+  describe("progressPercent", () => {
+    it("tracks bytes against the estimate", () => {
+      const p = { ...start(), completed: 1, freedBytes: 500 };
+      expect(progressPercent(p)).toBe(50);
+    });
+
+    it("never exceeds the share of work actually completed", () => {
+      // One huge worktree finishing first must not claim the bar is nearly full.
+      const p = { ...start(), completed: 1, freedBytes: 999 };
+      expect(progressPercent(p)).toBe(99);
+    });
+
+    it("clamps an overshooting estimate", () => {
+      const p = { ...start(), completed: 3, freedBytes: 100_000 };
+      expect(progressPercent(p)).toBe(99);
+    });
+
+    it("is full once every session is done, however the estimate compared", () => {
+      const p = { ...start(), completed: 4, freedBytes: 1 };
+      expect(progressPercent(p)).toBe(100);
+    });
+
+    it("falls back to session count when nothing was measured", () => {
+      const p = { ...start({ estimatedBytes: null }), completed: 1 };
+      expect(progressPercent(p)).toBe(25);
+    });
+
+    it("treats a zero estimate as unmeasured rather than dividing by zero", () => {
+      const p = { ...start({ estimatedBytes: 0 }), completed: 2 };
+      expect(progressPercent(p)).toBe(50);
+    });
+
+    it("reports an empty batch as complete", () => {
+      expect(progressPercent(start({ total: 0 }))).toBe(100);
+    });
+  });
+
+  describe("describeProgress", () => {
+    it("names the session being worked on", () => {
+      const p = { ...start(), completed: 1, freedBytes: 1024, currentTitle: "Fix resume" };
+      const text = describeProgress(p);
+      expect(text).toContain("Slimming 2 of 4");
+      expect(text).toContain("1.0 KB freed");
+      expect(text).toContain("Fix resume");
+    });
+
+    it("switches to a summary when finished", () => {
+      const p = { ...start(), completed: 4, reclaimedCount: 3, skippedCount: 1, finished: true };
+      const text = describeProgress(p);
+      expect(text).toContain("Done · 3 of 4 reclaimed");
+      expect(text).toContain("1 skipped");
+      expect(text).not.toContain("Slimming");
+    });
+
+    it("says Removing for both removal actions", () => {
+      expect(describeProgress(start({ action: "remove" }))).toContain("Removing");
+      expect(describeProgress(start({ action: "force-remove" }))).toContain("Removing");
+    });
+  });
+});
+
+describe("estimateActionBytes", () => {
+  const entries = [
+    entry({ threadId: ThreadId.make("a"), reclaimableBytes: 100, worktreeBytes: 900 }),
+    entry({ threadId: ThreadId.make("b"), reclaimableBytes: 200, worktreeBytes: 800 }),
+  ];
+
+  it("sums the reclaimable bytes for a slim", () => {
+    expect(estimateActionBytes(entries, [ThreadId.make("a"), ThreadId.make("b")], "slim")).toBe(
+      300,
+    );
+  });
+
+  it("sums the whole worktree for a removal", () => {
+    expect(estimateActionBytes(entries, [ThreadId.make("a")], "remove")).toBe(900);
+    expect(estimateActionBytes(entries, [ThreadId.make("a")], "force-remove")).toBe(900);
+  });
+
+  it("ignores threads that are not targeted", () => {
+    expect(estimateActionBytes(entries, [ThreadId.make("b")], "slim")).toBe(200);
+  });
+
+  it("returns null when nothing was measured", () => {
+    const unmeasured = [
+      entry({ threadId: ThreadId.make("a"), reclaimableBytes: null, worktreeBytes: null }),
+    ];
+    expect(estimateActionBytes(unmeasured, [ThreadId.make("a")], "slim")).toBeNull();
+  });
+
+  it("still totals the measured ones when some are unknown", () => {
+    const mixed = [
+      entry({ threadId: ThreadId.make("a"), reclaimableBytes: 100 }),
+      entry({ threadId: ThreadId.make("b"), reclaimableBytes: null }),
+    ];
+    expect(estimateActionBytes(mixed, [ThreadId.make("a"), ThreadId.make("b")], "slim")).toBe(100);
   });
 });
