@@ -509,6 +509,50 @@ layer("DurableExecutionCoordinator", (it) => {
       assert.deepStrictEqual(yield* Ref.get(terminated), [workItemId]);
     }),
   );
+  it.effect("fails the execution when a bootstrap parks the work item for attention", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("attention", 44, "attention");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const exhausted = yield* Ref.make<Array<string>>([]);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-attention",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        // The expbkt3 shape: a bootstrap step that cannot be proven either way
+        // refuses to run again, and refusing is correct. What was wrong is that
+        // the execution kept rendering as running beside the banner saying so.
+        prepare: () =>
+          Effect.fail(
+            new DurableExecutionDispatchError({
+              failureType: "bootstrap-setup-uncertain",
+              detail:
+                "The setup script may already have run for this session, so it will not be launched again automatically. Retry to run it again.",
+              retryable: false,
+            }),
+          ),
+        dispatchOriginal: () => Effect.die("dispatch must not run"),
+        recover: () => Effect.die("recovery must not run"),
+        onExhausted: ({ detail }) => Ref.update(exhausted, (all) => [...all, detail]),
+      });
+
+      yield* coordinator.run(workItemId);
+
+      const parked = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(parked._tag === "Some");
+      if (parked._tag === "None") return;
+      assert.strictEqual(parked.value.phase, "recovery-exhausted");
+      // Parked after one look, with the budget untouched: this is not a retry
+      // that ran out, it is a side effect nobody can prove.
+      assert.strictEqual(parked.value.recoveryAttempts, 0);
+
+      const details = yield* Ref.get(exhausted);
+      assert.strictEqual(details.length, 1);
+      assert.include(details[0] ?? "", "Retry to run it again.");
+    }),
+  );
+
   it.effect("hands a not-yet-delivered work item back runnable instead of parking it", () =>
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
