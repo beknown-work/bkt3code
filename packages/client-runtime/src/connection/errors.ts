@@ -109,7 +109,6 @@ export function mapManagedRelayError(error: ManagedRelayClientError): Connection
       });
   }
 }
-
 // T3-CUSTOM(expbkt3): BEGIN — team-mode environments reject a connection for
 // identity reasons, not only credential ones. Each needs a different action from
 // the operator, so they cannot share one "credential is invalid" message.

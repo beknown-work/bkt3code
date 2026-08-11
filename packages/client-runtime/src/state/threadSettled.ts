@@ -215,6 +215,7 @@ export function threadWokeAt(
   return wakeAtMs <= Date.parse(options.now) ? shell.snoozedUntil : null;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — merged pull requests no longer settle active follow-up work.
 /**
  * Settled resolution over the server-backed settled lifecycle. Activity
  * blockers (pending approval/user-input, a live session, an unadjudicated
@@ -228,6 +229,7 @@ export function threadWokeAt(
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
  */
+// T3-CUSTOM(expbkt3): END
 export function effectiveSettled(
   shell: OrchestrationThreadShell,
   options: {
@@ -259,6 +261,7 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  // T3-CUSTOM(expbkt3): BEGIN — only abandoned pull requests settle immediately.
   // An abandoned change request is a decision: nothing is shipping from this
   // thread, so it settles immediately.
   if (options.changeRequestState === "closed") return true;
@@ -274,6 +277,7 @@ export function effectiveSettled(
   // work waiting on it. Only a close (above) or an explicit user settle
   // resolves it.
   if (options.changeRequestState === "open") return false;
+  // T3-CUSTOM(expbkt3): END
   if (options.autoSettleAfterDays === null) return false;
 
   const lastActivityAt = threadLastActivityAt(shell);

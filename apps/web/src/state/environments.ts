@@ -9,19 +9,21 @@ import * as Option from "effect/Option";
 import { useMemo } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
-// T3-CUSTOM(expbkt3): per-environment nickname, icon and colour.
+// T3-CUSTOM(expbkt3): BEGIN — per-environment nickname, icon and colour.
 import { useEnvironmentAppearanceStore } from "../environmentAppearanceStore";
 import {
   resolveEnvironmentAppearance,
   type EnvironmentAppearance,
   type ResolvedEnvironmentAppearance,
 } from "./environmentAppearance";
+// T3-CUSTOM(expbkt3): END
 import { environmentPresentations, useEnvironmentPresentation } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
 import { relayEnvironmentDiscovery } from "./relay";
 import { usePreparedConnection } from "./session";
 
+// T3-CUSTOM(expbkt3): BEGIN — resolved appearance travels with every environment view.
 export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly environmentId: EnvironmentId;
   /**
@@ -37,7 +39,9 @@ export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly displayUrl: string | null;
   readonly relayManaged: boolean;
 }
+// T3-CUSTOM(expbkt3): END
 
+// T3-CUSTOM(expbkt3): BEGIN — project the stored appearance into the environment view.
 function projectEnvironmentPresentation(
   environmentId: EnvironmentId,
   presentation: BaseEnvironmentPresentation,
@@ -60,12 +64,13 @@ function projectEnvironmentPresentation(
     relayManaged: presentation.entry.target._tag === "RelayConnectionTarget",
   };
 }
+// T3-CUSTOM(expbkt3): END
 
 export function useEnvironments() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
   const presentationById = useAtomValue(environmentPresentations.presentationsAtom);
-  // T3-CUSTOM(expbkt3): subscribe so renaming an environment re-renders every
+  // T3-CUSTOM(expbkt3): BEGIN — subscribe so renaming an environment re-renders every
   // surface that shows it, without each of them knowing the store exists.
   const storedAppearances = useEnvironmentAppearanceStore(
     (state) => state.appearanceByEnvironmentId,
@@ -82,6 +87,7 @@ export function useEnvironments() {
       ),
     [presentationById, storedAppearances],
   );
+  // T3-CUSTOM(expbkt3): END
 
   return {
     isReady: catalog.isReady,
@@ -99,7 +105,7 @@ export function useEnvironment(
   environmentId: EnvironmentId | null,
 ): EnvironmentPresentation | null {
   const { presentation } = useEnvironmentPresentation(environmentId);
-  // T3-CUSTOM(expbkt3): same nickname resolution as the list hook.
+  // T3-CUSTOM(expbkt3): BEGIN — same nickname resolution as the list hook.
   const stored = useEnvironmentAppearanceStore((state) =>
     environmentId === null ? undefined : state.appearanceByEnvironmentId[environmentId],
   );
@@ -110,6 +116,7 @@ export function useEnvironment(
         : projectEnvironmentPresentation(environmentId, presentation, stored),
     [environmentId, presentation, stored],
   );
+  // T3-CUSTOM(expbkt3): END
 }
 
 export function usePrimaryEnvironment(): EnvironmentPresentation | null {
@@ -128,7 +135,6 @@ export function useRelayEnvironmentDiscovery(): Discovery.RelayEnvironmentDiscov
 export function useEnvironmentConnectionState(environmentId: EnvironmentId) {
   return useEnvironmentQuery(environmentCatalog.stateAtom(environmentId));
 }
-
 // T3-CUSTOM(expbkt3): BEGIN — per-environment identity for multi-environment clients.
 
 /**
