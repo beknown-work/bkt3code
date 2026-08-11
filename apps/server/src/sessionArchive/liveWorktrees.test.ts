@@ -102,30 +102,35 @@ describe("serverOwnedWorktrees", () => {
       serverCwd: `${WORKTREES_DIR}/t3code-bkmain/t3code-401beb01/apps/server`,
       worktreesDir: WORKTREES_DIR,
     });
-    expect([...owned]).toEqual([`${WORKTREES_DIR}/t3code-bkmain/t3code-401beb01`]);
+    // Both the exact cwd and the worktree root above it.
+    expect(owned.has(`${WORKTREES_DIR}/t3code-bkmain/t3code-401beb01`)).toBe(true);
   });
 
-  it("protects nothing when the server runs outside the worktrees directory", () => {
+  it("protects the server's own directory even outside the worktrees root", () => {
+    // Regression: the deployed servers on this host run from main checkouts
+    // outside the worktrees root. Returning an empty set here left the running
+    // application's directory unprotected, and a reclaim deleted its
+    // node_modules.
     const owned = serverOwnedWorktrees({
-      serverCwd: "/home/ubuntu/repos/t3code",
+      serverCwd: "/home/ubuntu/repos/t3code-expbkt3",
       worktreesDir: WORKTREES_DIR,
     });
-    expect(owned.size).toBe(0);
+    expect([...owned]).toEqual(["/home/ubuntu/repos/t3code-expbkt3"]);
   });
 
-  it("does not mistake a sibling directory for a worktree root", () => {
+  it("does not derive a worktree root from a sibling sharing a prefix", () => {
     const owned = serverOwnedWorktrees({
       serverCwd: `${WORKTREES_DIR}-backup/proj/one`,
       worktreesDir: WORKTREES_DIR,
     });
-    expect(owned.size).toBe(0);
+    expect([...owned]).toEqual([`${WORKTREES_DIR}-backup/proj/one`]);
   });
 
-  it("protects nothing when the path is only one level deep", () => {
+  it("adds no worktree root when the path is only one level deep", () => {
     const owned = serverOwnedWorktrees({
       serverCwd: `${WORKTREES_DIR}/t3code-bkmain`,
       worktreesDir: WORKTREES_DIR,
     });
-    expect(owned.size).toBe(0);
+    expect([...owned]).toEqual([`${WORKTREES_DIR}/t3code-bkmain`]);
   });
 });

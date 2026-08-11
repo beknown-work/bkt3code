@@ -1,4 +1,4 @@
-// T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker types.
+// T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker imports.
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 // T3-CUSTOM(expbkt3): END
@@ -13,10 +13,10 @@ import { selectProjectGroupingSettings } from "~/logicalProject";
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
-  // T3-CUSTOM(expbkt3): per-environment rows in the project picker.
   type SidebarProjectGroupMember,
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
+// T3-CUSTOM(expbkt3): BEGIN — environment identity in the new-thread picker.
 import {
   // T3-CUSTOM(expbkt3): environment identity in the new-thread picker.
   useEnvironmentAppearances,
@@ -180,7 +180,7 @@ export function DraftHeroHeadline({
         <MenuRadioGroup
           value={activeProjectKey}
           onValueChange={(value) => {
-            // T3-CUSTOM(expbkt3): BEGIN — resolve an explicit environment selection.
+            // T3-CUSTOM(expbkt3): BEGIN — select an exact environment-qualified project.
             if (value === activeProjectKey) return;
             // An environment-qualified value names the
             // exact project to start in; a bare key keeps the previous behaviour of
@@ -204,7 +204,7 @@ export function DraftHeroHeadline({
             // T3-CUSTOM(expbkt3): END
           }}
         >
-          {/* T3-CUSTOM(expbkt3): BEGIN — distinguish duplicate projects by environment. */}
+          {/* T3-CUSTOM(expbkt3): BEGIN — render per-environment project rows. */}
           {pickerItems.map((item) => {
             // T3-CUSTOM(expbkt3): the environment is named only when this project
             // exists on more than one, which is the only time it is ambiguous.
@@ -255,6 +255,8 @@ export function DraftHeroHeadline({
       ? (appearances.get(activeProjectRef.environmentId) ?? null)
       : null;
 
+  // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): BEGIN — show the selected machine beneath the draft prompt.
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-2">
       <h1 className="w-full text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">

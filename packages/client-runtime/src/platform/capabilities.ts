@@ -59,8 +59,8 @@ export class EnvironmentIdentity extends Context.Service<
     readonly identityToken: Effect.Effect<Option.Option<string>>;
   }
 >()("@t3tools/client-runtime/platform/capabilities/EnvironmentIdentity") {}
-// T3-CUSTOM(expbkt3): END
 
+// T3-CUSTOM(expbkt3): END
 export class PrimaryEnvironmentAuth extends Context.Service<
   PrimaryEnvironmentAuth,
   {
