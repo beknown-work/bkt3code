@@ -9,13 +9,14 @@ import * as Option from "effect/Option";
 import { useMemo } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
-// T3-CUSTOM(expbkt3): per-environment nickname, icon and colour.
+// T3-CUSTOM(expbkt3): BEGIN — per-environment nickname, icon and colour.
 import { useEnvironmentAppearanceStore } from "../environmentAppearanceStore";
 import {
   resolveEnvironmentAppearance,
   type EnvironmentAppearance,
   type ResolvedEnvironmentAppearance,
 } from "./environmentAppearance";
+// T3-CUSTOM(expbkt3): END
 import { environmentPresentations, useEnvironmentPresentation } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
@@ -24,6 +25,7 @@ import { usePreparedConnection } from "./session";
 
 export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly environmentId: EnvironmentId;
+  // T3-CUSTOM(expbkt3): BEGIN — resolved environment identity.
   /**
    * What to show the operator. T3-CUSTOM(expbkt3): this is the nickname when one
    * is set, so every existing consumer displays it without being touched. Use
@@ -34,10 +36,12 @@ export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly connectionLabel: string;
   readonly appearance: ResolvedEnvironmentAppearance;
   // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): END
   readonly displayUrl: string | null;
   readonly relayManaged: boolean;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — resolve environment identity into presentations.
 function projectEnvironmentPresentation(
   environmentId: EnvironmentId,
   presentation: BaseEnvironmentPresentation,
@@ -60,7 +64,9 @@ function projectEnvironmentPresentation(
     relayManaged: presentation.entry.target._tag === "RelayConnectionTarget",
   };
 }
+// T3-CUSTOM(expbkt3): END
 
+// T3-CUSTOM(expbkt3): BEGIN — subscribe presentation lists to environment identity.
 export function useEnvironments() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
@@ -90,11 +96,13 @@ export function useEnvironments() {
     presentationById,
   };
 }
+// T3-CUSTOM(expbkt3): END
 
 export function usePrimaryEnvironmentId(): EnvironmentId | null {
   return useAtomValue(primaryEnvironmentIdAtom);
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — subscribe one presentation to environment identity.
 export function useEnvironment(
   environmentId: EnvironmentId | null,
 ): EnvironmentPresentation | null {
@@ -111,6 +119,7 @@ export function useEnvironment(
     [environmentId, presentation, stored],
   );
 }
+// T3-CUSTOM(expbkt3): END
 
 export function usePrimaryEnvironment(): EnvironmentPresentation | null {
   return useEnvironment(usePrimaryEnvironmentId());
@@ -128,7 +137,6 @@ export function useRelayEnvironmentDiscovery(): Discovery.RelayEnvironmentDiscov
 export function useEnvironmentConnectionState(environmentId: EnvironmentId) {
   return useEnvironmentQuery(environmentCatalog.stateAtom(environmentId));
 }
-
 // T3-CUSTOM(expbkt3): BEGIN — per-environment identity for multi-environment clients.
 
 /**
