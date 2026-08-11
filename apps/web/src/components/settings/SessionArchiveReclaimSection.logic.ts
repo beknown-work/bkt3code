@@ -128,6 +128,133 @@ export function selectionTargets(
     .map((entry) => entry.threadId);
 }
 
+/**
+ * Live state of a running reclaim.
+ *
+ * The reclaim RPC answers once, at the end, so a single call for a batch shows
+ * nothing until it is over. The panel instead drives one call per session and
+ * folds each answer into this, which is what makes a progress bar possible at
+ * all — and means a batch interrupted halfway still reports what it freed.
+ */
+export interface ReclaimProgress {
+  readonly action: "slim" | "remove" | "force-remove";
+  readonly total: number;
+  readonly completed: number;
+  readonly freedBytes: number;
+  /** Sum of the scan's per-entry estimates, or null when none were measured. */
+  readonly estimatedBytes: number | null;
+  readonly reclaimedCount: number;
+  readonly skippedCount: number;
+  /** Title of the session being worked on, or null between items. */
+  readonly currentTitle: string | null;
+  readonly finished: boolean;
+}
+
+export function initialProgress(input: {
+  readonly action: ReclaimProgress["action"];
+  readonly total: number;
+  readonly estimatedBytes: number | null;
+}): ReclaimProgress {
+  return {
+    action: input.action,
+    total: input.total,
+    completed: 0,
+    freedBytes: 0,
+    estimatedBytes: input.estimatedBytes,
+    reclaimedCount: 0,
+    skippedCount: 0,
+    currentTitle: null,
+    finished: false,
+  };
+}
+
+/**
+ * How full the bar should be, 0-100.
+ *
+ * Driven by bytes when the scan measured an estimate, because "how much space
+ * is being cleared" is the question the bar exists to answer. Falls back to
+ * sessions completed when nothing was measured, and is clamped both ways: an
+ * estimate is a guess, and a bar that overshoots or sticks at 99% reads as
+ * broken. Completion is authoritative — once every session is done the bar is
+ * full regardless of how the estimate compared.
+ */
+export function progressPercent(progress: ReclaimProgress): number {
+  if (progress.total === 0) {
+    return 100;
+  }
+  if (progress.completed >= progress.total) {
+    return 100;
+  }
+  const byCount = (progress.completed / progress.total) * 100;
+  if (progress.estimatedBytes === null || progress.estimatedBytes <= 0) {
+    return clampPercent(byCount);
+  }
+  const byBytes = (progress.freedBytes / progress.estimatedBytes) * 100;
+  // Never let the byte estimate claim more progress than work actually done —
+  // one huge worktree finishing early would otherwise show 90% with most
+  // sessions untouched.
+  return clampPercent(Math.min(byBytes, 99));
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return value > 100 ? 100 : value;
+}
+
+/** The line under the bar: what has happened so far, in plain terms. */
+export function describeProgress(progress: ReclaimProgress): string {
+  const verb = progress.action === "slim" ? "Slimming" : "Removing";
+  const head = progress.finished
+    ? `Done · ${progress.reclaimedCount} of ${progress.total} reclaimed`
+    : `${verb} ${progress.completed + 1} of ${progress.total}`;
+  const parts = [head, `${formatBytes(progress.freedBytes)} freed`];
+  if (progress.skippedCount > 0) {
+    parts.push(`${progress.skippedCount} skipped`);
+  }
+  if (!progress.finished && progress.currentTitle !== null) {
+    parts.push(progress.currentTitle);
+  }
+  return parts.join(" · ");
+}
+
+/** Fold one session's outcome into the running progress. */
+export function advanceProgress(
+  progress: ReclaimProgress,
+  outcome: { readonly reclaimed: boolean; readonly freedBytes: number },
+): ReclaimProgress {
+  return {
+    ...progress,
+    completed: progress.completed + 1,
+    freedBytes: progress.freedBytes + outcome.freedBytes,
+    reclaimedCount: progress.reclaimedCount + (outcome.reclaimed ? 1 : 0),
+    skippedCount: progress.skippedCount + (outcome.reclaimed ? 0 : 1),
+  };
+}
+
+/** Bytes the scan expects a given action to free across these threads. */
+export function estimateActionBytes(
+  entries: ReadonlyArray<SessionArchiveEntry>,
+  threadIds: ReadonlyArray<string>,
+  action: ReclaimProgress["action"],
+): number | null {
+  const wanted = new Set(threadIds);
+  let total = 0;
+  let measured = false;
+  for (const entry of entries) {
+    if (!wanted.has(entry.threadId)) continue;
+    // A slim frees only the regenerable directories; a removal takes the whole
+    // worktree with it.
+    const bytes = action === "slim" ? entry.reclaimableBytes : entry.worktreeBytes;
+    if (bytes !== null) {
+      total += bytes;
+      measured = true;
+    }
+  }
+  return measured ? total : null;
+}
+
 /** How a bulk-select control narrows the list. */
 export type SelectionScope =
   | { readonly kind: "all" }

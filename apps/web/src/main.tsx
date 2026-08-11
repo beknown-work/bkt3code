@@ -10,6 +10,9 @@ import "./index.css";
 import { isElectron } from "./env";
 import { ManagedClerkIdentityAuthProvider, ManagedRelayAuthProvider } from "./cloud/managedAuth";
 import { resolveAppClerkMode, resolveClerkPublishableKey } from "./cloud/publicConfig";
+// T3-CUSTOM(expbkt3): BEGIN - desktop blank-window diagnostic.
+import { DesktopAuthStallNotice } from "./components/clerk/DesktopAuthStallNotice";
+// T3-CUSTOM(expbkt3): END
 import { TeamIdentityBridge } from "./components/clerk/TeamIdentityBridge";
 import { getRouter } from "./router";
 import {
@@ -49,10 +52,18 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     {clerkPublishableKey && clerkMode !== "disabled" ? (
       isElectron ? (
-        <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
-          {clerkChildren}
-        </ElectronClerkProvider>
+        // T3-CUSTOM(expbkt3): BEGIN - the desktop provider renders nothing until
+        // Clerk's Native API answers, so a disabled Native API leaves a blank
+        // window with no explanation. The notice is a sibling, not a child, so it
+        // still renders in exactly that case.
+        <>
+          <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
+            {clerkChildren}
+          </ElectronClerkProvider>
+          <DesktopAuthStallNotice />
+        </>
       ) : (
+        // T3-CUSTOM(expbkt3): END
         <ClerkProvider publishableKey={clerkPublishableKey}>{clerkChildren}</ClerkProvider>
       )
     ) : (

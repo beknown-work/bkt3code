@@ -1436,9 +1436,7 @@ function SavedBackendListRow({
             {/* T3-CUSTOM(expbkt3): BEGIN — show the environment's own identity here,
                 so what you pick below is what you recognise elsewhere. */}
             <EnvironmentBadge environmentId={environment.environmentId} variant="icon" />
-            <h3 className="text-sm font-medium text-foreground">
-              {environmentAppearance?.name ?? environment.label}
-            </h3>
+            <h3 className="text-sm font-medium text-foreground">{environment.label}</h3>
             {/* T3-CUSTOM(expbkt3): END */}
           </div>
           {metadataBits.length > 0 ? (
@@ -1454,7 +1452,9 @@ function SavedBackendListRow({
                 <EnvironmentAppearanceEditor
                   environmentId={environment.environmentId}
                   appearance={environmentAppearance}
-                  fallbackName={environment.label}
+                  // T3-CUSTOM(expbkt3): the connection's own name, not the nickname
+                  // — otherwise the placeholder echoes what you just typed.
+                  fallbackName={environment.connectionLabel}
                 />
               </div>
             </details>
@@ -3041,6 +3041,36 @@ export function ConnectionsSettings() {
 
   return (
     <SettingsPageContainer>
+      {/* T3-CUSTOM(expbkt3): BEGIN — the environment you are running on needs a
+          nickname and colour as much as an attached one does; without this it is
+          the only environment you cannot tell apart from the others. Its own
+          section because the "This environment" blocks below are conditional on
+          how the backend is managed. */}
+      {primaryEnvironment !== null ? (
+        <SettingsSection title="Environment appearance">
+          <div className="px-3.5 py-3">
+            <div className="flex items-center gap-2 pb-3">
+              <EnvironmentBadge environmentId={primaryEnvironment.environmentId} variant="icon" />
+              <span className="text-sm font-medium text-foreground">
+                {primaryEnvironment.label}
+              </span>
+              {primaryEnvironment.displayUrl ? (
+                <span className="truncate text-xs text-muted-foreground">
+                  {primaryEnvironment.displayUrl}
+                </span>
+              ) : null}
+            </div>
+            <div className="max-w-md">
+              <EnvironmentAppearanceEditor
+                environmentId={primaryEnvironment.environmentId}
+                appearance={primaryEnvironment.appearance}
+                fallbackName={primaryEnvironment.connectionLabel}
+              />
+            </div>
+          </div>
+        </SettingsSection>
+      ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="This environment">

@@ -388,7 +388,7 @@ export const T3UpdateProjectTool = mutatingTool(
 export const T3CreateSessionTool = mutatingTool(
   Tool.make("t3_create_session", {
     description:
-      "Create a user-owned T3 Code session in an accessible project and optionally start its first prompt. Available to user-bound provider sessions, personal external users, and external operators.",
+      "Create a user-owned T3 Code session in an accessible project and optionally start its first prompt. Available to user-bound provider sessions, personal external users, and external operators. The new session is tagged with your session's audience — its owner and everyone tagged on it — so delegated work stays visible to the people who asked for it; override with tagUserIds or inheritParentTags.",
     parameters: Schema.Struct({
       projectId: described(Schema.String, "Target project ID obtained from t3_list_projects."),
       title: Schema.optional(
@@ -459,6 +459,22 @@ export const T3CreateSessionTool = mutatingTool(
         described(
           Schema.String,
           "Optional explicit parent session ID, for building a tree you are not the root of. Defaults to the calling session. Cannot be combined with createAsChild: false.",
+        ),
+      ),
+      // T3-CUSTOM(expbkt3): END
+      // T3-CUSTOM(expbkt3): BEGIN — inherited tagging. The default is
+      // inheritance, so these two only exist for the cases where the new
+      // session's audience genuinely differs from the calling session's.
+      tagUserIds: Schema.optional(
+        described(
+          Schema.Array(Schema.String),
+          "Users to tag on the new session, as T3 user IDs or email addresses. Replaces the tags inherited from your session unless you also pass inheritParentTags: true. Tagged users see the session in their own sidebar.",
+        ),
+      ),
+      inheritParentTags: Schema.optional(
+        described(
+          Schema.Boolean,
+          "Whether the new session inherits your session's audience — its owner plus everyone tagged on it. Defaults to true so delegated work stays visible to the people who asked for it. Pass false to keep the session to yourself, or combine with tagUserIds to add people on top of the inherited set.",
         ),
       ),
       // T3-CUSTOM(expbkt3): END

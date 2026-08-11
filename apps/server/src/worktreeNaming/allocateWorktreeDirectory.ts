@@ -15,6 +15,7 @@
  * not a git repository on the target branch. Reserving a name by pre-creating an
  * empty directory would therefore break every bootstrap that used it.
  */
+import { WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import { WORKTREE_CODENAMES, worktreeCodenameHash } from "@t3tools/shared/worktreeCodename";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -56,6 +57,41 @@ export function chooseWorktreeDirectoryName(input: {
 }
 
 /**
+ * One identity for a newly generated worktree. Directory entries and Git refs
+ * are independent registries, so a codename is available only when neither
+ * registry contains it. Remote branch names may be passed in their normal
+ * `<remote>/<branch>` shape.
+ */
+export function chooseWorktreeIdentity(input: {
+  readonly seed: string;
+  readonly takenDirectoryNames: ReadonlySet<string>;
+  readonly takenBranchNames: ReadonlySet<string>;
+  readonly legacyName: string;
+}): { readonly directoryName: string; readonly branchName: string } {
+  const branchPrefix = `${WORKTREE_BRANCH_PREFIX}/`;
+  const takenNames = new Set(input.takenDirectoryNames);
+
+  for (const branchName of input.takenBranchNames) {
+    const localBranchName = branchName.startsWith(branchPrefix)
+      ? branchName
+      : branchName.slice(branchName.indexOf("/") + 1);
+    if (localBranchName.startsWith(branchPrefix)) {
+      takenNames.add(localBranchName.slice(branchPrefix.length));
+    }
+  }
+
+  const directoryName = chooseWorktreeDirectoryName({
+    seed: input.seed,
+    taken: takenNames,
+    legacyName: input.legacyName,
+  });
+  return {
+    directoryName,
+    branchName: `${branchPrefix}${directoryName}`,
+  };
+}
+
+/**
  * Resolve a free directory name inside a project's worktrees directory. A
  * missing directory means nothing is taken yet — the first worktree for a
  * project creates it.
@@ -78,6 +114,26 @@ export const allocateWorktreeDirectoryName = Effect.fn("allocateWorktreeDirector
     });
   },
 );
+
+/** Allocate the same free codename across the filesystem and Git ref registries. */
+export const allocateWorktreeIdentity = Effect.fn("allocateWorktreeIdentity")(function* (input: {
+  readonly projectWorktreesDir: string;
+  readonly seed: string;
+  readonly legacyName: string;
+  readonly takenBranchNames: ReadonlySet<string>;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const entries = yield* fileSystem
+    .readDirectory(input.projectWorktreesDir)
+    .pipe(Effect.orElseSucceed(() => []));
+
+  return chooseWorktreeIdentity({
+    seed: input.seed,
+    legacyName: input.legacyName,
+    takenDirectoryNames: new Set(entries),
+    takenBranchNames: input.takenBranchNames,
+  });
+});
 
 /** The pre-codename directory name: the branch with its slashes swapped. */
 export function legacyWorktreeDirectoryName(branch: string): string {

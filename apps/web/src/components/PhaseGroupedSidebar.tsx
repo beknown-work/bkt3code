@@ -158,6 +158,7 @@ import {
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
   resolvePhaseSidebarWorkBadge,
+  phaseSidebarRowActionsClassName,
   phaseSidebarRowClassName,
   formatThreadPriority,
   PHASE_SIDEBAR_PRIORITY_CHOICES,
@@ -1455,7 +1456,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             {environmentAppearance ? (
               <Tooltip>
                 <TooltipTrigger render={<span className="inline-flex shrink-0 items-center" />}>
-                  <EnvironmentBadgeView appearance={environmentAppearance} variant="dot" />
+                  <EnvironmentBadgeView appearance={environmentAppearance} variant="glyph" />
                 </TooltipTrigger>
                 <TooltipPopup side="top">{environmentAppearance.name}</TooltipPopup>
               </Tooltip>
@@ -1741,12 +1742,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </Tooltip>
         </span>
         {/* T3-CUSTOM(expbkt3): BEGIN — hover actions overlay the row instead of reflowing metadata. */}
-        <span
-          className={cn(
-            "absolute top-1/2 right-1 z-10 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/70 bg-background/95 p-0.5 shadow-sm backdrop-blur-sm group-hover/phase-row:flex group-focus-within/phase-row:flex",
-            snoozeMenuOpen && "flex",
-          )}
-        >
+        <span className={phaseSidebarRowActionsClassName(snoozeMenuOpen || linearTagDialogOpen)}>
           {section === "snoozed" ? (
             row.snoozeSupported ? (
               <PhaseRowAction

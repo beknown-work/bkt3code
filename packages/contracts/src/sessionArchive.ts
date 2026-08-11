@@ -50,6 +50,7 @@ export const SessionArchiveBlockedReason = Schema.Literals([
   "dirty-worktree",
   "unpushed-commits",
   "no-worktree",
+  "not-a-managed-worktree",
 ]);
 export type SessionArchiveBlockedReason = typeof SessionArchiveBlockedReason.Type;
 
