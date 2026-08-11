@@ -46,26 +46,30 @@ Artifacts land in `release/`:
 | -------------------------------- | ----------------------------------------------------------------- |
 | `BK-T3-Code-<version>-arm64.dmg` | What a teammate downloads and installs                            |
 | `BK-T3-Code-<version>-arm64.zip` | Squirrel.Mac payload — this is what auto-update actually installs |
-| `*.blockmap`                     | Differential download support                                     |
+| `*.blockmap`                     | Differential download support, one per installer                  |
 | `nightly-mac.yml`                | The manifest electron-updater reads                               |
+
+That is five files in total: the DMG, the ZIP, a `.blockmap` for each, and the manifest.
 
 ### Versioning
 
 Builds are stamped `X.Y.Z-nightly.YYYYMMDD.N`, where `X.Y.Z` is one patch above the current `apps/desktop/package.json` version and `N` counts that day's builds. This is not cosmetic — see "Why the nightly channel" below. The build number is resolved from the tags already published, so consecutive builds always increase. To stamp one yourself:
 
 ```sh
-pnpm dist:desktop:bk -- --build-version 0.0.32-nightly.20260810.2
+pnpm dist:desktop:bk --build-version 0.0.32-nightly.20260810.2
 ```
 
 ## Publish
 
 ```sh
-pnpm publish:desktop:bk -- --build-version <the version just built>
+pnpm publish:desktop:bk --build-version <the version just built>
 ```
 
 Add `--dry-run` to run every check and print the `gh` command without publishing.
 
-This creates a **prerelease** on `beknown-work/bkt3code` with the DMG, the ZIP, the blockmap and the manifest. Three guards run first, and each one blocks publication:
+Do not insert a `--` separator before the flags. With pnpm 11.10.0 the separator reaches the script itself and the Effect CLI then reports `Missing required flag: --build-version`.
+
+This creates a **prerelease** on `beknown-work/bkt3code` with five assets — the DMG and ZIP, a `.blockmap` for each, and `nightly-mac.yml`. Three guards run first, and each one blocks publication:
 
 1. **The tag must be nightly-form.** `.github/workflows/release.yml` triggers on `v*.*.*` with `!v*-nightly.*` excluded, and it has no dry-run mode — a wrong tag would publish `t3` to npm, cut a public GitHub Release, and re-alias `app.t3.codes`. Only nightly-form tags are excluded from that trigger.
 2. **The version must be strictly newer** than the newest published one, or electron-updater will never offer it.
@@ -100,6 +104,46 @@ The fork brand deliberately wins over the nightly branding, so these builds are 
 - **The `t3code://` URL scheme.** `@clerk/electron`'s OAuth transport supplies the `t3code://app/` redirect (see `apps/web/src/components/clerk/authRedirect.ts`), so renaming it risks breaking sign-in in the packaged app. Consequence: if a teammate also has upstream T3 Code installed, macOS picks one of them for `t3code://` deep links.
 - **`DesktopAppStageLabel`** in `packages/contracts` stays `"Nightly"` for these builds. Only the displayed name changes, so no upstream contract union needs a new member.
 - **Code signing.** Apple certificates are bound to upstream's `com.t3tools.t3code` App ID, so fork builds are unsigned. Squirrel.Mac is stricter about unsigned _update_ payloads than about first install: if auto-update fails in practice, the fallback is a manual DMG reinstall, and signing becomes a prerequisite.
+
+## Troubleshooting
+
+### Blank window, and sign-in fails with `native_api_disabled`
+
+Symptom: the app launches, the Dock icon and About panel are correct, but the
+window renders nothing, and Clerk returns HTTP 400:
+
+```json
+{ "code": "native_api_disabled", "message": "Native API disabled" }
+```
+
+Cause: a **prerequisite on the Clerk instance, not a build problem**. In a
+packaged desktop build `apps/web/src/main.tsx` mounts `ElectronClerkProvider`
+from `@clerk/electron/react`, which talks to Clerk's Native API. When that API is
+disabled the provider never finishes loading, so nothing beneath it renders — one
+root cause producing both symptoms.
+
+The fork hit this on its first desktop build because the hosted web client uses
+the plain browser `ClerkProvider`, which needs no Native API. Upstream documents
+the requirement in
+[T3 Connect: Desktop OAuth Redirect Allowlist](../internals/t3-connect.md#desktop-oauth-redirect-allowlist)
+and lists it as a release step.
+
+Fix, on the Beknown production Clerk instance (`clerk.beknown.live`):
+
+1. **Clerk Dashboard → Native applications → enable the Native API.** This alone
+   resolves the blank window.
+2. Add `t3code://app/` to the mobile SSO redirect allowlist (and
+   `t3code-dev://app/` if you want local desktop development to sign in too).
+3. Confirm `t3code://app` is in the instance's Backend API `allowed_origins`.
+   There is no dashboard UI for this; see the `PATCH /v1/instance` call in the
+   T3 Connect doc. A `native_api_disabled` response that already echoes
+   `Origin: t3code://app` indicates this part is configured.
+
+To confirm the diagnosis, or to ship a usable build before the dashboard change,
+build with no Clerk key: `resolveAppClerkMode()` returns `"disabled"` when the key
+is absent, `main.tsx` then mounts no provider, and the app renders normally with
+team mode off — no sign-in gate, no member tagging, no "Assigned to me". There is
+no separate switch; key presence _is_ the switch.
 
 ## Icons
 
