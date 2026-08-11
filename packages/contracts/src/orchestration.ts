@@ -1046,6 +1046,11 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   // T3-CUSTOM(expbkt3): trusted external creators may nominate the durable owner.
   ownerUserId: Schema.optional(UserId),
+  // T3-CUSTOM(expbkt3): BEGIN — tags a session is born with. A session created
+  // from another session inherits its parent's audience, so delegated work
+  // stays visible to the humans watching the parent.
+  memberUserIds: Schema.optional(Schema.Array(UserId)),
+  // T3-CUSTOM(expbkt3): END
   createdAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): session priority. Absent means "unprioritised".
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
@@ -1105,6 +1110,8 @@ export const ThreadBootstrapRequestCommand = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage. Absent/null creates a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   ownerUserId: Schema.optional(UserId),
+  // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
+  memberUserIds: Schema.optional(Schema.Array(UserId)),
   createdAt: IsoDateTime,
 });
 export type ThreadBootstrapRequestCommand = typeof ThreadBootstrapRequestCommand.Type;
@@ -1196,6 +1203,8 @@ export const ResolvedThreadBootstrapRequest = Schema.Struct({
   // resolved requests persisted before lineage shipped still decode.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   ownerUserId: Schema.optional(UserId),
+  // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
+  memberUserIds: Schema.optional(Schema.Array(UserId)),
   createdAt: IsoDateTime,
 });
 export type ResolvedThreadBootstrapRequest = typeof ResolvedThreadBootstrapRequest.Type;
@@ -1371,6 +1380,8 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   ),
   // T3-CUSTOM(expbkt3): trusted external creators may nominate the durable owner.
   ownerUserId: Schema.optional(UserId),
+  // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
+  memberUserIds: Schema.optional(Schema.Array(UserId)),
   createdAt: IsoDateTime,
   // T3-CUSTOM(expbkt3): lets single-shot creators (MCP, the Linear bridge)
   // set a priority at creation time.
@@ -1407,6 +1418,8 @@ export const ThreadTurnStartBootstrap = Schema.Struct({
       // T3-CUSTOM(expbkt3): session lineage carried through the client outbox.
       parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
       ownerUserId: Schema.optional(UserId),
+      // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
+      memberUserIds: Schema.optional(Schema.Array(UserId)),
       createdAt: IsoDateTime,
     }),
   ),
@@ -1912,6 +1925,10 @@ export const ThreadCreatedPayload = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage at creation time. Immutable on this
   // event; later re-parenting travels on thread.meta.updated.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): BEGIN — tags the session is born with, beyond its
+  // creator. Later tag changes travel on thread.member-added/removed.
+  memberUserIds: Schema.optional(Schema.Array(UserId)),
+  // T3-CUSTOM(expbkt3): END
 });
 
 export const ThreadDeletedPayload = Schema.Struct({

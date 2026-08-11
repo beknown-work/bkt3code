@@ -145,6 +145,9 @@ export function mergeThreadCreationDefaults(input: {
     // T3-CUSTOM(expbkt3): session lineage survives bootstrap resolution.
     parentThreadId: command.parentThreadId ?? null,
     ...(command.ownerUserId ? { ownerUserId: command.ownerUserId } : {}),
+    // T3-CUSTOM(expbkt3): inherited session tags survive bootstrap resolution.
+    // An empty list is meaningful ("tag nobody"), so only an absent one is dropped.
+    ...(command.memberUserIds !== undefined ? { memberUserIds: command.memberUserIds } : {}),
     createdAt: command.createdAt,
   };
 }

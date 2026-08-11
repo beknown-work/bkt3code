@@ -316,12 +316,20 @@ export function projectEvent(
             ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
             // T3-CUSTOM(expbkt3): BEGIN — creator ownership and explicit tagging.
             // The creator is both the durable owner and an
-            // explicit tagged member from the first projection.
+            // explicit tagged member from the first projection. A session
+            // created from another session is born carrying the parent's
+            // audience too, so the humans watching the parent keep seeing the
+            // work it delegates.
             memberUserIds:
               existing?.memberUserIds ??
-              (payload.createdByUserId === null || payload.createdByUserId === undefined
-                ? []
-                : [payload.createdByUserId]),
+              Array.from(
+                new Set([
+                  ...(payload.createdByUserId === null || payload.createdByUserId === undefined
+                    ? []
+                    : [payload.createdByUserId]),
+                  ...(payload.memberUserIds ?? []),
+                ]),
+              ),
             // T3-CUSTOM(expbkt3): END
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,

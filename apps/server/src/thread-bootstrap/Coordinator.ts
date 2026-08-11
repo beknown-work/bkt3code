@@ -653,6 +653,10 @@ const make = Effect.gen(function* () {
                       worktreePath: initialPath,
                       sourceControlProfileId: resolved.sourceControlProfileId,
                       ...(resolved.ownerUserId ? { ownerUserId: resolved.ownerUserId } : {}),
+                      // T3-CUSTOM(expbkt3): inherited session tags.
+                      ...(resolved.memberUserIds !== undefined
+                        ? { memberUserIds: resolved.memberUserIds }
+                        : {}),
                       createdAt: resolved.createdAt,
                       priority: resolved.priority,
                       // T3-CUSTOM(expbkt3): session lineage. This is the branch
@@ -694,6 +698,10 @@ const make = Effect.gen(function* () {
           worktreePath: resolved.workspace.mode === "existing-worktree" ? initialPath : null,
           sourceControlProfileId: resolved.sourceControlProfileId,
           ...(resolved.ownerUserId ? { ownerUserId: resolved.ownerUserId } : {}),
+          // T3-CUSTOM(expbkt3): inherited session tags.
+          ...(resolved.memberUserIds !== undefined
+            ? { memberUserIds: resolved.memberUserIds }
+            : {}),
           createdAt: resolved.createdAt,
           priority: resolved.priority,
           // T3-CUSTOM(expbkt3): session lineage survives bootstrap into the
