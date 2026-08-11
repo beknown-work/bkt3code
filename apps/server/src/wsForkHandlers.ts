@@ -219,6 +219,10 @@ export const makeForkWsHandlers = ({
       observeRpcEffect(WS_METHODS.sessionArchiveReclaim, sessionArchive.reclaim(input), {
         "rpc.aggregate": "session-archive",
       }),
+    [WS_METHODS.sessionArchiveBackfill]: (input) =>
+      observeRpcEffect(WS_METHODS.sessionArchiveBackfill, sessionArchive.backfill(input), {
+        "rpc.aggregate": "session-archive",
+      }),
     // Context handoff: thread-scoped read, so it applies per-thread access
     // where the archive batch RPCs above rely on the operate scope alone.
     [WS_METHODS.threadContextExport]: (input) =>

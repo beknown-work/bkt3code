@@ -119,6 +119,14 @@ export interface ProjectionThreadRepositoryShape {
   readonly deleteById: (
     input: DeleteProjectionThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): every thread the session-history backfill must cover.
+  // Soft-deleted rows are included deliberately: their messages are still in
+  // the projection, and the archive is the only record that survives them.
+  readonly listArchivedOrDeleted: () => Effect.Effect<
+    ReadonlyArray<ProjectionThread>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**

@@ -12,11 +12,15 @@
 import {
   CommandId,
   SessionArchiveError,
+  type ModelSelection,
   type ProjectId,
+  type SessionArchiveBackfillInput,
+  type SessionArchiveBackfillResult,
   type SessionArchiveEntry,
   type SessionArchiveExportResult,
   type SessionArchiveExportedFile,
   type SessionArchiveOrphanedWorktree,
+  type SessionArchiveRawTranscript,
   type SessionArchiveReclaimInput,
   type SessionArchiveReclaimMode,
   type SessionArchiveReclaimOutcome,
@@ -26,6 +30,7 @@ import {
   type ThreadContextExportResult,
   type ThreadId,
 } from "@t3tools/contracts";
+import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,7 +44,15 @@ import { ServerConfig } from "../config.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { expandHomePath } from "../pathExpansion.ts";
+import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
+import { ProjectionThreadActivityRepository } from "../persistence/Services/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
+import {
+  ProjectionThreadRepository,
+  type ProjectionThread,
+} from "../persistence/Services/ProjectionThreads.ts";
+import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import {
@@ -49,6 +62,20 @@ import {
 } from "./archivePaths.ts";
 import { renderThreadContextDigest } from "./contextDigest.ts";
 import { readWorktreeGitFacts, UNKNOWN_GIT_FACTS } from "./gitFacts.ts";
+import {
+  renderSessionManifest,
+  summarizeMessageSenders,
+  type ManifestFileEntry,
+} from "./manifest.ts";
+import {
+  claudeProjectsDir,
+  claudeTranscriptCandidate,
+  codexSessionsDir,
+  copyFileGzipped,
+  findCodexRolloutFiles,
+  parseResumeSessionId,
+  parseRuntimeCwd,
+} from "./providerTranscripts.ts";
 import {
   renderSessionHistoryDigest,
   renderSessionHistoryIndex,
@@ -95,6 +122,12 @@ export interface SessionArchiveServiceShape {
     readonly mode: SessionArchiveReclaimMode;
     readonly minArchivedDays: number;
   }) => Effect.Effect<SessionArchiveReclaimResult, SessionArchiveError>;
+  // T3-CUSTOM(expbkt3): one-shot export of every archived or soft-deleted
+  // session that has no history file yet. Soft-deleted threads are reachable
+  // only through this path — the snapshots the other methods read exclude them.
+  readonly backfill: (
+    input: SessionArchiveBackfillInput,
+  ) => Effect.Effect<SessionArchiveBackfillResult, SessionArchiveError>;
 }
 
 export class SessionArchiveService extends Context.Service<
@@ -109,6 +142,73 @@ const fail = (operation: string, cause: unknown) =>
   });
 
 /**
+ * The fields an export actually reads, decoupled from the snapshot shell.
+ *
+ * The backfill feeds raw projection rows through the export — including
+ * soft-deleted threads, which no snapshot ever surfaces — so the export cannot
+ * demand a full `OrchestrationThreadShell`.
+ */
+interface ArchiveExportSource {
+  readonly id: ThreadId;
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly modelSelection: ModelSelection;
+  readonly ownerUserId: string | null;
+  readonly createdAt: string;
+  readonly archivedAt: string | null;
+  readonly deletedAt: string | null;
+  readonly linearIssueUrl: string | null;
+  readonly parentThreadId: string | null;
+  /** Used when the session-detail query has no row for this thread. */
+  readonly rollingSummaryFallback: string | null;
+}
+
+function shellToExportSource(thread: OrchestrationThreadShell): ArchiveExportSource {
+  return {
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    modelSelection: thread.modelSelection,
+    ownerUserId: thread.ownerUserId,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    // Snapshots never contain soft-deleted threads.
+    deletedAt: null,
+    linearIssueUrl: thread.linearIssueUrl ?? null,
+    parentThreadId: thread.parentThreadId ?? null,
+    rollingSummaryFallback: null,
+  };
+}
+
+function rowToExportSource(row: ProjectionThread): ArchiveExportSource {
+  return {
+    id: row.threadId,
+    projectId: row.projectId,
+    title: row.title,
+    branch: row.branch,
+    worktreePath: row.worktreePath,
+    modelSelection: row.modelSelection,
+    ownerUserId: row.ownerUserId,
+    createdAt: row.createdAt,
+    archivedAt: row.archivedAt,
+    deletedAt: row.deletedAt,
+    linearIssueUrl: row.linearIssueUrl ?? null,
+    parentThreadId: row.parentThreadId ?? null,
+    rollingSummaryFallback: row.rollingSummary,
+  };
+}
+
+/** Project names and roots an export renders into the digest and manifest. */
+interface ArchiveExportContext {
+  readonly projectNames: ReadonlyMap<ProjectId, string>;
+  readonly projectRoots: ReadonlyMap<ProjectId, string>;
+}
+
+/**
  * Services the helpers below reach for lazily — the filesystem walk, the atomic
  * writes, and the git reads. They are captured once and re-provided to every
  * effect this service hands out, so the public shape stays requirement-free.
@@ -121,6 +221,9 @@ export const make = Effect.gen(function* () {
   const snapshots = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const messages = yield* ProjectionThreadMessageRepository;
+  const activities = yield* ProjectionThreadActivityRepository;
+  const threadRows = yield* ProjectionThreadRepository;
+  const providerRuntime = yield* ProviderSessionRuntimeRepository;
   const gitWorkflow = yield* GitWorkflowService;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -221,17 +324,14 @@ export const make = Effect.gen(function* () {
       );
     });
 
-  const digestPathFor = (
-    historyDir: string,
-    thread: OrchestrationThreadShell,
-    projectName: string,
-  ) =>
+  const digestPathFor = (historyDir: string, source: ArchiveExportSource, projectName: string) =>
     sessionHistoryPaths({
       historyDir,
       projectName,
-      threadId: thread.id,
-      title: thread.title,
-      archivedAt: thread.archivedAt ?? thread.createdAt,
+      threadId: source.id,
+      title: source.title,
+      // Deleted-but-never-archived threads date under their deletion.
+      archivedAt: source.archivedAt ?? source.deletedAt ?? source.createdAt,
     });
 
   /**
@@ -322,36 +422,165 @@ export const make = Effect.gen(function* () {
       });
     });
 
-  /** Write one session's digest and transcript, and refresh the project index. */
-  const exportThread = (thread: OrchestrationThreadShell, reclaimNote: string | null) =>
+  /**
+   * Copy the provider CLI's own transcript files into the archive, gzipped.
+   *
+   * Best-effort by design: a session whose provider files were pruned, or
+   * whose cursor never resolved, still exports everything else. Every attempt
+   * is recorded so the manifest can say what was and was not preserved.
+   *
+   * Home directories come from the default provider settings; per-instance
+   * home overrides are rare enough here that the os home fallback covers them.
+   */
+  const copyProviderTranscripts = (source: ArchiveExportSource, rawDir: string) =>
+    Effect.gen(function* () {
+      const runtimeOption = yield* providerRuntime
+        .getByThreadId({ threadId: source.id })
+        .pipe(Effect.orElseSucceed(() => Option.none()));
+      if (Option.isNone(runtimeOption)) {
+        return [] as ReadonlyArray<SessionArchiveRawTranscript>;
+      }
+      const runtime = runtimeOption.value;
+      const sessionId = parseResumeSessionId(runtime.providerName, runtime.resumeCursor);
+      if (sessionId === null) {
+        return [] as ReadonlyArray<SessionArchiveRawTranscript>;
+      }
+
+      const settings = yield* settingsService.getSettings;
+      const osHome = NodeOS.homedir();
+
+      const sourcePaths: Array<string> = [];
+      if (runtime.providerName === "claudeAgent") {
+        const claudeSettings = settings.providers.claudeAgent;
+        const configuredHome =
+          claudeSettings.homePath.trim().length > 0
+            ? yield* resolveClaudeHomePath(claudeSettings)
+            : null;
+        const cwd = parseRuntimeCwd(runtime.runtimePayload) ?? source.worktreePath;
+        if (cwd !== null) {
+          sourcePaths.push(
+            claudeTranscriptCandidate({
+              projectsDir: claudeProjectsDir(configuredHome, osHome),
+              cwd,
+              sessionId,
+            }),
+          );
+        }
+      } else if (runtime.providerName === "codex") {
+        const codexHomePath = settings.providers.codex.homePath.trim();
+        const configuredHome =
+          codexHomePath.length > 0 ? path.resolve(expandHomePath(codexHomePath)) : null;
+        const sessionsDir = codexSessionsDir(configuredHome, osHome);
+        const found = yield* findCodexRolloutFiles({ sessionsDir, sessionId });
+        if (found.length === 0) {
+          return [
+            {
+              provider: runtime.providerName,
+              sourcePath: `${sessionsDir}/**/*${sessionId}*.jsonl`,
+              archivedPath: null,
+              status: "missing",
+            },
+          ] as ReadonlyArray<SessionArchiveRawTranscript>;
+        }
+        sourcePaths.push(...found);
+      } else {
+        return [] as ReadonlyArray<SessionArchiveRawTranscript>;
+      }
+
+      const results: Array<SessionArchiveRawTranscript> = [];
+      for (const sourcePath of sourcePaths) {
+        const exists = yield* fs.exists(sourcePath).pipe(Effect.orElseSucceed(() => false));
+        if (!exists) {
+          results.push({
+            provider: runtime.providerName,
+            sourcePath,
+            archivedPath: null,
+            status: "missing",
+          });
+          continue;
+        }
+        const targetPath = `${rawDir}/${path.basename(sourcePath)}.gz`;
+        const copied = yield* copyFileGzipped({ sourcePath, targetPath }).pipe(
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("session archive could not copy a provider transcript", {
+              threadId: source.id,
+              sourcePath,
+              cause: describeCause(cause),
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        results.push(
+          copied
+            ? {
+                provider: runtime.providerName,
+                sourcePath,
+                archivedPath: targetPath,
+                status: "copied",
+              }
+            : { provider: runtime.providerName, sourcePath, archivedPath: null, status: "missing" },
+        );
+      }
+      return results as ReadonlyArray<SessionArchiveRawTranscript>;
+    });
+
+  /** Byte sizes for the manifest's file inventory; null when unreadable. */
+  const statBytes = (filePath: string) =>
+    fs.stat(filePath).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.orElseSucceed((): number | null => null),
+    );
+
+  /** Write one session's digest, sidecars, manifest, and raw transcripts. */
+  const exportThread = (
+    source: ArchiveExportSource,
+    reclaimNote: string | null,
+    context: ArchiveExportContext,
+  ) =>
     Effect.gen(function* () {
       const historyDir = yield* resolveHistoryDir;
       const settings = yield* settingsService.getSettings;
-      const includeSidecar = settings.experimental.sessionArchive.includeTranscriptSidecar;
+      const archiveSettings = settings.experimental.sessionArchive;
+      const includeSidecar = archiveSettings.includeTranscriptSidecar;
+      const includeActivities = archiveSettings.includeActivities;
+      const includeRawTranscripts = archiveSettings.includeRawProviderTranscripts;
 
-      const context = yield* readContext;
-      const projectName = context.projectNames.get(thread.projectId) ?? "unknown-project";
-      const paths = digestPathFor(historyDir, thread, projectName);
+      const projectName = context.projectNames.get(source.projectId) ?? "unknown-project";
+      const paths = digestPathFor(historyDir, source, projectName);
 
-      const [threadMessages, details, git] = yield* Effect.all([
-        messages.listByThreadId({ threadId: thread.id }),
-        snapshots.getSessionListDetails([thread.id]),
-        readGitFacts(thread.worktreePath),
+      const [threadMessages, details, git, threadActivities] = yield* Effect.all([
+        messages.listByThreadId({ threadId: source.id }),
+        snapshots.getSessionListDetails([source.id]),
+        readGitFacts(source.worktreePath),
+        includeActivities ? activities.listByThreadId({ threadId: source.id }) : Effect.succeed([]),
       ]);
 
       const detail = details[0] ?? null;
-      const rollingSummary = detail?.rollingSummary ?? null;
+      const rollingSummary = detail?.rollingSummary ?? source.rollingSummaryFallback;
+
+      const gitState =
+        git === null
+          ? null
+          : {
+              branch: git.branch ?? source.branch,
+              baseRef: git.baseRef,
+              headSha: git.headSha,
+              hasUncommittedChanges: git.hasUncommittedChanges,
+              hasUntrackedFiles: git.hasUntrackedFiles,
+              hasUnpushedCommits: git.hasUnpushedCommits,
+              changedFiles: git.changedFiles,
+            };
 
       const digest = renderSessionHistoryDigest({
-        threadId: thread.id,
-        title: thread.title,
+        threadId: source.id,
+        title: source.title,
         projectName,
-        workspaceRoot: context.projectRoots.get(thread.projectId) ?? "",
-        worktreePath: thread.worktreePath,
-        providerInstanceId: thread.modelSelection.instanceId,
-        model: thread.modelSelection.model,
-        createdAt: thread.createdAt,
-        archivedAt: thread.archivedAt,
+        workspaceRoot: context.projectRoots.get(source.projectId) ?? "",
+        worktreePath: source.worktreePath,
+        providerInstanceId: source.modelSelection.instanceId,
+        model: source.modelSelection.model,
+        createdAt: source.createdAt,
+        archivedAt: source.archivedAt,
         rollingSummary,
         turnSummaries:
           detail?.latestTurnSummary != null
@@ -365,18 +594,7 @@ export const make = Effect.gen(function* () {
         userPrompts: threadMessages
           .filter((message) => message.role === "user")
           .map((message) => ({ text: message.text, createdAt: message.createdAt })),
-        git:
-          git === null
-            ? null
-            : {
-                branch: git.branch ?? thread.branch,
-                baseRef: git.baseRef,
-                headSha: git.headSha,
-                hasUncommittedChanges: git.hasUncommittedChanges,
-                hasUntrackedFiles: git.hasUntrackedFiles,
-                hasUnpushedCommits: git.hasUnpushedCommits,
-                changedFiles: git.changedFiles,
-              },
+        git: gitState,
         messageCount: threadMessages.length,
         transcriptFileName: includeSidecar ? path.basename(paths.transcriptPath) : null,
         reclaimNote,
@@ -403,15 +621,84 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      let activitiesPath: string | null = null;
+      if (includeActivities && threadActivities.length > 0) {
+        const activityLines = threadActivities
+          .map((activity) =>
+            JSON.stringify({
+              activityId: activity.activityId,
+              turnId: activity.turnId,
+              kind: activity.kind,
+              tone: activity.tone,
+              summary: activity.summary,
+              payload: activity.payload,
+              createdAt: activity.createdAt,
+            }),
+          )
+          .join("\n");
+        yield* writeFileStringAtomically({
+          filePath: paths.activitiesPath,
+          contents: `${activityLines}\n`,
+        });
+        activitiesPath = paths.activitiesPath;
+      }
+
+      const rawTranscripts = includeRawTranscripts
+        ? yield* copyProviderTranscripts(source, paths.rawDir)
+        : [];
+
+      // The manifest is written last so its file inventory reflects what
+      // actually landed on disk, sizes included.
+      const inventoryPaths = [
+        paths.digestPath,
+        ...(includeSidecar ? [paths.transcriptPath] : []),
+        ...(activitiesPath !== null ? [activitiesPath] : []),
+        ...rawTranscripts.flatMap((raw) => (raw.archivedPath !== null ? [raw.archivedPath] : [])),
+      ];
+      const files: Array<ManifestFileEntry> = [];
+      for (const filePath of inventoryPaths) {
+        files.push({ name: path.basename(filePath), bytes: yield* statBytes(filePath) });
+      }
+
+      const exportedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* writeFileStringAtomically({
+        filePath: paths.manifestPath,
+        contents: renderSessionManifest({
+          threadId: source.id,
+          title: source.title,
+          projectId: source.projectId,
+          projectName,
+          workspaceRoot: context.projectRoots.get(source.projectId) ?? "",
+          worktreePath: source.worktreePath,
+          branch: git?.branch ?? source.branch,
+          providerInstanceId: source.modelSelection.instanceId,
+          model: source.modelSelection.model,
+          ownerUserId: source.ownerUserId,
+          createdAt: source.createdAt,
+          archivedAt: source.archivedAt,
+          deletedAt: source.deletedAt,
+          exportedAt,
+          linearIssueUrl: source.linearIssueUrl,
+          parentThreadId: source.parentThreadId,
+          messageCount: threadMessages.length,
+          activityCount: threadActivities.length,
+          messageSenders: summarizeMessageSenders(threadMessages),
+          git: gitState,
+          reclaimNote,
+          files,
+          rawTranscripts,
+        }),
+      });
+
       yield* refreshProjectIndex({
         projectDir: paths.projectDir,
         indexPath: paths.indexPath,
         projectName,
         entry: {
           fileName: path.basename(paths.digestPath),
-          title: thread.title,
-          archivedAt: thread.archivedAt,
-          branch: git?.branch ?? thread.branch,
+          title: source.title,
+          archivedAt: source.archivedAt ?? source.deletedAt,
+          branch: git?.branch ?? source.branch,
           oneLineSummary: toOneLineSummary(rollingSummary),
         },
       });
@@ -419,10 +706,13 @@ export const make = Effect.gen(function* () {
       yield* writeReadmeOnce(historyDir);
 
       return {
-        threadId: thread.id,
+        threadId: source.id,
         digestPath: paths.digestPath,
         transcriptPath: includeSidecar ? paths.transcriptPath : null,
         messageCount: threadMessages.length,
+        activitiesPath,
+        manifestPath: paths.manifestPath,
+        rawTranscripts,
       } satisfies SessionArchiveExportedFile;
     });
 
@@ -576,7 +866,7 @@ export const make = Effect.gen(function* () {
               sizingIncomplete = true;
             }
 
-            const paths = digestPathFor(historyDir, thread, projectName);
+            const paths = digestPathFor(historyDir, shellToExportSource(thread), projectName);
             const digestExists = yield* fs
               .exists(paths.digestPath)
               .pipe(Effect.orElseSucceed(() => false));
@@ -642,7 +932,7 @@ export const make = Effect.gen(function* () {
                 message: "No archived session with this id.",
               };
             }
-            return yield* exportThread(thread, null).pipe(
+            return yield* exportThread(shellToExportSource(thread), null, context).pipe(
               Effect.map((exported) => ({ _tag: "success" as const, exported })),
               Effect.catchCause((cause) =>
                 Effect.succeed({
@@ -682,6 +972,7 @@ export const make = Effect.gen(function* () {
     /** The project's main checkout; `git worktree remove` must run from it. */
     readonly workspaceRoot: string | null;
     readonly worktreesDir: string;
+    readonly exportContext: ArchiveExportContext;
   }) =>
     Effect.gen(function* () {
       const { thread, mode } = input;
@@ -725,7 +1016,11 @@ export const make = Effect.gen(function* () {
           ? "Regenerable directories were deleted from this session's worktree to reclaim disk. The checkout and its branch are intact."
           : "This session's worktree was removed to reclaim disk. The branch named below is where the code lives.";
 
-      const exported = yield* exportThread(thread, note).pipe(
+      const exported = yield* exportThread(
+        shellToExportSource(thread),
+        note,
+        input.exportContext,
+      ).pipe(
         Effect.map((value) => ({ _tag: "ok" as const, value })),
         Effect.catchCause((cause) =>
           Effect.succeed({ _tag: "failed" as const, message: describeCause(cause) }),
@@ -874,6 +1169,7 @@ export const make = Effect.gen(function* () {
             activeThreadWorktreePaths: context.activeThreadWorktreePaths,
             workspaceRoot: context.projectRoots.get(thread.projectId) ?? null,
             worktreesDir: config.worktreesDir,
+            exportContext: context,
           }),
         { concurrency: 1 },
       );
@@ -883,6 +1179,62 @@ export const make = Effect.gen(function* () {
         totalFreedBytes: outcomes.reduce((total, outcome) => total + outcome.freedBytes, 0),
       } satisfies SessionArchiveReclaimResult;
     }).pipe(Effect.mapError((cause) => fail("reclaim", cause)));
+
+  /**
+   * Export every archived or soft-deleted session that has no digest yet.
+   *
+   * Reads projection rows directly rather than snapshots because soft-deleted
+   * threads never appear in any snapshot, and the user has asked for their
+   * history too. One thread's failure is a counted outcome, never the batch's.
+   */
+  const backfill = (input: SessionArchiveBackfillInput) =>
+    Effect.gen(function* () {
+      const historyDir = yield* resolveHistoryDir;
+      const context = yield* readContext;
+      const rows = yield* threadRows.listArchivedOrDeleted();
+
+      const outcomes = yield* Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            const source = rowToExportSource(row);
+            const projectName = context.projectNames.get(source.projectId) ?? "unknown-project";
+            const paths = digestPathFor(historyDir, source, projectName);
+            const digestExists = yield* fs
+              .exists(paths.digestPath)
+              .pipe(Effect.orElseSucceed(() => false));
+            if (digestExists && !input.force) {
+              return { _tag: "skipped" as const };
+            }
+            return yield* exportThread(source, null, context).pipe(
+              Effect.map((exported) => ({ _tag: "exported" as const, exported })),
+              Effect.catchCause((cause) =>
+                Effect.succeed({
+                  _tag: "failure" as const,
+                  threadId: source.id,
+                  message: describeCause(cause),
+                }),
+              ),
+            );
+          }),
+        { concurrency: 2 },
+      );
+
+      return {
+        exported: outcomes.filter((outcome) => outcome._tag === "exported").length,
+        skipped: outcomes.filter((outcome) => outcome._tag === "skipped").length,
+        rawTranscriptsMissing: outcomes.filter(
+          (outcome) =>
+            outcome._tag === "exported" &&
+            outcome.exported.rawTranscripts.some((raw) => raw.status === "missing"),
+        ).length,
+        failures: outcomes.flatMap((outcome) =>
+          outcome._tag === "failure"
+            ? [{ threadId: outcome.threadId, message: outcome.message }]
+            : [],
+        ),
+      } satisfies SessionArchiveBackfillResult;
+    }).pipe(Effect.mapError((cause) => fail("backfill", cause)));
 
   return {
     scan: () => withPlatform(scan()),
@@ -908,6 +1260,7 @@ export const make = Effect.gen(function* () {
           minArchivedDays: input.minArchivedDays,
         }),
       ),
+    backfill: (input) => withPlatform(backfill(input)),
   } satisfies SessionArchiveServiceShape;
 });
 

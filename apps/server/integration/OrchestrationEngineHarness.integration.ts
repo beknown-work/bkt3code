@@ -64,6 +64,8 @@ import {
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
+// T3-CUSTOM(expbkt3): archive-time session history export.
+import { ArchiveExportReactor } from "../src/orchestration/Services/ArchiveExportReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
 import { WorkSummaryReactor } from "../src/orchestration/Services/WorkSummaryReactor.ts";
@@ -389,6 +391,14 @@ export const makeOrchestrationIntegrationHarness = (
         }),
       ),
       // T3-CUSTOM(expbkt3): END
+      // T3-CUSTOM(expbkt3): archive export has its own unit coverage; the
+      // harness only needs the dependency satisfied.
+      Layer.provideMerge(
+        Layer.succeed(ArchiveExportReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
       Layer.provideMerge(
         Layer.succeed(ThreadDeletionReactor, {
           start: () => Effect.void,
