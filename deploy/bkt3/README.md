@@ -47,6 +47,28 @@ sudo systemctl daemon-reload
 > turn on the instance. Trigger a manual bkt3 deploy from the `t3.dev` instance
 > or from a human shell.
 
+## Temporary files
+
+`start.sh` exports `TMPDIR=<base-dir>/tmp` so the service and every agent session
+beneath it write scratch files to the root filesystem. `/tmp` is a RAM-backed
+tmpfs sized at 50% of RAM, mounted with `usrquota`, and systemd caps each user at
+80% of it; once `ubuntu` reaches that cap, writes fail with `EDQUOT` and commands
+exit 1 with no output at all.
+
+Those directories live on a disk that runs close to full, so
+`deploy/tmpfiles/t3-tmp.conf` expires their contents after seven days. Like unit
+files, it is not installed by artifact deployment:
+
+```bash
+sudo install -m 0644 deploy/tmpfiles/t3-tmp.conf /etc/tmpfiles.d/t3-tmp.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/t3-tmp.conf
+```
+
+The same applies to the `t3.dev` and `expbkt3` deployments, whose `start.sh`
+scripts carry the identical export. Snap-confined Chromium (agent-browser,
+browser-use) ignores `TMPDIR` and still writes under `/tmp/snap-private-tmp`;
+that space is not covered here.
+
 ## Reverse proxy
 
 ```bash
