@@ -13,7 +13,9 @@ import {
   type UserId,
   type WorktreeBaseRef,
 } from "@t3tools/contracts";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+// T3-CUSTOM(expbkt3): BEGIN — generated worktree branches share the directory codename.
+import { buildTemporaryWorktreeBranchName, isTemporaryWorktreeBranch } from "@t3tools/shared/git";
+// T3-CUSTOM(expbkt3): END
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -42,6 +44,7 @@ import { resolveAvailableWorktreeBase } from "./WorktreeBaseResolver.ts";
 // T3-CUSTOM(expbkt3): worktree directories are named after their codename.
 import {
   allocateWorktreeDirectoryName,
+  allocateWorktreeIdentity,
   legacyWorktreeDirectoryName,
 } from "../worktreeNaming/allocateWorktreeDirectory.ts";
 
@@ -579,31 +582,56 @@ const make = Effect.gen(function* () {
           );
           allocatedBranch = buildTemporaryWorktreeBranchName(() => uuid);
         }
-        // T3-CUSTOM(expbkt3): BEGIN — name the directory after the worktree's
-        // codename. The filesystem is the registry, so this is the one place
-        // that can guarantee uniqueness; the reactor's pure recompute keeps the
-        // legacy branch-derived formula and only runs when no intendedPath was
-        // persisted.
+        // T3-CUSTOM(expbkt3): BEGIN — generated branches and directories share
+        // one codename. Existing explicit values remain authoritative, and the
+        // reactor's pure fallback formula stays unchanged.
         const projectWorktreesDir = path.join(
           serverConfig.worktreesDir,
           path.basename(resolved.workspace.projectCwd),
         );
         const legacyName = legacyWorktreeDirectoryName(allocatedBranch);
-        const directoryName = yield* allocateWorktreeDirectoryName({
-          projectWorktreesDir,
-          seed: allocatedBranch,
-          legacyName,
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          // Naming must never be what stops a thread from starting.
-          Effect.orElseSucceed(() => legacyName),
-        );
+        const shouldAllocateIdentity =
+          resolved.workspace.intendedPath === undefined &&
+          (resolved.workspace.newBranch === undefined ||
+            isTemporaryWorktreeBranch(resolved.workspace.newBranch));
+        const takenBranchNames = shouldAllocateIdentity
+          ? new Set(
+              yield* gitWorkflow.listWorktreeBranchNames(resolved.workspace.projectCwd).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ThreadBootstrapCoordinatorError({
+                      message: "Failed to allocate a unique worktree branch.",
+                      cause,
+                    }),
+                ),
+              ),
+            )
+          : new Set<string>();
+        const identity = shouldAllocateIdentity
+          ? yield* allocateWorktreeIdentity({
+              projectWorktreesDir,
+              seed: allocatedBranch,
+              legacyName,
+              takenBranchNames,
+            }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem))
+          : null;
+        const directoryName =
+          identity?.directoryName ??
+          (yield* allocateWorktreeDirectoryName({
+            projectWorktreesDir,
+            seed: allocatedBranch,
+            legacyName,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.orElseSucceed(() => legacyName),
+          ));
         resolved = {
           ...resolved,
           workspace: {
             ...resolved.workspace,
-            newBranch: allocatedBranch,
-            intendedPath: path.join(projectWorktreesDir, directoryName),
+            newBranch: identity?.branchName ?? allocatedBranch,
+            intendedPath:
+              resolved.workspace.intendedPath ?? path.join(projectWorktreesDir, directoryName),
           },
         };
         // T3-CUSTOM(expbkt3): END
