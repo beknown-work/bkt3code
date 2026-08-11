@@ -4,6 +4,7 @@ import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -45,6 +46,10 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle
+  | typeof WS_METHODS.subscribeServerResources
+  | typeof WS_METHODS.subscribeProviderRateLimits
+  // T3-CUSTOM(expbkt3): native plan review snapshots.
+  | typeof WS_METHODS.subscribePlanReview
   | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
@@ -171,7 +176,13 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
-  readonly retryExpectedFailureAfter?: Duration.Input;
+  // T3-CUSTOM(expbkt3): allow hot subscriptions to back off and become dormant.
+  readonly retryExpectedFailureAfter?:
+    | Duration.Input
+    | ((
+        attempt: number,
+        cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+      ) => Option.Option<Duration.Input>);
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
 }
 
@@ -188,6 +199,13 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
     Effect.gen(function* () {
       const supervisor = yield* EnvironmentSupervisor;
       const observer = yield* EnvironmentRpcSubscriptionObserver;
+      // T3-CUSTOM(expbkt3): foreground wakeups share the active session's retry
+      // budget, so an exhausted stale subscription cannot be restarted forever.
+      const retryState = yield* Ref.make<{
+        readonly session: RpcSession | null;
+        readonly attempt: number;
+        readonly dormant: boolean;
+      }>({ session: null, attempt: 0, dormant: false });
       const sessionChanges = SubscriptionRef.changes(supervisor.session);
       const sessions =
         options?.resubscribe === undefined
@@ -209,7 +227,9 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               >;
-              const subscribeToSession = (): Stream.Stream<
+              const subscribeToSession = (
+                retryAttempt = 0,
+              ): Stream.Stream<
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               > =>
@@ -224,6 +244,9 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                       });
                       return method(input).pipe(
                         Stream.ensuring(completeObservation),
+                        Stream.tap(() =>
+                          Ref.set(retryState, { session, attempt: 0, dormant: false }),
+                        ),
                         Stream.catchCause((cause) => {
                           const hasOnlyExpectedFailures =
                             cause.reasons.length > 0 &&
@@ -249,16 +272,34 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                             const handled = Stream.fromEffect(
                               options.onExpectedFailure(cause),
                             ).pipe(Stream.drain);
-                            if (options.retryExpectedFailureAfter === undefined) {
+                            const retryExpectedFailureAfter = options.retryExpectedFailureAfter;
+                            if (retryExpectedFailureAfter === undefined) {
                               return handled;
                             }
+                            // T3-CUSTOM(expbkt3): a policy may end retries without
+                            // waiting for the whole WebSocket session to be replaced.
+                            const retryDelay =
+                              typeof retryExpectedFailureAfter === "function"
+                                ? retryExpectedFailureAfter(retryAttempt, cause)
+                                : Option.some(retryExpectedFailureAfter);
+                            const rememberAttempt = Stream.fromEffect(
+                              Ref.set(retryState, {
+                                session,
+                                attempt: retryAttempt + 1,
+                                dormant: Option.isNone(retryDelay),
+                              }),
+                            ).pipe(Stream.drain);
+                            if (Option.isNone(retryDelay)) {
+                              return Stream.concat(handled, rememberAttempt);
+                            }
                             return handled.pipe(
+                              Stream.concat(rememberAttempt),
                               Stream.concat(
-                                Stream.fromEffect(
-                                  Effect.sleep(options.retryExpectedFailureAfter),
-                                ).pipe(Stream.drain),
+                                Stream.fromEffect(Effect.sleep(retryDelay.value)).pipe(
+                                  Stream.drain,
+                                ),
                               ),
-                              Stream.concat(subscribeToSession()),
+                              Stream.concat(subscribeToSession(retryAttempt + 1)),
                             );
                           }
                           return Stream.failCause(cause);
@@ -267,7 +308,19 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                     }),
                   ),
                 );
-              return subscribeToSession();
+              return Stream.unwrap(
+                Ref.modify(retryState, (current) => {
+                  if (current.session === session) {
+                    return [current, current] as const;
+                  }
+                  const reset = { session, attempt: 0, dormant: false } as const;
+                  return [reset, reset] as const;
+                }).pipe(
+                  Effect.map((current) =>
+                    current.dormant ? Stream.empty : subscribeToSession(current.attempt),
+                  ),
+                ),
+              );
             },
           }),
         ),

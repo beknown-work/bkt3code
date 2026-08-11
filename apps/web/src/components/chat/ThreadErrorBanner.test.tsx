@@ -4,6 +4,19 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
 
 describe("ThreadErrorBanner", () => {
+  it("renders Retry and Dismiss actions for exhausted recovery", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadErrorBanner
+        error="Automatic recovery was exhausted."
+        onRetry={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+
+    expect(markup).toContain(">Retry<");
+    expect(markup).toContain(">Dismiss<");
+  });
+
   it("aligns the warning and dismiss icons with the first line of a multi-line error", () => {
     const markup = renderToStaticMarkup(
       <ThreadErrorBanner

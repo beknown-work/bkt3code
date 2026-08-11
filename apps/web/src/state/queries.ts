@@ -15,6 +15,7 @@ import type {
   ProjectContentMatch,
   ProjectEntryKind,
   ThreadId,
+  VcsListRefsInput, // T3-CUSTOM(expbkt3): exact remote-ref query input.
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
@@ -115,21 +116,38 @@ export function useThreadDetail(
   };
 }
 
-export function useBranches(target: VcsRefTarget) {
+// T3-CUSTOM(expbkt3): BEGIN — optionally retain matching remote refs.
+export type BranchQueryTarget = VcsRefTarget & {
+  readonly includeMatchingRemoteRefs?: boolean;
+};
+
+// T3-CUSTOM(expbkt3): Exact worktree-base pickers can request the remote
+// counterpart of a local branch instead of receiving the deduplicated list.
+export function buildBranchesListInput(target: BranchQueryTarget): VcsListRefsInput | null {
   const query = target.query?.trim() ?? "";
+  if (target.cwd === null) return null;
+  return {
+    cwd: target.cwd,
+    ...(query.length > 0 ? { query } : {}),
+    ...(target.includeMatchingRemoteRefs === undefined
+      ? {}
+      : { includeMatchingRemoteRefs: target.includeMatchingRemoteRefs }),
+    limit: VCS_REF_LIST_LIMIT,
+  };
+}
+
+export function useBranches(target: BranchQueryTarget) {
+  const input = buildBranchesListInput(target);
   return useEnvironmentQuery(
-    target.environmentId !== null && target.cwd !== null
+    target.environmentId !== null && input !== null
       ? vcsEnvironment.listRefs({
           environmentId: target.environmentId,
-          input: {
-            cwd: target.cwd,
-            ...(query.length > 0 ? { query } : {}),
-            limit: VCS_REF_LIST_LIMIT,
-          },
+          input,
         })
       : null,
   );
 }
+// T3-CUSTOM(expbkt3): END
 
 export function usePaginatedBranches(target: VcsRefTarget) {
   const query = target.query?.trim() ?? "";

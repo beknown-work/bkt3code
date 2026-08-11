@@ -14,21 +14,26 @@ export {
 } from "./context";
 
 export {
+  bindPrimaryEnvironmentClerkIdentity,
   createServerPairingCredential,
   fetchSessionState,
   isPrimaryEnvironmentPairingCredentialRejectedError,
   isPrimaryEnvironmentRequestError,
   listServerClientSessions,
   listServerPairingLinks,
+  // T3-CUSTOM(expbkt3): Expose current-session logout to the web account control.
+  logoutPrimaryEnvironment,
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,
+  PrimaryEnvironmentClerkNotMemberError,
   reauthenticatePrimaryEnvironment,
   resolveInitialServerAuthGateState,
   revokeOtherServerClientSessions,
   revokeServerClientSession,
   revokeServerPairingLink,
   stripPairingTokenFromUrl,
+  submitClerkSessionToken,
   submitServerAuthCredential,
   takePairingTokenFromUrl,
   type ServerClientSessionRecord,

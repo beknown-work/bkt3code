@@ -666,7 +666,6 @@ export function NewTaskDraftScreen(props: {
     flow.startFromOrigin,
     flow.workspaceMode,
   ]);
-
   const selectedEnvironmentLabel =
     flow.environments.find(
       (environment) => environment.environmentId === flow.selectedEnvironmentId,
@@ -867,6 +866,9 @@ export function NewTaskDraftScreen(props: {
       startFromOrigin,
       runtimeMode,
       interactionMode,
+      // T3-CUSTOM(expbkt3): The server binds the creator's assigned GitHub
+      // profile; clients cannot select or impersonate another profile.
+      sourceControlProfileId: null,
       initialMessageText,
       initialAttachments: draft.attachments,
       ...(editingPendingTask

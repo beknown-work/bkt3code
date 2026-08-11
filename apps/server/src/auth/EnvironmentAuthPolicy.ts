@@ -26,12 +26,26 @@ export const make = Effect.gen(function* () {
         ? "remote-reachable"
         : "loopback-browser";
 
-  const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
+  const baseBootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
     policy === "desktop-managed-local"
       ? ["desktop-bootstrap"]
       : config.mode === "desktop" && policy === "remote-reachable"
         ? ["desktop-bootstrap", "one-time-token"]
         : ["one-time-token"];
+
+  // Team mode: advertise the Clerk sign-in bootstrap method and (when a
+  // publishable key is configured) a runtime descriptor so the SPA can detect
+  // team mode and render its Clerk sign-in surface without build-time coupling.
+  const clerkConfig = config.clerkAuth;
+  const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
+    clerkConfig !== undefined ? [...baseBootstrapMethods, "clerk-session"] : baseBootstrapMethods;
+  const clerk: ServerAuthDescriptor["clerk"] =
+    clerkConfig?.publishableKey !== undefined
+      ? {
+          publishableKey: clerkConfig.publishableKey,
+          organizationId: clerkConfig.organizationId ?? null,
+        }
+      : undefined;
 
   const descriptor: ServerAuthDescriptor = {
     policy,
@@ -44,6 +58,7 @@ export const make = Effect.gen(function* () {
       instanceKey: config.stateDir,
       development: config.devUrl !== undefined,
     }),
+    ...(clerk !== undefined ? { clerk } : {}),
   };
 
   return EnvironmentAuthPolicy.of({

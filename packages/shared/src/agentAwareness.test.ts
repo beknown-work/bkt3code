@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   OrchestrationProjectShell,
   OrchestrationThreadShell,
+  ThreadExecutionSnapshot,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -24,7 +25,7 @@ function thread(
   | "id"
   | "title"
   | "modelSelection"
-  | "session"
+  | "execution"
   | "latestTurn"
   | "updatedAt"
   | "hasPendingApprovals"
@@ -34,7 +35,7 @@ function thread(
     id: "thread-1" as ThreadId,
     title: "Fix failing CI",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-    session: null,
+    execution: idleExecution(),
     latestTurn: null,
     updatedAt: NOW,
     hasPendingApprovals: false,
@@ -43,13 +44,53 @@ function thread(
   };
 }
 
+function idleExecution(overrides: Partial<ThreadExecutionSnapshot> = {}): ThreadExecutionSnapshot {
+  return {
+    threadId: "thread-1" as ThreadId,
+    authorityEpoch: "server-epoch",
+    revision: 1,
+    observedAt: NOW,
+    activity: "idle",
+    canStop: false,
+    providerSession: {
+      state: "ready",
+      generation: 1,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      startedAt: NOW,
+      lastObservedAt: NOW,
+      lastError: null,
+    },
+    turn: null,
+    ...overrides,
+  };
+}
+
+function activeExecution(
+  state: NonNullable<ThreadExecutionSnapshot["turn"]>["state"] = "running",
+): ThreadExecutionSnapshot {
+  return idleExecution({
+    activity:
+      state === "waiting-for-approval" || state === "waiting-for-input" ? "blocked" : "active",
+    canStop: true,
+    turn: {
+      executionId: "execution-1",
+      providerTurnId: "turn-1" as TurnId,
+      state,
+      startedAt: NOW,
+      stopRequestedAt: null,
+      completedAt: null,
+      lastError: null,
+    },
+  });
+}
+
 describe("projectThreadAwareness", () => {
   it("returns null for idle threads without an active awareness state", () => {
     expect(
       projectThreadAwareness({
         environmentId: "env-1" as EnvironmentId,
         project,
-        thread: thread(),
+        thread: thread({ execution: idleExecution() }),
       }),
     ).toBeNull();
   });
@@ -59,16 +100,7 @@ describe("projectThreadAwareness", () => {
       environmentId: "env-1" as EnvironmentId,
       project,
       thread: thread({
-        hasPendingApprovals: true,
-        session: {
-          threadId: "thread-1" as ThreadId,
-          status: "running",
-          providerName: "Codex",
-          runtimeMode: "full-access",
-          activeTurnId: "turn-1" as TurnId,
-          lastError: null,
-          updatedAt: NOW,
-        },
+        execution: activeExecution("waiting-for-approval"),
       }),
     });
 
@@ -81,28 +113,20 @@ describe("projectThreadAwareness", () => {
       environmentId: "env-1" as EnvironmentId,
       project,
       thread: thread({
-        session: {
-          threadId: "thread-1" as ThreadId,
-          status: "running",
-          providerName: "Codex",
-          runtimeMode: "full-access",
-          activeTurnId: "turn-1" as TurnId,
-          lastError: null,
-          updatedAt: NOW,
-        },
+        execution: activeExecution(),
       }),
     });
 
     expect(state).toMatchObject({
       phase: "running",
       headline: "Agent is working",
-      detail: "Codex is active.",
+      detail: "codex is active.",
       modelTitle: "gpt-5.4",
       deepLink: "/threads/env-1/thread-1",
     });
   });
 
-  it("projects completed turns as completed even when teardown settled them as interrupted", () => {
+  it("projects only observed completed execution transitions as completed", () => {
     const finishedTurn = {
       turnId: "turn-1" as TurnId,
       state: "interrupted" as const,
@@ -110,48 +134,58 @@ describe("projectThreadAwareness", () => {
       startedAt: NOW,
       completedAt: NOW,
       assistantMessageId: null,
+      durationMs: null,
     };
     const state = projectThreadAwareness({
       environmentId: "env-1" as EnvironmentId,
       project,
-      thread: thread({ latestTurn: finishedTurn }),
+      thread: thread({
+        latestTurn: finishedTurn,
+        execution: idleExecution({
+          turn: {
+            executionId: "execution-1",
+            providerTurnId: "turn-1" as TurnId,
+            state: "completed",
+            startedAt: NOW,
+            stopRequestedAt: null,
+            completedAt: NOW,
+            lastError: null,
+          },
+        }),
+      }),
     });
 
-    // Session teardown settles still-running turns by session status, and
-    // that write can race turn.completed; the completion timestamp is the
-    // durable signal. Without this the thread resolves to null persistently
-    // and gets tombstoned off the lock-screen card instead of showing Done.
     expect(state?.phase).toBe("completed");
 
     const trulyInterrupted = projectThreadAwareness({
       environmentId: "env-1" as EnvironmentId,
       project,
-      thread: thread({ latestTurn: { ...finishedTurn, completedAt: null } }),
+      thread: thread({
+        latestTurn: { ...finishedTurn, completedAt: null },
+        execution: idleExecution({
+          turn: {
+            executionId: "execution-1",
+            providerTurnId: "turn-1" as TurnId,
+            state: "interrupted",
+            startedAt: NOW,
+            stopRequestedAt: NOW,
+            completedAt: NOW,
+            lastError: null,
+          },
+        }),
+      }),
     });
     expect(trulyInterrupted).toBeNull();
   });
 
-  it("projects ready sessions with no materialized turn as completed", () => {
-    // Quick threads without code changes never get a checkpoint, so the SQL
-    // shell has no latestTurn row and latest_turn_id is cleared when the
-    // session settles; the ready session is the only completion signal left.
+  it("does not treat a reusable ready provider session as completed work", () => {
     const state = projectThreadAwareness({
       environmentId: "env-1" as EnvironmentId,
       project,
-      thread: thread({
-        session: {
-          threadId: "thread-1" as ThreadId,
-          status: "ready",
-          providerName: "Codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: NOW,
-        },
-      }),
+      thread: thread({ execution: idleExecution() }),
     });
 
-    expect(state?.phase).toBe("completed");
+    expect(state).toBeNull();
   });
 
   it("projects failures with the session error detail", () => {
@@ -159,15 +193,15 @@ describe("projectThreadAwareness", () => {
       environmentId: "env-1" as EnvironmentId,
       project,
       thread: thread({
-        session: {
-          threadId: "thread-1" as ThreadId,
-          status: "error",
-          providerName: "Codex",
-          runtimeMode: "full-access",
-          activeTurnId: null,
-          lastError: "Provider process exited.",
-          updatedAt: NOW,
-        },
+        execution: idleExecution({
+          activity: "failed",
+          canStop: false,
+          providerSession: {
+            ...idleExecution().providerSession,
+            state: "failed",
+            lastError: "Provider process exited.",
+          },
+        }),
       }),
     });
 

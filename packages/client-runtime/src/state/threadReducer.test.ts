@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import type { OrchestrationThread } from "@t3tools/contracts";
 
@@ -29,9 +30,12 @@ const baseThread: OrchestrationThread = {
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  sourceControlProfileId: null,
   branch: null,
   worktreePath: null,
   latestTurn: null,
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
   archivedAt: null,
@@ -42,6 +46,8 @@ const baseThread: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  rollingSummary: null,
+  turnSummaries: [],
   session: null,
 };
 
@@ -87,6 +93,7 @@ describe("applyThreadDetailEvent", () => {
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
           interactionMode: "default",
+          sourceControlProfileId: null,
           branch: "main",
           worktreePath: null,
           createdAt: "2026-04-01T01:00:00.000Z",
@@ -307,6 +314,39 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread.owner-transferred", () => {
+    it("moves the new owner out of members and keeps the previous owner assigned", () => {
+      const previousOwner = UserId.make("user-previous-owner");
+      const nextOwner = UserId.make("user-next-owner");
+      const thread = {
+        ...baseThread,
+        ownerUserId: previousOwner,
+        memberUserIds: [nextOwner],
+      };
+      const result = applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: "2026-04-01T06:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.owner-transferred",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          previousOwnerUserId: previousOwner,
+          ownerUserId: nextOwner,
+          transferredByUserId: previousOwner,
+          transferredAt: "2026-04-01T06:00:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.ownerUserId).toBe(nextOwner);
+        expect(result.thread.memberUserIds).toEqual([previousOwner]);
+      }
+    });
+  });
+
   describe("thread.message-sent", () => {
     it("appends a new message", () => {
       const result = applyThreadDetailEvent(baseThread, {
@@ -345,6 +385,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Hello",
             turnId: TurnId.make("turn-1"),
             streaming: true,
+            sentByUserId: null,
             createdAt: "2026-04-01T06:00:00.000Z",
             updatedAt: "2026-04-01T06:00:00.000Z",
           },
@@ -377,7 +418,7 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
-    it("updates latestTurn for assistant messages with a turn", () => {
+    it("annotates but does not settle latestTurn for assistant messages", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
         sequence: 8,
@@ -400,7 +441,8 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
-        expect(result.thread.latestTurn?.state).toBe("completed");
+        expect(result.thread.latestTurn?.state).toBe("running");
+        expect(result.thread.latestTurn?.completedAt).toBeNull();
         expect(result.thread.latestTurn?.assistantMessageId).toBe("msg-3");
       }
     });
@@ -424,6 +466,7 @@ describe("applyThreadDetailEvent", () => {
           startedAt: "2026-04-01T06:59:00.000Z",
           completedAt: null,
           assistantMessageId: null,
+          durationMs: null,
         },
       };
 
@@ -455,7 +498,7 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.session-set", () => {
-    it("settles a running latestTurn when the session leaves the running status", () => {
+    it("does not settle a turn from provider routing/session metadata", () => {
       const threadWithRunningTurn: OrchestrationThread = {
         ...baseThread,
         latestTurn: {
@@ -465,6 +508,7 @@ describe("applyThreadDetailEvent", () => {
           startedAt: "2026-04-01T07:00:00.000Z",
           completedAt: null,
           assistantMessageId: MessageId.make("msg-3"),
+          durationMs: null,
         },
       };
 
@@ -491,12 +535,12 @@ describe("applyThreadDetailEvent", () => {
 
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
-        expect(result.thread.latestTurn?.state).toBe("completed");
-        expect(result.thread.latestTurn?.completedAt).toBe("2026-04-01T08:00:00.000Z");
+        expect(result.thread.latestTurn?.state).toBe("running");
+        expect(result.thread.latestTurn?.completedAt).toBeNull();
       }
     });
 
-    it("updates session and latestTurn for a running session", () => {
+    it("updates session metadata without creating a latestTurn", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
         sequence: 9,
@@ -521,14 +565,13 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.session?.status).toBe("running");
-        expect(result.thread.latestTurn?.turnId).toBe("turn-1");
-        expect(result.thread.latestTurn?.state).toBe("running");
+        expect(result.thread.latestTurn).toBeNull();
       }
     });
   });
 
   describe("thread.session-stop-requested", () => {
-    it("marks session as stopped", () => {
+    it("does not optimistically mark a session stopped from an intent event", () => {
       const threadWithSession: OrchestrationThread = {
         ...baseThread,
         session: {
@@ -555,11 +598,7 @@ describe("applyThreadDetailEvent", () => {
         },
       });
 
-      expect(result.kind).toBe("updated");
-      if (result.kind === "updated") {
-        expect(result.thread.session?.status).toBe("stopped");
-        expect(result.thread.session?.activeTurnId).toBeNull();
-      }
+      expect(result.kind).toBe("unchanged");
     });
 
     it("returns unchanged when no session exists", () => {
@@ -773,7 +812,7 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.turn-diff-completed", () => {
-    it("adds a checkpoint and updates latestTurn", () => {
+    it("adds a checkpoint without treating it as lifecycle evidence", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
         sequence: 13,
@@ -796,8 +835,113 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.checkpoints).toHaveLength(1);
-        expect(result.thread.latestTurn?.turnId).toBe("turn-1");
-        expect(result.thread.latestTurn?.state).toBe("completed");
+        expect(result.thread.latestTurn).toBeNull();
+      }
+    });
+  });
+
+  describe("thread.catchup-summary-updated", () => {
+    const catchupEvent = (input: {
+      readonly progress: "pending" | "ready" | "error" | "cleared";
+      readonly rollingSummary?: string | null;
+      readonly displaySummary?: string | null;
+    }) =>
+      ({
+        ...baseEventFields,
+        sequence: 14,
+        occurredAt: "2026-04-01T12:05:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.catchup-summary-updated",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          turnId: TurnId.make("turn-1"),
+          assistantMessageId: MessageId.make("msg-3"),
+          rollingSummary: input.rollingSummary ?? null,
+          displaySummary: input.displaySummary ?? null,
+          progress: input.progress,
+          createdAt: "2026-04-01T12:05:00.000Z",
+        },
+      }) as const;
+
+    it("records a pending marker without touching the rolling summary", () => {
+      const result = applyThreadDetailEvent(baseThread, catchupEvent({ progress: "pending" }));
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.rollingSummary).toBeNull();
+        expect(result.thread.turnSummaries).toEqual([
+          {
+            turnId: TurnId.make("turn-1"),
+            assistantMessageId: MessageId.make("msg-3"),
+            summary: null,
+            status: "pending",
+            createdAt: "2026-04-01T12:05:00.000Z",
+          },
+        ]);
+      }
+    });
+
+    it("replaces the pending marker with the ready summary", () => {
+      const pending = applyThreadDetailEvent(baseThread, catchupEvent({ progress: "pending" }));
+      expect(pending.kind).toBe("updated");
+      if (pending.kind !== "updated") return;
+
+      const ready = applyThreadDetailEvent(
+        pending.thread,
+        catchupEvent({
+          progress: "ready",
+          rollingSummary: "Rolling summary text.",
+          displaySummary: "Line one.\nLine two.",
+        }),
+      );
+
+      expect(ready.kind).toBe("updated");
+      if (ready.kind === "updated") {
+        expect(ready.thread.rollingSummary).toBe("Rolling summary text.");
+        expect(ready.thread.turnSummaries).toHaveLength(1);
+        expect(ready.thread.turnSummaries[0]?.status).toBe("ready");
+        expect(ready.thread.turnSummaries[0]?.summary).toBe("Line one.\nLine two.");
+      }
+    });
+
+    it("retracts the card when summarization is cleared", () => {
+      const pending = applyThreadDetailEvent(baseThread, catchupEvent({ progress: "pending" }));
+      expect(pending.kind).toBe("updated");
+      if (pending.kind !== "updated") return;
+
+      const cleared = applyThreadDetailEvent(
+        pending.thread,
+        catchupEvent({ progress: "cleared", rollingSummary: "Rolling summary text." }),
+      );
+
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind === "updated") {
+        expect(cleared.thread.turnSummaries).toEqual([]);
+        expect(cleared.thread.rollingSummary).toBe("Rolling summary text.");
+      }
+    });
+
+    it("keeps a generation failure available for inline retry", () => {
+      const result = applyThreadDetailEvent(
+        baseThread,
+        catchupEvent({
+          progress: "error",
+          displaySummary: "The configured summarizer is unavailable.",
+        }),
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.turnSummaries).toEqual([
+          {
+            turnId: TurnId.make("turn-1"),
+            assistantMessageId: MessageId.make("msg-3"),
+            summary: "The configured summarizer is unavailable.",
+            status: "error",
+            createdAt: "2026-04-01T12:05:00.000Z",
+          },
+        ]);
       }
     });
   });
@@ -813,6 +957,7 @@ describe("applyThreadDetailEvent", () => {
             text: "First",
             turnId: null,
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-04-01T01:00:00.000Z",
             updatedAt: "2026-04-01T01:00:00.000Z",
           },
@@ -822,6 +967,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Response 1",
             turnId: TurnId.make("turn-1"),
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-04-01T02:00:00.000Z",
             updatedAt: "2026-04-01T02:00:00.000Z",
           },
@@ -831,6 +977,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Response 2",
             turnId: TurnId.make("turn-2"),
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-04-01T03:00:00.000Z",
             updatedAt: "2026-04-01T03:00:00.000Z",
           },

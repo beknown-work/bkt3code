@@ -54,6 +54,7 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
+  "no rollout found",
   "missing thread",
   "no such thread",
   "unknown thread",
@@ -123,6 +124,8 @@ export interface CodexSessionRuntimeSendTurnInput {
 export interface CodexThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<CodexThreadItem>;
+  // T3-CUSTOM(expbkt3): preserve Codex's durable terminal evidence for recovery.
+  readonly state: "completed" | "interrupted" | "failed" | "in-progress";
 }
 
 export interface CodexThreadSnapshot {
@@ -834,6 +837,7 @@ function parseThreadSnapshot(
     turns: response.thread.turns.map((turn) => ({
       id: TurnId.make(turn.id),
       items: turn.items,
+      state: turn.status === "inProgress" ? "in-progress" : turn.status,
     })),
   };
 }
@@ -1686,6 +1690,27 @@ export const makeCodexSessionRuntime = (
       yield* client.request("initialize", buildCodexInitializeParams());
       yield* client.notify("initialized", undefined);
 
+      // Subscription quota collection is observability-only. Run it after
+      // initialization, but never make thread startup wait on the account RPC.
+      yield* client.request("account/rateLimits/read", undefined).pipe(
+        Effect.flatMap((payload) =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method: "account/rateLimits/read",
+            payload,
+          }),
+        ),
+        Effect.catch(() =>
+          emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method: "account/rateLimits/readFailed",
+          }),
+        ),
+        Effect.forkIn(runtimeScope),
+      );
+
       const requestedModel = normalizeCodexModelSlug(options.model);
 
       const opened = yield* openCodexThread({
@@ -1739,6 +1764,13 @@ export const makeCodexSessionRuntime = (
         ),
       );
       yield* Scope.close(runtimeScope, Exit.void);
+      if (yield* child.isRunning.pipe(Effect.orDie)) {
+        return yield* Effect.die(
+          new Error(
+            `Codex app-server process tree for thread '${options.threadId}' remained alive after close.`,
+          ),
+        );
+      }
       yield* Queue.shutdown(serverNotifications);
       yield* Queue.shutdown(events);
     });

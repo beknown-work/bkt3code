@@ -1,31 +1,41 @@
 import {
   EnvironmentId,
+  EventId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { Thread, ThreadShell } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+  MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  activeRuntimeWarningLabel,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
+  buildStopExecutionInput,
   buildLoadingThreadFromShell,
-  buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveOutboxSendGate,
   dismissBranchMismatchForSession,
+  ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
+  hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  reconcileMountedPlannotatorThreadIds,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  resolveSendWorkspaceContext,
+  scheduleEnvironmentReconnectWarning,
+  shouldPrepareWorktreeForFirstTurn,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -36,11 +46,49 @@ const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
 
+describe("environment reconnect warning grace", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a persistent reconnect after the grace period", () => {
+    vi.useFakeTimers();
+    const showWarning = vi.fn();
+
+    scheduleEnvironmentReconnectWarning(showWarning);
+    vi.advanceTimersByTime(ENVIRONMENT_RECONNECT_WARNING_GRACE_MS - 1);
+    expect(showWarning).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(showWarning).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the warning when the connection recovers during the grace period", () => {
+    vi.useFakeTimers();
+    const showWarning = vi.fn();
+
+    const cancel = scheduleEnvironmentReconnectWarning(showWarning);
+    cancel();
+    vi.advanceTimersByTime(ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
+
+    expect(showWarning).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse elapsed grace from another environment", () => {
+    const anotherEnvironmentId = EnvironmentId.make("environment-remote");
+
+    expect(hasEnvironmentReconnectWarningGraceElapsed(environmentId, environmentId)).toBe(true);
+    expect(hasEnvironmentReconnectWarningGraceElapsed(anotherEnvironmentId, environmentId)).toBe(
+      false,
+    );
+  });
+});
+
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: threadId,
     environmentId,
     projectId,
+    ownerUserId: null,
+    memberUserIds: [],
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
@@ -53,6 +101,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
@@ -62,6 +112,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    sourceControlProfileId: null,
     ...overrides,
   };
 }
@@ -73,6 +124,7 @@ const completedTurn = {
   startedAt: "2026-03-29T00:00:01.000Z",
   completedAt: "2026-03-29T00:00:10.000Z",
   assistantMessageId: null,
+  durationMs: null,
 };
 
 const readySession = {
@@ -86,6 +138,31 @@ const readySession = {
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
 
+const activeExecution = {
+  threadId,
+  authorityEpoch: "epoch-1",
+  revision: 1,
+  observedAt: now,
+  activity: "active" as const,
+  canStop: true,
+  providerSession: {
+    state: "ready" as const,
+    generation: 1,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    startedAt: now,
+    lastObservedAt: now,
+    lastError: null,
+  },
+  turn: {
+    executionId: "execution-1",
+    providerTurnId: TurnId.make("turn-running"),
+    state: "running" as const,
+    startedAt: now,
+    stopRequestedAt: null,
+    completedAt: null,
+    lastError: null,
+  },
+};
 describe("buildLoadingThreadFromShell", () => {
   it("preserves shell metadata and supplies empty detail collections", () => {
     const shell = {
@@ -101,6 +178,7 @@ describe("buildLoadingThreadFromShell", () => {
       interactionMode: "default",
       branch: "main",
       worktreePath: null,
+      sourceControlProfileId: null,
       latestTurn: null,
       createdAt: now,
       updatedAt: now,
@@ -114,6 +192,9 @@ describe("buildLoadingThreadFromShell", () => {
       hasPendingApprovals: false,
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
+      // T3-CUSTOM(expbkt3): multi-user ownership fields on ThreadShell.
+      ownerUserId: null,
+      memberUserIds: [],
     } satisfies ThreadShell;
 
     expect(buildLoadingThreadFromShell(shell)).toMatchObject({
@@ -159,27 +240,89 @@ describe("resolveThreadMetadataUpdateForNextTurn", () => {
   });
 });
 
-describe("buildThreadTurnInterruptInput", () => {
-  it("targets the session's active running turn", () => {
-    const activeTurnId = TurnId.make("turn-running");
+describe("buildStopExecutionInput", () => {
+  it("fences the stop request to the backend execution", () => {
+    const executionId = "execution-running";
 
     expect(
-      buildThreadTurnInterruptInput(
+      buildStopExecutionInput(
         makeThread({
-          session: {
-            ...readySession,
-            status: "running",
-            activeTurnId,
+          execution: {
+            threadId,
+            authorityEpoch: "epoch-1",
+            revision: 4,
+            observedAt: now,
+            activity: "active",
+            canStop: true,
+            providerSession: {
+              state: "ready",
+              generation: 1,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              startedAt: now,
+              lastObservedAt: now,
+              lastError: null,
+            },
+            turn: {
+              executionId,
+              providerTurnId: TurnId.make("turn-running"),
+              state: "running",
+              startedAt: now,
+              stopRequestedAt: null,
+              completedAt: null,
+              lastError: null,
+            },
           },
         }),
       ),
-    ).toEqual({ threadId, turnId: activeTurnId });
+    ).toEqual({ threadId, expectedExecutionId: executionId });
   });
 
-  it("omits a turn id when the session is not running", () => {
-    expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
+  it("omits an execution id before an authoritative execution exists", () => {
+    expect(buildStopExecutionInput(makeThread({ execution: null }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("deriveOutboxSendGate", () => {
+  it("keeps the composer free while disconnected so messages can queue up", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: true,
+        environmentConnected: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("latches while connected with a pending item (dispatch/drain in flight)", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: true,
+        environmentConnected: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("always latches during the synchronous local dispatch window", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: true,
+        hasPendingOutboxItem: false,
+        environmentConnected: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays open with nothing pending", () => {
+    expect(
+      deriveOutboxSendGate({
+        isLocalSendBusy: false,
+        hasPendingOutboxItem: false,
+        environmentConnected: true,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -343,6 +486,83 @@ describe("resolveSendEnvMode", () => {
   });
 });
 
+describe("resolveSendWorkspaceContext", () => {
+  it("uses the latest local draft selection instead of a stale rendered worktree mode", () => {
+    expect(
+      resolveSendWorkspaceContext({
+        isLocalDraftThread: true,
+        isGitRepo: true,
+        rendered: {
+          envMode: "worktree",
+          branch: "main",
+          worktreePath: null,
+        },
+        latestDraft: {
+          envMode: "local",
+          branch: "main",
+          worktreePath: null,
+        },
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: "main",
+      worktreePath: null,
+    });
+  });
+
+  it("does not let an unrelated draft override a server thread context", () => {
+    expect(
+      resolveSendWorkspaceContext({
+        isLocalDraftThread: false,
+        isGitRepo: true,
+        rendered: {
+          envMode: "local",
+          branch: "release",
+          worktreePath: null,
+        },
+        latestDraft: {
+          envMode: "worktree",
+          branch: "main",
+          worktreePath: null,
+        },
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: "release",
+      worktreePath: null,
+    });
+  });
+});
+
+describe("shouldPrepareWorktreeForFirstTurn", () => {
+  it("never prepares a worktree for Current checkout", () => {
+    expect(
+      shouldPrepareWorktreeForFirstTurn({
+        isFirstMessage: true,
+        envMode: "local",
+        worktreePath: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("prepares one only for an unattached first turn in New worktree mode", () => {
+    expect(
+      shouldPrepareWorktreeForFirstTurn({
+        isFirstMessage: true,
+        envMode: "worktree",
+        worktreePath: null,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPrepareWorktreeForFirstTurn({
+        isFirstMessage: false,
+        envMode: "worktree",
+        worktreePath: null,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("branchMismatchKey", () => {
   it("builds a key from thread id and both branches", () => {
     expect(branchMismatchKey("thread-1", { threadBranch: "feat/a", currentBranch: "feat/b" })).toBe(
@@ -424,6 +644,34 @@ describe("reconcileMountedTerminalThreadIds", () => {
         activeThreadTerminalOpen: false,
       }),
     ).toEqual(ids.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
+  });
+});
+
+describe("reconcileMountedPlannotatorThreadIds", () => {
+  it("keeps an in-progress review mounted while the user visits another thread", () => {
+    expect(
+      reconcileMountedPlannotatorThreadIds({
+        currentThreadIds: ["thread-with-review"],
+        openThreadIds: ["thread-with-review"],
+        activeThreadId: "other-thread",
+        activeThreadPlannotatorOpen: false,
+      }),
+    ).toEqual(["thread-with-review"]);
+  });
+
+  it("bounds hidden review surfaces while keeping the active review mounted", () => {
+    const hiddenIds = Array.from(
+      { length: MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS + 1 },
+      (_, index) => `hidden-thread-${index}`,
+    );
+    expect(
+      reconcileMountedPlannotatorThreadIds({
+        currentThreadIds: hiddenIds,
+        openThreadIds: [...hiddenIds, "active-thread"],
+        activeThreadId: "active-thread",
+        activeThreadPlannotatorOpen: true,
+      }),
+    ).toEqual([...hiddenIds.slice(-MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS), "active-thread"]);
   });
 });
 
@@ -535,6 +783,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "ready",
         latestTurn: completedTurn,
+        execution: null,
         latestUserMessageId: localDispatch.latestUserMessageId,
         session: readySession,
         hasPendingApproval: false,
@@ -561,6 +810,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "ready",
         latestTurn: newerTurn,
+        execution: null,
         latestUserMessageId: localDispatch.latestUserMessageId,
         session: { ...readySession, updatedAt: newerTurn.completedAt },
         hasPendingApproval: false,
@@ -581,6 +831,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       requestedAt: "2026-03-29T00:01:00.000Z",
       startedAt: "2026-03-29T00:01:01.000Z",
       completedAt: null,
+      durationMs: null,
     };
 
     expect(
@@ -588,6 +839,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "running",
         latestTurn: runningTurn,
+        execution: { ...activeExecution, activity: "idle", canStop: false },
         latestUserMessageId: localDispatch.latestUserMessageId,
         session: {
           ...readySession,
@@ -604,6 +856,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "running",
         latestTurn: runningTurn,
+        execution: activeExecution,
         latestUserMessageId: localDispatch.latestUserMessageId,
         session: {
           ...readySession,
@@ -641,6 +894,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
             createdAt: runningTurn.requestedAt,
             updatedAt: runningTurn.requestedAt,
             streaming: false,
+            sentByUserId: null,
           },
         ],
       }),
@@ -651,6 +905,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         localDispatch,
         phase: "running",
         latestTurn: runningTurn,
+        execution: activeExecution,
         latestUserMessageId: MessageId.make("message-steer"),
         session: runningSession,
         hasPendingApproval: false,
@@ -666,6 +921,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       localDispatch,
       phase: "ready" as const,
       latestTurn: null,
+      execution: null,
       latestUserMessageId: localDispatch.latestUserMessageId,
       session: null,
       hasPendingApproval: false,
@@ -676,5 +932,44 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("activeRuntimeWarningLabel", () => {
+  const warning = {
+    id: EventId.make("warning-1"),
+    tone: "info" as const,
+    kind: "runtime.warning",
+    summary: "Reconnecting... 2/5",
+    payload: {},
+    turnId: null,
+    createdAt: "2026-03-29T00:00:05.000Z",
+  };
+
+  it("surfaces a warning from the active execution", () => {
+    expect(
+      activeRuntimeWarningLabel({
+        activities: [warning],
+        activeWorkStartedAt: now,
+        isWorking: true,
+      }),
+    ).toBe("Reconnecting... 2/5");
+  });
+
+  it("ignores warnings from an older execution or an idle thread", () => {
+    expect(
+      activeRuntimeWarningLabel({
+        activities: [warning],
+        activeWorkStartedAt: "2026-03-29T00:01:00.000Z",
+        isWorking: true,
+      }),
+    ).toBeNull();
+    expect(
+      activeRuntimeWarningLabel({
+        activities: [warning],
+        activeWorkStartedAt: now,
+        isWorking: false,
+      }),
+    ).toBeNull();
   });
 });

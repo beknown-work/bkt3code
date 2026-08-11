@@ -1,4 +1,6 @@
 import { EnvironmentId, type VcsRef } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): worktree codenames.
+import { resolveWorktreeCodename } from "@t3tools/shared/worktreeCodename";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
@@ -17,6 +19,7 @@ import {
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
   shouldIncludeBranchPickerItem,
+  shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
 
@@ -421,6 +424,38 @@ describe("shouldShowEnvironmentIndicator", () => {
   });
 });
 
+describe("shouldShowComposerContextStrip", () => {
+  it("keeps the environment indicator visible for a non-Git project", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        hasActiveProject: true,
+        isGitRepo: false,
+        showEnvironmentIndicator: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides the strip when a non-Git project has no environment indicator", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        hasActiveProject: true,
+        isGitRepo: false,
+        showEnvironmentIndicator: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows Git controls without requiring an environment indicator", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        hasActiveProject: true,
+        isGitRepo: true,
+        showEnvironmentIndicator: false,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("resolveEffectiveEnvMode", () => {
   it("treats draft threads already attached to a worktree as current-checkout mode", () => {
     expect(
@@ -465,8 +500,11 @@ describe("resolveLockedWorkspaceLabel", () => {
     expect(resolveLockedWorkspaceLabel(null)).toBe("Local checkout");
   });
 
-  it("uses a shorter label for an attached worktree", () => {
-    expect(resolveLockedWorkspaceLabel("/repo/.t3/worktrees/feature-a")).toBe("Worktree");
+  // T3-CUSTOM(expbkt3): the label names the worktree rather than restating its kind.
+  it("names an attached worktree by its codename", () => {
+    const worktreePath = "/repo/.t3/worktrees/t3code-2d633e64";
+    expect(resolveLockedWorkspaceLabel(worktreePath)).toBe(resolveWorktreeCodename(worktreePath));
+    expect(resolveLockedWorkspaceLabel(worktreePath)).not.toBe("Worktree");
   });
 });
 

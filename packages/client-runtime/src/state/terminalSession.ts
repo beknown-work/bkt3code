@@ -10,6 +10,7 @@ import type {
 export interface TerminalSessionState {
   readonly summary: TerminalSummary | null;
   readonly buffer: string;
+  readonly bufferEpoch: number;
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly hasRunningSubprocess: boolean;
@@ -19,6 +20,7 @@ export interface TerminalSessionState {
 
 export interface TerminalBufferState {
   readonly buffer: string;
+  readonly bufferEpoch: number;
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly updatedAt: string | null;
@@ -46,6 +48,7 @@ export function selectRunningSubprocessTerminalIds(
 
 export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
   buffer: "",
+  bufferEpoch: 0,
   status: "closed",
   error: null,
   updatedAt: null,
@@ -55,6 +58,7 @@ export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
 export const EMPTY_TERMINAL_SESSION_STATE = Object.freeze<TerminalSessionState>({
   summary: null,
   buffer: "",
+  bufferEpoch: 0,
   status: "closed",
   error: null,
   hasRunningSubprocess: false,
@@ -91,13 +95,16 @@ function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
 export function terminalBufferStateFromSnapshot(
   snapshot: TerminalSessionSnapshot,
   maxBufferBytes: number,
+  version = 1,
+  bufferEpoch = 1,
 ): TerminalBufferState {
   return {
     buffer: trimBufferToBytes(snapshot.history, maxBufferBytes),
+    bufferEpoch,
     status: snapshot.status,
     error: null,
     updatedAt: snapshot.updatedAt,
-    version: 1,
+    version,
   };
 }
 
@@ -114,6 +121,7 @@ export function combineTerminalSessionState(
   return {
     summary,
     buffer: buffer.buffer,
+    bufferEpoch: buffer.bufferEpoch,
     status: buffer.version > 0 ? buffer.status : (summary?.status ?? buffer.status),
     error: buffer.error,
     hasRunningSubprocess: summary?.hasRunningSubprocess ?? false,
@@ -130,7 +138,12 @@ export function applyTerminalAttachStreamEvent(
   switch (event.type) {
     case "snapshot":
     case "restarted":
-      return terminalBufferStateFromSnapshot(event.snapshot, maxBufferBytes);
+      return terminalBufferStateFromSnapshot(
+        event.snapshot,
+        maxBufferBytes,
+        current.version + 1,
+        current.bufferEpoch + 1,
+      );
     case "output":
       return {
         ...current,
@@ -143,6 +156,7 @@ export function applyTerminalAttachStreamEvent(
       return {
         ...current,
         buffer: "",
+        bufferEpoch: current.bufferEpoch + 1,
         error: null,
         version: current.version + 1,
       };

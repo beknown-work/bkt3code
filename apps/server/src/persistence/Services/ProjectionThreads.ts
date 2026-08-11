@@ -14,8 +14,11 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  SourceControlProfileId,
   ThreadId,
+  ThreadPriority,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -33,7 +36,9 @@ export const ProjectionThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  sourceControlProfileId: Schema.NullOr(SourceControlProfileId),
   latestTurnId: Schema.NullOr(TurnId),
+  ownerUserId: Schema.NullOr(UserId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime),
@@ -41,6 +46,18 @@ export const ProjectionThread = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozedUntil: Schema.NullOr(IsoDateTime),
   snoozedAt: Schema.NullOr(IsoDateTime),
+  // T3-CUSTOM(expbkt3): session priority (P0..P4 as 0..4, null = unset).
+  priority: Schema.NullOr(ThreadPriority),
+  // T3-CUSTOM(expbkt3): durable manual Linear issue URL.
+  linearIssueUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  // T3-CUSTOM(expbkt3): session lineage; null means this is a root session.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): BEGIN — JSON-encoded ThreadWorkSummary for the bulk session
+  // manager. Kept as a raw string here so the projection repository stays a
+  // dumb column carrier; decoding happens in ProjectionSnapshotQuery, where a
+  // malformed row degrades to "no summary" instead of failing a whole snapshot.
+  workSummary: Schema.optional(Schema.NullOr(Schema.String)),
+  // T3-CUSTOM(expbkt3): END
   pinnedAt: Schema.NullOr(IsoDateTime),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -48,6 +65,8 @@ export const ProjectionThread = Schema.Struct({
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
+  // Rolling catch-up summary maintained incrementally per turn completion.
+  rollingSummary: Schema.NullOr(Schema.String),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;
@@ -100,6 +119,14 @@ export interface ProjectionThreadRepositoryShape {
   readonly deleteById: (
     input: DeleteProjectionThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): every thread the session-history backfill must cover.
+  // Soft-deleted rows are included deliberately: their messages are still in
+  // the projection, and the archive is the only record that survives them.
+  readonly listArchivedOrDeleted: () => Effect.Effect<
+    ReadonlyArray<ProjectionThread>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**

@@ -1511,6 +1511,19 @@ describe("composerDraftStore setModelSelection", () => {
       draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_INSTANCE],
     ).toEqual(modelSelection(CODEX_DRIVER, "gpt-5.3-codex"));
   });
+
+  // T3-CUSTOM(expbkt3): new drafts can return to inherited creation defaults.
+  it("clears the active model and options when returning to creation defaults", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(
+      threadRef,
+      modelSelection(CODEX_DRIVER, "gpt-5.3-codex", { reasoningEffort: "high" }),
+    );
+
+    store.setModelSelection(threadRef, null, { replaceOptions: true });
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore sticky composer settings", () => {
@@ -1770,5 +1783,53 @@ describe("createDebouncedStorage", () => {
     vi.advanceTimersByTime(300);
     expect(base.setItem).toHaveBeenCalledTimes(1);
     expect(base.setItem).toHaveBeenCalledWith("key", "v2");
+  });
+});
+
+// T3-CUSTOM(expbkt3): context-handoff drafts carry session lineage.
+describe("composerDraftStore parentThreadId", () => {
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-lineage"));
+  const parentId = ThreadId.make("thread-parent");
+  const draftId = DraftId.make("draft-lineage");
+
+  it("stores the parent on creation and clears it when reseeded without one", () => {
+    const store = useComposerDraftStore.getState();
+    store.setLogicalProjectDraftThreadId(scopedProjectKey(projectRef), projectRef, draftId, {
+      threadId: ThreadId.make("thread-child"),
+      parentThreadId: parentId,
+    });
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.parentThreadId).toBe(
+      parentId,
+    );
+
+    useComposerDraftStore.getState().setDraftThreadContext(draftId, { parentThreadId: null });
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.parentThreadId).toBeNull();
+  });
+
+  it("keeps the parent when unrelated context changes, drops it on a project change", () => {
+    const store = useComposerDraftStore.getState();
+    store.setLogicalProjectDraftThreadId(scopedProjectKey(projectRef), projectRef, draftId, {
+      threadId: ThreadId.make("thread-child"),
+      parentThreadId: parentId,
+    });
+    useComposerDraftStore.getState().setDraftThreadContext(draftId, { branch: "feature/x" });
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.parentThreadId).toBe(
+      parentId,
+    );
+
+    const otherProjectRef = scopeProjectRef(
+      OTHER_TEST_ENVIRONMENT_ID,
+      ProjectId.make("project-elsewhere"),
+    );
+    useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+      projectRef: otherProjectRef,
+    });
+    expect(
+      useComposerDraftStore.getState().getDraftSession(draftId)?.parentThreadId ?? null,
+    ).toBeNull();
   });
 });

@@ -8,8 +8,12 @@ import { createHashHistory, createBrowserHistory } from "@tanstack/react-router"
 import "./index.css";
 
 import { isElectron } from "./env";
-import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
-import { hasCloudPublicConfig } from "./cloud/publicConfig";
+import { ManagedClerkIdentityAuthProvider, ManagedRelayAuthProvider } from "./cloud/managedAuth";
+import { resolveAppClerkMode, resolveClerkPublishableKey } from "./cloud/publicConfig";
+// T3-CUSTOM(expbkt3): BEGIN - desktop blank-window diagnostic.
+import { DesktopAuthStallNotice } from "./components/clerk/DesktopAuthStallNotice";
+// T3-CUSTOM(expbkt3): END
+import { TeamIdentityBridge } from "./components/clerk/TeamIdentityBridge";
 import { getRouter } from "./router";
 import {
   syncDocumentElectronPlatformClasses,
@@ -27,21 +31,40 @@ if (isElectron) {
   syncDocumentWindowControlsOverlayClass();
 }
 
-const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const clerkPublishableKey = resolveClerkPublishableKey();
+const clerkMode = resolveAppClerkMode();
 
 const app = <AppRoot router={router} />;
+const authenticatedApp =
+  clerkMode === "cloud" ? <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider> : app;
+
+// Inside Clerk, expose the token to standalone identity binding and mirror the
+// signed-in user for the existing team-mode access controls. Full cloud builds
+// additionally activate the managed relay session.
+const clerkChildren = (
+  <ManagedClerkIdentityAuthProvider>
+    <TeamIdentityBridge />
+    {authenticatedApp}
+  </ManagedClerkIdentityAuthProvider>
+);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {clerkPublishableKey && hasCloudPublicConfig() ? (
+    {clerkPublishableKey && clerkMode !== "disabled" ? (
       isElectron ? (
-        <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
-        </ElectronClerkProvider>
+        // T3-CUSTOM(expbkt3): BEGIN - the desktop provider renders nothing until
+        // Clerk's Native API answers, so a disabled Native API leaves a blank
+        // window with no explanation. The notice is a sibling, not a child, so it
+        // still renders in exactly that case.
+        <>
+          <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
+            {clerkChildren}
+          </ElectronClerkProvider>
+          <DesktopAuthStallNotice />
+        </>
       ) : (
-        <ClerkProvider publishableKey={clerkPublishableKey}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
-        </ClerkProvider>
+        // T3-CUSTOM(expbkt3): END
+        <ClerkProvider publishableKey={clerkPublishableKey}>{clerkChildren}</ClerkProvider>
       )
     ) : (
       app

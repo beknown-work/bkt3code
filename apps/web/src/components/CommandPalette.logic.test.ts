@@ -6,6 +6,10 @@ import {
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   filterCommandPaletteGroups,
+  markProjectNicknameCloneResolved,
+  projectNicknameWorkspaceRoot,
+  startCloneProjectNicknameStep,
+  startLocalProjectNicknameStep,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
@@ -111,11 +115,46 @@ describe("enumerateCommandPaletteItems", () => {
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-1");
 
+describe("add project nickname steps", () => {
+  it("starts local and clone steps with inferred nicknames", () => {
+    const local = startLocalProjectNicknameStep({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      workspaceRoot: "/work/my-app",
+    });
+    expect(local.query).toBe("my-app");
+    expect(projectNicknameWorkspaceRoot(local.step)).toBe("/work/my-app");
+
+    const clone = startCloneProjectNicknameStep({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      remoteUrl: "git@github.com:example/server.git",
+      destinationPath: "/work",
+      repositoryTitle: "example/server",
+      repositoryName: "example/server",
+    });
+    expect(clone.query).toBe("server");
+    expect(projectNicknameWorkspaceRoot(clone.step)).toBeNull();
+  });
+
+  it("records a completed clone so create retries do not clone again", () => {
+    const { step } = startCloneProjectNicknameStep({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      remoteUrl: "https://github.com/example/server.git",
+      destinationPath: "/work",
+      repositoryTitle: "example/server",
+    });
+    const resolved = markProjectNicknameCloneResolved(step, "/work/server");
+    expect(projectNicknameWorkspaceRoot(resolved)).toBe("/work/server");
+    expect(resolved).toMatchObject({ kind: "clone", clonedWorkspaceRoot: "/work/server" });
+  });
+});
+
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.make("thread-1"),
     environmentId: LOCAL_ENVIRONMENT_ID,
     projectId: PROJECT_ID,
+    ownerUserId: null,
+    memberUserIds: [],
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",
@@ -132,7 +171,10 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    sourceControlProfileId: null,
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     activities: [],
     ...overrides,
   };

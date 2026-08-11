@@ -20,6 +20,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -34,7 +35,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import { ProviderAdapterProcessError, ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -49,7 +50,11 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  durableRecoveryFailure,
+  providerHistoryReadProvesUndelivered,
+  providerHistoryProvesCompletion,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -67,6 +72,86 @@ const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+
+// T3-CUSTOM(expbkt3): guarded recovery only trusts explicit terminal provider evidence.
+it("does not mistake interrupted or partial provider history for completion", () => {
+  const providerTurnId = asTurnId("durable-provider-turn");
+  const history = (state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown") => ({
+    threadId: ThreadId.make("durable-provider-history"),
+    turns: [{ id: providerTurnId, items: [], state }],
+  });
+
+  expect(providerHistoryProvesCompletion(history("completed"), providerTurnId)).toBe(true);
+  for (const state of ["interrupted", "failed", "in-progress", "unknown"] as const) {
+    expect(providerHistoryProvesCompletion(history(state), providerTurnId)).toBe(false);
+  }
+});
+
+it("fails missing durable resume state without spending ten identical retries", () => {
+  const missing = durableRecoveryFailure(
+    { _tag: "ProviderSessionNotFoundError", message: "resume state missing" },
+    "provider-history-read-failed",
+  );
+  const transient = durableRecoveryFailure(
+    { _tag: "ProviderAdapterRequestError", message: "transport disconnected" },
+    "provider-history-read-failed",
+  );
+
+  expect(missing.failureType).toBe("durable-resume-unavailable");
+  expect(missing.retryable).toBe(false);
+  expect(transient.failureType).toBe("provider-history-read-failed");
+  expect(transient.retryable).toBe(true);
+});
+
+// T3-CUSTOM(expbkt3): a spawn against a deleted worktree buries its ENOENT two
+// causes deep, where String() on the adapter error never surfaces it.
+it("classifies a spawn failure against a deleted worktree as permanent", () => {
+  const spawnFailure = durableRecoveryFailure(
+    new ProviderAdapterProcessError({
+      provider: "codex",
+      threadId: "thread-1",
+      detail: "Failed to spawn Codex App Server process for command: codex app-server",
+      cause: new Error("Failed to spawn Codex App Server process for command: codex app-server", {
+        cause: new Error(
+          "ENOENT: no such file or directory, access '/worktrees/proj/t3code-abc123'",
+        ),
+      }),
+    }),
+    "provider-turn-dispatch-failed",
+  );
+  const transientSpawnFailure = durableRecoveryFailure(
+    new ProviderAdapterProcessError({
+      provider: "codex",
+      threadId: "thread-1",
+      detail: "Codex App Server exited before the session was ready",
+      cause: new Error("process exited with code 143"),
+    }),
+    "provider-turn-dispatch-failed",
+  );
+
+  expect(spawnFailure.failureType).toBe("durable-resume-unavailable");
+  expect(spawnFailure.retryable).toBe(false);
+  expect(transientSpawnFailure.failureType).toBe("provider-turn-dispatch-failed");
+  expect(transientSpawnFailure.retryable).toBe(true);
+});
+
+// T3-CUSTOM(expbkt3): An unmaterialized Codex thread has never received its first prompt.
+it("treats unmaterialized Codex history as proof the original prompt was not delivered", () => {
+  const unmaterialized = new ProviderAdapterRequestError({
+    provider: "codex",
+    method: "thread/read",
+    detail:
+      "thread provider-thread-1 is not materialized yet; includeTurns is unavailable before first user message",
+  });
+  const unrelated = new ProviderAdapterRequestError({
+    provider: "codex",
+    method: "thread/read",
+    detail: "transport disconnected",
+  });
+
+  expect(providerHistoryReadProvesUndelivered(unmaterialized)).toBe(true);
+  expect(providerHistoryReadProvesUndelivered(unrelated)).toBe(false);
+});
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
@@ -152,6 +237,7 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -311,6 +397,9 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
+      inspectSession: () => Effect.succeed(null),
+      requestTurnInterrupt: () => unsupported(),
+      terminateSession: () => unsupported(),
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
@@ -318,6 +407,9 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          // T3-CUSTOM(expbkt3): explicit durable execution behavior.
+          activeTurnInput: "steer",
+          durableResume: "supported",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -347,6 +439,7 @@ describe("ProviderCommandReactor", () => {
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(ThreadBackgroundLiveness.layer),
+      Layer.provide(ThreadPlanProgress.layer),
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
@@ -355,6 +448,7 @@ describe("ProviderCommandReactor", () => {
     );
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(ThreadBackgroundLiveness.layer),
+      Layer.provide(ThreadPlanProgress.layer),
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
@@ -365,7 +459,9 @@ describe("ProviderCommandReactor", () => {
         const engine = yield* OrchestrationEngineService;
         return {
           readEvents: engine.readEvents,
-          dispatch: (command) => {
+          // T3-CUSTOM(expbkt3): forward dispatch options; actorUserId rides on
+          // them and the fork's credential-handoff behaviour depends on it.
+          dispatch: (command, options) => {
             if (command.type === "thread.title.regeneration.complete") {
               titleRegenerationCompletionDispatchAttempts += 1;
               if (
@@ -375,7 +471,7 @@ describe("ProviderCommandReactor", () => {
                 return Effect.die(new Error("Injected title regeneration completion failure"));
               }
             }
-            return engine.dispatch(command);
+            return engine.dispatch(command, options);
           },
           get streamDomainEvents() {
             return engine.streamDomainEvents;
@@ -392,6 +488,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           renameBranch,
+          ...input?.gitWorkflow,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
       ),
       Layer.provideMerge(
@@ -443,6 +540,7 @@ describe("ProviderCommandReactor", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt: now,
       }),
     );
@@ -459,6 +557,7 @@ describe("ProviderCommandReactor", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
         }),
       );
@@ -1906,6 +2005,58 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession.mock.calls.length).toBe(0);
   });
 
+  effectIt.effect(
+    "restarts the provider session when a different credential actor takes over",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch(
+          {
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-turn-start-actor-1"),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: asMessageId("user-message-actor-1"),
+              role: "user",
+              text: "first",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          },
+          { actorUserId: UserId.make("user-a") },
+        );
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+        yield* harness.engine.dispatch(
+          {
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-turn-start-actor-2"),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: asMessageId("user-message-actor-2"),
+              role: "user",
+              text: "second",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          },
+          { actorUserId: UserId.make("user-b") },
+        );
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+        expect(harness.stopSession.mock.calls.length).toBe(0);
+      }),
+  );
+
   it("restarts an existing Codex thread on a compatible requested instance", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -2000,6 +2151,9 @@ describe("ProviderCommandReactor", () => {
       cwd: "/tmp/provider-project",
     });
 
+    // The reactor verifies a thread's worktree exists before starting its
+    // session, so the fixture path must be a real directory.
+    NodeFS.mkdirSync("/tmp/provider-project-worktree", { recursive: true });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -2040,6 +2194,129 @@ describe("ProviderCommandReactor", () => {
       runtimeMode: "approval-required",
     });
   });
+
+  // T3-CUSTOM(expbkt3): a worktree deleted out from under a live thread must
+  // self-heal on the next turn start instead of failing with ENOENT forever.
+  effectIt.effect(
+    "recreates a missing worktree from its surviving branch before starting the session",
+    () =>
+      Effect.gen(function* () {
+        const tmpRoot = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"),
+        );
+        const worktreePath = NodePath.join(tmpRoot, "t3code-recovered");
+        const listLocalBranchNames = vi.fn(() => Effect.succeed(["main", "t3code/recovered"]));
+        const pruneWorktrees = vi.fn(() => Effect.void);
+        const createWorktree = vi.fn(() => {
+          NodeFS.mkdirSync(worktreePath, { recursive: true });
+          return Effect.succeed({ worktree: { path: worktreePath, refName: "t3code/recovered" } });
+        });
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            gitWorkflow: { listLocalBranchNames, pruneWorktrees, createWorktree },
+          }),
+        );
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-worktree-recovery-meta"),
+          threadId: ThreadId.make("thread-1"),
+          branch: "t3code/recovered",
+          worktreePath,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-worktree-recovery"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-worktree-recovery"),
+            role: "user",
+            text: "turn against a deleted worktree",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+        expect(listLocalBranchNames).toHaveBeenCalledWith("/tmp/provider-project");
+        expect(pruneWorktrees).toHaveBeenCalledWith("/tmp/provider-project");
+        expect(createWorktree).toHaveBeenCalledWith({
+          cwd: "/tmp/provider-project",
+          refName: "t3code/recovered",
+          path: worktreePath,
+        });
+        expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: worktreePath });
+
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const readModel = await harness.readModel();
+            const thread = readModel.threads.find(
+              (entry) => entry.id === ThreadId.make("thread-1"),
+            );
+            return (
+              thread?.activities.some((activity) => activity.kind === "worktree.recreated") ?? false
+            );
+          }),
+        );
+      }),
+  );
+
+  effectIt.effect("fails a turn permanently when both the worktree and its branch are gone", () =>
+    Effect.gen(function* () {
+      const tmpRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3code-reactor-worktree-"),
+      );
+      const worktreePath = NodePath.join(tmpRoot, "t3code-unrecoverable");
+      const listLocalBranchNames = vi.fn(() => Effect.succeed(["main"]));
+      const createWorktree = vi.fn(() =>
+        Effect.die("createWorktree must not run without a branch"),
+      );
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          gitWorkflow: { listLocalBranchNames, createWorktree },
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-worktree-unrecoverable-meta"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "t3code/deleted-branch",
+        worktreePath,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-worktree-unrecoverable"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-unrecoverable"),
+          role: "user",
+          text: "turn against an unrecoverable worktree",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+          return thread?.session?.status === "error";
+        }),
+      );
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.session?.lastError).toContain("no longer exists");
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(createWorktree).not.toHaveBeenCalled();
+    }),
+  );
 
   it("restarts claude sessions when claude effort changes", async () => {
     const harness = await createHarness({
@@ -2940,4 +3217,83 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerInstanceId).toBe(ProviderInstanceId.make("codex_work"));
     expect(thread?.session?.activeTurnId).toBeNull();
   });
+
+  it("still stops the provider when the projected session already looks stopped", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stale-stopped"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.make("cmd-session-force-stop-stale-projection"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+  });
+
+  effectIt.effect("reconnects a stopped provider session and preserves its conversation id", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-for-restart"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          providerThreadId: "provider-thread-1",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.restart",
+        commandId: CommandId.make("cmd-session-restart"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        providerInstanceId: ProviderInstanceId.make("codex_work"),
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.session?.status).toBe("ready");
+      expect(thread?.session?.providerThreadId).toBe("provider-thread-1");
+    }),
+  );
 });

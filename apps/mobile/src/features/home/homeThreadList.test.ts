@@ -22,6 +22,8 @@ function makeProject(
     scripts: [],
     createdAt: "2026-06-01T00:00:00.000Z",
     updatedAt: "2026-06-01T00:00:00.000Z",
+    ownerUserId: null,
+    memberUserIds: [],
     ...input,
   };
 }
@@ -45,7 +47,10 @@ function makeThread(
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    ownerUserId: null,
+    memberUserIds: [],
     ...input,
+    sourceControlProfileId: input.sourceControlProfileId ?? null,
     settledOverride: input.settledOverride ?? null,
     settledAt: input.settledAt ?? null,
   };

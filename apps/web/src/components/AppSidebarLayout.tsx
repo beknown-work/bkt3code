@@ -14,8 +14,15 @@ import { getLocalStorageItem } from "../hooks/useLocalStorage";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { useEnvironmentIdentificationMode, useSidebarV2Enabled } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  useClientSettingsHydrated,
+  useEnvironmentIdentificationMode,
+  useSidebarV2Enabled,
+} from "../hooks/useSettings";
 import ThreadSidebar from "./Sidebar";
+import PhaseGroupedSidebar from "./PhaseGroupedSidebar";
+import { shouldUsePhaseGroupedSidebar } from "./sidebar/sidebarVariant";
 import ThreadSidebarV2 from "./SidebarV2";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import {
@@ -118,13 +125,22 @@ function SidebarControl() {
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const clientSettingsHydrated = useClientSettingsHydrated();
+  const phaseGroupedSidebarEnabled = useClientSettings(
+    (settings) => settings.phaseGroupedSidebarEnabled,
+  );
+  const usePhaseGroupedSidebar = shouldUsePhaseGroupedSidebar({
+    clientSettingsHydrated,
+    phaseGroupedSidebarEnabled,
+    pathname,
+  });
   const sidebarV2Enabled = useSidebarV2Enabled();
   // Settings routes render the settings nav, which lives in the v1 component
   // and is identical for both sidebars — so v1 stays mounted there.
-  const pathname = useLocation({ select: (location) => location.pathname });
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
-  const useSidebarV2 = sidebarV2Enabled && !isOnSettings;
-  const useSidebarV2Theme = useSidebarV2 || isOnSettings;
+  const useSidebarV2 = sidebarV2Enabled && !isOnSettings && !usePhaseGroupedSidebar;
+  const useSidebarV2Theme = useSidebarV2 || usePhaseGroupedSidebar || isOnSettings;
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
@@ -200,7 +216,13 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           onResize: setSidebarWidth,
         }}
       >
-        {useSidebarV2 ? <ThreadSidebarV2 /> : <ThreadSidebar />}
+        {usePhaseGroupedSidebar ? (
+          <PhaseGroupedSidebar />
+        ) : useSidebarV2 ? (
+          <ThreadSidebarV2 />
+        ) : (
+          <ThreadSidebar />
+        )}
         <SidebarRail />
       </Sidebar>
       {children}

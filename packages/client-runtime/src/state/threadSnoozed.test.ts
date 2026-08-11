@@ -57,6 +57,7 @@ function makeShell(input: {
             startedAt: null,
             completedAt: input.turnCompletedAt,
             assistantMessageId: null,
+            durationMs: null,
           },
   };
 }

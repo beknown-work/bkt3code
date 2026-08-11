@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -19,6 +19,8 @@ const stubProject = {
   repositoryIdentity: null,
   defaultModelSelection: null,
   scripts: [],
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
 } as const;
@@ -30,9 +32,12 @@ const stubThread = {
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access" as const,
   interactionMode: "default" as const,
+  sourceControlProfileId: null,
   branch: null,
   worktreePath: null,
   latestTurn: null,
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
   archivedAt: null,
@@ -53,17 +58,32 @@ describe("applyShellStreamEvent", () => {
       projects: [stubProject],
     };
 
-    for (const sequence of [3, 4]) {
-      const next = applyShellStreamEvent(snapshotWithProject, {
-        kind: "project-upserted",
-        sequence,
-        project: { ...stubProject, title: "Stale Title" },
-      });
+    const next = applyShellStreamEvent(snapshotWithProject, {
+      kind: "project-upserted",
+      sequence: 3,
+      project: { ...stubProject, title: "Stale Title" },
+    });
 
-      expect(next).toBe(snapshotWithProject);
-      expect(next.snapshotSequence).toBe(4);
-      expect(next.projects[0]?.title).toBe("Test Project");
-    }
+    expect(next).toBe(snapshotWithProject);
+    expect(next.snapshotSequence).toBe(4);
+    expect(next.projects[0]?.title).toBe("Test Project");
+  });
+
+  it("applies multiple derived frames that share one durable sequence", () => {
+    const withProject = applyShellStreamEvent(baseSnapshot, {
+      kind: "project-upserted",
+      sequence: 1,
+      project: stubProject,
+    });
+    const withProjectAndThread = applyShellStreamEvent(withProject, {
+      kind: "thread-upserted",
+      sequence: 1,
+      thread: stubThread,
+    });
+
+    expect(withProjectAndThread.snapshotSequence).toBe(1);
+    expect(withProjectAndThread.projects.map((project) => project.id)).toEqual(["project-1"]);
+    expect(withProjectAndThread.threads.map((thread) => thread.id)).toEqual(["thread-1"]);
   });
 
   describe("project-upserted", () => {
@@ -154,6 +174,152 @@ describe("applyShellStreamEvent", () => {
 
       expect(next.threads).toHaveLength(1);
       expect(next.threads[0]?.title).toBe("Updated Thread");
+    });
+
+    it("preserves the authoritative execution overlay when a domain upsert omits it", () => {
+      const execution = {
+        threadId: stubThread.id,
+        authorityEpoch: "epoch-1",
+        revision: 2,
+        observedAt: "2026-04-01T00:00:01.000Z",
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          state: "ready" as const,
+          generation: 1,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          startedAt: "2026-04-01T00:00:00.000Z",
+          lastObservedAt: "2026-04-01T00:00:01.000Z",
+          lastError: null,
+        },
+        turn: {
+          executionId: "execution-1",
+          providerTurnId: TurnId.make("turn-1"),
+          state: "running" as const,
+          startedAt: "2026-04-01T00:00:01.000Z",
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const snapshotWithExecution: OrchestrationShellSnapshot = {
+        ...baseSnapshot,
+        threads: [{ ...stubThread, execution }],
+      };
+
+      const next = applyShellStreamEvent(snapshotWithExecution, {
+        kind: "thread-upserted",
+        sequence: 5,
+        thread: { ...stubThread, title: "Updated while running" },
+      });
+
+      expect(next.threads[0]?.title).toBe("Updated while running");
+      expect(next.threads[0]?.execution).toEqual(execution);
+    });
+
+    // T3-CUSTOM(expbkt3): the overlay is preserved across upserts, so it needs a
+    // way out. Execution frames are live-only and never replayed, so a client
+    // that was away when the turn ended would otherwise pin "Running" forever.
+    it("drops a preserved overlay once the upsert reports its turn finished", () => {
+      const runningExecution = {
+        threadId: stubThread.id,
+        authorityEpoch: "epoch-1",
+        revision: 2,
+        observedAt: "2026-04-01T00:00:01.000Z",
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          state: "ready" as const,
+          generation: 1,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          startedAt: "2026-04-01T00:00:00.000Z",
+          lastObservedAt: "2026-04-01T00:00:01.000Z",
+          lastError: null,
+        },
+        turn: {
+          executionId: "execution-1",
+          providerTurnId: TurnId.make("turn-1"),
+          state: "running" as const,
+          startedAt: "2026-04-01T00:00:01.000Z",
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const snapshotWithExecution: OrchestrationShellSnapshot = {
+        ...baseSnapshot,
+        threads: [{ ...stubThread, execution: runningExecution }],
+      };
+      const finishedTurn = {
+        turnId: TurnId.make("turn-1"),
+        state: "completed" as const,
+        requestedAt: "2026-04-01T00:00:01.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:09.000Z",
+        assistantMessageId: null,
+        durationMs: 8_000,
+      };
+
+      const next = applyShellStreamEvent(snapshotWithExecution, {
+        kind: "thread-upserted",
+        sequence: 5,
+        thread: { ...stubThread, latestTurn: finishedTurn },
+      });
+
+      expect(next.threads[0]?.execution).toBeUndefined();
+    });
+
+    it("keeps the overlay when the upsert describes a different turn", () => {
+      const execution = {
+        threadId: stubThread.id,
+        authorityEpoch: "epoch-1",
+        revision: 3,
+        observedAt: "2026-04-01T00:01:00.000Z",
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          state: "ready" as const,
+          generation: 1,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          startedAt: "2026-04-01T00:00:00.000Z",
+          lastObservedAt: "2026-04-01T00:01:00.000Z",
+          lastError: null,
+        },
+        turn: {
+          executionId: "execution-2",
+          providerTurnId: TurnId.make("turn-2"),
+          state: "running" as const,
+          startedAt: "2026-04-01T00:01:00.000Z",
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const snapshotWithExecution: OrchestrationShellSnapshot = {
+        ...baseSnapshot,
+        threads: [{ ...stubThread, execution }],
+      };
+
+      // The projection still reports the PREVIOUS turn as completed; that says
+      // nothing about the newer turn the overlay is tracking.
+      const next = applyShellStreamEvent(snapshotWithExecution, {
+        kind: "thread-upserted",
+        sequence: 6,
+        thread: {
+          ...stubThread,
+          latestTurn: {
+            turnId: TurnId.make("turn-1"),
+            state: "completed" as const,
+            requestedAt: "2026-04-01T00:00:01.000Z",
+            startedAt: "2026-04-01T00:00:01.000Z",
+            completedAt: "2026-04-01T00:00:09.000Z",
+            assistantMessageId: null,
+            durationMs: 8_000,
+          },
+        },
+      });
+
+      expect(next.threads[0]?.execution).toEqual(execution);
     });
   });
 

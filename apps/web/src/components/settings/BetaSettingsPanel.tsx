@@ -60,11 +60,30 @@ export function BetaSettingsPanel() {
   const sidebarAutoSettleAfterDays = useClientSettings(
     (settings) => settings.sidebarAutoSettleAfterDays,
   );
+  const planModeEnabled = useClientSettings((settings) => settings.planModeEnabled);
   const updateSettings = useUpdateClientSettings();
+  // T3-CUSTOM(expbkt3): BEGIN — native plan review.
+  const nativePlanReviewEnabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
+  // T3-CUSTOM(expbkt3): END
 
   return (
     <SettingsPageContainer>
       <SettingsSection title="Beta features">
+        {/* T3-CUSTOM(expbkt3): BEGIN — native plan review. */}
+        <SettingsRow
+          {...searchableSetting("native-plan-review")}
+          description="Review proposed plans in a side panel: comment on exact lines, edit the plan with tracked changes, and step through every version with its author. Approving sends a short acknowledgement instead of repeating the whole plan. While off, plan review goes through Plannotator only."
+          control={
+            <Switch
+              checked={nativePlanReviewEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ nativePlanReviewEnabled: Boolean(checked) })
+              }
+              aria-label="Native plan review"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
         <SettingsRow
           {...searchableSetting("sidebar-v2")}
           description="One flat thread list in creation order. Active work renders as rich cards; settled threads collapse to compact rows. Settling requires an up-to-date server — on older servers threads simply stay active. Switch back any time."
@@ -114,6 +133,17 @@ export function BetaSettingsPanel() {
             ) : null}
           </>
         ) : null}
+        <SettingsRow
+          {...searchableSetting("restore-plan-mode")}
+          description="Legacy feature. Brings back the Build/Plan toggle in the composer along with the /plan and /default commands and the Shift+Tab shortcut. While off, every thread runs in build mode."
+          control={
+            <Switch
+              checked={planModeEnabled}
+              onCheckedChange={(checked) => updateSettings({ planModeEnabled: Boolean(checked) })}
+              aria-label="Restore plan mode (legacy)"
+            />
+          }
+        />
       </SettingsSection>
     </SettingsPageContainer>
   );

@@ -2,6 +2,9 @@ import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+// T3-CUSTOM(expbkt3): BEGIN - share the manifest version with connection metadata.
+import { MOBILE_APP_VERSION } from "./app-version.ts";
+// T3-CUSTOM(expbkt3): END
 
 type AppVariant = "development" | "preview" | "production";
 
@@ -160,8 +163,10 @@ const config: ExpoConfig = {
   name: variant.appName,
   slug: "t3-code",
   platforms: ["ios", "android"],
+  // T3-CUSTOM(expbkt3): BEGIN - report the exact native version to connected servers.
   scheme: variant.scheme,
-  version: "1.0.1",
+  version: MOBILE_APP_VERSION,
+  // T3-CUSTOM(expbkt3): END
   runtimeVersion: {
     // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
     // project — native deps, config plugins, AND patches/ — matches the update.

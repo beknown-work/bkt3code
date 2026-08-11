@@ -5,6 +5,8 @@ import {
   PairingPendingSurface,
   PairingRouteSurface,
 } from "../components/auth/PairingRouteSurface";
+import { ClerkSignInGate } from "../components/auth/ClerkSignInGate";
+import { hasClerkPublicConfig } from "../cloud/publicConfig";
 
 export const Route = createFileRoute("/pair")({
   beforeLoad: async ({ context }) => {
@@ -36,6 +38,18 @@ function PairRouteView() {
 
   if (authGateState.status === "hosted-pairing") {
     return <HostedPairingRouteSurface />;
+  }
+
+  // Team mode: when the server advertises Clerk sign-in and a publishable key is
+  // configured, use the Clerk gate instead of the pairing-token surface.
+  if (authGateState.auth.bootstrapMethods.includes("clerk-session") && hasClerkPublicConfig()) {
+    return (
+      <ClerkSignInGate
+        onAuthenticated={() => {
+          void navigate({ to: "/", replace: true });
+        }}
+      />
+    );
   }
 
   return (

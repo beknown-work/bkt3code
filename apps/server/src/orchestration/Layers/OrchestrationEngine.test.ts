@@ -6,6 +6,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  UserId,
   type OrchestrationEvent,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -17,9 +18,14 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
+import {
+  DurableExecutionIntentRepository,
+  DurableExecutionIntentRepositoryLive,
+} from "../../execution/DurableExecutionIntentRepository.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -32,6 +38,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -55,20 +62,28 @@ async function createOrchestrationSystem() {
       Layer.provide(OrchestrationProjectionPipelineLive),
     ),
     OrchestrationProjectionSnapshotQueryLive,
+    DurableExecutionIntentRepositoryLive,
   ).pipe(
     Layer.provide(ThreadBackgroundLiveness.layer),
+    Layer.provide(ThreadPlanProgress.layer),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
   const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+  const intentRepository = await runtime.runPromise(
+    Effect.service(DurableExecutionIntentRepository),
+  );
+  const sql = await runtime.runPromise(Effect.service(SqlClient.SqlClient));
   return {
     engine,
+    intentRepository,
+    sql,
     readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
@@ -91,6 +106,161 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it("atomically accepts exact durable turn intent and deduplicates command retries", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-durable-project"),
+        projectId: asProjectId("project-durable"),
+        title: "Durable project",
+        workspaceRoot: "/tmp/project-durable",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-durable-thread"),
+        threadId: ThreadId.make("thread-durable"),
+        projectId: asProjectId("project-durable"),
+        title: "Durable thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        sourceControlProfileId: null,
+        createdAt,
+      }),
+    );
+
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId: CommandId.make("cmd-durable-turn"),
+      threadId: ThreadId.make("thread-durable"),
+      message: {
+        messageId: MessageId.make("message-durable-turn"),
+        role: "user" as const,
+        text: "persist this exactly",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+      runtimeMode: "full-access" as const,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      bootstrap: { runSetupScript: true },
+      createdAt,
+    };
+
+    const first = await system.run(
+      system.engine.dispatch(command, { actorUserId: UserId.make("user-durable") }),
+    );
+    const duplicate = await system.run(
+      system.engine.dispatch(command, { actorUserId: UserId.make("user-durable") }),
+    );
+    expect(duplicate).toEqual(first);
+
+    const intent = await system.run(
+      system.intentRepository.getByWorkItemId({ workItemId: command.commandId }),
+    );
+    expect(Option.isSome(intent)).toBe(true);
+    if (Option.isSome(intent)) {
+      expect(intent.value.messageText).toBe("persist this exactly");
+      expect(intent.value.modelSelection).toEqual(command.modelSelection);
+      expect(intent.value.bootstrap).toEqual(command.bootstrap);
+      expect(intent.value.actingUserId).toBe("user-durable");
+      expect(intent.value.desiredState).toBe("running");
+      expect(intent.value.phase).toBe("queued");
+    }
+    const rows = await system.run(
+      system.intentRepository.listByThreadId({ threadId: command.threadId }),
+    );
+    expect(rows).toHaveLength(1);
+    await system.dispose();
+  });
+
+  it("rolls back message, events, receipt, and intent when durable intent persistence fails", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-rollback-project"),
+        projectId: asProjectId("project-rollback"),
+        title: "Rollback project",
+        workspaceRoot: "/tmp/project-rollback",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-rollback-thread"),
+        threadId: ThreadId.make("thread-rollback"),
+        projectId: asProjectId("project-rollback"),
+        title: "Rollback thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        sourceControlProfileId: null,
+        createdAt,
+      }),
+    );
+    await system.run(system.sql`
+      CREATE TRIGGER fail_durable_intent_insert
+      BEFORE INSERT ON projection_thread_execution_intents
+      BEGIN
+        SELECT RAISE(ABORT, 'injected durable intent failure');
+      END
+    `);
+
+    const commandId = CommandId.make("cmd-rollback-turn");
+    const messageId = MessageId.make("message-rollback-turn");
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.turn.start",
+          commandId,
+          threadId: ThreadId.make("thread-rollback"),
+          message: { messageId, role: "user", text: "must all roll back", attachments: [] },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow();
+
+    const counts = await system.run(system.sql<{
+      readonly events: number;
+      readonly messages: number;
+      readonly receipts: number;
+      readonly intents: number;
+    }>`
+      SELECT
+        (SELECT COUNT(*) FROM orchestration_events WHERE command_id = ${commandId}) AS events,
+        (SELECT COUNT(*) FROM projection_thread_messages WHERE message_id = ${messageId}) AS messages,
+        (SELECT COUNT(*) FROM orchestration_command_receipts WHERE command_id = ${commandId}) AS receipts,
+        (SELECT COUNT(*) FROM projection_thread_execution_intents WHERE command_id = ${commandId}) AS intents
+    `);
+    expect(counts[0]).toEqual({ events: 0, messages: 0, receipts: 0, intents: 0 });
+    await system.dispose();
+  });
+
   it("bootstraps command handling from persisted projections without reading the full snapshot", async () => {
     let nextSequence = 8;
     const eventStore: OrchestrationEventStoreShape = {
@@ -129,6 +299,8 @@ describe("OrchestrationEngine", () => {
           createdAt: "2026-03-03T00:00:00.000Z",
           updatedAt: "2026-03-03T00:00:01.000Z",
           deletedAt: null,
+          ownerUserId: null,
+          memberUserIds: [],
         },
       ],
       threads: [
@@ -144,6 +316,7 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "full-access" as const,
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           latestTurn: null,
           createdAt: "2026-03-03T00:00:02.000Z",
           updatedAt: "2026-03-03T00:00:03.000Z",
@@ -155,7 +328,11 @@ describe("OrchestrationEngine", () => {
           proposedPlans: [],
           activities: [],
           checkpoints: [],
+          rollingSummary: null,
+          turnSummaries: [],
           session: null,
+          ownerUserId: null,
+          memberUserIds: [],
         },
       ],
     };
@@ -167,6 +344,8 @@ describe("OrchestrationEngine", () => {
         proposedPlans: [],
         activities: [],
         checkpoints: [],
+        rollingSummary: null,
+        turnSummaries: [],
       })),
     };
     let fullSnapshotReadCount = 0;
@@ -180,6 +359,9 @@ describe("OrchestrationEngine", () => {
               fullSnapshotReadCount += 1;
               return projectionSnapshot;
             }),
+          // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
+          getSessionListDetails: () => Effect.succeed([]),
+          listLatestProposedPlansForActiveThreads: () => Effect.succeed([]),
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: projectionSnapshot.snapshotSequence,
@@ -202,7 +384,9 @@ describe("OrchestrationEngine", () => {
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),
           getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+          getThreadAccessById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
+          listThreadShellsByProjectId: () => Effect.succeed([]),
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
           searchThreads: () => Effect.succeed({ matches: [] }),
@@ -274,6 +458,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -334,6 +519,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "full-access",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -427,6 +613,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -495,6 +682,7 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         });
         yield* engine.dispatch({
@@ -546,6 +734,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: "t3code/generated-branch-name",
         worktreePath: "/tmp/project-branch-race-worktree",
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -599,6 +788,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: "main",
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -653,6 +843,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "full-access",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -690,6 +881,7 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         }),
       ),
@@ -741,6 +933,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -820,6 +1013,7 @@ describe("OrchestrationEngine", () => {
       OrchestrationEngineLive.pipe(
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
         Layer.provide(OrchestrationProjectionPipelineLive),
         Layer.provide(Layer.succeed(OrchestrationEventStore, flakyStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
@@ -863,6 +1057,7 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         }),
       ),
@@ -883,6 +1078,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -926,6 +1122,7 @@ describe("OrchestrationEngine", () => {
       OrchestrationEngineLive.pipe(
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
         Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
@@ -966,6 +1163,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1070,6 +1268,7 @@ describe("OrchestrationEngine", () => {
       OrchestrationEngineLive.pipe(
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
         Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
@@ -1110,6 +1309,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1198,6 +1398,7 @@ describe("OrchestrationEngine", () => {
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         createdAt,
       }),
     );
@@ -1218,6 +1419,7 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         }),
       ),

@@ -29,7 +29,14 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  InterruptAcknowledgement,
+  ProviderAdapterCapabilities,
+  ProviderSessionInspection,
+  ProviderSessionExecutionOptions,
+  ProviderThreadSnapshot,
+  VerifiedTermination,
+} from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
 
 /**
@@ -42,6 +49,7 @@ export interface ProviderServiceShape {
   readonly startSession: (
     threadId: ThreadId,
     input: ProviderSessionStartInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
   /**
@@ -49,6 +57,7 @@ export interface ProviderServiceShape {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
@@ -56,13 +65,33 @@ export interface ProviderServiceShape {
    */
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  readonly inspectSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionInspection | null, ProviderServiceError>;
+
+  /** T3-CUSTOM(expbkt3): durable recovery proves terminal provider turns before continuing. */
+  readonly readThread?: (
+    threadId: ThreadId,
+    options?: ProviderSessionExecutionOptions,
+  ) => Effect.Effect<ProviderThreadSnapshot, ProviderServiceError>;
+
+  readonly requestTurnInterrupt: (
+    input: ProviderInterruptTurnInput,
+  ) => Effect.Effect<InterruptAcknowledgement, ProviderServiceError>;
+
+  readonly terminateSession: (
+    input: ProviderStopSessionInput,
+  ) => Effect.Effect<VerifiedTermination, ProviderServiceError>;
 
   /**
    * Respond to a provider approval request.
    */
   readonly respondToRequest: (
     input: ProviderRespondToRequestInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -70,6 +99,7 @@ export interface ProviderServiceShape {
    */
   readonly respondToUserInput: (
     input: ProviderRespondToUserInputInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
@@ -100,10 +130,13 @@ export interface ProviderServiceShape {
   /**
    * Roll back provider conversation state by a number of turns.
    */
-  readonly rollbackConversation: (input: {
-    readonly threadId: ThreadId;
-    readonly numTurns: number;
-  }) => Effect.Effect<void, ProviderServiceError>;
+  readonly rollbackConversation: (
+    input: {
+      readonly threadId: ThreadId;
+      readonly numTurns: number;
+    },
+    options?: ProviderSessionExecutionOptions,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

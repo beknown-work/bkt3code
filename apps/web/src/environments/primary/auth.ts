@@ -21,10 +21,17 @@ import {
 
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 import { runPrimaryHttp } from "../../lib/runtime";
+import { readManagedClerkIdentityToken } from "../../cloud/managedIdentity";
+// T3-CUSTOM(expbkt3): identify the direct hosted build in server diagnostics.
+import { APP_VERSION } from "../../branding";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
+  // T3-CUSTOM(expbkt3): Web logout revokes the current environment session.
+  "logout-current-session",
   "exchange-bootstrap-credential",
+  "exchange-clerk-session",
+  "bind-current-identity",
   "fetch-environment-descriptor",
   "create-pairing-credential",
   "list-pairing-links",
@@ -129,6 +136,7 @@ export interface ServerPairingLinkRecord {
 
 export interface ServerClientSessionRecord {
   readonly sessionId: AuthSessionId;
+  readonly userId: string | null;
   readonly subject: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly method: ServerAuthSessionMethod;
@@ -203,6 +211,26 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
   });
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — terminate the server cookie session before Clerk signs out.
+export async function logoutPrimaryEnvironment(): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.logout({ headers: {} })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "logout-current-session",
+      cause: error,
+    });
+  }
+
+  resolvedAuthenticatedGateState = null;
+  bootstrapPromise = null;
+}
+// T3-CUSTOM(expbkt3): END
+
 function readHttpApiStatus(error: unknown): number | null {
   if (isEnvironmentHttpCommonError(error)) {
     return readEnvironmentHttpErrorStatus(error);
@@ -231,9 +259,18 @@ function readEnvironmentHttpErrorStatus(error: EnvironmentHttpCommonErrorType): 
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBrowserSessionResult> {
   return retryTransientBootstrap(async () => {
     try {
+      const identityToken = await readManagedClerkIdentityToken();
       return await runPrimaryHttp(
         PrimaryEnvironmentHttpClient.pipe(
-          Effect.flatMap((client) => client.auth.browserSession({ payload: { credential } })),
+          Effect.flatMap((client) =>
+            client.auth.browserSession({
+              payload: {
+                credential,
+                client_version: APP_VERSION,
+                ...(identityToken ? { identityToken } : {}),
+              },
+            }),
+          ),
         ),
       );
     } catch (error) {
@@ -253,6 +290,86 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
       });
     }
   });
+}
+
+/**
+ * A valid Clerk token for someone outside the configured organization — the
+ * gate surfaces this distinctly ("not a member — try a different account").
+ */
+export class PrimaryEnvironmentClerkNotMemberError extends Schema.TaggedErrorClass<PrimaryEnvironmentClerkNotMemberError>()(
+  "PrimaryEnvironmentClerkNotMemberError",
+  {
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+async function exchangeClerkSession(token: string): Promise<AuthBrowserSessionResult> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.auth.clerkSession({ payload: { token, client_version: APP_VERSION } }),
+        ),
+      ),
+    );
+  } catch (error) {
+    // Non-org-member ⇒ 403 forbidden; distinguish from a retryable failure.
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "_tag" in error &&
+      (error as { _tag?: unknown })._tag === "EnvironmentHttpForbiddenError"
+    ) {
+      const detail =
+        "message" in error && typeof (error as { message?: unknown }).message === "string"
+          ? (error as { message: string }).message
+          : "This account is not a member of the workspace organization.";
+      throw new PrimaryEnvironmentClerkNotMemberError({ detail });
+    }
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "exchange-clerk-session",
+      cause: error,
+    });
+  }
+}
+
+export async function bindPrimaryEnvironmentClerkIdentity(identityToken: string): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.auth.bindIdentity({
+            headers: {},
+            payload: { identityToken },
+          }),
+        ),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "bind-current-identity",
+      cause: error,
+    });
+  }
+}
+
+/**
+ * Exchange a verified Clerk session token for a browser-session cookie, then
+ * clear the auth gate caches so the app re-resolves as authenticated.
+ */
+export async function submitClerkSessionToken(token: string): Promise<void> {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    throw new PrimaryEnvironmentClerkNotMemberError({ detail: "Missing Clerk session token." });
+  }
+  resolvedAuthenticatedGateState = null;
+  await exchangeClerkSession(trimmed);
+  await waitForAuthenticatedSessionAfterBootstrap();
+  bootstrapPromise = null;
 }
 
 async function waitForAuthenticatedSessionAfterBootstrap(): Promise<AuthSessionState> {
@@ -321,6 +438,20 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   const bootstrapCredential = getDesktopBootstrapCredential();
   const currentSession = await fetchSessionState();
   if (currentSession.authenticated) {
+    const identityToken = await readManagedClerkIdentityToken();
+    if (identityToken) {
+      try {
+        await bindPrimaryEnvironmentClerkIdentity(identityToken);
+      } catch (error) {
+        // T3-CUSTOM(expbkt3): Recover through the Clerk sign-in exchange instead of
+        // crashing the root route when a stale or incompatible identity token is rejected.
+        return {
+          status: "requires-auth",
+          auth: currentSession.auth,
+          errorMessage: error instanceof Error ? error.message : "Authentication failed.",
+        };
+      }
+    }
     return { status: "authenticated" };
   }
 
@@ -452,6 +583,7 @@ export async function listServerClientSessions(): Promise<
     );
     return clientSessions.map((clientSession) => ({
       sessionId: clientSession.sessionId,
+      userId: clientSession.userId,
       subject: clientSession.subject,
       scopes: clientSession.scopes,
       method: clientSession.method,

@@ -9,6 +9,9 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  BellIcon,
+  FolderCogIcon,
+  UsersIcon,
   ArrowLeftIcon,
   BotIcon,
   FlaskConicalIcon,
@@ -35,6 +38,9 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
+// T3-CUSTOM(expbkt3): Keep account logout available while the settings sidebar replaces chrome.
+import { WebLogoutControl } from "../clerk/WebLogoutControl";
+import { useIsTeamAdmin } from "../../state/orgMembers";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -51,7 +57,13 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/providers": BotIcon,
   "/settings/source-control": GitBranchIcon,
+  "/settings/users": UsersIcon,
   "/settings/connections": Link2Icon,
+  // T3-CUSTOM(expbkt3): fork-only settings sections.
+  "/settings/notifications": BellIcon,
+  "/settings/projects": FolderCogIcon,
+  "/settings/project-access": UsersIcon,
+  "/settings/experiments": FlaskConicalIcon,
   "/settings/beta": FlaskConicalIcon,
   "/settings/archived": ArchiveIcon,
 };
@@ -76,6 +88,14 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
+  // T3-CUSTOM(expbkt3): Project Access is an admin-only section; upstream
+  // derives the nav from the section registry, so filter it here.
+  const isTeamAdmin = useIsTeamAdmin();
+  const visibleNavItems = useMemo(
+    () =>
+      SETTINGS_NAV_ITEMS.filter((item) => item.to !== "/settings/project-access" || isTeamAdmin),
+    [isTeamAdmin],
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
@@ -279,7 +299,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))
-              : SETTINGS_NAV_ITEMS.map((item) => {
+              : visibleNavItems.map((item) => {
                   const Icon = item.icon;
                   const isActive = pathname === item.to;
                   return (
@@ -299,6 +319,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
         <T3ConnectSidebarSignIn />
+        {/* T3-CUSTOM(expbkt3): Keep logout in Settings instead of the main thread sidebar. */}
+        <WebLogoutControl />
         <div className="flex items-center gap-1">
           <SidebarMenu className="min-w-0 flex-1">
             <SidebarMenuItem>

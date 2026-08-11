@@ -35,6 +35,8 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -107,7 +109,12 @@ interface GrokSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  // T3-CUSTOM(expbkt3): persisted history carries explicit terminal evidence.
+  turns: Array<{
+    id: TurnId;
+    items: Array<unknown>;
+    state: "completed" | "interrupted";
+  }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
   /** Turns already interrupted; late prompt RPCs must not resurrect them. */
@@ -146,14 +153,15 @@ function appendPromptResultToTurn(
   promptParts: ReadonlyArray<EffectAcpSchema.ContentBlock>,
   result: EffectAcpSchema.PromptResponse,
 ): void {
+  const state = result.stopReason === "cancelled" ? "interrupted" : "completed";
   const existingTurnRecord = ctx.turns.find((turn) => turn.id === turnId);
   ctx.turns = existingTurnRecord
     ? ctx.turns.map((turn) =>
         turn.id === turnId
-          ? { ...turn, items: [...turn.items, { prompt: promptParts, result }] }
+          ? { ...turn, items: [...turn.items, { prompt: promptParts, result }], state }
           : turn,
       )
-    : [...ctx.turns, { id: turnId, items: [{ prompt: promptParts, result }] }];
+    : [...ctx.turns, { id: turnId, items: [{ prompt: promptParts, result }], state }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -516,7 +524,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+        yield* Scope.close(ctx.scope, Exit.void);
+        if (yield* ctx.acp.isProcessAlive) {
+          return yield* Effect.die(
+            new Error(`Grok process tree for thread '${ctx.threadId}' remained alive after close.`),
+          );
+        }
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent({
           type: "session.exited",
@@ -525,9 +538,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           threadId: ctx.threadId,
           payload: { exitKind: "graceful" },
         });
-      });
+      }).pipe(Effect.onError(() => Effect.sync(() => (ctx.stopped = false))));
 
-    const startSession: GrokAdapterShape["startSession"] = (input) =>
+    const startSession: GrokAdapterShape["startSession"] = (input, executionOptions) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -570,9 +583,15 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           });
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const sessionEnvironment = executionOptions?.environment
+            ? mergeSourceControlEnvironment(
+                options?.environment ?? process.env,
+                executionOptions.environment,
+              )
+            : options?.environment;
           const acp = yield* makeGrokAcpRuntime({
             grokSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
@@ -591,6 +610,17 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                         },
                       ],
                     },
+                    ...mcpSession.upstreamServers.map((server) => ({
+                      type: "http" as const,
+                      name: McpProviderSession.upstreamMcpServerName(server),
+                      url: server.endpoint,
+                      headers: [
+                        {
+                          name: "Authorization",
+                          value: mcpSession.authorizationHeader,
+                        },
+                      ],
+                    })),
                   ],
                 }
               : {}),
@@ -786,6 +816,30 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               Effect.gen(function* () {
                 if (event._tag === "EventStreamBarrier") {
                   yield* Deferred.succeed(event.acknowledge, undefined);
+                  return;
+                }
+                if (event._tag === "Exited") {
+                  // The agent process died. Nothing else in the ACP path reports
+                  // this, so without it the turn stays "running" forever.
+                  // Deliberately does not interrupt the notification fiber or
+                  // close the session scope — we are running inside that fiber;
+                  // a later stopSession/shutdown closes the scope.
+                  if (ctx.stopped) return;
+                  ctx.stopped = true;
+                  yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+                  yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+                  sessions.delete(ctx.threadId);
+                  yield* offerRuntimeEvent({
+                    type: "session.exited",
+                    ...(yield* makeEventStamp()),
+                    provider: PROVIDER,
+                    threadId: ctx.threadId,
+                    payload: {
+                      exitKind: event.exitCode === 0 ? "graceful" : "error",
+                      reason: `Grok agent process exited with code ${event.exitCode}.`,
+                      recoverable: false,
+                    },
+                  });
                   return;
                 }
                 if (
@@ -1444,9 +1498,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);
 
-    return {
+    const adapter = {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      // T3-CUSTOM(expbkt3): explicit busy-turn and resume behavior.
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      },
       startSession,
       sendTurn,
       interruptTurn,
@@ -1459,6 +1518,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       hasSession,
       stopAll,
       streamEvents,
-    } satisfies GrokAdapterShape;
+    } satisfies Omit<
+      GrokAdapterShape,
+      "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+    >;
+    return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies GrokAdapterShape;
   });
 }

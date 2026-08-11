@@ -8,6 +8,7 @@ import {
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
+  ThreadSourceControlProfileSetPayload as ContractsThreadSourceControlProfileSetPayloadSchema,
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
   ThreadUnarchivedPayload as ContractsThreadUnarchivedPayloadSchema,
   ThreadUnsettledPayload as ContractsThreadUnsettledPayloadSchema,
@@ -19,6 +20,8 @@ import {
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
   ThreadSessionSetPayload as ContractsThreadSessionSetPayloadSchema,
   ThreadTurnDiffCompletedPayload as ContractsThreadTurnDiffCompletedPayloadSchema,
+  ThreadCatchupSummaryUpdatedPayload as ContractsThreadCatchupSummaryUpdatedPayloadSchema,
+  ThreadCatchupSummaryRequestedPayload as ContractsThreadCatchupSummaryRequestedPayloadSchema,
   ThreadRevertedPayload as ContractsThreadRevertedPayloadSchema,
   ThreadActivityAppendedPayload as ContractsThreadActivityAppendedPayloadSchema,
   ThreadTurnStartRequestedPayload as ContractsThreadTurnStartRequestedPayloadSchema,
@@ -26,6 +29,18 @@ import {
   ThreadApprovalResponseRequestedPayload as ContractsThreadApprovalResponseRequestedPayloadSchema,
   ThreadCheckpointRevertRequestedPayload as ContractsThreadCheckpointRevertRequestedPayloadSchema,
   ThreadSessionStopRequestedPayload as ContractsThreadSessionStopRequestedPayloadSchema,
+  ThreadSessionRestartRequestedPayload as ContractsThreadSessionRestartRequestedPayloadSchema,
+  ThreadMemberAddedPayload as ContractsThreadMemberAddedPayloadSchema,
+  ThreadMemberRemovedPayload as ContractsThreadMemberRemovedPayloadSchema,
+  ThreadOwnerTransferredPayload as ContractsThreadOwnerTransferredPayloadSchema,
+  ProjectMemberAddedPayload as ContractsProjectMemberAddedPayloadSchema,
+  ProjectMemberRemovedPayload as ContractsProjectMemberRemovedPayloadSchema,
+  ProjectOwnerTransferredPayload as ContractsProjectOwnerTransferredPayloadSchema,
+  // T3-CUSTOM(expbkt3): additive durable bootstrap event schemas.
+  ThreadBootstrapRequestedPayload as ContractsThreadBootstrapRequestedPayloadSchema,
+  ThreadBootstrapStepUpdatedPayload as ContractsThreadBootstrapStepUpdatedPayloadSchema,
+  ThreadBootstrapControlRequestedPayload as ContractsThreadBootstrapControlRequestedPayloadSchema,
+  ThreadBootstrapCompletedPayload as ContractsThreadBootstrapCompletedPayloadSchema,
 } from "@t3tools/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
@@ -39,6 +54,8 @@ export const ThreadSettledPayload = ContractsThreadSettledPayloadSchema;
 export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
+export const ThreadSourceControlProfileSetPayload =
+  ContractsThreadSourceControlProfileSetPayloadSchema;
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
 export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;
 export const ThreadUnsettledPayload = ContractsThreadUnsettledPayloadSchema;
@@ -51,8 +68,16 @@ export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadProposedPlanUpsertedPayload = ContractsThreadProposedPlanUpsertedPayloadSchema;
 export const ThreadSessionSetPayload = ContractsThreadSessionSetPayloadSchema;
 export const ThreadTurnDiffCompletedPayload = ContractsThreadTurnDiffCompletedPayloadSchema;
+export const ThreadCatchupSummaryUpdatedPayload = ContractsThreadCatchupSummaryUpdatedPayloadSchema;
+export const ThreadCatchupSummaryRequestedPayload =
+  ContractsThreadCatchupSummaryRequestedPayloadSchema;
 export const ThreadRevertedPayload = ContractsThreadRevertedPayloadSchema;
 export const ThreadActivityAppendedPayload = ContractsThreadActivityAppendedPayloadSchema;
+export const ThreadBootstrapRequestedPayload = ContractsThreadBootstrapRequestedPayloadSchema;
+export const ThreadBootstrapStepUpdatedPayload = ContractsThreadBootstrapStepUpdatedPayloadSchema;
+export const ThreadBootstrapControlRequestedPayload =
+  ContractsThreadBootstrapControlRequestedPayloadSchema;
+export const ThreadBootstrapCompletedPayload = ContractsThreadBootstrapCompletedPayloadSchema;
 
 export const ThreadTurnStartRequestedPayload = ContractsThreadTurnStartRequestedPayloadSchema;
 export const ThreadTurnInterruptRequestedPayload =
@@ -62,3 +87,12 @@ export const ThreadApprovalResponseRequestedPayload =
 export const ThreadCheckpointRevertRequestedPayload =
   ContractsThreadCheckpointRevertRequestedPayloadSchema;
 export const ThreadSessionStopRequestedPayload = ContractsThreadSessionStopRequestedPayloadSchema;
+export const ThreadSessionRestartRequestedPayload =
+  ContractsThreadSessionRestartRequestedPayloadSchema;
+
+export const ThreadMemberAddedPayload = ContractsThreadMemberAddedPayloadSchema;
+export const ThreadMemberRemovedPayload = ContractsThreadMemberRemovedPayloadSchema;
+export const ThreadOwnerTransferredPayload = ContractsThreadOwnerTransferredPayloadSchema;
+export const ProjectMemberAddedPayload = ContractsProjectMemberAddedPayloadSchema;
+export const ProjectMemberRemovedPayload = ContractsProjectMemberRemovedPayloadSchema;
+export const ProjectOwnerTransferredPayload = ContractsProjectOwnerTransferredPayloadSchema;

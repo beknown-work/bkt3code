@@ -37,6 +37,8 @@ const readModel: OrchestrationReadModel = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
     {
       id: ProjectId.make("project-b"),
@@ -50,6 +52,8 @@ const readModel: OrchestrationReadModel = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
   ],
   threads: [
@@ -65,6 +69,7 @@ const readModel: OrchestrationReadModel = {
       runtimeMode: "full-access",
       branch: null,
       worktreePath: null,
+      sourceControlProfileId: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -76,7 +81,11 @@ const readModel: OrchestrationReadModel = {
       activities: [],
       proposedPlans: [],
       checkpoints: [],
+      rollingSummary: null,
+      turnSummaries: [],
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
     {
       id: ThreadId.make("thread-2"),
@@ -90,6 +99,7 @@ const readModel: OrchestrationReadModel = {
       runtimeMode: "full-access",
       branch: null,
       worktreePath: null,
+      sourceControlProfileId: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -101,7 +111,11 @@ const readModel: OrchestrationReadModel = {
       activities: [],
       proposedPlans: [],
       checkpoints: [],
+      rollingSummary: null,
+      turnSummaries: [],
       deletedAt: null,
+      ownerUserId: null,
+      memberUserIds: [],
     },
   ],
 };
@@ -153,26 +167,55 @@ describe("commandInvariants", () => {
 
   it("requires missing thread for create flows", async () => {
     await Effect.runPromise(
-      requireThreadAbsent({
-        readModel,
-        command: {
-          type: "thread.create",
-          commandId: CommandId.make("cmd-2"),
-          threadId: ThreadId.make("thread-3"),
-          projectId: ProjectId.make("project-a"),
-          title: "new",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: "gpt-5-codex",
+      Effect.all([
+        requireThreadAbsent({
+          readModel,
+          command: {
+            type: "thread.create",
+            commandId: CommandId.make("cmd-2"),
+            threadId: ThreadId.make("thread-3"),
+            projectId: ProjectId.make("project-a"),
+            title: "new",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            sourceControlProfileId: null,
+            createdAt: now,
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        },
-        threadId: ThreadId.make("thread-3"),
-      }),
+          threadId: ThreadId.make("thread-3"),
+        }),
+        requireThreadAbsent({
+          readModel: {
+            ...readModel,
+            threads: readModel.threads.map((thread) =>
+              thread.id === ThreadId.make("thread-1") ? { ...thread, deletedAt: now } : thread,
+            ),
+          },
+          command: {
+            type: "thread.create",
+            commandId: CommandId.make("cmd-4"),
+            threadId: ThreadId.make("thread-1"),
+            projectId: ProjectId.make("project-a"),
+            title: "retry after compensated bootstrap failure",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            sourceControlProfileId: null,
+            createdAt: now,
+          },
+          threadId: ThreadId.make("thread-1"),
+        }),
+      ]),
     );
 
     await expect(
@@ -193,6 +236,7 @@ describe("commandInvariants", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: now,
           },
           threadId: ThreadId.make("thread-1"),

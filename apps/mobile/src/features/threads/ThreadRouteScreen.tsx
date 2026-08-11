@@ -8,13 +8,18 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import {
+  requestOlderThreadTurns,
+  threadHasOlderTurns,
+} from "@t3tools/client-runtime/state/threads";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import { Platform, ScrollView, View } from "react-native";
+import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
+import { sourceControlEnvironment } from "../../state/sourceControl";
 
 import { EmptyState } from "../../components/EmptyState";
 import {
@@ -190,12 +195,28 @@ function ThreadRouteContent(
     useThreadSelection();
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  // "Load earlier turns" header state for windowed (paginated) thread loads.
+  const loadEarlierTurns = useMemo(() => {
+    if (selectedThread === null || !threadHasOlderTurns(selectedThreadDetailState)) {
+      return null;
+    }
+    return {
+      loading:
+        selectedThreadDetailState.page._tag === "Some" &&
+        selectedThreadDetailState.page.value.loadingOlder,
+      onLoadEarlier: () => {
+        requestOlderThreadTurns(selectedThread.environmentId, selectedThread.id);
+      },
+    };
+  }, [selectedThread, selectedThreadDetailState]);
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
-  const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const stopThreadExecution = useAtomCommand(threadEnvironment.stopExecution, "thread stop");
+  const retryThreadRecovery = useAtomCommand(threadEnvironment.restartSession, "retry recovery");
+  const dismissThreadRecovery = useAtomCommand(threadEnvironment.stopSession, "dismiss recovery");
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -262,6 +283,18 @@ function ThreadRouteContent(
     }, [props.renderInspector]),
   );
   const routeEnvironmentRuntime = useRemoteEnvironmentRuntime(environmentId);
+  const sourceControlProfilesQuery = useEnvironmentQuery(
+    environmentId === null ? null : sourceControlEnvironment.profiles({ environmentId, input: {} }),
+  );
+  // T3-CUSTOM(expbkt3): The header displays server-owned attribution state;
+  // changing GitHub identity requires transferring durable thread ownership.
+  const currentSourceControlProfile =
+    (sourceControlProfilesQuery.data?.profiles ?? []).find(
+      (profile) =>
+        profile.ownerUserId !== null &&
+        selectedThread?.ownerUserId != null &&
+        String(profile.ownerUserId) === String(selectedThread.ownerUserId),
+    ) ?? null;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeConnectionError = routeEnvironmentRuntime?.connectionError ?? null;
@@ -283,6 +316,7 @@ function ThreadRouteContent(
   const headerSubtitle = [
     selectedThreadProject?.title ?? null,
     selectedEnvironmentConnection?.environmentLabel ?? null,
+    currentSourceControlProfile ? `@${currentSourceControlProfile.login}` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -291,7 +325,7 @@ function ThreadRouteContent(
     selectedThread !== null && selectedThreadCwd !== null
       ? vcsEnvironment.status({
           environmentId: selectedThread.environmentId,
-          input: { cwd: selectedThreadCwd },
+          input: { cwd: selectedThreadCwd, threadId: selectedThread.id },
         })
       : null,
   );
@@ -314,7 +348,6 @@ function ThreadRouteContent(
     }
     onReconnectEnvironment(environmentId);
   }, [environmentId, onReconnectEnvironment]);
-
   /* ─── Git action progress (for overlay banner) ──────────────────── */
   const gitActionProgressTarget = useMemo(
     () => ({
@@ -461,23 +494,33 @@ function ThreadRouteContent(
     void navigation.navigate("Connections");
   }, [navigation]);
   const handleStopThread = useCallback(() => {
-    if (
-      !selectedThread ||
-      (selectedThread.session?.status !== "running" &&
-        selectedThread.session?.status !== "starting")
-    ) {
+    if (!selectedThread || selectedThread.execution?.canStop !== true) {
       return;
     }
-    return interruptThreadTurn({
+    return stopThreadExecution({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        ...(selectedThread.session.activeTurnId
-          ? { turnId: selectedThread.session.activeTurnId }
+        ...(selectedThread.execution.turn?.executionId
+          ? { expectedExecutionId: selectedThread.execution.turn.executionId }
           : {}),
       },
     });
-  }, [interruptThreadTurn, selectedThread]);
+  }, [stopThreadExecution, selectedThread]);
+  const handleRetryRecovery = useCallback(() => {
+    if (!selectedThread) return;
+    return retryThreadRecovery({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+  }, [retryThreadRecovery, selectedThread]);
+  const handleDismissRecovery = useCallback(() => {
+    if (!selectedThread) return;
+    return dismissThreadRecovery({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+  }, [dismissThreadRecovery, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -617,8 +660,16 @@ function ThreadRouteContent(
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
-  const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
-  const compactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  const baseThreadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
+  const baseCompactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  const threadCenterHeaderItems = useMemo<NativeHeaderItems>(
+    () => [...baseThreadCenterHeaderItems],
+    [baseThreadCenterHeaderItems],
+  );
+  const compactRightHeaderItems = useMemo<NativeHeaderItems>(
+    () => [...baseCompactRightHeaderItems],
+    [baseCompactRightHeaderItems],
+  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -755,6 +806,7 @@ function ThreadRouteContent(
           connectionError={routeConnectionError}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
           selectedThreadFeed={composer.selectedThreadFeed}
+          selectedThreadTurnSummaries={composer.selectedThreadTurnSummaries}
           activeWorkStartedAt={composer.activeWorkStartedAt}
           activePendingApproval={requests.activePendingApproval}
           respondingApprovalId={requests.respondingApprovalId}
@@ -766,11 +818,13 @@ function ThreadRouteContent(
           draftAttachments={composer.draftAttachments}
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
+          loadEarlier={loadEarlierTurns}
           activeThreadBusy={composer.activeThreadBusy}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
+          failedOutboxDetail={composer.failedOutboxDetail}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}
@@ -780,6 +834,10 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
+          onRetryRecovery={handleRetryRecovery}
+          onDismissRecovery={handleDismissRecovery}
+          onRetryFailedOutbox={composer.onRetryFailedOutboxMessage}
+          onEditFailedOutbox={composer.onEditFailedOutboxMessage}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}

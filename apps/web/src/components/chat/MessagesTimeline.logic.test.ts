@@ -276,6 +276,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -290,6 +291,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -304,6 +306,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -324,6 +327,130 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
   });
 
+  it("anchors the catch-up card to the terminal assistant message of its turn", () => {
+    // Regression: summaries were keyed by the assistant message id recorded when
+    // the summary was written, which is not the terminal message when a turn
+    // streams further assistant messages afterwards.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-interim-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:10Z",
+          message: {
+            id: "assistant-interim" as never,
+            role: "assistant",
+            text: "Working on it.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:10Z",
+            updatedAt: "2026-01-01T00:00:11Z",
+            streaming: false,
+            sentByUserId: null,
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "All done.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:30Z",
+            streaming: false,
+            sentByUserId: null,
+          },
+        },
+      ],
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      catchupSummaryByTurnId: new Map([
+        [
+          "turn-1" as never,
+          {
+            turnId: "turn-1" as never,
+            // Deliberately an earlier, non-terminal message id.
+            assistantMessageId: "assistant-interim" as never,
+            summary: "Shipped the card.\nRemains: verify in prod.",
+            status: "ready" as const,
+            createdAt: "2026-01-01T00:00:25Z",
+          },
+        ],
+      ]),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const assistantRows = rows.filter(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+
+    expect(assistantRows).toHaveLength(2);
+    expect(assistantRows[0]?.assistantCatchupSummary).toBeUndefined();
+    expect(assistantRows[1]?.assistantCatchupSummary?.summary).toBe(
+      "Shipped the card.\nRemains: verify in prod.",
+    );
+  });
+
+  it("keeps the catch-up card attached while the turn still reads as in progress", () => {
+    // Regression: the card used to be gated on showAssistantMeta, which is
+    // withheld for an unsettled turn. On reload latestTurn briefly hydrates as
+    // unsettled, so the newest card vanished and the note appeared to jump to
+    // an older turn.
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "assistant-final-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant",
+            text: "All done.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:30Z",
+            streaming: false,
+            sentByUserId: null,
+          },
+        },
+      ],
+      // Turn reads as unsettled, as it momentarily does during hydration.
+      runningTurnId: "turn-1" as never,
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      catchupSummaryByTurnId: new Map([
+        [
+          "turn-1" as never,
+          {
+            turnId: "turn-1" as never,
+            assistantMessageId: "assistant-final" as never,
+            summary: "Still visible.",
+            status: "ready" as const,
+            createdAt: "2026-01-01T00:00:25Z",
+          },
+        ],
+      ]),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const assistantRow = rows.find(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+
+    // Metadata row stays withheld, but the card does not.
+    expect(assistantRow?.showAssistantMeta).toBe(false);
+    expect(assistantRow?.assistantCatchupSummary?.summary).toBe("Still visible.");
+    expect(assistantRow?.assistantCatchupTurnId).toBe("turn-1");
+  });
+
   it("marks only the active assistant turn as streaming for copy controls", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -339,6 +466,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -353,6 +481,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -361,6 +490,7 @@ describe("deriveMessagesTimelineRows", () => {
         state: "running",
         startedAt: "2026-01-01T00:00:19Z",
         completedAt: null,
+        durationMs: null,
       },
       isWorking: false,
       activeTurnStartedAt: null,
@@ -402,6 +532,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -416,6 +547,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -454,6 +586,7 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
           streaming: false,
+          sentByUserId: null,
         },
       },
       {
@@ -468,6 +601,7 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt: "2026-01-01T00:00:05Z",
           updatedAt: "2026-01-01T00:00:06Z",
           streaming: false,
+          sentByUserId: null,
         },
       },
       {
@@ -494,6 +628,7 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt: "2026-01-01T00:00:20Z",
           updatedAt: "2026-01-01T00:00:22Z",
           streaming: false,
+          sentByUserId: null,
         },
       },
     ];
@@ -560,6 +695,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:00Z",
             updatedAt: "2026-01-01T00:00:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -574,6 +710,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:09Z",
             updatedAt: "2026-01-01T00:00:09Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -600,6 +737,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:14Z",
             updatedAt: "2026-01-01T00:00:14Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -614,6 +752,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:17Z",
             updatedAt: "2026-01-01T00:00:17Z",
             streaming: true,
+            sentByUserId: null,
           },
         },
       ],
@@ -622,6 +761,7 @@ describe("deriveMessagesTimelineRows", () => {
         state: "running",
         startedAt: "2026-01-01T00:00:14Z",
         completedAt: null,
+        durationMs: null,
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:14Z",
@@ -659,6 +799,7 @@ describe("deriveMessagesTimelineRows", () => {
         state: "interrupted",
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: "2026-01-01T00:00:47Z",
+        durationMs: null,
       },
       isWorking: false,
       activeTurnStartedAt: null,
@@ -705,6 +846,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:22Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -719,6 +861,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:01:00Z",
             updatedAt: "2026-01-01T00:01:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -727,9 +870,11 @@ describe("deriveMessagesTimelineRows", () => {
         state: "completed",
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: "2026-01-01T00:00:22Z",
+        durationMs: null,
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
+      workingStatusLabel: "Starting Codex session",
       turnDiffSummaryByAssistantMessageId: new Map(),
       revertTurnCountByUserMessageId: new Map(),
     });
@@ -742,6 +887,8 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
     const finalRow = rows.find((row) => row.id === "assistant-final-entry");
     expect(finalRow?.kind === "message" && finalRow.showAssistantMeta).toBe(true);
+    const workingRow = rows.find((row) => row.id === "working-indicator-row");
+    expect(workingRow?.kind === "working" && workingRow.label).toBe("Starting Codex session");
   });
 
   it("does not fold the active in-progress turn", () => {
@@ -759,6 +906,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:05Z",
             updatedAt: "2026-01-01T00:00:06Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -779,6 +927,7 @@ describe("deriveMessagesTimelineRows", () => {
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: null,
+        durationMs: null,
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
@@ -821,6 +970,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:01:00Z",
             updatedAt: "2026-01-01T00:01:00Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -841,6 +991,7 @@ describe("deriveMessagesTimelineRows", () => {
         state: "completed",
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: "2026-01-01T00:00:25Z",
+        durationMs: null,
       },
       runningTurnId: "turn-2" as never,
       isWorking: true,
@@ -870,6 +1021,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
         {
@@ -884,6 +1036,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -917,6 +1070,7 @@ describe("deriveMessagesTimelineRows", () => {
             createdAt: "2026-01-01T00:00:10Z",
             updatedAt: "2026-01-01T00:00:11Z",
             streaming: false,
+            sentByUserId: null,
           },
         },
       ],
@@ -925,6 +1079,7 @@ describe("deriveMessagesTimelineRows", () => {
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",
         completedAt: null,
+        durationMs: null,
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
@@ -1023,6 +1178,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
       streaming: false,
+      sentByUserId: null,
     };
     const secondUserMessage = {
       id: "user-2" as never,
@@ -1032,6 +1188,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:10Z",
       updatedAt: "2026-01-01T00:00:10Z",
       streaming: false,
+      sentByUserId: null,
     };
 
     const rows = deriveMessagesTimelineRows({
@@ -1128,6 +1285,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
       streaming: false,
+      sentByUserId: null,
     };
     const secondUserMessage = {
       id: "user-2" as never,
@@ -1137,6 +1295,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-01-01T00:00:10Z",
       updatedAt: "2026-01-01T00:00:10Z",
       streaming: false,
+      sentByUserId: null,
     };
 
     const firstRows = deriveMessagesTimelineRows({

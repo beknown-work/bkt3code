@@ -119,29 +119,51 @@ export function buildBulkTitleRegenerationContextMenuItem(input: {
 
 export interface ThreadStatusPill {
   label:
+    | "Planning"
+    | "Implementing"
     | "Working"
     | "Monitoring"
     | "Connecting"
+    | "Error"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "Checking agent status";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
 }
 
-// Rollup order mirrors the per-thread resolver exactly: attention states,
-// then active work, then the actionable plan prompt, then passive
-// monitoring. A Monitoring sibling must never hide a Plan Ready thread.
+export function canReconnectThreadSession(
+  thread: Pick<SidebarThreadSummary, "execution" | "session">,
+): boolean {
+  if (thread.session === null) return false;
+
+  const executionState = thread.execution?.providerSession.state;
+  if (executionState !== undefined) {
+    return (
+      executionState === "absent" || executionState === "stopped" || executionState === "failed"
+    );
+  }
+
+  return thread.session.status === "stopped" || thread.session.status === "error";
+}
+
+// Attention and failures lead, followed by active foreground work, actionable
+// plans, passive monitoring, and finally completed/checking states.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 6,
-  "Awaiting Input": 5,
+  "Pending Approval": 7,
+  Error: 7,
+  "Awaiting Input": 6,
+  Planning: 5,
+  Implementing: 5,
   Working: 4,
-  Connecting: 4,
+  Connecting: 5,
   "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
+  "Checking agent status": 0,
 };
 
 type ThreadStatusInput = Pick<
@@ -152,6 +174,7 @@ type ThreadStatusInput = Pick<
   | "interactionMode"
   | "latestTurn"
   | "session"
+  | "execution"
   | "backgroundLiveness"
 > & {
   lastVisitedAt?: string | undefined;
@@ -596,7 +619,16 @@ export function resolveThreadStatusPill(input: {
 }): ThreadStatusPill | null {
   const { thread } = input;
 
-  if (thread.hasPendingApprovals) {
+  if (thread.execution === null || thread.execution === undefined) {
+    return {
+      label: "Checking agent status",
+      colorClass: "text-muted-foreground",
+      dotClass: "bg-muted-foreground/60",
+      pulse: true,
+    };
+  }
+
+  if (thread.execution?.turn?.state === "waiting-for-approval") {
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
@@ -605,7 +637,7 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.hasPendingUserInput) {
+  if (thread.execution?.turn?.state === "waiting-for-input") {
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
@@ -614,16 +646,20 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.session?.status === "running") {
+  if (
+    thread.execution?.activity === "active" ||
+    thread.execution?.activity === "blocked" ||
+    thread.execution?.activity === "stopping"
+  ) {
     return {
-      label: "Working",
+      label: thread.interactionMode === "plan" ? "Planning" : "Implementing",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
     };
   }
 
-  if (thread.session?.status === "starting") {
+  if (thread.execution?.providerSession.state === "starting") {
     return {
       label: "Connecting",
       colorClass: "text-sky-600 dark:text-sky-300/80",
@@ -632,12 +668,21 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  if (thread.execution?.activity === "failed") {
+    return {
+      label: "Error",
+      colorClass: "text-destructive",
+      dotClass: "bg-destructive",
+      pulse: false,
+    };
+  }
+
   // An actionable plan prompt outranks lingering background work: it needs
   // the user's decision, while liveness merely reports (review finding).
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
     thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    isLatestTurnSettled(thread.latestTurn, thread.execution ?? null) &&
     thread.hasActionableProposedPlan;
   if (hasPlanReadyPrompt) {
     return {

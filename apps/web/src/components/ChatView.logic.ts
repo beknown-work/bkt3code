@@ -4,6 +4,7 @@ import {
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
+  type OrchestrationThreadActivity,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -23,10 +24,24 @@ import {
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
+export const MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS = 3;
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
+export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
+  const timeoutId = globalThis.setTimeout(showWarning, ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
+  return () => globalThis.clearTimeout(timeoutId);
+}
+
+export function hasEnvironmentReconnectWarningGraceElapsed(
+  activeEnvironmentId: EnvironmentId | null,
+  elapsedEnvironmentId: EnvironmentId | null,
+): boolean {
+  return activeEnvironmentId !== null && activeEnvironmentId === elapsedEnvironmentId;
+}
 
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,
@@ -36,6 +51,21 @@ export function startNewThreadForProject(
   void handleNewThread(projectRef);
 
   return true;
+}
+
+export function activeRuntimeWarningLabel(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  activeWorkStartedAt: string | null;
+  isWorking: boolean;
+}): string | null {
+  if (!input.isWorking || input.activeWorkStartedAt === null) {
+    return null;
+  }
+  const latestActivity = input.activities.at(-1);
+  return latestActivity?.kind === "runtime.warning" &&
+    latestActivity.createdAt >= input.activeWorkStartedAt
+    ? latestActivity.summary
+    : null;
 }
 
 export function resolveThreadMetadataUpdateForNextTurn(input: {
@@ -87,9 +117,14 @@ export function buildLocalDraftThread(
     settledAt: null,
     deletedAt: null,
     latestTurn: null,
+    ownerUserId: null,
+    memberUserIds: [],
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
+    sourceControlProfileId: null,
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     activities: [],
     proposedPlans: [],
   };
@@ -103,6 +138,9 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
     activities: [],
     checkpoints: [],
     deletedAt: null,
+    // T3-CUSTOM(expbkt3): catch-up summary fields the fork adds to Thread.
+    rollingSummary: null,
+    turnSummaries: [],
   };
 }
 
@@ -125,14 +163,15 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   );
 }
 
-export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
+export function buildStopExecutionInput(thread: Pick<Thread, "id" | "execution">): {
   threadId: ThreadId;
-  turnId?: TurnId;
+  expectedExecutionId?: string;
 } {
-  const runningTurnId = thread.session?.status === "running" ? thread.session.activeTurnId : null;
   return {
     threadId: thread.id,
-    ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
+    ...(thread.execution?.turn?.executionId
+      ? { expectedExecutionId: thread.execution.turn.executionId }
+      : {}),
   };
 }
 
@@ -149,6 +188,22 @@ export function reconcileMountedTerminalThreadIds(input: {
     activeThreadId: input.activeThreadId,
     activeThreadOpen: input.activeThreadTerminalOpen,
     maxHiddenThreadCount: input.maxHiddenThreadCount ?? MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  });
+}
+
+export function reconcileMountedPlannotatorThreadIds(input: {
+  currentThreadIds: ReadonlyArray<string>;
+  openThreadIds: ReadonlyArray<string>;
+  activeThreadId: string | null;
+  activeThreadPlannotatorOpen: boolean;
+  maxHiddenThreadCount?: number;
+}): string[] {
+  return reconcileRetainedMountedThreadIds({
+    currentThreadIds: input.currentThreadIds,
+    openThreadIds: input.openThreadIds,
+    activeThreadId: input.activeThreadId,
+    activeThreadOpen: input.activeThreadPlannotatorOpen,
+    maxHiddenThreadCount: input.maxHiddenThreadCount ?? MAX_HIDDEN_MOUNTED_PLANNOTATOR_THREADS,
   });
 }
 
@@ -244,6 +299,40 @@ export function resolveSendEnvMode(input: {
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
+export function resolveSendWorkspaceContext(input: {
+  isLocalDraftThread: boolean;
+  isGitRepo: boolean;
+  rendered: {
+    envMode: DraftThreadEnvMode;
+    branch: string | null;
+    worktreePath: string | null;
+  };
+  latestDraft: Pick<DraftThreadState, "envMode" | "branch" | "worktreePath"> | null;
+}): {
+  envMode: DraftThreadEnvMode;
+  branch: string | null;
+  worktreePath: string | null;
+} {
+  const selected =
+    input.isLocalDraftThread && input.latestDraft ? input.latestDraft : input.rendered;
+  return {
+    envMode: resolveSendEnvMode({
+      requestedEnvMode: selected.envMode,
+      isGitRepo: input.isGitRepo,
+    }),
+    branch: selected.branch,
+    worktreePath: selected.worktreePath,
+  };
+}
+
+export function shouldPrepareWorktreeForFirstTurn(input: {
+  isFirstMessage: boolean;
+  envMode: DraftThreadEnvMode;
+  worktreePath: string | null;
+}): boolean {
+  return input.isFirstMessage && input.envMode === "worktree" && input.worktreePath === null;
+}
+
 export function cloneComposerImageForRetry(
   image: ComposerImageAttachment,
 ): ComposerImageAttachment {
@@ -258,6 +347,18 @@ export function cloneComposerImageForRetry(
   } catch {
     return image;
   }
+}
+
+export function deriveOutboxSendGate(options: {
+  isLocalSendBusy: boolean;
+  hasPendingOutboxItem: boolean;
+  environmentConnected: boolean;
+}): boolean {
+  // While the environment is disconnected the outbox is a queue, not an
+  // in-flight turn: further sends must stay possible so messages can line up
+  // behind it. Once connected, a pending item means a dispatch/drain is
+  // actively running and the composer stays latched as before.
+  return options.isLocalSendBusy || (options.hasPendingOutboxItem && options.environmentConnected);
 }
 
 export function deriveComposerSendState(options: {
@@ -483,6 +584,8 @@ export interface LocalDispatchSnapshot {
   latestTurnRequestedAt: string | null;
   latestTurnStartedAt: string | null;
   latestTurnCompletedAt: string | null;
+  executionId: string | null;
+  executionRevision: number | null;
   sessionStatus: NonNullable<Thread["session"]>["status"] | null;
   sessionUpdatedAt: string | null;
 }
@@ -492,6 +595,7 @@ export function createLocalDispatchSnapshot(
   options?: { preparingWorktree?: boolean },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
+  const execution = activeThread?.execution ?? null;
   const session = activeThread?.session ?? null;
   const latestUserMessage = activeThread?.messages.findLast((message) => message.role === "user");
   return {
@@ -502,6 +606,8 @@ export function createLocalDispatchSnapshot(
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
     latestTurnCompletedAt: latestTurn?.completedAt ?? null,
+    executionId: execution?.turn?.executionId ?? null,
+    executionRevision: execution?.revision ?? null,
     sessionStatus: session?.status ?? null,
     sessionUpdatedAt: session?.updatedAt ?? null,
   };
@@ -511,6 +617,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   localDispatch: LocalDispatchSnapshot | null;
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
+  execution: Thread["execution"] | null;
   latestUserMessageId: ChatMessage["id"] | null;
   session: Thread["session"] | null;
   hasPendingApproval: boolean;
@@ -525,6 +632,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   }
 
   const latestTurn = input.latestTurn ?? null;
+  const execution = input.execution ?? null;
   const session = input.session ?? null;
   const latestUserMessageChanged =
     input.localDispatch.latestUserMessageId !== input.latestUserMessageId;
@@ -551,15 +659,24 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     if (
       session?.activeTurnId !== null &&
       session?.activeTurnId !== undefined &&
-      latestTurn?.turnId !== session.activeTurnId
+      latestTurn.turnId !== session.activeTurnId
     ) {
       return false;
     }
-    return true;
+    if (execution === null) {
+      return true;
+    }
+    return (
+      execution?.activity === "active" ||
+      execution?.activity === "blocked" ||
+      execution?.activity === "stopping"
+    );
   }
 
   return (
     latestTurnChanged ||
+    input.localDispatch.executionId !== (execution?.turn?.executionId ?? null) ||
+    input.localDispatch.executionRevision !== (execution?.revision ?? null) ||
     input.localDispatch.sessionStatus !== (session?.status ?? null) ||
     input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
   );

@@ -296,6 +296,67 @@ it.layer(
     }),
   );
 
+  // T3-CUSTOM(expbkt3): durable setup commands retain PTY interactivity and history.
+  it.effect("runs a one-shot command interactively and returns its real exit", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/bin/bash",
+      });
+      const completionFiber = yield* Effect.forkChild(
+        manager.runCommand({ ...openInput({ terminalId: "setup-1" }), command: "./setup.sh" }),
+      );
+      yield* waitFor(Effect.sync(() => ptyAdapter.processes.length === 1));
+
+      expect(ptyAdapter.spawnInputs[0]).toMatchObject({
+        shell: "/bin/bash",
+        args: ["-lc", "./setup.sh"],
+      });
+      ptyAdapter.processes[0]?.emitExit({ exitCode: 17, signal: 0 });
+
+      expect(yield* Fiber.join(completionFiber)).toEqual({
+        threadId: "thread-1",
+        terminalId: "setup-1",
+        exitCode: 17,
+        exitSignal: null,
+        error: null,
+      });
+    }),
+  );
+
+  it.effect("settles a one-shot command when the user stops its terminal", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/bin/bash",
+      });
+      const completionFiber = yield* Effect.forkChild(
+        manager.runCommand({ ...openInput({ terminalId: "setup-1" }), command: "./setup.sh" }),
+      );
+      yield* waitFor(Effect.sync(() => ptyAdapter.processes.length === 1));
+      yield* manager.stopCommand({
+        threadId: "thread-1",
+        terminalId: "setup-1",
+      });
+
+      expect(yield* Fiber.join(completionFiber)).toEqual({
+        threadId: "thread-1",
+        terminalId: "setup-1",
+        exitCode: null,
+        exitSignal: null,
+        error: "Terminal was stopped.",
+      });
+
+      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
+      const unsubscribe = yield* manager.attachStream(
+        { threadId: "thread-1", terminalId: "setup-1" },
+        (event) => Ref.update(attachEvents, (events) => [...events, event]),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      const snapshot = (yield* Ref.get(attachEvents)).find((event) => event.type === "snapshot");
+      expect(snapshot?.type === "snapshot" ? snapshot.snapshot.status : null).toBe("error");
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
   it.effect("attaches to running sessions without restarting them", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -967,6 +1028,30 @@ it.layer(
       const reopened = yield* manager.open(openInput());
       const nonEmptyLines = reopened.history.split("\n").filter((line) => line.length > 0);
       expect(nonEmptyLines).toEqual(["line2", "line3", "line4"]);
+    }),
+  );
+
+  it.effect("redacts injected GitHub credentials from terminal output and history", () =>
+    Effect.gen(function* () {
+      const credential = "github_pat_terminal_secret";
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      yield* manager.open(openInput({ env: { GH_TOKEN: credential } }));
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      process.emitData(`token=${credential}\n`);
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "output")),
+        "1200 millis",
+      );
+      yield* manager.close({ threadId: "thread-1" });
+
+      const outputEvent = (yield* getEvents).find((event) => event.type === "output");
+      expect(outputEvent).toMatchObject({ data: "token=[REDACTED]\n" });
+      const reopened = yield* manager.open(openInput({ env: { GH_TOKEN: credential } }));
+      expect(reopened.history).toContain("token=[REDACTED]");
+      expect(reopened.history).not.toContain(credential);
     }),
   );
 

@@ -45,6 +45,7 @@ import {
   flattenQueuedThreadMessages,
   threadOutboxManager,
   updateThreadOutboxMessage,
+  type QueuedThreadCreation,
   type QueuedThreadMessage,
 } from "../../state/thread-outbox";
 import {
@@ -154,7 +155,10 @@ type NewTaskFlowContextValue = {
   readonly beginEditingPendingTask: (messageId: string) => boolean;
   readonly finishEditingPendingTask: () => void;
   readonly cancelEditingPendingTask: () => void;
-  readonly buildPendingTaskMessage: (metadata: TurnCommandMetadata) => QueuedThreadMessage | null;
+  readonly buildPendingTaskMessage: (
+    metadata: TurnCommandMetadata,
+    sourceControlProfileId?: QueuedThreadCreation["sourceControlProfileId"],
+  ) => QueuedThreadMessage | null;
   readonly setPrompt: (value: string) => void;
   readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerImageAttachment>) => void;
   readonly appendAttachments: (attachments: ReadonlyArray<DraftComposerImageAttachment>) => void;
@@ -257,6 +261,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       scripts: [],
       createdAt: editingPendingTask.createdAt,
       updatedAt: editingPendingTask.createdAt,
+      ownerUserId: null,
+      memberUserIds: [],
     };
   }, [editingPendingTask]);
 
@@ -674,7 +680,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   }, []);
 
   const buildPendingTaskMessage = useCallback(
-    (metadata: TurnCommandMetadata): QueuedThreadMessage | null => {
+    (
+      metadata: TurnCommandMetadata,
+      sourceControlProfileId?: QueuedThreadCreation["sourceControlProfileId"],
+    ): QueuedThreadMessage | null => {
       if (!selectedProject || !selectedProjectDraftKey) {
         return null;
       }
@@ -727,6 +736,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           // drain with the same origin mode the composer displayed.
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
+            : {}),
+          ...((sourceControlProfileId ?? editingPendingTask?.creation?.sourceControlProfileId)
+            ? {
+                sourceControlProfileId:
+                  sourceControlProfileId ?? editingPendingTask?.creation?.sourceControlProfileId,
+              }
             : {}),
         },
         createdAt: metadata.createdAt,

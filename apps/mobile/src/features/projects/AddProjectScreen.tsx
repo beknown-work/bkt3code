@@ -560,6 +560,9 @@ function useCreateProject(environment: EnvironmentOption | null) {
       const command = buildProjectCreateCommand({
         commandId: CommandId.make(uuidv4()),
         projectId,
+        // T3-CUSTOM(expbkt3): the fork's create command carries an explicit
+        // title; upstream infers it from the path at this call site.
+        title: inferProjectTitleFromPath(workspaceRoot),
         workspaceRoot,
         createdAt: new Date().toISOString(),
       });
@@ -604,7 +607,6 @@ export function AddProjectRepositoryScreen(props: {
   const [repositoryInput, setRepositoryInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const lookupRepository = useCallback(async () => {
     if (!environment || repositoryInput.trim().length === 0 || isSubmitting) return;
     setError(null);
@@ -641,13 +643,15 @@ export function AddProjectRepositoryScreen(props: {
         params: {
           environmentId: environment.environmentId,
           source,
-          remoteUrl: repository.sshUrl,
+          // T3-CUSTOM(expbkt3): The server resolves the signed-in user's
+          // profile, so GitHub clone flows always use token-free HTTPS.
+          remoteUrl: provider === "github" ? repository.url : repository.sshUrl,
           repositoryTitle: repository.nameWithOwner,
         },
       });
     }
     setIsSubmitting(false);
-  }, [environment, isSubmitting, lookupRepositoryQuery, repositoryInput, navigation, source]);
+  }, [environment, isSubmitting, lookupRepositoryQuery, navigation, repositoryInput, source]);
 
   return (
     <AddProjectShell>
@@ -821,6 +825,7 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
 }
 
 export function AddProjectDestinationScreen(props: {
+  // T3-CUSTOM(expbkt3): The server resolves the acting user's GitHub profile.
   readonly environmentId?: string | string[];
   readonly remoteUrl?: string | string[];
   readonly repositoryTitle?: string | string[];

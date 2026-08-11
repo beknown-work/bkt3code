@@ -12,6 +12,7 @@ import type {
   SourceControlProviderDiscoveryItem,
   SourceControlProviderKind,
   SourceControlPublishRepositoryResult,
+  SourceControlProfileId,
   SourceControlRepositoryVisibility,
   VcsStatusResult,
 } from "@t3tools/contracts";
@@ -95,6 +96,8 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
+  actingProfileLogin?: string | null;
+  sourceControlProfileId?: SourceControlProfileId | null;
 }
 
 interface PendingDefaultBranchAction {
@@ -147,11 +150,15 @@ function requestVcsStatusRefresh(
   refresh: RefreshVcsStatus,
   environmentId: ScopedThreadRef["environmentId"] | null,
   cwd: string | null,
+  threadId: ScopedThreadRef["threadId"] | null,
 ): void {
   if (environmentId === null || cwd === null) {
     return;
   }
-  void refresh({ environmentId, input: { cwd } });
+  void refresh({
+    environmentId,
+    input: { cwd, ...(threadId !== null ? { threadId } : {}) },
+  });
 }
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
 
@@ -369,6 +376,8 @@ interface PublishRepositoryDialogProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: ScopedThreadRef["environmentId"] | null;
   readonly gitCwd: string;
+  readonly threadId: ScopedThreadRef["threadId"] | null;
+  readonly sourceControlProfileId: SourceControlProfileId | null;
 }
 
 function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
@@ -398,8 +407,10 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     () => ({
       environmentId: props.environmentId,
       cwd: props.gitCwd,
+      threadId: props.threadId,
+      sourceControlProfileId: props.sourceControlProfileId,
     }),
-    [props.environmentId, props.gitCwd],
+    [props.environmentId, props.gitCwd, props.sourceControlProfileId, props.threadId],
   );
   const publishRepositoryAction = useSourceControlPublishRepositoryAction(sourceControlScope);
   const publishAccountByProvider = useMemo(() => {
@@ -971,11 +982,16 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadRef,
   draftId,
+  actingProfileLogin = null,
+  sourceControlProfileId = null,
 }: GitActionsControlProps) {
   const updateThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
     "thread branch metadata update",
   );
+  const convertRemote = useAtomCommand(sourceControlEnvironment.convertRemote, {
+    reportFailure: false,
+  });
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(activeEnvironmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
@@ -985,6 +1001,56 @@ export default function GitActionsControl({
   const threadToastData = useMemo(
     () => (activeThreadRef ? { threadRef: activeThreadRef } : undefined),
     [activeThreadRef],
+  );
+  const convertOriginRemoteToHttps = useCallback(async () => {
+    if (activeThreadRef === null || gitCwd === null) return;
+    const result = await convertRemote({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, cwd: gitCwd, remoteName: "origin" },
+    });
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Remote conversion failed",
+        description: error instanceof Error ? error.message : "The origin remote was not changed.",
+        data: threadToastData,
+      });
+      return;
+    }
+    toastManager.add({
+      type: "success",
+      title: "GitHub remote converted to HTTPS",
+      description: result.value.remoteUrl,
+      data: threadToastData,
+    });
+  }, [activeThreadRef, convertRemote, gitCwd, threadToastData]);
+  const sourceControlErrorToastData = useCallback(
+    (error: unknown): ThreadToastData | undefined => {
+      if (
+        activeThreadRef === null ||
+        gitCwd === null ||
+        typeof error !== "object" ||
+        error === null ||
+        !("reason" in error) ||
+        error.reason !== "ssh-remote"
+      ) {
+        return threadToastData;
+      }
+      return {
+        ...threadToastData,
+        additionalActions: [
+          {
+            id: "convert-github-origin-to-https",
+            props: {
+              children: "Convert origin to HTTPS",
+              onClick: () => void convertOriginRemoteToHttps(),
+            },
+          },
+        ],
+      };
+    },
+    [activeThreadRef, convertOriginRemoteToHttps, gitCwd, threadToastData],
   );
   const activeDraftThread = useComposerDraftStore((store) =>
     draftId
@@ -1006,8 +1072,13 @@ export default function GitActionsControl({
     useState<PendingDefaultBranchAction | null>(null);
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
   const sourceControlScope = useMemo(
-    () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
-    [activeEnvironmentId, gitCwd],
+    () => ({
+      environmentId: activeEnvironmentId,
+      cwd: gitCwd,
+      threadId: activeThreadRef?.threadId ?? null,
+      sourceControlProfileId,
+    }),
+    [activeEnvironmentId, activeThreadRef?.threadId, gitCwd, sourceControlProfileId],
   );
   let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
@@ -1082,7 +1153,10 @@ export default function GitActionsControl({
     activeEnvironmentId !== null && gitCwd !== null
       ? vcsEnvironment.status({
           environmentId: activeEnvironmentId,
-          input: { cwd: gitCwd },
+          input: {
+            cwd: gitCwd,
+            ...(activeThreadRef ? { threadId: activeThreadRef.threadId } : {}),
+          },
         })
       : null,
   );
@@ -1191,7 +1265,12 @@ export default function GitActionsControl({
       }
       refreshTimeout = window.setTimeout(() => {
         refreshTimeout = null;
-        requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
+        requestVcsStatusRefresh(
+          refreshVcsStatus,
+          activeEnvironmentId,
+          gitCwd,
+          activeThreadRef?.threadId ?? null,
+        );
       }, GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS);
     };
     const handleVisibilityChange = () => {
@@ -1210,7 +1289,7 @@ export default function GitActionsControl({
       window.removeEventListener("focus", scheduleRefreshCurrentGitStatus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [activeEnvironmentId, gitCwd, refreshVcsStatus]);
+  }, [activeEnvironmentId, activeThreadRef?.threadId, gitCwd, refreshVcsStatus]);
 
   const openExistingPr = useCallback(async () => {
     const api = readLocalApi();
@@ -1405,13 +1484,14 @@ export default function GitActionsControl({
         }
 
         const error = squashAtomCommandFailure(result);
+        const errorToastData = sourceControlErrorToastData(error);
         toastManager.update(
           resolvedProgressToastId,
           stackedThreadToast({
             type: "error",
             title: "Action failed",
             description: error instanceof Error ? error.message : "An error occurred.",
-            ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
+            ...(errorToastData !== undefined ? { data: errorToastData } : {}),
           }),
         );
         return;
@@ -1729,7 +1809,12 @@ export default function GitActionsControl({
           <Menu
             onOpenChange={(open) => {
               if (open) {
-                requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
+                requestVcsStatusRefresh(
+                  refreshVcsStatus,
+                  activeEnvironmentId,
+                  gitCwd,
+                  activeThreadRef?.threadId ?? null,
+                );
               }
             }}
           >
@@ -1830,7 +1915,9 @@ export default function GitActionsControl({
       >
         <DialogPopup>
           <DialogHeader>
-            <DialogTitle>{COMMIT_DIALOG_TITLE}</DialogTitle>
+            <DialogTitle>
+              {actingProfileLogin ? `Commit as @${actingProfileLogin}` : COMMIT_DIALOG_TITLE}
+            </DialogTitle>
             <DialogDescription>{COMMIT_DIALOG_DESCRIPTION}</DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
@@ -1989,6 +2076,8 @@ export default function GitActionsControl({
         onOpenChange={setIsPublishDialogOpen}
         environmentId={activeEnvironmentId}
         gitCwd={gitCwd}
+        threadId={activeThreadRef?.threadId ?? null}
+        sourceControlProfileId={sourceControlProfileId}
       />
 
       <Dialog

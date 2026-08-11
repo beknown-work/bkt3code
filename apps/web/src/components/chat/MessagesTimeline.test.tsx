@@ -1,4 +1,10 @@
-import { CheckpointRef, EnvironmentId, MessageId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EnvironmentId,
+  MessageId,
+  OrchestrationProposedPlanId,
+  TurnId,
+} from "@t3tools/contracts";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -181,6 +187,7 @@ function buildProps() {
     turnDiffSummaryByAssistantMessageId: new Map(),
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
+    onOpenPlannotator: () => {},
     revertTurnCountByUserMessageId: new Map(),
     onRevertUserMessage: () => {},
     isRevertingCheckpoint: false,
@@ -194,6 +201,7 @@ function buildProps() {
     onAnchorReady: () => {},
     onAnchorSizeChanged: () => {},
     contentInsetEndAdjustment: 0,
+    liveFollowEnabled: true,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
   };
@@ -218,11 +226,97 @@ function buildUserTimelineEntry(text: string) {
       createdAt: MESSAGE_CREATED_AT,
       updatedAt: MESSAGE_CREATED_AT,
       streaming: false,
+      sentByUserId: null,
     },
   };
 }
 
 describe("MessagesTimeline", () => {
+  it("shows Review for actionable native plans while Plannotator attaches", () => {
+    const proposedPlan = {
+      id: OrchestrationProposedPlanId.make("plan-review"),
+      turnId: null,
+      planMarkdown:
+        "# Review me\n\nInspect this plan.\n\n<!-- t3-plannotator:/plannotator/review_token/ -->",
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt: MESSAGE_CREATED_AT,
+      updatedAt: MESSAGE_CREATED_AT,
+    };
+    const withReview = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-plan-review",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan,
+          },
+        ]}
+      />,
+    );
+    const withoutReview = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-plan-plain",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan: {
+              ...proposedPlan,
+              id: OrchestrationProposedPlanId.make("plan-plain"),
+              planMarkdown: "# Plain plan\n\nNo attached review.",
+            },
+          },
+        ]}
+      />,
+    );
+    // T3-CUSTOM(expbkt3): native plan preview stays visible during async capture.
+    const nativePreviewPending = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onOpenPlanReview={() => {}}
+        timelineEntries={[
+          {
+            id: "entry-plan-native-pending",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan,
+          },
+        ]}
+      />,
+    );
+    const nativePreviewReady = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onOpenPlanReview={() => {}}
+        planReviewDocumentId="plan-doc:ready"
+        timelineEntries={[
+          {
+            id: "entry-plan-native-ready",
+            kind: "proposed-plan",
+            createdAt: MESSAGE_CREATED_AT,
+            proposedPlan,
+          },
+        ]}
+      />,
+    );
+
+    expect(withReview).toContain("data-plannotator-review-trigger");
+    expect(withReview).toContain('aria-label="Review plan in Plannotator"');
+    expect(withReview).toContain(">Review<");
+    expect(withReview).not.toContain("review_token");
+    expect(withoutReview).not.toContain("data-plannotator-review-trigger");
+    expect(withoutReview).toContain("data-plannotator-review-pending");
+    expect(withoutReview).toContain('aria-label="Preparing Plannotator review"');
+    expect(nativePreviewPending).toContain("data-plan-review-pending");
+    expect(nativePreviewPending).toContain('aria-label="Preparing plan preview"');
+    expect(nativePreviewReady).toContain("data-plan-review-trigger");
+    expect(nativePreviewReady).toContain('aria-label="Open the plan in the review panel"');
+  });
+
   it("uses the larger leading inset only when the top fade is enabled", () => {
     const timelineEntries = [buildUserTimelineEntry("Hello")];
 
@@ -250,6 +344,7 @@ describe("MessagesTimeline", () => {
           state: "completed",
           startedAt: MESSAGE_CREATED_AT,
           completedAt: MESSAGE_CREATED_AT,
+          durationMs: null,
         }}
         timelineEntries={[
           {
@@ -264,6 +359,7 @@ describe("MessagesTimeline", () => {
               createdAt: MESSAGE_CREATED_AT,
               updatedAt: MESSAGE_CREATED_AT,
               streaming: false,
+              sentByUserId: null,
             },
           },
         ]}
@@ -296,7 +392,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
-  it("uses LegendList isNearEnd when deciding whether the live edge is visible", async () => {
+  it("treats only the strict list end as the live edge", async () => {
     const {
       resolveTimelineIsAtEnd,
       resolveTimelineMinimapHasPersistentGutter,
@@ -307,10 +403,36 @@ describe("MessagesTimeline", () => {
       resolveTimelineMinimapTopPercent,
     } = await import("./MessagesTimeline.logic");
 
-    expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(true);
-    expect(resolveTimelineIsAtEnd({ isNearEnd: false, isAtEnd: true })).toBe(false);
     expect(resolveTimelineIsAtEnd({ isAtEnd: true })).toBe(true);
     expect(resolveTimelineIsAtEnd(undefined)).toBeUndefined();
+    // Within the pixel band above the content bottom counts as the end...
+    expect(
+      resolveTimelineIsAtEnd({
+        isAtEnd: false,
+        contentLength: 2000,
+        scroll: 1170,
+        scrollLength: 800,
+      }),
+    ).toBe(true);
+    // ...but half a viewport up (LegendList's isNearEnd territory) does not.
+    expect(
+      resolveTimelineIsAtEnd({
+        isAtEnd: false,
+        contentLength: 2000,
+        scroll: 900,
+        scrollLength: 800,
+      }),
+    ).toBe(false);
+    // The composer inset is part of contentLength and must not count as
+    // distance-to-end.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: false, contentLength: 2100, scroll: 1170, scrollLength: 800 },
+        100,
+      ),
+    ).toBe(true);
+    // Geometry missing (older state shape): fall back to the strict flag.
+    expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
 
     expect(resolveTimelineMinimapHeightStyle(5)).toBe("min(32px, calc(100vh - 18rem))");
     expect(resolveTimelineMinimapTopPercent(2, 5)).toBe(50);
@@ -434,7 +556,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).not.toContain("Show full message");
     expect(markup).toContain('data-user-message-collapsible="false"');
-    expect(markup).toContain("rounded-2xl bg-accent p-3");
+    expect(markup).toContain("rounded-2xl bg-message p-3");
   });
 
   it("renders inline terminal labels with the composer chip UI", () => {
@@ -579,6 +701,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               updatedAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
+              sentByUserId: null,
             },
           },
         ]}
@@ -618,6 +741,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               updatedAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
+              sentByUserId: null,
             },
           },
         ]}

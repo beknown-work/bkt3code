@@ -43,6 +43,8 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -130,7 +132,12 @@ interface CursorSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  // T3-CUSTOM(expbkt3): persisted history carries explicit terminal evidence.
+  readonly turns: Array<{
+    id: TurnId;
+    items: Array<unknown>;
+    state: "completed" | "interrupted";
+  }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
   /** Number of sendTurn prompts currently in flight or being prepared.
@@ -465,7 +472,14 @@ export function makeCursorAdapter(
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+        yield* Scope.close(ctx.scope, Exit.void);
+        if (yield* ctx.acp.isProcessAlive) {
+          return yield* Effect.die(
+            new Error(
+              `Cursor process tree for thread '${ctx.threadId}' remained alive after close.`,
+            ),
+          );
+        }
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent({
           type: "session.exited",
@@ -474,9 +488,9 @@ export function makeCursorAdapter(
           threadId: ctx.threadId,
           payload: { exitKind: "graceful" },
         });
-      });
+      }).pipe(Effect.onError(() => Effect.sync(() => (ctx.stopped = false))));
 
-    const startSession: CursorAdapterShape["startSession"] = (input) =>
+    const startSession: CursorAdapterShape["startSession"] = (input, executionOptions) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
@@ -532,9 +546,15 @@ export function makeCursorAdapter(
             : cursorSettings;
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const sessionEnvironment = executionOptions?.environment
+            ? mergeSourceControlEnvironment(
+                options?.environment ?? process.env,
+                executionOptions.environment,
+              )
+            : options?.environment;
           const acp = yield* makeCursorAcpRuntime({
             cursorSettings: effectiveCursorSettings,
-            ...(options?.environment ? { environment: options.environment } : {}),
+            ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
@@ -553,6 +573,17 @@ export function makeCursorAdapter(
                         },
                       ],
                     },
+                    ...mcpSession.upstreamServers.map((server) => ({
+                      type: "http" as const,
+                      name: McpProviderSession.upstreamMcpServerName(server),
+                      url: server.endpoint,
+                      headers: [
+                        {
+                          name: "Authorization",
+                          value: mcpSession.authorizationHeader,
+                        },
+                      ],
+                    })),
                   ],
                 }
               : {}),
@@ -789,6 +820,30 @@ export function makeCursorAdapter(
                   case "EventStreamBarrier":
                     yield* Deferred.succeed(event.acknowledge, undefined);
                     return;
+                  case "Exited": {
+                    // The agent process died. Nothing else in the ACP path
+                    // reports this, so without it the turn stays "running"
+                    // forever. Deliberately does not interrupt the notification
+                    // fiber or close the session scope — we are running inside
+                    // that fiber; a later stopSession/shutdown closes the scope.
+                    if (ctx.stopped) return;
+                    ctx.stopped = true;
+                    yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+                    yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+                    sessions.delete(ctx.threadId);
+                    yield* offerRuntimeEvent({
+                      type: "session.exited",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      payload: {
+                        exitKind: event.exitCode === 0 ? "graceful" : "error",
+                        reason: `Cursor agent process exited with code ${event.exitCode}.`,
+                        recoverable: false,
+                      },
+                    });
+                    return;
+                  }
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
@@ -1015,10 +1070,16 @@ export function makeCursorAdapter(
             );
 
           const turnRecord = ctx.turns.find((turn) => turn.id === turnId);
+          const turnState = result.stopReason === "cancelled" ? "interrupted" : "completed";
           if (turnRecord) {
             turnRecord.items.push({ prompt: promptParts, result });
+            turnRecord.state = turnState;
           } else {
-            ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+            ctx.turns.push({
+              id: turnId,
+              items: [{ prompt: promptParts, result }],
+              state: turnState,
+            });
           }
           ctx.session = {
             ...ctx.session,
@@ -1162,9 +1223,14 @@ export function makeCursorAdapter(
 
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);
 
-    return {
+    const adapter = {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      // T3-CUSTOM(expbkt3): explicit busy-turn and resume behavior.
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      },
       startSession,
       sendTurn,
       interruptTurn,
@@ -1177,6 +1243,10 @@ export function makeCursorAdapter(
       hasSession,
       stopAll,
       streamEvents,
-    } satisfies CursorAdapterShape;
+    } satisfies Omit<
+      CursorAdapterShape,
+      "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+    >;
+    return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies CursorAdapterShape;
   });
 }

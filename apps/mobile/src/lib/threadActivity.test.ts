@@ -48,8 +48,13 @@ function makeThread(
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     session: null,
+    ownerUserId: null,
+    memberUserIds: [],
     ...input,
+    sourceControlProfileId: input.sourceControlProfileId ?? null,
     settledOverride: input.settledOverride ?? null,
     settledAt: input.settledAt ?? null,
   };
@@ -68,6 +73,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: null,
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
@@ -120,6 +126,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: "2026-04-01T00:00:03.000Z",
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
@@ -192,6 +199,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: "2026-04-01T00:00:03.000Z",
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({
@@ -289,6 +297,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: "2026-04-01T00:00:18.000Z",
         assistantMessageId: MessageId.make("assistant-final"),
+        durationMs: null,
       },
       messages: [
         {
@@ -297,6 +306,7 @@ describe("buildThreadFeed", () => {
           text: "I am checking.",
           turnId,
           streaming: false,
+          sentByUserId: null,
           createdAt: "2026-04-01T00:00:02.000Z",
           updatedAt: "2026-04-01T00:00:03.000Z",
         },
@@ -306,6 +316,7 @@ describe("buildThreadFeed", () => {
           text: "Done.",
           turnId,
           streaming: false,
+          sentByUserId: null,
           createdAt: "2026-04-01T00:00:17.000Z",
           updatedAt: "2026-04-01T00:00:18.000Z",
         },
@@ -359,6 +370,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:14.000Z",
         completedAt: null,
         assistantMessageId: MessageId.make("assistant-next"),
+        durationMs: null,
       },
       messages: [
         {
@@ -367,6 +379,7 @@ describe("buildThreadFeed", () => {
           text: "Do it once more.",
           turnId: null,
           streaming: false,
+          sentByUserId: null,
           createdAt: "2026-04-01T00:00:00.000Z",
           updatedAt: "2026-04-01T00:00:00.000Z",
         },
@@ -376,6 +389,7 @@ describe("buildThreadFeed", () => {
           text: "Kicking off call 1.",
           turnId: firstTurnId,
           streaming: false,
+          sentByUserId: null,
           createdAt: "2026-04-01T00:00:09.000Z",
           updatedAt: "2026-04-01T00:00:09.000Z",
         },
@@ -385,6 +399,7 @@ describe("buildThreadFeed", () => {
           text: "Actually do 15.",
           turnId: null,
           streaming: false,
+          sentByUserId: null,
           createdAt: "2026-04-01T00:00:14.000Z",
           updatedAt: "2026-04-01T00:00:14.000Z",
         },
@@ -394,6 +409,7 @@ describe("buildThreadFeed", () => {
           text: "One down - adjusting.",
           turnId: secondTurnId,
           streaming: true,
+          sentByUserId: null,
           createdAt: "2026-04-01T00:00:17.000Z",
           updatedAt: "2026-04-01T00:00:17.000Z",
         },
@@ -436,6 +452,7 @@ describe("buildThreadFeed", () => {
         startedAt: "2026-04-01T00:00:01.000Z",
         completedAt: null,
         assistantMessageId: null,
+        durationMs: null,
       },
       activities: [
         makeActivity({

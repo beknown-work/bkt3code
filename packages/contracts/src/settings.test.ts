@@ -3,8 +3,8 @@ import * as Schema from "effect/Schema";
 
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
-  ClientSettingsSchema,
   ClientSettingsPatch,
+  ClientSettingsSchema,
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
   ServerSettingsPatch,
@@ -30,6 +30,56 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
+  });
+});
+
+describe("ClientSettings phase-grouped sidebar", () => {
+  it("defaults the experiment off for legacy settings", () => {
+    expect(decodeClientSettings({}).phaseGroupedSidebarEnabled).toBe(false);
+    expect(decodeServerSettings({}).experimental.externalMcp).toEqual({
+      enabled: false,
+      apiKey: "",
+      publicUrl: "",
+    });
+  });
+
+  it("accepts persisted values and client patches", () => {
+    expect(
+      decodeClientSettings({ phaseGroupedSidebarEnabled: true }).phaseGroupedSidebarEnabled,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ phaseGroupedSidebarEnabled: true }).phaseGroupedSidebarEnabled,
+    ).toBe(true);
+  });
+});
+
+describe("ClientSettings resource monitor", () => {
+  it("defaults the experiment off for legacy settings", () => {
+    expect(decodeClientSettings({}).resourceMonitorEnabled).toBe(false);
+  });
+
+  it("accepts persisted values and client patches", () => {
+    expect(decodeClientSettings({ resourceMonitorEnabled: true }).resourceMonitorEnabled).toBe(
+      true,
+    );
+    expect(decodeClientSettingsPatch({ resourceMonitorEnabled: true }).resourceMonitorEnabled).toBe(
+      true,
+    );
+  });
+});
+
+describe("ClientSettings provider usage limits", () => {
+  it("defaults the header indicator on for legacy settings", () => {
+    expect(decodeClientSettings({}).providerRateLimitsEnabled).toBe(true);
+  });
+
+  it("accepts persisted values and client patches", () => {
+    expect(
+      decodeClientSettings({ providerRateLimitsEnabled: false }).providerRateLimitsEnabled,
+    ).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ providerRateLimitsEnabled: false }).providerRateLimitsEnabled,
+    ).toBe(false);
   });
 });
 
@@ -177,13 +227,102 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin on for legacy configs", () => {
-    expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(true);
+    const settings = decodeServerSettings({});
+
+    expect(settings.newWorktreesStartFromOrigin).toBe(true);
+    expect(settings.defaultThreadModelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+    });
+    expect(settings.defaultThreadRuntimeMode).toBe("full-access");
+    expect(settings.defaultThreadInteractionMode).toBe("default");
   });
 
   it("accepts start-from-origin updates", () => {
     expect(
       decodeServerSettingsPatch({ newWorktreesStartFromOrigin: false }).newWorktreesStartFromOrigin,
     ).toBe(false);
+  });
+
+  it("accepts thread model, access, and interaction default updates", () => {
+    const patch = decodeServerSettingsPatch({
+      defaultThreadModelSelection: {
+        instanceId: "claudeAgent",
+        model: "claude-opus-5",
+        options: [{ id: "effort", value: "high" }],
+      },
+      defaultThreadRuntimeMode: "approval-required",
+      defaultThreadInteractionMode: "plan",
+    });
+
+    expect(patch.defaultThreadModelSelection).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-opus-5",
+      options: [{ id: "effort", value: "high" }],
+    });
+    expect(patch.defaultThreadRuntimeMode).toBe("approval-required");
+    expect(patch.defaultThreadInteractionMode).toBe("plan");
+  });
+});
+
+describe("ServerSettings source-control profiles", () => {
+  it("defaults legacy installations to machine identity with no profiles", () => {
+    const settings = decodeServerSettings({});
+
+    expect(settings.sourceControlIdentityMode).toBe("machine");
+    expect(settings.environmentUserIdentityMode).toBe("optional");
+    expect(settings.sourceControlProfiles).toEqual({});
+  });
+
+  it("never retains credentials in profile metadata or serialized settings", () => {
+    const secret = "github_pat_must_not_be_serialized";
+    const settings = decodeServerSettings({
+      sourceControlIdentityMode: "thread-profile",
+      sourceControlProfiles: {
+        alice: {
+          id: "alice",
+          provider: "github",
+          label: "Alice",
+          login: "alice",
+          accountId: 42,
+          avatarUrl: null,
+          gitName: "Alice Example",
+          gitEmail: "42+alice@users.noreply.github.com",
+          archived: false,
+          credential: secret,
+          credentialStatus: "connected",
+        },
+      },
+    });
+
+    const [profile] = Object.values(settings.sourceControlProfiles);
+    expect(profile?.ownerUserId).toBeNull();
+    expect(profile).not.toHaveProperty("credential");
+    expect(profile).not.toHaveProperty("credentialStatus");
+    expect(JSON.stringify(encodeServerSettings(settings))).not.toContain(secret);
+  });
+
+  it("persists the collaborative Clerk identity mode and profile owner", () => {
+    const settings = decodeServerSettings({
+      environmentUserIdentityMode: "required",
+      sourceControlProfiles: {
+        alice: {
+          id: "alice",
+          provider: "github",
+          label: "Alice",
+          login: "alice",
+          accountId: 42,
+          avatarUrl: null,
+          gitName: "Alice Example",
+          gitEmail: "42+alice@users.noreply.github.com",
+          ownerUserId: "user_clerk_alice",
+          archived: false,
+        },
+      },
+    });
+
+    expect(settings.environmentUserIdentityMode).toBe("required");
+    expect(Object.values(settings.sourceControlProfiles)[0]?.ownerUserId).toBe("user_clerk_alice");
   });
 });
 

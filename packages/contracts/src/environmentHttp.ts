@@ -12,8 +12,11 @@ import {
   AuthAccessTokenResult,
   AuthBrowserSessionRequest,
   AuthBrowserSessionResult,
+  AuthClerkSessionRequest,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
+  AuthIdentityBindingRequest,
+  AuthIdentityBindingResult,
   AuthPairingCredentialResult,
   AuthPairingLink,
   AuthRevokeClientSessionInput,
@@ -24,7 +27,16 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  EnvironmentUserId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
@@ -32,7 +44,10 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationUsersResult,
+  ThreadExecutionSnapshot,
 } from "./orchestration.ts";
+import { ServerProviders } from "./server.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -62,6 +77,9 @@ export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidRe
 export const EnvironmentAuthInvalidReason = Schema.Literals([
   "missing_credential",
   "invalid_credential",
+  "missing_identity",
+  "invalid_identity",
+  "blocked_identity",
 ]);
 export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.Type;
 
@@ -81,6 +99,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "pairing_link_revoke_failed",
   "client_sessions_load_failed",
   "client_session_revoke_failed",
+  "identity_management_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
@@ -268,6 +287,14 @@ const EnvironmentSessionCreationErrors = [
   EnvironmentAuthInvalidError,
   EnvironmentInternalError,
 ] as const;
+// Clerk sign-in exchange: a bad/expired token is `auth_invalid` (401); a valid
+// token for someone outside the configured org is `forbidden` (403) so the SPA
+// can show "not a member — try a different account" distinctly from a retry.
+const EnvironmentClerkSessionErrors = [
+  EnvironmentAuthInvalidError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentTokenExchangeErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentAuthInvalidError,
@@ -298,11 +325,49 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
 const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
+  EnvironmentHttpConflictError,
   EnvironmentInternalError,
 ] as const;
 
+export const OrchestrationPullRequestLink = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  threadTitle: TrimmedNonEmptyString,
+  threadUpdatedAt: IsoDateTime,
+  branch: TrimmedNonEmptyString,
+  repository: Schema.Struct({
+    canonicalKey: TrimmedNonEmptyString,
+    owner: TrimmedNonEmptyString,
+    name: TrimmedNonEmptyString,
+  }),
+  pullRequest: Schema.Struct({
+    number: PositiveInt,
+    title: TrimmedNonEmptyString,
+    url: Schema.String,
+    baseRef: TrimmedNonEmptyString,
+    headRef: TrimmedNonEmptyString,
+    state: Schema.Literals(["open", "closed", "merged"]),
+  }),
+  execution: ThreadExecutionSnapshot,
+});
+export type OrchestrationPullRequestLink = typeof OrchestrationPullRequestLink.Type;
+
+export const OrchestrationPullRequestLinkFailure = Schema.Struct({
+  threadId: ThreadId,
+  reason: Schema.Literals(["project_not_found", "workspace_unavailable", "repository_unresolved"]),
+});
+export type OrchestrationPullRequestLinkFailure = typeof OrchestrationPullRequestLinkFailure.Type;
+
+export const OrchestrationPullRequestLinksResult = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  links: Schema.Array(OrchestrationPullRequestLink),
+  failures: Schema.Array(OrchestrationPullRequestLinkFailure),
+});
+export type OrchestrationPullRequestLinksResult = typeof OrchestrationPullRequestLinksResult.Type;
+
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
+  readonly userId: EnvironmentUserId | null;
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlySet<AuthEnvironmentScope>;
@@ -366,6 +431,13 @@ export const AuthClientSessionRevokeResult = Schema.Struct({
 });
 export type AuthClientSessionRevokeResult = typeof AuthClientSessionRevokeResult.Type;
 
+// T3-CUSTOM(expbkt3): BEGIN — current-session logout is distinct from administrative revocation.
+export const AuthSessionLogoutResult = Schema.Struct({
+  revoked: Schema.Boolean,
+});
+export type AuthSessionLogoutResult = typeof AuthSessionLogoutResult.Type;
+// T3-CUSTOM(expbkt3): END
+
 export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
   revokedCount: Schema.Number,
 });
@@ -385,12 +457,36 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       error: [EnvironmentInternalError],
     }),
   )
+  // T3-CUSTOM(expbkt3): BEGIN — let an authenticated web client end its own session.
+  .add(
+    HttpApiEndpoint.post("logout", "/api/auth/logout", {
+      headers: OptionalBearerHeaders,
+      success: AuthSessionLogoutResult,
+      error: EnvironmentAuthenticationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  // T3-CUSTOM(expbkt3): END
   .add(
     HttpApiEndpoint.post("browserSession", "/api/auth/browser-session", {
       payload: AuthBrowserSessionRequest,
       success: AuthBrowserSessionResult,
       error: EnvironmentSessionCreationErrors,
     }),
+  )
+  .add(
+    HttpApiEndpoint.post("clerkSession", "/api/auth/clerk-session", {
+      payload: AuthClerkSessionRequest,
+      success: AuthBrowserSessionResult,
+      error: EnvironmentClerkSessionErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("bindIdentity", "/api/auth/identity", {
+      headers: OptionalBearerHeaders,
+      payload: AuthIdentityBindingRequest,
+      success: AuthIdentityBindingResult,
+      error: EnvironmentAuthenticationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("token", "/oauth/token", {
@@ -457,6 +553,16 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
+// Query-string window for windowed thread snapshots (GET payloads must encode
+// to strings). Both fields optional: omitting them keeps the full-snapshot
+// behavior, so pagination stays opt-in per request.
+const EnvironmentOrchestrationThreadSnapshotQuery = {
+  turnLimit: Schema.optional(
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+  beforeCursor: Schema.optional(TrimmedNonEmptyString),
+};
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -473,12 +579,38 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
+    HttpApiEndpoint.get("providers", "/api/orchestration/providers", {
+      headers: OptionalBearerHeaders,
+      success: ServerProviders,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("users", "/api/orchestration/users", {
+      headers: OptionalBearerHeaders,
+      success: OrchestrationUsersResult,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
+      payload: EnvironmentOrchestrationThreadSnapshotQuery,
       success: OrchestrationThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "pullRequestLinks",
+      "/api/orchestration/source-control/pull-request-links",
+      {
+        headers: OptionalBearerHeaders,
+        success: OrchestrationPullRequestLinksResult,
+        error: EnvironmentOrchestrationSnapshotErrors,
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {

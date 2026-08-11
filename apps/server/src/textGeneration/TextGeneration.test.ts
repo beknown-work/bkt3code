@@ -21,6 +21,11 @@ const makeStubTextGeneration = (
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
     generateBranchName: () => Effect.die("generateBranchName stub not configured for this test"),
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
+    updateRollingSummary: () =>
+      Effect.die("updateRollingSummary stub not configured for this test"),
+    generateCatchupSummary: () =>
+      Effect.die("generateCatchupSummary stub not configured for this test"),
+    generateWorkSummary: () => Effect.die("generateWorkSummary stub not configured for this test"),
     ...overrides,
   });
 

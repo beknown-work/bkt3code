@@ -9,6 +9,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
+  type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -36,6 +37,7 @@ import {
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
 } from "./threads.ts";
+import { THREAD_SUBSCRIPTION_RETRY_DELAYS_MS } from "./threadSubscriptionRetry.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -63,9 +65,12 @@ const BASE_THREAD: OrchestrationThread = {
   },
   runtimeMode: "full-access",
   interactionMode: "default",
+  sourceControlProfileId: null,
   branch: "main",
   worktreePath: null,
   latestTurn: null,
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
   archivedAt: null,
@@ -76,7 +81,10 @@ const BASE_THREAD: OrchestrationThread = {
   proposedPlans: [],
   activities: [],
   checkpoints: [],
+  rollingSummary: null,
+  turnSummaries: [],
   session: null,
+  execution: null,
 };
 const ACTIVE_THREAD: OrchestrationThread = {
   ...BASE_THREAD,
@@ -87,6 +95,7 @@ const ACTIVE_THREAD: OrchestrationThread = {
     startedAt: "2026-04-01T00:01:00.000Z",
     completedAt: null,
     assistantMessageId: null,
+    durationMs: null,
   },
   session: {
     threadId: THREAD_ID,
@@ -98,6 +107,35 @@ const ACTIVE_THREAD: OrchestrationThread = {
     updatedAt: "2026-04-01T00:01:00.000Z",
   },
 };
+
+const executionSnapshot = (
+  activity: ThreadExecutionSnapshot["activity"],
+  turnState: NonNullable<ThreadExecutionSnapshot["turn"]>["state"] = "completed",
+): ThreadExecutionSnapshot => ({
+  threadId: THREAD_ID,
+  authorityEpoch: "server-epoch",
+  revision: 2,
+  observedAt: "2026-04-01T01:00:00.000Z",
+  activity,
+  canStop: activity !== "idle",
+  providerSession: {
+    state: activity === "idle" ? "ready" : "ready",
+    generation: 1,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    startedAt: "2026-04-01T00:00:00.000Z",
+    lastObservedAt: "2026-04-01T01:00:00.000Z",
+    lastError: null,
+  },
+  turn: {
+    executionId: "execution-1",
+    providerTurnId: TurnId.make("turn-from-a-previous-life"),
+    state: turnState,
+    startedAt: "2026-04-01T00:00:00.000Z",
+    stopRequestedAt: null,
+    completedAt: activity === "idle" ? "2026-04-01T01:00:00.000Z" : null,
+    lastError: null,
+  },
+});
 
 type TestThreadInput = OrchestrationThreadStreamItem | Error;
 
@@ -325,6 +363,47 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("treats cached running state as historical until the execution frame arrives", () =>
+    Effect.gen(function* () {
+      // Cached lifecycle data is never authoritative. It is cleared before the
+      // warm snapshot is painted, then replaced by the mandatory execution
+      // frame sent at the start of every subscription.
+      const staleRunningThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.make("turn-from-a-previous-life"),
+          lastError: null,
+          updatedAt: "2026-04-01T00:00:00.000Z",
+        },
+        execution: executionSnapshot("active", "running"),
+      };
+      const harness = yield* makeHarness({ cached: staleRunningThread });
+
+      const historical = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.execution === null,
+      );
+      expect(Option.getOrThrow(historical.data).execution).toBeNull();
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+
+      yield* Queue.offer(harness.inputs, {
+        kind: "execution",
+        execution: executionSnapshot("idle"),
+      });
+      const authoritative = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.execution?.activity === "idle",
+      );
+
+      expect(Option.getOrThrow(authoritative.data).latestTurn?.state).toBe("completed");
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
+    }),
+  );
+
   it.effect("resumes a warm cache via afterSequence without an HTTP fetch", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
@@ -455,7 +534,8 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("does not resurrect a deleted thread when the app returns to the foreground", () =>
+  // T3-CUSTOM(expbkt3): terminal threads must not restart a failing subscription loop.
+  it.effect("does not resubscribe a deleted thread when the app returns to the foreground", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         cached: BASE_THREAD,
@@ -472,12 +552,11 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
       yield* Queue.offer(harness.wakeups, "application-active");
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
         yield* Effect.yieldNow;
       }
 
       const latest = yield* Ref.get(harness.latest);
-      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
       expect(latest.status).toBe("deleted");
       expect(Option.isNone(latest.data)).toBe(true);
@@ -525,6 +604,26 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("clears live execution authority when the stream disconnects", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(harness.inputs, {
+        kind: "execution",
+        execution: executionSnapshot("active", "running"),
+      });
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.execution?.activity === "active",
+      );
+
+      yield* Queue.offer(harness.inputs, new Error("connection lost"));
+      const disconnected = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(Option.getOrThrow(disconnected.data).execution).toBeNull();
+    }),
+  );
+
   it.effect("recovers from a transient domain failure without replacing the session", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -562,6 +661,45 @@ describe("EnvironmentThreads", () => {
       expect(Option.isNone(recovered.error)).toBe(true);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.retryCount)).toBe(0);
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): missing archived/deleted routes must not retry forever.
+  it.effect("makes a persistently missing thread subscription dormant after bounded retries", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 1) break;
+        yield* Effect.yieldNow;
+      }
+      for (const [attempt, delay] of THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.entries()) {
+        yield* Queue.offer(harness.inputs, new Error(`thread missing ${attempt}`));
+        yield* TestClock.adjust(delay);
+        for (let spin = 0; spin < 100; spin += 1) {
+          if ((yield* Ref.get(harness.subscriptionCount)) >= attempt + 2) break;
+          yield* Effect.yieldNow;
+        }
+      }
+
+      yield* Queue.offer(harness.inputs, new Error("thread still missing"));
+      yield* TestClock.adjust("1 hour");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(
+        THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.length + 1,
+      );
+
+      yield* Queue.offer(harness.wakeups, "application-active");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(
+        THREAD_SUBSCRIPTION_RETRY_DELAYS_MS.length + 1,
+      );
     }),
   );
 

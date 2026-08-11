@@ -9,6 +9,7 @@ import {
   type AuthClientSession,
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
+  type EnvironmentUserId,
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
@@ -60,6 +61,7 @@ export interface IssuedBearerSession {
 
 export interface AuthenticatedSession {
   readonly sessionId: AuthSessionId;
+  readonly userId: EnvironmentUserId | null;
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
@@ -414,6 +416,7 @@ export class EnvironmentAuth extends Context.Service<
     readonly createBrowserSession: (
       credential: string,
       requestMetadata: AuthClientMetadata,
+      input?: { readonly userId?: EnvironmentUserId },
     ) => Effect.Effect<
       {
         readonly response: AuthBrowserSessionResult;
@@ -421,12 +424,37 @@ export class EnvironmentAuth extends Context.Service<
       },
       ServerAuthInvalidCredentialError | ServerAuthInternalError
     >;
+    /**
+     * Issue a browser-session cookie for an already-verified Clerk operator.
+     *
+     * Unlike `createBrowserSession` this bypasses one-time bootstrap credential
+     * consumption: the caller (the `/api/auth/clerk-session` handler) has already
+     * verified the Clerk token and org membership, so we mint a standard-scoped
+     * cookie session with `subject: "clerk:<userId>"`. Everything downstream (WS
+     * ticket, principal, visibility) reads that subject unchanged.
+     */
+    readonly createClerkBrowserSession: (
+      input: {
+        readonly subject: string;
+        // T3-CUSTOM(expbkt3): Direct Clerk sessions retain their durable user binding.
+        readonly userId: EnvironmentUserId;
+        readonly label?: string;
+      },
+      requestMetadata: AuthClientMetadata,
+    ) => Effect.Effect<
+      {
+        readonly response: AuthBrowserSessionResult;
+        readonly sessionToken: string;
+      },
+      ServerAuthInternalError
+    >;
     readonly exchangeBootstrapCredentialForAccessToken: (
       credential: string,
       requestedScopes: ReadonlyArray<AuthEnvironmentScope> | undefined,
       requestMetadata: AuthClientMetadata,
       input?: {
         readonly proofKeyThumbprint?: string;
+        readonly userId?: EnvironmentUserId;
       },
     ) => Effect.Effect<
       AuthAccessTokenResult,
@@ -580,6 +608,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map((session) => ({
         sessionId: session.sessionId,
+        userId: session.userId,
         subject: session.subject,
         method: session.method,
         scopes: session.scopes,
@@ -655,6 +684,7 @@ export const make = Effect.gen(function* () {
   const createBrowserSession: EnvironmentAuth["Service"]["createBrowserSession"] = (
     credential,
     requestMetadata,
+    input,
   ) =>
     bootstrapCredentials.consume(credential).pipe(
       Effect.mapError(toBootstrapExchangeError),
@@ -664,6 +694,7 @@ export const make = Effect.gen(function* () {
             method: "browser-session-cookie",
             subject: grant.subject,
             scopes: grant.scopes,
+            ...(input?.userId ? { userId: input.userId } : {}),
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -688,6 +719,39 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.createBrowserSession"),
     );
 
+  const createClerkBrowserSession: EnvironmentAuth["Service"]["createClerkBrowserSession"] = (
+    input,
+    requestMetadata,
+  ) =>
+    sessions
+      .issue({
+        method: "browser-session-cookie",
+        subject: input.subject,
+        // T3-CUSTOM(expbkt3): Make the Clerk identity available to every authenticated use case.
+        userId: input.userId,
+        scopes: AuthStandardClientScopes,
+        client: {
+          ...requestMetadata,
+          ...(input.label ? { label: input.label } : {}),
+        },
+      })
+      .pipe(
+        Effect.mapError((cause) => new ServerAuthAuthenticatedSessionIssueError({ cause })),
+        Effect.map(
+          (session) =>
+            ({
+              response: {
+                authenticated: true,
+                scopes: session.scopes,
+                sessionMethod: session.method,
+                expiresAt: DateTime.toUtc(session.expiresAt),
+              } satisfies AuthBrowserSessionResult,
+              sessionToken: session.token,
+            }) satisfies BootstrapExchangeResult,
+        ),
+        Effect.withSpan("EnvironmentAuth.createClerkBrowserSession"),
+      );
+
   const exchangeBootstrapCredentialForAccessToken: EnvironmentAuth["Service"]["exchangeBootstrapCredentialForAccessToken"] =
     (credential, requestedScopes, requestMetadata, input) =>
       bootstrapCredentials.consume(credential, input).pipe(
@@ -709,6 +773,7 @@ export const make = Effect.gen(function* () {
                       ttl: Duration.hours(1),
                     }
                   : {}),
+                ...(input?.userId ? { userId: input.userId } : {}),
                 client: {
                   ...requestMetadata,
                   ...(grant.label ? { label: grant.label } : {}),
@@ -947,6 +1012,7 @@ export const make = Effect.gen(function* () {
           return yield* sessions.verifyWebSocketToken(websocketTicket).pipe(
             Effect.map((session) => ({
               sessionId: session.sessionId,
+              userId: session.userId,
               subject: session.subject,
               method: session.method,
               scopes: session.scopes,
@@ -965,6 +1031,7 @@ export const make = Effect.gen(function* () {
       Effect.succeed(descriptor).pipe(Effect.withSpan("EnvironmentAuth.getDescriptor")),
     getSessionState,
     createBrowserSession,
+    createClerkBrowserSession,
     exchangeBootstrapCredentialForAccessToken,
     createPairingLink,
     issuePairingCredential,

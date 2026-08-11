@@ -45,10 +45,55 @@ import Migration0029 from "./Migrations/029_ProjectionThreadDetailOrderingIndexe
 import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.ts";
 import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
-import Migration0033 from "./Migrations/033_ProjectionThreadsSettled.ts";
-import Migration0034 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
-import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
-import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
+import Migration0033 from "./Migrations/033_ProjectionOwnershipMembership.ts";
+import Migration0034 from "./Migrations/034_ProjectionThreadMessageSender.ts";
+import Migration0035 from "./Migrations/035_BackfillProjectionThreadLatestTurn.ts";
+import Migration0036 from "./Migrations/036_BackfillLatestTurnSkipPendingRows.ts";
+import Migration0037 from "./Migrations/037_ThreadExecutions.ts";
+import Migration0038 from "./Migrations/038_CatchupSummaries.ts";
+import Migration0039 from "./Migrations/039_CatchupSummaryStatus.ts";
+import Migration0040 from "./Migrations/033_ProjectionThreadsSettled.ts";
+import Migration0041 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
+// T3-CUSTOM(expbkt3): Per-user MCP profiles and personal access tokens.
+import Migration0042 from "./Migrations/042_UserMcpProfiles.ts";
+// T3-CUSTOM(expbkt3): upstream ships this as migration 35. See the allocation
+// rule above the registry — legacy fork indices 33-42 make 35 unavailable.
+import Migration0043 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
+import Migration0044 from "./Migrations/044_ProjectionThreadSourceControlProfile.ts";
+import Migration0045 from "./Migrations/045_EnvironmentUsers.ts";
+// T3-CUSTOM(expbkt3): upstream migration 36 arrived after fork migration 1004
+// had shipped, so the monotonic migrator requires the next free applied ID.
+import Migration1005 from "./Migrations/036_ProjectionThreadsPinned.ts";
+// T3-CUSTOM(expbkt3): fork migrations, numbered 1000+.
+import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
+import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
+import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.ts";
+// T3-CUSTOM(expbkt3): exact durable work items and guarded recovery audit.
+import Migration1003 from "./Migrations/1003_DurableExecutionIntents.ts";
+// T3-CUSTOM(expbkt3): durable manual Linear issue tags.
+import Migration1004 from "./Migrations/1004_ProjectionThreadsLinearIssue.ts";
+// T3-CUSTOM(expbkt3): connected-client build identity for stale-bundle diagnosis.
+import Migration1006 from "./Migrations/1006_AuthSessionClientVersion.ts";
+// T3-CUSTOM(expbkt3): event-type index plus one-time maintenance markers so the
+// ownership backfill stops re-scanning the event log on every boot.
+import Migration1007 from "./Migrations/1007_OwnershipBackfillFastPath.ts";
+// T3-CUSTOM(expbkt3): upstream ships this as migration 37, which the legacy fork
+// block already occupies (ThreadExecutions). It registers at the next free ID in
+// the 1000+ lane instead; the file keeps its upstream name.
+import Migration1008 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
+// T3-CUSTOM(expbkt3): native plan review documents, versions and discussions.
+import Migration1009 from "./Migrations/1009_PlanReviewDocuments.ts";
+
+// T3-CUSTOM(expbkt3): session lineage column for the experimental sidebar tree.
+import Migration1010 from "./Migrations/1010_ProjectionThreadsParentThread.ts";
+// T3-CUSTOM(expbkt3): plan documents record their renderer (markdown or HTML).
+import Migration1011 from "./Migrations/1011_PlanDocumentFormat.ts";
+// T3-CUSTOM(expbkt3): BEGIN — durable bulk-session-manager work summaries.
+// Allocated at 1012, above the highest applied id: Effect only runs migrations
+// newer than the newest row in effect_sql_migrations, so a lower id would never
+// execute on a database that already applied 1011.
+import Migration1012 from "./Migrations/1012_ProjectionThreadsWorkSummary.ts";
+// T3-CUSTOM(expbkt3): END
 
 /**
  * Migration loader with all migrations defined inline.
@@ -60,7 +105,27 @@ import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-export const migrationEntries = [
+export // T3-CUSTOM(expbkt3): migration index allocation rule. Do not re-decide this
+// on every upstream merge — apply it mechanically.
+//
+//   * 1-32      shared history, identical to upstream.
+//   * 33-42     LEGACY fork block. Frozen. These indices are already applied in
+//               production databases (effect_sql_migrations keys on
+//               `${id}_${name}`), so renumbering one makes it run a second time
+//               on live data. Never touch them.
+//   * 43-45     LEGACY upstream remaps applied before the first 1000+ migration.
+//               Frozen for the same durable-identity reason as 33-42.
+//   * 46-999    reserved. Do not append migrations here: Effect only executes
+//               IDs greater than the highest applied ID, and live databases
+//               have already applied 1000+ migrations.
+//   * 1000+     monotonic shared allocation lane for every new migration. Fork
+//               files use the allocated ID; upstream files keep their upstream
+//               filename but register at the next free ID in this lane.
+//
+// Always allocate an ID greater than the current maximum registry ID. This is
+// required by Migrator.make, which only runs migrations newer than the highest
+// row already present in effect_sql_migrations.
+const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
   [3, "CheckpointDiffBlobs", Migration0003],
@@ -93,10 +158,36 @@ export const migrationEntries = [
   [30, "ProjectionThreadShellArchiveIndexes", Migration0030],
   [31, "AuthAuthorizationScopes", Migration0031],
   [32, "AuthPairingProofKeyThumbprint", Migration0032],
-  [33, "ProjectionThreadsSettled", Migration0033],
-  [34, "ProjectionThreadsSnoozed", Migration0034],
-  [35, "ProjectionThreadTitleRegeneration", Migration0035],
-  [36, "ProjectionThreadsPinned", Migration0036],
+  [33, "ProjectionOwnershipMembership", Migration0033],
+  [34, "ProjectionThreadMessageSender", Migration0034],
+  [35, "BackfillProjectionThreadLatestTurn", Migration0035],
+  [36, "BackfillLatestTurnSkipPendingRows", Migration0036],
+  [37, "ThreadExecutions", Migration0037],
+  [38, "CatchupSummaries", Migration0038],
+  [39, "CatchupSummaryStatus", Migration0039],
+  [40, "ProjectionThreadsSettled", Migration0040],
+  [41, "ProjectionThreadsSnoozed", Migration0041],
+  [42, "UserMcpProfiles", Migration0042],
+  [43, "ProjectionThreadTitleRegeneration", Migration0043],
+  [44, "ProjectionThreadSourceControlProfile", Migration0044],
+  [45, "EnvironmentUsers", Migration0045],
+  // T3-CUSTOM(expbkt3): 46-999 stay empty once the 1000+ lane has started.
+  [1000, "ProjectionThreadsPriority", Migration1000],
+  [1001, "SessionRecoveryState", Migration1001],
+  [1002, "ThreadBootstrapAndCreationDefaults", Migration1002],
+  [1003, "DurableExecutionIntents", Migration1003],
+  [1004, "ProjectionThreadsLinearIssue", Migration1004],
+  [1005, "ProjectionThreadsPinned", Migration1005],
+  [1006, "AuthSessionClientVersion", Migration1006],
+  [1007, "OwnershipBackfillFastPath", Migration1007],
+  [1008, "ProjectionTurnsKeysetIndex", Migration1008],
+  [1009, "PlanReviewDocuments", Migration1009],
+  // T3-CUSTOM(expbkt3): session lineage.
+  [1010, "ProjectionThreadsParentThread", Migration1010],
+  [1011, "PlanDocumentFormat", Migration1011],
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  [1012, "ProjectionThreadsWorkSummary", Migration1012],
+  // T3-CUSTOM(expbkt3): END
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

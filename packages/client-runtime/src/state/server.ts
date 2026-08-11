@@ -708,6 +708,18 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 5_000,
     }),
     configProjection,
+    // Live host/process resource samples. Short idle TTL so the ws
+    // subscription tears down promptly once the monitor panel unmounts.
+    resources: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:resources",
+      tag: WS_METHODS.subscribeServerResources,
+      idleTtlMs: 5_000,
+    }),
+    providerRateLimits: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:provider-rate-limits",
+      tag: WS_METHODS.subscribeProviderRateLimits,
+      idleTtlMs: 5_000,
+    }),
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
       tag: WS_METHODS.subscribeServerLifecycle,
@@ -747,6 +759,27 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:update-settings",
       tag: WS_METHODS.serverUpdateSettings,
       scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    // T3-CUSTOM(expbkt3): User-scoped automation/MCP state is intentionally
+    // separate from server-wide settings.
+    personalMcpProfile: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:personal-mcp:profile",
+      tag: WS_METHODS.personalMcpGetProfile,
+    }),
+    updatePersonalMcpProfile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:personal-mcp:update-profile",
+      tag: WS_METHODS.personalMcpUpdateProfile,
+      concurrency: configConcurrency,
+    }),
+    rotatePersonalMcpToken: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:personal-mcp:rotate-token",
+      tag: WS_METHODS.personalMcpRotateToken,
+      concurrency: configConcurrency,
+    }),
+    revokePersonalMcpToken: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:personal-mcp:revoke-token",
+      tag: WS_METHODS.personalMcpRevokeToken,
       concurrency: configConcurrency,
     }),
     signalProcess: createEnvironmentRpcCommand(runtime, {

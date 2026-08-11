@@ -1,5 +1,6 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  computeTurnDurationMs,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -9,6 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+// T3-CUSTOM(expbkt3): fork event projections
+import { isForkOrchestrationEvent, projectForkEvent } from "./projectorForkCases.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -32,6 +35,9 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadBootstrapRequestedPayload,
+  ThreadBootstrapStepUpdatedPayload,
+  ThreadBootstrapCompletedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -203,6 +209,12 @@ export function projectEvent(
     updatedAt: event.occurredAt,
   };
 
+  // T3-CUSTOM(expbkt3): BEGIN fork events are projected in projectorForkCases.ts
+  if (isForkOrchestrationEvent(event)) {
+    return projectForkEvent(nextBase, event, { decodeForEvent, updateThread });
+  }
+  // T3-CUSTOM(expbkt3): END
+
   switch (event.type) {
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
@@ -213,7 +225,12 @@ export function projectEvent(
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
+            threadCreationDefaults: payload.threadCreationDefaults,
             scripts: payload.scripts,
+            // Owner is the creator (team mode). Preserve a prior owner on
+            // idempotent re-creation; otherwise seed from the created payload.
+            ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
+            memberUserIds: existing?.memberUserIds ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -244,6 +261,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultModelSelection !== undefined
                     ? { defaultModelSelection: payload.defaultModelSelection }
+                    : {}),
+                  ...(payload.threadCreationDefaults !== undefined
+                    ? { threadCreationDefaults: payload.threadCreationDefaults }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   updatedAt: payload.updatedAt,
@@ -277,6 +297,7 @@ export function projectEvent(
           event.type,
           "payload",
         );
+        const existing = nextBase.threads.find((entry) => entry.id === payload.threadId);
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -288,7 +309,28 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            sourceControlProfileId: payload.sourceControlProfileId,
             latestTurn: null,
+            // Owner is the creator (team mode). Preserve a prior owner on
+            // idempotent re-creation (bootstrap retry after compensation).
+            ownerUserId: existing?.ownerUserId ?? payload.createdByUserId ?? null,
+            // T3-CUSTOM(expbkt3): BEGIN — creator ownership and explicit tagging.
+            // The creator is both the durable owner and an
+            // explicit tagged member from the first projection. A session
+            // created from another session is born carrying the parent's
+            // audience too, so the humans watching the parent keep seeing the
+            // work it delegates.
+            memberUserIds:
+              existing?.memberUserIds ??
+              Array.from(
+                new Set([
+                  ...(payload.createdByUserId === null || payload.createdByUserId === undefined
+                    ? []
+                    : [payload.createdByUserId]),
+                  ...(payload.memberUserIds ?? []),
+                ]),
+              ),
+            // T3-CUSTOM(expbkt3): END
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             archivedAt: null,
@@ -296,16 +338,24 @@ export function projectEvent(
             settledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
+            bootstrap: null,
+            // T3-CUSTOM(expbkt3): session priority.
+            priority: payload.priority ?? null,
+            // T3-CUSTOM(expbkt3): no manual Linear tag at thread creation.
+            linearIssueUrl: null,
+            // T3-CUSTOM(expbkt3): session lineage stamped at creation.
+            parentThreadId: payload.parentThreadId ?? null,
             deletedAt: null,
             messages: [],
             activities: [],
             checkpoints: [],
+            rollingSummary: null,
+            turnSummaries: [],
             session: null,
           },
           event.type,
           "thread",
         );
-        const existing = nextBase.threads.find((entry) => entry.id === thread.id);
         return {
           ...nextBase,
           threads: existing
@@ -432,6 +482,16 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            // T3-CUSTOM(expbkt3): session priority.
+            ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
+            // T3-CUSTOM(expbkt3): durable manual Linear tag.
+            ...(payload.linearIssueUrl !== undefined
+              ? { linearIssueUrl: payload.linearIssueUrl }
+              : {}),
+            // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
+            ...(payload.parentThreadId !== undefined
+              ? { parentThreadId: payload.parentThreadId }
+              : {}),
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -486,6 +546,7 @@ export function projectEvent(
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
+            sentByUserId: payload.sentByUserId ?? null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
           },
@@ -570,6 +631,7 @@ export function projectEvent(
                       thread.latestTurn?.turnId === session.activeTurnId
                         ? thread.latestTurn.assistantMessageId
                         : null,
+                    durationMs: null,
                   }
                 : thread.latestTurn !== null &&
                     thread.latestTurn.state === "running" &&
@@ -581,6 +643,10 @@ export function projectEvent(
                       // placeholder checkpoint timestamp — the session leaving
                       // "running" is the authoritative turn end.
                       completedAt: session.updatedAt,
+                      durationMs: computeTurnDurationMs(
+                        thread.latestTurn.startedAt,
+                        session.updatedAt,
+                      ),
                     }
                   : thread.latestTurn,
             updatedAt: event.occurredAt,
@@ -689,6 +755,12 @@ export function projectEvent(
                       : payload.completedAt,
                   completedAt: payload.completedAt,
                   assistantMessageId: payload.assistantMessageId,
+                  durationMs: computeTurnDurationMs(
+                    thread.latestTurn?.turnId === payload.turnId
+                      ? (thread.latestTurn.startedAt ?? payload.completedAt)
+                      : payload.completedAt,
+                    payload.completedAt,
+                  ),
                 },
             updatedAt: event.occurredAt,
           }),
@@ -718,6 +790,10 @@ export function projectEvent(
             retainedTurnIds,
           ).slice(-200);
           const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+          // Drop catch-up cards for turns that no longer exist after the revert.
+          const turnSummaries = thread.turnSummaries.filter((entry) =>
+            retainedTurnIds.has(entry.turnId),
+          );
 
           const latestCheckpoint = checkpoints.at(-1) ?? null;
           const latestTurn =
@@ -730,6 +806,8 @@ export function projectEvent(
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId,
+                  // Reverted turns collapse to a single checkpoint instant.
+                  durationMs: 0,
                 };
 
           return {
@@ -739,6 +817,7 @@ export function projectEvent(
               messages,
               proposedPlans,
               activities,
+              turnSummaries,
               latestTurn,
               updatedAt: event.occurredAt,
             }),
@@ -775,6 +854,92 @@ export function projectEvent(
           };
         }),
       );
+
+    case "thread.bootstrap-requested":
+      return decodeForEvent(
+        ThreadBootstrapRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            bootstrap: payload.progress,
+            updatedAt: payload.createdAt,
+          }),
+        })),
+      );
+
+    case "thread.bootstrap-step-updated":
+      return decodeForEvent(
+        ThreadBootstrapStepUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread?.bootstrap || thread.bootstrap.id !== payload.bootstrapId) return nextBase;
+          const currentStep = thread.bootstrap[payload.step];
+          const nextStep = {
+            ...currentStep,
+            status: payload.status,
+            attempt: payload.attempt,
+            ...(payload.terminalId !== undefined ? { terminalId: payload.terminalId } : {}),
+            ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+            ...(payload.error !== undefined ? { error: payload.error } : {}),
+            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+          };
+          const status =
+            payload.status === "failed"
+              ? ("failed" as const)
+              : payload.status === "running" || payload.status === "pending"
+                ? ("running" as const)
+                : thread.bootstrap.status;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              bootstrap: {
+                ...thread.bootstrap,
+                status,
+                [payload.step]: nextStep,
+                updatedAt: payload.updatedAt,
+              },
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.bootstrap-completed":
+      return decodeForEvent(
+        ThreadBootstrapCompletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread?.bootstrap || thread.bootstrap.id !== payload.bootstrapId) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              bootstrap: {
+                ...thread.bootstrap,
+                status: "ready",
+                updatedAt: payload.completedAt,
+              },
+              updatedAt: payload.completedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.bootstrap-stop-requested":
+    case "thread.bootstrap-retry-requested":
+    case "thread.bootstrap-continue-requested":
+      return Effect.succeed(nextBase);
 
     default:
       return Effect.succeed(nextBase);

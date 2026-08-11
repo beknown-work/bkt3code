@@ -109,7 +109,16 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
         : instance,
     ]),
   );
-  return { ...settings, providerInstances };
+  return {
+    ...settings,
+    providerInstances,
+    // T3-CUSTOM(expbkt3): The legacy server-wide MCP operator secret must
+    // never be distributed to authenticated browser clients.
+    experimental: {
+      ...settings.experimental,
+      externalMcp: { ...settings.experimental.externalMcp, apiKey: "" },
+    },
+  };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -214,6 +223,11 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
+  // T3-CUSTOM(expbkt3): model selections are atomic option envelopes.
+  "defaultThreadModelSelection",
+  // Nested under experimental.sessionSummary; stripped as a unit so a
+  // non-default model selection is never partially persisted.
+  "modelSelection",
 ]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {

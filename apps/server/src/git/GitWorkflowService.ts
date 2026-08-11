@@ -69,6 +69,10 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly remoteName: string;
     }) => Effect.Effect<void, GitCommandError>;
+    readonly remoteExists: (input: {
+      readonly cwd: string;
+      readonly remoteName: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
     readonly resolveRemoteTrackingCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -80,6 +84,10 @@ export class GitWorkflowService extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
+    readonly pruneWorktrees: (cwd: string) => Effect.Effect<void, GitCommandError>;
+    readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+    // T3-CUSTOM(expbkt3): live local + remote names reserve generated worktree codenames.
+    readonly listWorktreeBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
@@ -303,6 +311,10 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
         Effect.andThen(git.fetchRemote(input)),
       ),
+    remoteExists: (input) =>
+      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(
+        Effect.andThen(git.remoteExists(input)),
+      ),
     resolveRemoteTrackingCommit: (input) =>
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
         Effect.andThen(git.resolveRemoteTrackingCommit(input)),
@@ -310,6 +322,19 @@ export const make = Effect.gen(function* () {
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(git.removeWorktree(input)),
+      ),
+    pruneWorktrees: (cwd) =>
+      ensureGitCommand("GitWorkflowService.pruneWorktrees", cwd).pipe(
+        Effect.andThen(git.pruneWorktrees(cwd)),
+      ),
+    listLocalBranchNames: (cwd) =>
+      ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
+        Effect.andThen(git.listLocalBranchNames(cwd)),
+      ),
+    // T3-CUSTOM(expbkt3): generated worktree names must be free locally and remotely.
+    listWorktreeBranchNames: (cwd) =>
+      ensureGitCommand("GitWorkflowService.listWorktreeBranchNames", cwd).pipe(
+        Effect.andThen(git.listWorktreeBranchNames(cwd)),
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(

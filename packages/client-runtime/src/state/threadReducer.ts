@@ -1,15 +1,16 @@
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as O from "effect/Order";
+import { computeTurnDurationMs } from "@t3tools/contracts";
 import type {
   MessageId,
   OrchestrationCheckpointSummary,
   OrchestrationEvent,
   OrchestrationLatestTurn,
   OrchestrationMessage,
-  OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  OrchestrationTurnCatchupSummary,
   TurnId,
 } from "@t3tools/contracts";
 
@@ -27,6 +28,11 @@ const checkpointOrder = O.mapInput(
   O.Number,
   (cp: OrchestrationThread["checkpoints"][number]) =>
     cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
+);
+
+const turnSummaryOrder = O.mapInput(
+  O.String,
+  (summary: OrchestrationTurnCatchupSummary) => summary.createdAt,
 );
 
 const activityOrder = O.combineAll<OrchestrationThreadActivity>([
@@ -86,7 +92,17 @@ export function applyThreadDetailEvent(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          sourceControlProfileId: event.payload.sourceControlProfileId,
+          // T3-CUSTOM(expbkt3): bootstrap arrives in its own durable event.
+          bootstrap: null,
           latestTurn: null,
+          ownerUserId: event.payload.createdByUserId ?? null,
+          // T3-CUSTOM(expbkt3): BEGIN — creation tags the authenticated owner too.
+          memberUserIds:
+            event.payload.createdByUserId === null || event.payload.createdByUserId === undefined
+              ? []
+              : [event.payload.createdByUserId],
+          // T3-CUSTOM(expbkt3): END
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
@@ -99,12 +115,26 @@ export function applyThreadDetailEvent(
           proposedPlans: [],
           activities: [],
           checkpoints: [],
+          rollingSummary: null,
+          turnSummaries: [],
           session: null,
         },
       };
 
     case "thread.deleted":
       return { kind: "deleted" };
+
+    case "thread.source-control-profile-set":
+      return event.payload.threadId === thread.id
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              sourceControlProfileId: event.payload.sourceControlProfileId,
+              updatedAt: event.payload.changedAt,
+            },
+          }
+        : { kind: "unchanged" };
 
     case "thread.archived":
       return {
@@ -204,9 +234,68 @@ export function applyThreadDetailEvent(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
+          // T3-CUSTOM(expbkt3): session priority.
+          ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
+          // T3-CUSTOM(expbkt3): durable manual Linear tag.
+          ...(event.payload.linearIssueUrl !== undefined
+            ? { linearIssueUrl: event.payload.linearIssueUrl }
+            : {}),
+          // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
+          ...(event.payload.parentThreadId !== undefined
+            ? { parentThreadId: event.payload.parentThreadId }
+            : {}),
           updatedAt: event.payload.updatedAt,
         },
       };
+
+    case "thread.member-added":
+      return thread.memberUserIds.includes(event.payload.userId)
+        ? { kind: "unchanged" }
+        : {
+            kind: "updated",
+            thread: {
+              ...thread,
+              memberUserIds: [...thread.memberUserIds, event.payload.userId],
+              updatedAt: event.payload.addedAt,
+            },
+          };
+
+    case "thread.member-removed":
+      return thread.memberUserIds.includes(event.payload.userId)
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              memberUserIds: thread.memberUserIds.filter((id) => id !== event.payload.userId),
+              updatedAt: event.payload.removedAt,
+            },
+          }
+        : { kind: "unchanged" };
+
+    case "thread.owner-transferred": {
+      const memberUserIds = thread.memberUserIds.filter((id) => id !== event.payload.ownerUserId);
+      if (
+        event.payload.previousOwnerUserId !== null &&
+        event.payload.previousOwnerUserId !== event.payload.ownerUserId &&
+        !memberUserIds.includes(event.payload.previousOwnerUserId)
+      ) {
+        memberUserIds.push(event.payload.previousOwnerUserId);
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          ownerUserId: event.payload.ownerUserId,
+          memberUserIds,
+          updatedAt: event.payload.transferredAt,
+        },
+      };
+    }
+
+    case "project.member-added":
+    case "project.member-removed":
+    case "project.owner-transferred":
+      return { kind: "unchanged" };
 
     case "thread.runtime-mode-set":
       return {
@@ -260,6 +349,10 @@ export function applyThreadDetailEvent(
             state: "interrupted",
             startedAt: latestTurn.startedAt ?? event.payload.createdAt,
             completedAt: latestTurn.completedAt ?? event.payload.createdAt,
+            durationMs: computeTurnDurationMs(
+              latestTurn.startedAt ?? event.payload.createdAt,
+              latestTurn.completedAt ?? event.payload.createdAt,
+            ),
           },
           updatedAt: event.occurredAt,
         },
@@ -277,6 +370,7 @@ export function applyThreadDetailEvent(
           : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
+        sentByUserId: event.payload.sentByUserId ?? null,
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
       };
@@ -302,43 +396,31 @@ export function applyThreadDetailEvent(
                 },
           )
         : Arr.append(thread.messages, message);
-      // Update latestTurn for assistant messages bound to a turn. A completed
-      // assistant message only settles the turn once the session is no longer
-      // running it — providers may emit several assistant messages per turn
-      // (commentary between tool calls), and the turn must stay unsettled
-      // until the provider reports turn end.
-      const turnStillRunning =
-        event.payload.turnId !== null &&
-        thread.session?.status === "running" &&
-        thread.session.activeTurnId === event.payload.turnId;
-      const settlesTurn = !event.payload.streaming && !turnStillRunning;
+      // Messages can annotate a turn, but they cannot settle it. Only an
+      // observed execution transition has lifecycle authority.
+      const messageTurnStartedAt =
+        thread.latestTurn?.turnId === event.payload.turnId
+          ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
+          : event.payload.createdAt;
+      const messageTurnCompletedAt =
+        thread.latestTurn?.turnId === event.payload.turnId
+          ? (thread.latestTurn.completedAt ?? null)
+          : null;
       const latestTurn: OrchestrationThread["latestTurn"] =
         event.payload.role === "assistant" &&
         event.payload.turnId !== null &&
         (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
           ? {
               turnId: event.payload.turnId,
-              state: settlesTurn
-                ? thread.latestTurn?.state === "interrupted"
-                  ? "interrupted"
-                  : thread.latestTurn?.state === "error"
-                    ? "error"
-                    : "completed"
-                : "running",
+              state: thread.latestTurn?.state ?? "running",
               requestedAt:
                 thread.latestTurn?.turnId === event.payload.turnId
                   ? thread.latestTurn.requestedAt
                   : event.payload.createdAt,
-              startedAt:
-                thread.latestTurn?.turnId === event.payload.turnId
-                  ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
-                  : event.payload.createdAt,
-              completedAt: settlesTurn
-                ? event.payload.updatedAt
-                : thread.latestTurn?.turnId === event.payload.turnId
-                  ? (thread.latestTurn.completedAt ?? null)
-                  : null,
+              startedAt: messageTurnStartedAt,
+              completedAt: messageTurnCompletedAt,
               assistantMessageId: event.payload.messageId,
+              durationMs: computeTurnDurationMs(messageTurnStartedAt, messageTurnCompletedAt),
             }
           : thread.latestTurn;
 
@@ -366,68 +448,22 @@ export function applyThreadDetailEvent(
 
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {
-      // Leaving the "running" session status is the turn-end signal: settle a
-      // still-running latest turn so its duration reflects the whole turn.
-      const settledTurnState = settledTurnStateForSessionStatus(event.payload.session.status);
-      const latestTurn: OrchestrationLatestTurn | null =
-        event.payload.session.status === "running" && event.payload.session.activeTurnId !== null
-          ? {
-              turnId: event.payload.session.activeTurnId,
-              state: "running",
-              requestedAt:
-                thread.latestTurn?.turnId === event.payload.session.activeTurnId
-                  ? thread.latestTurn.requestedAt
-                  : event.payload.session.updatedAt,
-              startedAt:
-                thread.latestTurn?.turnId === event.payload.session.activeTurnId
-                  ? (thread.latestTurn.startedAt ?? event.payload.session.updatedAt)
-                  : event.payload.session.updatedAt,
-              completedAt: null,
-              assistantMessageId:
-                thread.latestTurn?.turnId === event.payload.session.activeTurnId
-                  ? thread.latestTurn.assistantMessageId
-                  : null,
-            }
-          : thread.latestTurn !== null &&
-              thread.latestTurn.state === "running" &&
-              settledTurnState !== null
-            ? {
-                ...thread.latestTurn,
-                state: settledTurnState,
-                // A running turn's completedAt can only hold a mid-turn
-                // placeholder checkpoint timestamp — the session leaving
-                // "running" is the authoritative turn end.
-                completedAt: event.payload.session.updatedAt,
-              }
-            : thread.latestTurn;
-
       return {
         kind: "updated",
         thread: {
           ...thread,
           session: event.payload.session,
-          latestTurn,
           updatedAt: event.occurredAt,
         },
       };
     }
 
     case "thread.session-stop-requested":
-      return thread.session === null
-        ? { kind: "unchanged" }
-        : {
-            kind: "updated",
-            thread: {
-              ...thread,
-              session: {
-                ...thread.session,
-                status: "stopped",
-                activeTurnId: null,
-                updatedAt: event.payload.createdAt,
-              },
-              updatedAt: event.occurredAt,
-            },
-          };
+    case "thread.session-restart-requested":
+      // An intent receipt is not a lifecycle observation. The execution
+      // snapshot (and, for internal cleanup, a later session-set event) owns
+      // the visible state transition.
+      return { kind: "unchanged" };
 
     // ── Proposed plans ──────────────────────────────────────────────
     case "thread.proposed-plan-upserted": {
@@ -471,27 +507,9 @@ export function applyThreadDetailEvent(
         Arr.sort(checkpointOrder),
       );
 
-      // Mid-turn diff updates produce placeholder checkpoints; record the
-      // checkpoint, but don't settle a turn its session is still running.
-      const diffTurnStillRunning =
-        thread.session?.status === "running" &&
-        thread.session.activeTurnId === event.payload.turnId;
-      const latestTurn =
-        !diffTurnStillRunning &&
-        (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
-          ? {
-              turnId: event.payload.turnId,
-              state: checkpointStatusToTurnState(event.payload.status),
-              requestedAt: thread.latestTurn?.requestedAt ?? event.payload.completedAt,
-              startedAt: thread.latestTurn?.startedAt ?? event.payload.completedAt,
-              completedAt: event.payload.completedAt,
-              assistantMessageId: event.payload.assistantMessageId,
-            }
-          : thread.latestTurn;
-
       return {
         kind: "updated",
-        thread: { ...thread, checkpoints, latestTurn, updatedAt: event.occurredAt },
+        thread: { ...thread, checkpoints, updatedAt: event.occurredAt },
       };
     }
 
@@ -517,6 +535,11 @@ export function applyThreadDetailEvent(
         thread.activities,
         Arr.filter((activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId)),
       );
+      // Drop catch-up cards for turns the revert removed.
+      const turnSummaries = pipe(
+        thread.turnSummaries,
+        Arr.filter((entry) => retainedTurnIds.has(entry.turnId)),
+      );
       const latestCheckpoint = checkpoints.at(-1) ?? null;
 
       return {
@@ -527,6 +550,7 @@ export function applyThreadDetailEvent(
           messages,
           proposedPlans,
           activities,
+          turnSummaries,
           latestTurn:
             latestCheckpoint === null
               ? null
@@ -539,9 +563,47 @@ export function applyThreadDetailEvent(
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,
                   assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
+                  // Reverted turns collapse to a single checkpoint instant.
+                  durationMs: 0,
                 },
           updatedAt: event.occurredAt,
         },
+      };
+    }
+
+    // ── Catch-up summaries ──────────────────────────────────────────
+    case "thread.catchup-summary-updated": {
+      // A null rolling summary means "unchanged" (e.g. the pending marker).
+      const rollingSummary = event.payload.rollingSummary ?? thread.rollingSummary;
+      const withoutTurn = pipe(
+        thread.turnSummaries,
+        Arr.filter((entry) => entry.turnId !== event.payload.turnId),
+      );
+
+      // "cleared" retracts the card for a below-cutoff turn. Failures remain
+      // present as an "error" summary so the user can retry in place.
+      if (event.payload.progress === "cleared") {
+        return {
+          kind: "updated",
+          thread: { ...thread, rollingSummary, turnSummaries: withoutTurn },
+        };
+      }
+
+      const turnSummaries = pipe(
+        withoutTurn,
+        Arr.append({
+          turnId: event.payload.turnId,
+          assistantMessageId: event.payload.assistantMessageId,
+          summary: event.payload.displaySummary,
+          status: event.payload.progress,
+          createdAt: event.payload.createdAt,
+        }),
+        Arr.sort(turnSummaryOrder),
+      );
+
+      return {
+        kind: "updated",
+        thread: { ...thread, rollingSummary, turnSummaries },
       };
     }
 
@@ -578,10 +640,85 @@ export function applyThreadDetailEvent(
       };
     }
 
+    // T3-CUSTOM(expbkt3): durable worktree/setup/agent progress is reduced from
+    // events so live views and reconnected snapshots converge identically.
+    case "thread.bootstrap-requested":
+      return event.payload.threadId === thread.id
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              bootstrap: event.payload.progress,
+              updatedAt: event.payload.createdAt,
+            },
+          }
+        : { kind: "unchanged" };
+
+    case "thread.bootstrap-step-updated": {
+      if (
+        event.payload.threadId !== thread.id ||
+        !thread.bootstrap ||
+        thread.bootstrap.id !== event.payload.bootstrapId
+      ) {
+        return { kind: "unchanged" };
+      }
+      const current = thread.bootstrap[event.payload.step];
+      const step = {
+        ...current,
+        status: event.payload.status,
+        attempt: event.payload.attempt,
+        ...(event.payload.terminalId !== undefined ? { terminalId: event.payload.terminalId } : {}),
+        ...(event.payload.exitCode !== undefined ? { exitCode: event.payload.exitCode } : {}),
+        ...(event.payload.error !== undefined ? { error: event.payload.error } : {}),
+        ...(event.payload.worktreePath !== undefined
+          ? { worktreePath: event.payload.worktreePath }
+          : {}),
+      };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          bootstrap: {
+            ...thread.bootstrap,
+            status:
+              event.payload.status === "failed"
+                ? "failed"
+                : event.payload.status === "running" || event.payload.status === "pending"
+                  ? "running"
+                  : thread.bootstrap.status === "failed"
+                    ? "running"
+                    : thread.bootstrap.status,
+            [event.payload.step]: step,
+            updatedAt: event.payload.updatedAt,
+          },
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
+    case "thread.bootstrap-completed":
+      return event.payload.threadId === thread.id && thread.bootstrap
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              bootstrap: {
+                ...thread.bootstrap,
+                status: "ready",
+                updatedAt: event.payload.completedAt,
+              },
+              updatedAt: event.payload.completedAt,
+            },
+          }
+        : { kind: "unchanged" };
+
     // ── Events that don't mutate thread state directly ──────────────
     case "thread.approval-response-requested":
     case "thread.user-input-response-requested":
     case "thread.checkpoint-revert-requested":
+    case "thread.bootstrap-stop-requested":
+    case "thread.bootstrap-retry-requested":
+    case "thread.bootstrap-continue-requested":
       return { kind: "unchanged" };
   }
 
@@ -590,29 +727,6 @@ export function applyThreadDetailEvent(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-/**
- * Turn state to settle a still-running latest turn with when its session
- * leaves the "running" status, or null while the session is (re)starting or
- * running and the turn must stay unsettled.
- */
-function settledTurnStateForSessionStatus(
-  status: OrchestrationSession["status"],
-): "completed" | "interrupted" | "error" | null {
-  switch (status) {
-    case "idle":
-    case "ready":
-      return "completed";
-    case "error":
-      return "error";
-    case "interrupted":
-    case "stopped":
-      return "interrupted";
-    case "starting":
-    case "running":
-      return null;
-  }
-}
 
 function checkpointStatusToTurnState(
   status: "ready" | "missing" | "error",

@@ -26,6 +26,9 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
+// T3-CUSTOM(expbkt3): automatic session recovery.
+import * as SessionRecoveryState from "./persistence/SessionRecoveryState.ts";
+import { SessionRecoveryLive } from "./recovery/SessionRecoveryLive.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
@@ -42,7 +45,17 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
+import { mcpUpstreamProxyRouteLayer } from "./mcp/McpUpstreamProxy.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+// T3-CUSTOM(expbkt3): BEGIN — experimental native-plan review runtime.
+import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
+// T3-CUSTOM(expbkt3): native plan review.
+import * as PlanIngestListener from "./planreview/PlanIngestListener.ts";
+import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
+import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
+import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
+// T3-CUSTOM(expbkt3): END
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -53,11 +66,18 @@ import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationRe
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
+import { CatchupSummaryReactorLive } from "./orchestration/Layers/CatchupSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+import { WorkSummaryReactorLive } from "./orchestration/Layers/WorkSummaryReactor.ts";
+// T3-CUSTOM(expbkt3): END
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+// T3-CUSTOM(expbkt3): archive-time session history export.
+import { ArchiveExportReactorLive } from "./orchestration/Layers/ArchiveExportReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+import * as ProviderRateLimits from "./provider/ProviderRateLimits.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -75,14 +95,20 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
+import * as ThreadSourceControlActionLock from "./sourceControl/ThreadSourceControlActionLock.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import { ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ClerkIdentityVerifier from "./auth/ClerkIdentityVerifier.ts";
+import * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
 import {
   connectHttpApiLayer,
+  pendingServiceUpdateExists,
   reconcileDesiredCloudLink,
   releaseManagedTunnelOnShutdown,
 } from "./cloud/http.ts";
@@ -94,6 +120,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
@@ -101,12 +128,25 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
+import * as SessionArchiveSweeper from "./sessionArchive/SessionArchiveSweeper.ts";
+import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages.ts";
+// T3-CUSTOM(expbkt3): archive-time history export reads activities, thread
+// rows (for the soft-deleted backfill), and provider resume cursors.
+import { ProjectionThreadActivityRepositoryLive } from "./persistence/Layers/ProjectionThreadActivities.ts";
+import { ProjectionThreadRepositoryLive } from "./persistence/Layers/ProjectionThreads.ts";
+import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
+import { ThreadExecutionSupervisorLive } from "./execution/ThreadExecutionSupervisorLive.ts";
+// T3-CUSTOM(expbkt3): durable execution state machine repository.
+import { DurableExecutionIntentRepositoryLive } from "./execution/DurableExecutionIntentRepository.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { OrchestrationAccessControlLive } from "./orchestration/Layers/AccessControl.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -234,7 +274,13 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
+  Layer.provideMerge(CatchupSummaryReactorLive),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  Layer.provideMerge(WorkSummaryReactorLive),
+  // T3-CUSTOM(expbkt3): END
   Layer.provideMerge(ThreadDeletionReactorLive),
+  // T3-CUSTOM(expbkt3): archive-time session history export.
+  Layer.provideMerge(ArchiveExportReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
@@ -256,6 +302,19 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
+// T3-CUSTOM(expbkt3): shared repository instance for provider dispatch and recovery.
+const DurableExecutionIntentLayerLive = DurableExecutionIntentRepositoryLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
+// T3-CUSTOM(expbkt3): Fully compose this custom persistence service once so
+// unrelated route tests and upstream callers never inherit its SqlClient or
+// secret-store implementation requirements.
+const UserMcpProfileStoreLive = UserMcpProfileStore.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(PersistenceLayerLive),
+);
+
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
 );
@@ -269,7 +328,9 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
 );
 
 const GitManagerLayerLive = GitManager.layer.pipe(
-  Layer.provideMerge(ProjectSetupScriptRunner.layer),
+  // T3-CUSTOM(expbkt3): BEGIN — setup falls back to the repository's t3.json.
+  Layer.provideMerge(ProjectSetupScriptRunner.layer.pipe(Layer.provide(T3ProjectFileLoader.layer))),
+  // T3-CUSTOM(expbkt3): END
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(TextGeneration.layer),
@@ -288,6 +349,12 @@ const GitWorkflowLayerLive = GitWorkflowService.layer.pipe(
 const SourceControlRepositoryServiceLayerLive = SourceControlRepositoryService.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
+);
+
+const SourceControlProfileServiceLayerLive = SourceControlProfileService.layer.pipe(
+  Layer.provide(GitHubCli.layer.pipe(Layer.provide(VcsProcess.layer))),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(ServerSecretStore.layer),
 );
 
 const ReviewLayerLive = ReviewService.layer.pipe(
@@ -340,9 +407,18 @@ const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(T3ProjectFileLoader.layer),
 );
 
-const AuthLayerLive = EnvironmentAuth.layer.pipe(
+const EnvironmentAuthLayerLive = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
+  // T3-CUSTOM(expbkt3): enables coordinator ownership in ProviderCommandReactor.
+  Layer.provideMerge(DurableExecutionIntentLayerLive),
   Layer.provide(ServerSecretStore.layer),
+);
+
+const AuthLayerLive = EnvironmentUserService.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provideMerge(EnvironmentAuthLayerLive),
+  Layer.provideMerge(ClerkIdentityVerifier.layer),
 );
 
 const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
@@ -358,15 +434,82 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
+// T3-CUSTOM(expbkt3): the supervisor records session recovery desired-state,
+// so its repository is composed in here rather than at every call site.
+const SessionRecoveryStateLayerLive = SessionRecoveryState.layer.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
+
+const ExecutionLayerLive = ThreadExecutionSupervisorLive.pipe(
+  // T3-CUSTOM(expbkt3): explicit Stop must fence the same durable rows the coordinator claims.
+  Layer.provide(DurableExecutionIntentLayerLive),
+  Layer.provide(ProviderLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+  Layer.provide(PersistenceLayerLive),
+  Layer.provide(SessionRecoveryStateLayerLive),
+);
+
+// T3-CUSTOM(expbkt3): reconnects sessions killed by a restart or a provider
+// crash. Depends on the supervisor for live snapshots, so it composes after it.
+const SessionRecoveryLayerLive = SessionRecoveryLive.pipe(
+  Layer.provide(ExecutionLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+  Layer.provide(SessionRecoveryStateLayerLive),
+);
+
+const ProviderExecutionRuntimeLayerLive = Layer.mergeAll(
+  ProviderRuntimeLayerLive,
+  ExecutionLayerLive,
+  SessionRecoveryLayerLive,
+);
+
+const ProviderRateLimitsLayerLive = ProviderRateLimits.layer.pipe(Layer.provide(ProviderLayerLive));
+
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim. Reads the projection
+// for archived threads and their messages, and removes worktrees through the
+// same git workflow service the delete path uses.
+const SessionArchiveLayerLive = SessionArchiveService.layer.pipe(
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+  Layer.provide(ProjectionThreadMessageRepositoryLive),
+  // T3-CUSTOM(expbkt3): archive-time export deps — activities sidecar, the
+  // soft-deleted backfill row source, and provider resume cursors for raw
+  // transcript capture.
+  Layer.provide(ProjectionThreadActivityRepositoryLive),
+  Layer.provide(ProjectionThreadRepositoryLive),
+  Layer.provide(ProviderSessionRuntime.layer),
+  Layer.provide(GitWorkflowLayerLive),
+  Layer.provide(PersistenceLayerLive),
+);
+
+// The sweeper only puts the service on a timer, so it composes on top of it.
+const SessionArchiveSweeperLayerLive = SessionArchiveSweeper.layer.pipe(
+  Layer.provide(SessionArchiveLayerLive),
+  Layer.provide(ServerSettingsLayerLive),
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
-  Layer.provideMerge(SourceControlProviderRegistryLayerLive),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      SourceControlProviderRegistryLayerLive,
+      SourceControlProfileServiceLayerLive,
+      ThreadSourceControlActionLock.layer,
+    ),
+  ),
   Layer.provideMerge(GitLayerLive),
-  Layer.provideMerge(VcsLayerLive),
-  Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
+  // T3-CUSTOM(expbkt3): the session archive is merged into the VCS group rather
+  // than added as its own `pipe` step — the chain is already at TypeScript's
+  // 20-overload ceiling for `.pipe`.
+  Layer.provideMerge(
+    Layer.mergeAll(VcsLayerLive, SessionArchiveLayerLive, SessionArchiveSweeperLayerLive),
+  ),
+  Layer.provideMerge(ProviderExecutionRuntimeLayerLive),
+  Layer.provideMerge(
+    Layer.mergeAll(ProviderRateLimitsLayerLive, TerminalLayerLive, PreviewLayerLive),
+  ),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
@@ -393,7 +536,17 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(ServerSecretStore.layer),
+  // T3-CUSTOM(expbkt3): Keep the personal MCP store beside its write-only
+  // secret dependency in one merge seam. Besides making upstream rebases
+  // mechanical, grouping these avoids exceeding Effect's typed pipe arity.
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ServerSecretStore.layer,
+      // Reusing this layer value shares the already-memoized SQLite runtime;
+      // it does not create a second database connection or migration graph.
+      UserMcpProfileStoreLive,
+    ),
+  ),
   Layer.provideMerge(
     Layer.mergeAll(
       CloudCliTokenManager.layer.pipe(
@@ -409,6 +562,10 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
+  // T3-CUSTOM(expbkt3): host-level metrics for the sidebar resource pill.
+  // Upstream's ResourceDiagnosticsLayerLive already covers ProcessDiagnostics
+  // and ProcessResourceMonitor; SystemResourceMonitor is fork-only.
+  Layer.provideMerge(SystemResourceMonitor.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
@@ -423,13 +580,34 @@ const commandReadinessLayer = HttpRouter.middleware(
     ),
   { global: true },
 );
+// T3-CUSTOM(expbkt3): Build one memoized user profile + credential registry
+// pair and provide both to the native T3 MCP transport and upstream proxy.
+const PersonalMcpRouteServicesLive = McpSessionRegistry.layer;
+
+const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
+  plannotatorProxyRouteLayer,
+  mcpUpstreamProxyRouteLayer,
+  McpHttpServer.layer,
+).pipe(
+  // One registry instance authenticates both the native and upstream MCP
+  // routes; separate instances would not recognize each other's run tokens.
+  Layer.provideMerge(PersonalMcpRouteServicesLive),
+  Layer.provide(ClerkDirectoryLive),
+  Layer.provide(OrchestrationAccessControlLive),
+);
+// T3-CUSTOM(expbkt3): END
 
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(authHttpApiLayer),
+      Layer.provide(authHttpApiLayer.pipe(Layer.provide(ClerkDirectoryLive))),
       Layer.provide(connectHttpApiLayer),
-      Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(
+        orchestrationHttpApiLayer.pipe(
+          Layer.provide(ClerkDirectoryLive),
+          Layer.provide(OrchestrationAccessControlLive),
+        ),
+      ),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
@@ -438,7 +616,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
+  PlannotatorAndMcpRoutesLive,
 ).pipe(
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
@@ -559,26 +737,34 @@ export const makeServerLayer = Layer.unwrap(
           yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
           return;
         }
+        const releaseManagedTunnel = releaseManagedTunnelOnShutdown().pipe(
+          Effect.timeout("10 seconds"),
+          Effect.tap((released) =>
+            released ? Effect.logInfo("Released the managed tunnel on shutdown") : Effect.void,
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "Failed to release the managed tunnel on shutdown; the next link reuses it",
+              { cause },
+            ),
+          ),
+          Effect.asVoid,
+        );
+        // A launcher trial can be stopped before activation. The previous
+        // server is already gone, so the trial owns cleanup immediately; the
+        // pending-state check keeps the tunnel for normal commit or rollback,
+        // while the launcher's explicit-stop marker allows it to be released.
+        // Other runtimes wait for activation so a failed standby cannot tear
+        // down the active runtime's tunnel.
+        const cleanupBeforeActivation = yield* pendingServiceUpdateExists;
+        if (cleanupBeforeActivation) {
+          yield* Effect.addFinalizer(() => releaseManagedTunnel);
+        }
         yield* forkParked(
           Effect.gen(function* () {
-            // Only an activated runtime owns the tunnel cleanup finalizer.
-            yield* Effect.addFinalizer(() =>
-              releaseManagedTunnelOnShutdown().pipe(
-                Effect.timeout("10 seconds"),
-                Effect.tap((released) =>
-                  released
-                    ? Effect.logInfo("Released the managed tunnel on shutdown")
-                    : Effect.void,
-                ),
-                Effect.catchCause((cause) =>
-                  Effect.logWarning(
-                    "Failed to release the managed tunnel on shutdown; the next link reuses it",
-                    { cause },
-                  ),
-                ),
-                Effect.asVoid,
-              ),
-            );
+            if (!cleanupBeforeActivation) {
+              yield* Effect.addFinalizer(() => releaseManagedTunnel);
+            }
             if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
             const server = yield* HttpServer.HttpServer;
             const address = server.address;
@@ -615,7 +801,7 @@ export const makeServerLayer = Layer.unwrap(
       }),
     );
 
-    const runtimeServicesLive = ServerRuntimeStartup.layerWithOptions({
+    const runtimeBaseServicesLive = ServerRuntimeStartup.layerWithOptions({
       activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
       abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
       awaitAuxiliaryParked: Effect.all(
@@ -628,6 +814,23 @@ export const makeServerLayer = Layer.unwrap(
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+    // T3-CUSTOM(expbkt3): Layer the durable dispatcher and Plannotator beside
+    // upstream's activation-aware runtime services.
+    const runtimeServicesWithoutPlannotatorLive = Layer.mergeAll(
+      runtimeBaseServicesLive,
+      OrchestrationCommandDispatcher.layer.pipe(Layer.provide(runtimeBaseServicesLive)),
+    );
+    // T3-CUSTOM(expbkt3): native plan review sits beside Plannotator; both read
+    // the same proposed-plan events and neither depends on the other.
+    const planReviewServicesLive = PlanReviewServiceLayer.layer.pipe(
+      Layer.provide(PlanReviewDocuments.layer),
+      Layer.provideMerge(runtimeServicesWithoutPlannotatorLive),
+    );
+    const runtimeServicesLive = Layer.mergeAll(
+      PlannotatorManager.layer.pipe(Layer.provideMerge(runtimeServicesWithoutPlannotatorLive)),
+      PlanIngestListener.layer.pipe(Layer.provideMerge(planReviewServicesLive)),
+      planReviewServicesLive,
+    );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,

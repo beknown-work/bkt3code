@@ -5,7 +5,10 @@
  * surface descriptors and the active surface, while each feature continues to
  * own its durable resource state. Browser surfaces point at preview tab ids,
  * terminal surfaces point at terminal session ids, file surfaces point at
- * workspace paths, and diff/plan/files remain singleton surfaces.
+ * workspace paths, and diff/files remain singleton surfaces.
+ *
+ * T3-CUSTOM(expbkt3): The `plannotator` descriptor is the only experimental
+ * addition to this upstream store; it remains thread-scoped and URL-only.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
@@ -13,9 +16,13 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+// T3-CUSTOM(expbkt3): Keep live Plannotator iframes out of durable panel state.
+import { withoutPersistedPlannotatorSurfaces } from "./plannotatorRightPanelPersistence";
 
 export const RIGHT_PANEL_KINDS = [
-  "plan",
+  "plannotator",
+  // T3-CUSTOM(expbkt3): native plan review surface.
+  "planReview",
   "diff",
   "files",
   "file",
@@ -45,11 +52,24 @@ export type RightPanelSurface =
       revealLine: number | null;
       revealRequestId: number;
     }
-  | { id: "plan"; kind: "plan" }
+  | {
+      id: `plannotator:${string}`;
+      kind: "plannotator";
+      url: `/plannotator/${string}/`;
+    }
+  // T3-CUSTOM(expbkt3): native plan review surface.
+  | {
+      id: `plan-review:${string}`;
+      kind: "planReview";
+      documentId: string;
+    }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 8;
+// v9 removed the "plan" surface kind (plans render inline in the transcript).
+// T3-CUSTOM(expbkt3): v9 also drops legacy persisted Plannotator surfaces.
+// T3-CUSTOM(expbkt3): v10 validates persisted native plan-review surfaces.
+const RIGHT_PANEL_STORAGE_VERSION = 10;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -59,8 +79,14 @@ export interface ThreadRightPanelState {
 
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
-  open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  open: (
+    ref: ScopedThreadRef,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator" | "planReview">,
+  ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
+  openPlannotator: (ref: ScopedThreadRef, url: `/plannotator/${string}/`) => void;
+  // T3-CUSTOM(expbkt3): native plan review.
+  openPlanReview: (ref: ScopedThreadRef, documentId: string) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -81,7 +107,10 @@ interface RightPanelStoreState {
   show: (ref: ScopedThreadRef) => void;
   close: (ref: ScopedThreadRef) => void;
   toggleVisibility: (ref: ScopedThreadRef) => void;
-  toggle: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  toggle: (
+    ref: ScopedThreadRef,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator" | "planReview">,
+  ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
 
@@ -92,19 +121,33 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal">,
+  // T3-CUSTOM(expbkt3): planReview carries a document id, so it is never a singleton.
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "plannotator" | "planReview">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
-    case "plan":
-      return { id: "plan", kind };
     case "agents":
       return { id: "agents", kind };
   }
 };
+
+// T3-CUSTOM(expbkt3): BEGIN — construct the persisted Plannotator surface descriptor.
+// T3-CUSTOM(expbkt3): native plan review surface descriptor.
+const planReviewSurface = (documentId: string): RightPanelSurface => ({
+  id: `plan-review:${documentId}`,
+  kind: "planReview",
+  documentId,
+});
+
+const plannotatorSurface = (url: `/plannotator/${string}/`): RightPanelSurface => ({
+  id: `plannotator:${url}`,
+  kind: "plannotator",
+  url,
+});
+// T3-CUSTOM(expbkt3): END
 
 const browserSurface = (tabId: string | null): RightPanelSurface =>
   tabId
@@ -181,6 +224,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
+                    // Dropped surface kind: plans now render inline in the
+                    // transcript (v9).
+                    if ((surface as { kind?: string }).kind === "plan") return [];
                     if (surface.kind === "file") {
                       const revealLine =
                         typeof surface.revealLine === "number" &&
@@ -194,6 +240,29 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           ? surface.revealRequestId
                           : 0;
                       return [{ ...surface, revealLine, revealRequestId }];
+                    }
+                    // T3-CUSTOM(expbkt3): a plan-review surface is only valid
+                    // when its id still matches its document (v10).
+                    if ((surface as { kind?: string }).kind === "planReview") {
+                      const documentId = (surface as { documentId?: unknown }).documentId;
+                      if (
+                        typeof documentId !== "string" ||
+                        documentId.length === 0 ||
+                        surface.id !== `plan-review:${documentId}`
+                      ) {
+                        return [];
+                      }
+                      return [surface];
+                    }
+                    if (surface.kind === "plannotator") {
+                      if (
+                        typeof surface.url !== "string" ||
+                        !/^\/plannotator\/[A-Za-z0-9_-]+\/$/.test(surface.url) ||
+                        surface.id !== `plannotator:${surface.url}`
+                      ) {
+                        return [];
+                      }
+                      return [surface];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -229,21 +298,30 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     ];
                   })
                 : [];
-              const activeSurfaceId = surfaces.some(
+              const persistedActiveSurfaceId = surfaces.some(
                 (surface) => surface.id === validThreadState?.activeSurfaceId,
               )
                 ? (validThreadState?.activeSurfaceId ?? null)
                 : null;
+              // A migration that dropped every surface (e.g. plan-only panels
+              // in v9) must not reopen an empty panel.
               const isOpen =
-                typeof validThreadState?.isOpen === "boolean"
+                surfaces.length > 0 &&
+                (typeof validThreadState?.isOpen === "boolean"
                   ? validThreadState.isOpen
-                  : activeSurfaceId !== null;
+                  : persistedActiveSurfaceId !== null);
+              // An open panel needs an active surface: if migration dropped
+              // the persisted one (e.g. plan was active), fall back to the
+              // first survivor instead of rendering an open empty panel.
+              const activeSurfaceId =
+                persistedActiveSurfaceId ?? (isOpen ? (surfaces[0]?.id ?? null) : null);
               return [threadKey, { isOpen, surfaces, activeSurfaceId }];
             },
           ),
         )
       : {};
-  return { byThreadKey };
+  // T3-CUSTOM(expbkt3): A saved descriptor alone must never recreate process ownership.
+  return { byThreadKey: withoutPersistedPlannotatorSurfaces(byThreadKey) };
 }
 
 export const useRightPanelStore = create<RightPanelStoreState>()(
@@ -270,6 +348,20 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
           }),
         })),
+      // T3-CUSTOM(expbkt3): BEGIN — one isolated store mutation for plan review.
+      openPlannotator: (ref, url) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, plannotatorSurface(url)),
+          ),
+        })),
+      openPlanReview: (ref, documentId) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, planReviewSurface(documentId)),
+          ),
+        })),
+      // T3-CUSTOM(expbkt3): END
       openFile: (ref, relativePath, line) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
@@ -538,7 +630,10 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      partialize: (state) => ({ byThreadKey: state.byThreadKey }),
+      // T3-CUSTOM(expbkt3): Runtime-hidden reviews stay mounted; only the saved copy is filtered.
+      partialize: (state) => ({
+        byThreadKey: withoutPersistedPlannotatorSurfaces(state.byThreadKey),
+      }),
       migrate: migratePersistedRightPanelState,
     },
   ),

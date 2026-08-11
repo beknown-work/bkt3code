@@ -4,7 +4,6 @@ import {
   QrCodeIcon,
   RefreshCwIcon,
   TerminalIcon,
-  TriangleAlertIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { type ReactNode, memo, useCallback, useId, useMemo, useState } from "react";
@@ -39,6 +38,10 @@ import * as Option from "effect/Option";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
+// T3-CUSTOM(expbkt3): BEGIN — per-environment identity.
+import { EnvironmentAppearanceEditor } from "../environment/EnvironmentAppearanceEditor";
+import { EnvironmentBadge } from "../environment/EnvironmentBadge";
+// T3-CUSTOM(expbkt3): END
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
@@ -123,6 +126,8 @@ import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslS
 import {
   type EnvironmentPresentation,
   useEnvironments,
+  // T3-CUSTOM(expbkt3): per-environment identity.
+  useEnvironmentAppearance,
   usePrimaryEnvironment,
 } from "~/state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -913,6 +918,9 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
       : null,
     clientSession.client.os ?? null,
     clientSession.client.browser ?? null,
+    // T3-CUSTOM(expbkt3): BEGIN - expose build identity for stale-client diagnosis.
+    clientSession.client.appVersion ? `T3 Code ${clientSession.client.appVersion}` : null,
+    // T3-CUSTOM(expbkt3): END
     clientSession.client.ipAddress ?? null,
   ].filter((value): value is string => value !== null);
   const primaryLabel =
@@ -1397,6 +1405,10 @@ function SavedBackendListRow({
   const metadataBits = [
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
     environment.relayManaged ? "T3 Connect" : null,
+    // T3-CUSTOM(expbkt3): name the machine this environment actually runs on.
+    // Without it two attached environments are told apart only by a label the
+    // operator may not have set yet.
+    environment.displayUrl,
   ].filter((value): value is string => value !== null);
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
@@ -1404,6 +1416,8 @@ function SavedBackendListRow({
   // environment you connect to or remove here — its lifecycle is driven by the
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
+  // T3-CUSTOM(expbkt3): resolved identity for this environment.
+  const environmentAppearance = useEnvironmentAppearance(environment.environmentId);
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1419,24 +1433,54 @@ function SavedBackendListRow({
                   : null
               }
             />
+            {/* T3-CUSTOM(expbkt3): BEGIN — show the environment's own identity here,
+                so what you pick below is what you recognise elsewhere. */}
+            <EnvironmentBadge environmentId={environment.environmentId} variant="icon" />
             <h3 className="text-sm font-medium text-foreground">{environment.label}</h3>
+            {/* T3-CUSTOM(expbkt3): END */}
           </div>
           {metadataBits.length > 0 ? (
             <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
           ) : null}
+          {/* T3-CUSTOM(expbkt3): BEGIN — nickname, colour and icon for this machine. */}
+          {environmentAppearance ? (
+            <details className="group/appearance pt-1">
+              <summary className="w-fit cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
+                Appearance
+              </summary>
+              <div className="max-w-md pt-2">
+                <EnvironmentAppearanceEditor
+                  environmentId={environment.environmentId}
+                  appearance={environmentAppearance}
+                  // T3-CUSTOM(expbkt3): the connection's own name, not the nickname
+                  // — otherwise the placeholder echoes what you just typed.
+                  fallbackName={environment.connectionLabel}
+                />
+              </div>
+            </details>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {serverUpdateState.status !== "idle" ? (
             <div className="max-w-md">
-              <ServerUpdateProgress
-                fromVersion={serverUpdateState.fromVersion}
-                state={serverUpdateState}
-              />
+              <ServerUpdateProgress state={serverUpdateState} />
             </div>
           ) : versionMismatch ? (
-            <p className="flex items-center gap-1 text-warning text-xs">
-              <TriangleAlertIcon className="size-3.5 shrink-0" />
-              Version drift: client {versionMismatch.clientVersion}, server{" "}
-              {versionMismatch.serverVersion}.
-            </p>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    className="w-fit cursor-help rounded-sm text-left text-muted-foreground text-xs"
+                  >
+                    Server update available
+                  </button>
+                }
+              />
+              <TooltipPopup side="top">
+                {versionMismatch.serverVersion} <span aria-hidden="true">→</span>{" "}
+                {versionMismatch.clientVersion}
+              </TooltipPopup>
+            </Tooltip>
           ) : null}
           {environment.connection.error && !resumingServerUpdate ? (
             <p className="flex min-w-0 items-center gap-2 text-destructive text-xs">
@@ -1461,7 +1505,7 @@ function SavedBackendListRow({
               serverLabel={`${environment.label} server`}
               selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
               targetVersion={versionMismatch.clientVersion}
-              label={serverUpdateState.status === "failed" ? "Retry update" : "Update server"}
+              label={serverUpdateState.status === "failed" ? "Retry" : "Update"}
             />
           ) : null}
           {isWslEnvironment ? (
@@ -2239,8 +2283,17 @@ export function ConnectionsSettings() {
     [retryEnvironment],
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — environment storage owns the durable message outbox.
   const handleRemoveSavedBackend = useCallback(
     async (environmentId: EnvironmentId) => {
+      if (
+        !window.confirm(
+          "Remove this backend? Any unsent messages saved for it will also be removed.",
+        )
+      ) {
+        return;
+      }
+      // T3-CUSTOM(expbkt3): END
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
       const result = await removeEnvironment(environmentId);
@@ -2988,6 +3041,36 @@ export function ConnectionsSettings() {
 
   return (
     <SettingsPageContainer>
+      {/* T3-CUSTOM(expbkt3): BEGIN — the environment you are running on needs a
+          nickname and colour as much as an attached one does; without this it is
+          the only environment you cannot tell apart from the others. Its own
+          section because the "This environment" blocks below are conditional on
+          how the backend is managed. */}
+      {primaryEnvironment !== null ? (
+        <SettingsSection title="Environment appearance">
+          <div className="px-3.5 py-3">
+            <div className="flex items-center gap-2 pb-3">
+              <EnvironmentBadge environmentId={primaryEnvironment.environmentId} variant="icon" />
+              <span className="text-sm font-medium text-foreground">
+                {primaryEnvironment.label}
+              </span>
+              {primaryEnvironment.displayUrl ? (
+                <span className="truncate text-xs text-muted-foreground">
+                  {primaryEnvironment.displayUrl}
+                </span>
+              ) : null}
+            </div>
+            <div className="max-w-md">
+              <EnvironmentAppearanceEditor
+                environmentId={primaryEnvironment.environmentId}
+                appearance={primaryEnvironment.appearance}
+                fallbackName={primaryEnvironment.connectionLabel}
+              />
+            </div>
+          </div>
+        </SettingsSection>
+      ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="This environment">
@@ -2998,21 +3081,25 @@ export function ConnectionsSettings() {
                     ? "Update failed"
                     : primaryServerUpdateState.status === "running"
                       ? "Updating server"
-                      : "Version drift"
+                      : "Server update available"
                 }
                 description={
                   primaryServerUpdateState.status !== "idle" ? (
-                    <ServerUpdateProgress
-                      fromVersion={primaryServerUpdateState.fromVersion}
-                      state={primaryServerUpdateState}
-                    />
+                    <ServerUpdateProgress state={primaryServerUpdateState} />
                   ) : primaryVersionMismatch ? (
-                    <span className="flex items-center gap-1 text-warning">
-                      <TriangleAlertIcon className="size-3.5 shrink-0" />
-                      Client {primaryVersionMismatch.clientVersion}, server{" "}
-                      {primaryVersionMismatch.serverVersion}. Sync them if RPC calls or reconnects
-                      fail.
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button type="button" className="w-fit cursor-help rounded-sm text-left">
+                            Update to match this client.
+                          </button>
+                        }
+                      />
+                      <TooltipPopup side="top">
+                        {primaryVersionMismatch.serverVersion} <span aria-hidden="true">→</span>{" "}
+                        {primaryVersionMismatch.clientVersion}
+                      </TooltipPopup>
+                    </Tooltip>
                   ) : null
                 }
                 control={
@@ -3024,9 +3111,7 @@ export function ConnectionsSettings() {
                       serverLabel={primaryEnvironment?.label ?? "this server"}
                       selfUpdate={resolveServerSelfUpdateCapability(primaryServerConfig)}
                       targetVersion={primaryVersionMismatch.clientVersion}
-                      {...(primaryServerUpdateState.status === "failed"
-                        ? { label: "Retry update" }
-                        : {})}
+                      label={primaryServerUpdateState.status === "failed" ? "Retry" : "Update"}
                     />
                   ) : undefined
                 }

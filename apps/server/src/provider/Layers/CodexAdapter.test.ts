@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
   CodexSettings,
+  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -23,6 +24,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -33,8 +35,10 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import type * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -45,7 +49,11 @@ import {
   type CodexSessionRuntimeShape,
   type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
-import { makeCodexAdapter } from "./CodexAdapter.ts";
+import {
+  makeCodexAdapter,
+  normalizeCodexRateLimitNotification,
+  normalizeCodexRateLimitRead,
+} from "./CodexAdapter.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
@@ -57,6 +65,76 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+
+it("normalizes Codex multi-bucket primary and secondary windows", () => {
+  const update = normalizeCodexRateLimitRead(
+    {
+      rateLimits: {},
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: { usedPercent: 26, resetsAt: 1_785_650_400, windowDurationMins: 300 },
+          secondary: {
+            usedPercent: 61,
+            resetsAt: 1_786_212_000,
+            windowDurationMins: 10_080,
+          },
+        },
+      },
+    } satisfies EffectCodexSchema.V2GetAccountRateLimitsResponse,
+    DateTime.makeUnsafe("2026-08-01T10:00:00.000Z"),
+  );
+
+  NodeAssert.equal(update.mode, "replace");
+  NodeAssert.equal(update.availability, "available");
+  NodeAssert.deepEqual(
+    update.windows.map((entry) => [entry.windowId, entry.label, entry.category]),
+    [
+      ["codex:codex:primary", "Codex primary", "rolling"],
+      ["codex:codex:secondary", "Codex secondary", "weekly"],
+    ],
+  );
+});
+
+it("falls back to the legacy Codex bucket and treats empty reads as not applicable", () => {
+  const observedAt = DateTime.makeUnsafe("2026-08-01T10:00:00.000Z");
+  const legacy = normalizeCodexRateLimitRead(
+    {
+      rateLimits: { primary: { usedPercent: 10, windowDurationMins: 300 } },
+    } satisfies EffectCodexSchema.V2GetAccountRateLimitsResponse,
+    observedAt,
+  );
+  NodeAssert.equal(legacy.windows[0]?.windowId, "codex:default:primary");
+
+  const unavailable = normalizeCodexRateLimitRead({ rateLimits: {} }, observedAt);
+  NodeAssert.equal(unavailable.availability, "not-applicable");
+  NodeAssert.deepEqual(unavailable.windows, []);
+});
+
+it("normalizes sparse Codex notifications as merge updates", () => {
+  const update = normalizeCodexRateLimitNotification(
+    {
+      rateLimits: {
+        limitId: "codex",
+        primary: { usedPercent: 44, windowDurationMins: 300 },
+      },
+    },
+    DateTime.makeUnsafe("2026-08-01T10:00:00.000Z"),
+  );
+  NodeAssert.equal(update.mode, "merge");
+  NodeAssert.deepEqual(
+    update.windows.map((entry) => entry.windowId),
+    ["codex:codex:primary"],
+  );
+
+  const empty = normalizeCodexRateLimitNotification(
+    { rateLimits: { limitId: "codex" } },
+    DateTime.makeUnsafe("2026-08-01T10:01:00.000Z"),
+  );
+  NodeAssert.equal(empty.availability, "available");
+  NodeAssert.deepEqual(empty.windows, []);
+});
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
@@ -239,6 +317,17 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("declares active-turn and durable-resume behavior", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      NodeAssert.deepStrictEqual(adapter.capabilities, {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      });
+    }),
+  );
+
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -391,6 +480,69 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("registers the user Bifrost proxy in Codex app-server arguments", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const threadId = asThreadId("sess-bifrost");
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make("environment-codex-test"),
+      threadId,
+      providerSessionId: "provider-session-codex-test",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      actorUserId: null,
+      endpoint: "http://127.0.0.1:18085/mcp",
+      authorizationHeader: "Bearer short-lived-provider-token",
+      upstreamServers: [
+        {
+          id: "bifrost",
+          name: "Bifrost",
+          endpoint: "http://127.0.0.1:18085/mcp/upstream/bifrost",
+          authMode: "x-bf-vk",
+          allowedTools: [],
+        },
+      ],
+    });
+    const layer = Layer.effect(
+      CodexAdapter,
+      makeCodexAdapter(decodeCodexSettings({}), {
+        makeRuntime: runtimeFactory.factory,
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.deepStrictEqual(runtime.options.appServerArgs, [
+        "-c",
+        "mcp_servers.t3-code.url=http://127.0.0.1:18085/mcp",
+        "-c",
+        'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+        "-c",
+        "mcp_servers.bifrost.url=http://127.0.0.1:18085/mcp/upstream/bifrost",
+        "-c",
+        'mcp_servers.bifrost.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+      ]);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(threadId);
+        }),
+      ),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for the session runtime", () => {
     const runtimeFactory = makeRuntimeFactory();
     const layer = Layer.effect(
@@ -512,6 +664,50 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("normalizes full rate-limit reads and non-fatal read failures", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-rate-limit-read"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-08-01T10:00:00.000Z",
+        method: "account/rateLimits/read",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          rateLimits: {
+            primary: { usedPercent: 26, windowDurationMins: 300 },
+          },
+        },
+      });
+      yield* runtime.emit({
+        id: asEventId("evt-rate-limit-read-failed"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-08-01T10:01:00.000Z",
+        method: "account/rateLimits/readFailed",
+        threadId: asThreadId("thread-1"),
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      NodeAssert.equal(events[0]?.type, "account.rate-limits.updated");
+      NodeAssert.equal(events[1]?.type, "account.rate-limits.updated");
+      if (
+        events[0]?.type === "account.rate-limits.updated" &&
+        events[1]?.type === "account.rate-limits.updated"
+      ) {
+        NodeAssert.equal(events[0].payload.rateLimits.mode, "replace");
+        NodeAssert.equal(events[0].payload.rateLimits.windows[0]?.usedPercent, 26);
+        NodeAssert.equal(events[1].payload.rateLimits.availability, "error");
+      }
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

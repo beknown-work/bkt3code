@@ -1,6 +1,8 @@
 import {
   ClientPresentation,
   CloudSession,
+  // T3-CUSTOM(expbkt3): team-mode identity for remote pairing.
+  EnvironmentIdentity,
   EnvironmentOwnedDataCleanup,
   PlatformConnectionSource,
   PrimaryEnvironmentAuth,
@@ -43,6 +45,10 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
+// T3-CUSTOM(expbkt3): attach the built client version to connection metadata.
+import { APP_VERSION } from "../branding";
+// T3-CUSTOM(expbkt3): the operator's Clerk token, for identity-bearing pairing.
+import { readTeamClerkToken } from "../state/teamIdentityToken";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import {
   readPrimaryEnvironmentTarget,
@@ -88,27 +94,46 @@ const connectivityLayer = Connectivity.layer({
   ),
 });
 
+// An "application-active" wakeup stream from a DOM event source. `register`
+// wires the listener(s) and returns a cleanup function.
+const applicationActiveFrom = (register: (emit: () => void) => () => void) =>
+  Stream.callback<"application-active">((queue) =>
+    Effect.acquireRelease(
+      Effect.sync(() => register(() => Queue.offerUnsafe(queue, "application-active"))),
+      (cleanup) => Effect.sync(cleanup),
+    ).pipe(Effect.asVoid),
+  );
+
 const wakeupsLayer = Wakeups.layer({
   changes: Stream.merge(
-    Stream.callback<"application-active">((queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          const listener = () => {
-            if (document.visibilityState === "visible") {
-              Queue.offerUnsafe(queue, "application-active");
-            }
-          };
-          document.addEventListener("visibilitychange", listener);
-          return listener;
+    // Tab/window became visible again.
+    applicationActiveFrom((emit) => {
+      const listener = () => {
+        if (document.visibilityState === "visible") {
+          emit();
+        }
+      };
+      document.addEventListener("visibilitychange", listener);
+      return () => document.removeEventListener("visibilitychange", listener);
+    }),
+    Stream.merge(
+      // Window regained focus — fire unconditionally. Covers the always-visible
+      // desktop window that never emits `visibilitychange` after a sleep, so the
+      // supervisor still runs a liveness probe on wake.
+      applicationActiveFrom((emit) => {
+        window.addEventListener("focus", emit);
+        return () => window.removeEventListener("focus", emit);
+      }),
+      Stream.merge(
+        // Network connectivity returned.
+        applicationActiveFrom((emit) => {
+          window.addEventListener("online", emit);
+          return () => window.removeEventListener("online", emit);
         }),
-        (listener) =>
-          Effect.sync(() => {
-            document.removeEventListener("visibilitychange", listener);
-          }),
-      ).pipe(Effect.asVoid),
-    ),
-    managedRelayAccountChanges(appAtomRegistry).pipe(
-      Stream.map(() => "credentials-changed" as const),
+        managedRelayAccountChanges(appAtomRegistry).pipe(
+          Stream.map(() => "credentials-changed" as const),
+        ),
+      ),
     ),
   ),
 });
@@ -119,6 +144,7 @@ function clientMetadata() {
   return {
     label: desktop ? "T3 Code Desktop" : "T3 Code Web",
     deviceType: "desktop" as const,
+    appVersion: APP_VERSION,
     ...(platform === "" ? {} : { os: platform }),
   };
 }
@@ -170,6 +196,16 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   };
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — present the operator's Clerk identity when pairing a
+// remote fork environment. Never fails: an absent token means "no identity to
+// present", and the environment's own identity mode decides whether that is
+// acceptable. Exported so the wiring from Clerk through to pairing is testable —
+// a silently-null token here is exactly the failure this feature has to avoid.
+export const teamEnvironmentIdentity: typeof EnvironmentIdentity.Service = EnvironmentIdentity.of({
+  identityToken: Effect.promise(readTeamClerkToken).pipe(Effect.map(Option.fromNullishOr)),
+});
+// T3-CUSTOM(expbkt3): END
+
 const capabilitiesLayer = Layer.effectContext(
   Effect.sync(() => {
     const presentation = ClientPresentation.of({
@@ -206,6 +242,8 @@ const capabilitiesLayer = Layer.effectContext(
     const identity = RelayDeviceIdentity.of({
       deviceId: Effect.succeed(Option.none()),
     });
+    // T3-CUSTOM(expbkt3): the operator's Clerk identity, for remote pairing.
+    const environmentIdentity = teamEnvironmentIdentity;
     const primaryAuth = PrimaryEnvironmentAuth.of({
       bearerToken: Effect.tryPromise({
         try: readDesktopPrimaryBearerToken,
@@ -277,6 +315,8 @@ const capabilitiesLayer = Layer.effectContext(
     return Context.make(CloudSession, cloudSession).pipe(
       Context.add(PrimaryEnvironmentAuth, primaryAuth),
       Context.add(RelayDeviceIdentity, identity),
+      // T3-CUSTOM(expbkt3): team-mode identity for remote pairing.
+      Context.add(EnvironmentIdentity, environmentIdentity),
       Context.add(ClientPresentation, presentation),
       Context.add(SshEnvironmentGateway, ssh),
     );
@@ -590,7 +630,7 @@ const rpcRequestObserverLayer = Layer.succeed(
       Effect.sync(() => {
         nextObservedRpcRequestId += 1;
         const requestId = `${environmentId}:${nextObservedRpcRequestId}`;
-        trackRpcRequestSent(requestId, `${method} · ${environmentId}`);
+        trackRpcRequestSent(requestId, method, `${method} · ${environmentId}`);
         return Effect.sync(() => {
           acknowledgeRpcRequest(requestId);
         });

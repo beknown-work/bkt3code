@@ -7,13 +7,20 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import type { EnvironmentSupervisor } from "../connection/supervisor.ts";
+// T3-CUSTOM(expbkt3): fork dispatch retries through the supervisor, so the
+// supervisor tag is imported as a value rather than a type.
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import {
   type EnvironmentRpcFailure,
   type EnvironmentRpcSuccess,
   type EnvironmentRpcUnavailableError,
   request,
 } from "../rpc/client.ts";
+// T3-CUSTOM(expbkt3): command acknowledgement timeout lives in commandAck.ts
+import {
+  ORCHESTRATION_COMMAND_ACK_TIMEOUT,
+  OrchestrationCommandAcknowledgementTimeoutError,
+} from "./commandAck.ts";
 
 type CommandType = ClientOrchestrationCommand["type"];
 type CommandOf<T extends CommandType> = Extract<ClientOrchestrationCommand, { readonly type: T }>;
@@ -32,6 +39,11 @@ export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
 export type CreateThreadInput = CommandInput<"thread.create">;
+// T3-CUSTOM(expbkt3): public durable bootstrap controls.
+export type RequestThreadBootstrapInput = CommandInput<"thread.bootstrap.request">;
+export type RetryThreadBootstrapInput = CommandInput<"thread.bootstrap.retry">;
+export type StopThreadBootstrapInput = CommandInput<"thread.bootstrap.stop">;
+export type ContinueThreadBootstrapInput = CommandInput<"thread.bootstrap.continue">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
 export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
@@ -52,9 +64,13 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
+
 type CommandEffect = Effect.Effect<
   EnvironmentRpcSuccess<DispatchTag>,
-  EnvironmentRpcFailure<DispatchTag> | EnvironmentRpcUnavailableError,
+  | EnvironmentRpcFailure<DispatchTag>
+  | EnvironmentRpcUnavailableError
+  // T3-CUSTOM(expbkt3): fork dispatch can fail on acknowledgement timeout
+  | OrchestrationCommandAcknowledgementTimeoutError,
   Crypto.Crypto | EnvironmentSupervisor
 >;
 
@@ -81,9 +97,24 @@ function timestampedCommandMetadata(input: {
   });
 }
 
-function dispatch(command: ClientOrchestrationCommand) {
-  return request(ORCHESTRATION_WS_METHODS.dispatchCommand, command);
-}
+const dispatch = Effect.fn("EnvironmentCommands.dispatch")(function* (
+  command: ClientOrchestrationCommand,
+) {
+  const supervisor = yield* EnvironmentSupervisor;
+  return yield* request(ORCHESTRATION_WS_METHODS.dispatchCommand, command).pipe(
+    Effect.timeoutOrElse({
+      duration: ORCHESTRATION_COMMAND_ACK_TIMEOUT,
+      orElse: () =>
+        supervisor.retryNow.pipe(
+          Effect.andThen(
+            new OrchestrationCommandAcknowledgementTimeoutError({
+              commandType: command.type,
+            }),
+          ),
+        ),
+    }),
+  );
+});
 
 export const createProject: (input: CreateProjectInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.createProject",
@@ -309,6 +340,53 @@ export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => Com
     });
   });
 
+// T3-CUSTOM(expbkt3): dispatch durable bootstrap lifecycle commands through the
+// same environment command transport used by existing thread operations.
+export const requestThreadBootstrap: (input: RequestThreadBootstrapInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.requestThreadBootstrap")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.bootstrap.request",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const retryThreadBootstrap: (input: RetryThreadBootstrapInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.retryThreadBootstrap",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.bootstrap.retry",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const stopThreadBootstrap: (input: StopThreadBootstrapInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.stopThreadBootstrap",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.bootstrap.stop",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const continueThreadBootstrap: (input: ContinueThreadBootstrapInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.continueThreadBootstrap")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.bootstrap.continue",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.stopThreadSession",
 )(function* (input) {
@@ -320,3 +398,10 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
     createdAt: metadata.createdAt,
   });
 });
+
+// T3-CUSTOM(expbkt3): BEGIN internals shared with commandsFork.ts
+export type ForkCommandInput<T extends CommandType> = CommandInput<T>;
+export type ForkCommandEffect = CommandEffect;
+export { commandId as commandIdInternal, dispatch as dispatchCommandInternal };
+export { timestampedCommandMetadata as timestampedCommandMetadataInternal };
+// T3-CUSTOM(expbkt3): END

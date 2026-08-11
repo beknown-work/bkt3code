@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -52,6 +53,7 @@ import {
 } from "../textGeneration/TextGenerationPresets.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import { CurrentSourceControlExecutionEnvironment } from "../sourceControl/SourceControlExecutionEnvironment.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
@@ -131,6 +133,12 @@ interface OpenPrInfo {
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   updatedAt: Option.Option<DateTime.Utc>;
+  isDraft?: boolean;
+  mergeability?: "mergeable" | "conflicting" | "unknown";
+  mergeStateStatus?: string;
+  reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown";
+  checksStatus?: "pass" | "fail" | "pending" | "unknown";
+  autoMergeEnabled?: boolean;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -364,6 +372,16 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     headRefName: summary.headRefName,
     state: summary.state ?? "open",
     updatedAt: summary.updatedAt,
+    ...(summary.isDraft !== undefined ? { isDraft: summary.isDraft } : {}),
+    ...(summary.mergeability !== undefined ? { mergeability: summary.mergeability } : {}),
+    ...(summary.mergeStateStatus !== undefined
+      ? { mergeStateStatus: summary.mergeStateStatus }
+      : {}),
+    ...(summary.reviewDecision !== undefined ? { reviewDecision: summary.reviewDecision } : {}),
+    ...(summary.checksStatus !== undefined ? { checksStatus: summary.checksStatus } : {}),
+    ...(summary.autoMergeEnabled !== undefined
+      ? { autoMergeEnabled: summary.autoMergeEnabled }
+      : {}),
     ...(summary.isCrossRepository !== undefined
       ? { isCrossRepository: summary.isCrossRepository }
       : {}),
@@ -517,6 +535,12 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  mergeability?: "mergeable" | "conflicting" | "unknown";
+  mergeStateStatus?: string;
+  reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown";
+  checksStatus?: "pass" | "fail" | "pending" | "unknown";
+  autoMergeEnabled?: boolean;
 } {
   return {
     number: pr.number,
@@ -525,6 +549,12 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.isDraft !== undefined ? { isDraft: pr.isDraft } : {}),
+    ...(pr.mergeability !== undefined ? { mergeability: pr.mergeability } : {}),
+    ...(pr.mergeStateStatus !== undefined ? { mergeStateStatus: pr.mergeStateStatus } : {}),
+    ...(pr.reviewDecision !== undefined ? { reviewDecision: pr.reviewDecision } : {}),
+    ...(pr.checksStatus !== undefined ? { checksStatus: pr.checksStatus } : {}),
+    ...(pr.autoMergeEnabled !== undefined ? { autoMergeEnabled: pr.autoMergeEnabled } : {}),
   };
 }
 
@@ -557,6 +587,11 @@ function shouldPreferSshRemote(url: string | null): boolean {
   const trimmed = url.trim();
   return trimmed.startsWith("git@") || trimmed.startsWith("ssh://");
 }
+
+class RemoteStatusCacheKey extends Data.Class<{
+  readonly cwd: string;
+  readonly sourceControlProfileId: string | null;
+}> {}
 
 function toPullRequestHeadRemoteInfo(pr: {
   isCrossRepository?: boolean | undefined;
@@ -830,11 +865,22 @@ export const make = Effect.gen(function* () {
   const canonicalizeExistingPath = (value: string) =>
     fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => value));
   const normalizeStatusCacheKey = canonicalizeExistingPath;
+  const normalizeRemoteStatusCacheKey = Effect.fn("normalizeRemoteStatusCacheKey")(function* (
+    cwd: string,
+  ) {
+    const canonicalCwd = yield* canonicalizeExistingPath(cwd);
+    const executionEnvironment = yield* CurrentSourceControlExecutionEnvironment;
+    return new RemoteStatusCacheKey({
+      cwd: canonicalCwd,
+      sourceControlProfileId: executionEnvironment?.profileId ?? null,
+    });
+  });
   const nonRepositoryStatusDetails = {
     isRepo: false,
     hasOriginRemote: false,
     isDefaultBranch: false,
     branch: null,
+    baseRef: null,
     upstreamRef: null,
     hasWorkingTreeChanges: false,
     workingTree: { files: [], insertions: 0, deletions: 0 },
@@ -859,6 +905,8 @@ export const make = Effect.gen(function* () {
       hasPrimaryRemote: details.hasOriginRemote,
       isDefaultRef: details.isDefaultBranch,
       refName: details.branch,
+      // T3-CUSTOM(expbkt3): Preserve the worktree origin for the experimental sidebar.
+      baseRef: details.baseRef,
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
       workingTree: details.workingTree,
     } satisfies VcsStatusLocalResult;
@@ -879,16 +927,29 @@ export const make = Effect.gen(function* () {
   const prLookupEpochByCwd = new Map<string, number>();
   const prLookupEpoch = (cwd: string) => prLookupEpochByCwd.get(cwd) ?? 0;
   const bumpPrLookupEpoch = (cwd: string) =>
-    normalizeStatusCacheKey(cwd).pipe(
-      Effect.map((cacheKey) => {
+    normalizeRemoteStatusCacheKey(cwd).pipe(
+      Effect.map(({ cwd: canonicalCwd, sourceControlProfileId }) => {
+        const cacheKey = `${canonicalCwd}\0${sourceControlProfileId ?? "machine"}`;
         prLookupEpochByCwd.set(cacheKey, prLookupEpoch(cacheKey) + 1);
       }),
     );
   // Cache keys are NUL-joined [cwd, branch, upstreamRef, epoch] — none of the
   // segments can contain a NUL byte, and refs are never empty, so "" decodes
   // back to a null upstreamRef.
-  const prLookupCacheKey = (cwd: string, details: { branch: string; upstreamRef: string | null }) =>
-    [cwd, details.branch, details.upstreamRef ?? "", String(prLookupEpoch(cwd))].join("\u0000");
+  const prLookupCacheKey = (
+    cwd: string,
+    sourceControlProfileId: string | null,
+    details: { branch: string; upstreamRef: string | null },
+  ) => {
+    const profileCwd = `${cwd}\0${sourceControlProfileId ?? "machine"}`;
+    return [
+      cwd,
+      details.branch,
+      details.upstreamRef ?? "",
+      String(prLookupEpoch(profileCwd)),
+      sourceControlProfileId ?? "machine",
+    ].join("\u0000");
+  };
   const prLookupCache = yield* Cache.makeWith(
     (key: string) => {
       const [cwd = "", branch = "", upstreamRef = ""] = key.split("\u0000");
@@ -973,8 +1034,13 @@ export const make = Effect.gen(function* () {
   ) {
     // Keyed by (cwd, branch) only: the upstream ref changing (e.g. a first
     // `push -u`) must not orphan the fallback value for the same branch.
-    const branchKey = `${cwd}\u0000${details.branch}`;
-    return yield* Cache.get(prLookupCache, prLookupCacheKey(cwd, details)).pipe(
+    const executionEnvironment = yield* CurrentSourceControlExecutionEnvironment;
+    const sourceControlProfileId = executionEnvironment?.profileId ?? null;
+    const branchKey = `${cwd}\u0000${details.branch}\u0000${sourceControlProfileId ?? "machine"}`;
+    return yield* Cache.get(
+      prLookupCache,
+      prLookupCacheKey(cwd, sourceControlProfileId, details),
+    ).pipe(
       Effect.map(({ latest, headContext }) => {
         if (!latest) return { pr: null, headContext };
         // On the default branch, only surface open PRs.
@@ -1047,12 +1113,15 @@ export const make = Effect.gen(function* () {
       pr,
     } satisfies VcsStatusRemoteResult;
   });
-  const remoteStatusResultCache = yield* Cache.makeWith((cwd: string) => readRemoteStatus(cwd), {
-    capacity: STATUS_RESULT_CACHE_CAPACITY,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? STATUS_RESULT_CACHE_TTL : Duration.zero),
-  });
+  const remoteStatusResultCache = yield* Cache.makeWith(
+    (key: RemoteStatusCacheKey) => readRemoteStatus(key.cwd),
+    {
+      capacity: STATUS_RESULT_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? STATUS_RESULT_CACHE_TTL : Duration.zero),
+    },
+  );
   const invalidateRemoteStatusResultCache = (cwd: string) =>
-    normalizeStatusCacheKey(cwd).pipe(
+    normalizeRemoteStatusCacheKey(cwd).pipe(
       Effect.flatMap((cacheKey) => Cache.invalidate(remoteStatusResultCache, cacheKey)),
     );
 
@@ -1671,9 +1740,9 @@ export const make = Effect.gen(function* () {
   );
   const remoteStatus: GitManager["Service"]["remoteStatus"] = Effect.fn("remoteStatus")(
     function* (input, options) {
-      const cacheKey = yield* normalizeStatusCacheKey(input.cwd);
+      const cacheKey = yield* normalizeRemoteStatusCacheKey(input.cwd);
       if (options?.refreshUpstream === false) {
-        return yield* readRemoteStatus(cacheKey, options);
+        return yield* readRemoteStatus(cacheKey.cwd, options);
       }
       return yield* Cache.get(remoteStatusResultCache, cacheKey);
     },
@@ -1732,13 +1801,21 @@ export const make = Effect.gen(function* () {
           worktreePath,
         })
         .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("GitManager.preparePullRequestThread setup script failed", {
-              threadId: input.threadId,
-              worktreePath,
-              cause: error,
-            }).pipe(Effect.asVoid),
+          // T3-CUSTOM(expbkt3): PR worktree preparation is readiness-gated too.
+          // Keep the worktree on failure and return the terminal identity.
+          Effect.mapError(
+            (error) =>
+              new GitManagerError({
+                operation: "preparePullRequestThread",
+                cwd: input.cwd,
+                detail: error.message,
+                ...("terminalId" in error && typeof error.terminalId === "string"
+                  ? { terminalId: error.terminalId }
+                  : {}),
+                cause: error,
+              }),
           ),
+          Effect.asVoid,
         );
     };
     return yield* Effect.gen(function* () {

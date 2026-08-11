@@ -25,7 +25,7 @@ export function useThreadPr(
     thread.branch !== null && cwd !== null
       ? vcsEnvironment.status({
           environmentId: thread.environmentId,
-          input: { cwd },
+          input: { cwd, threadId: thread.id },
         })
       : null,
   );

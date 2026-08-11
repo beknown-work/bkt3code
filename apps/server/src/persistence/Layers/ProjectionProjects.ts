@@ -5,7 +5,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
-import { ModelSelection, ProjectScript } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): persist per-project thread creation defaults additively.
+import { ModelSelection, ProjectScript, ProjectThreadCreationDefaults } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionProjectInput,
@@ -18,6 +19,7 @@ import {
 const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    threadCreationDefaults: Schema.fromJsonString(ProjectThreadCreationDefaults),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -35,7 +37,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           title,
           workspace_root,
           default_model_selection_json,
+          thread_creation_defaults_json,
           scripts_json,
+          owner_user_id,
           created_at,
           updated_at,
           deleted_at
@@ -45,7 +49,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.title},
           ${row.workspaceRoot},
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
+          ${JSON.stringify(row.threadCreationDefaults)},
           ${JSON.stringify(row.scripts)},
+          ${row.ownerUserId},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -55,7 +61,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           title = excluded.title,
           workspace_root = excluded.workspace_root,
           default_model_selection_json = excluded.default_model_selection_json,
+          thread_creation_defaults_json = excluded.thread_creation_defaults_json,
           scripts_json = excluded.scripts_json,
+          owner_user_id = COALESCE(excluded.owner_user_id, projection_projects.owner_user_id),
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -72,7 +80,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          thread_creation_defaults_json AS "threadCreationDefaults",
           scripts_json AS "scripts",
+          owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -91,7 +101,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
+          thread_creation_defaults_json AS "threadCreationDefaults",
           scripts_json AS "scripts",
+          owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

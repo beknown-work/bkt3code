@@ -123,6 +123,11 @@ function LocalSettingsRouteScreen() {
             value={`${environmentCount}`}
             target="SettingsEnvironments"
           />
+          <SettingsRow
+            icon="person.crop.circle.badge.checkmark"
+            label="Users"
+            target="SettingsSourceControl"
+          />
         </SettingsSection>
 
         <GeneralSettingsSection />
@@ -476,6 +481,11 @@ function ConfiguredSettingsRouteScreen() {
             label="Environments"
             value={`${environmentCount}`}
             target="SettingsEnvironments"
+          />
+          <SettingsRow
+            icon="person.crop.circle.badge.checkmark"
+            label="Users"
+            target="SettingsSourceControl"
           />
           <SettingsSwitchRow
             icon="bell.badge"

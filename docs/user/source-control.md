@@ -67,6 +67,44 @@ Run a quick **Rescan** after setting up a new machine or changing credentials.
 
 You can now clone, publish, and create pull requests.
 
+### Collaborative GitHub identity
+
+<!-- T3-CUSTOM(expbkt3): owner-based identity for Beknown team deployments. -->
+
+On a shared T3 Code server, an administrator can enable **user-owned GitHub identity** in
+**Settings → Users**. Every thread is owned by the user who created it. All commits, pushes, pull
+requests, comments, reviews, agent commands, and integrated terminal commands started from that
+thread automatically use the GitHub profile assigned to its durable owner.
+
+To add a collaborator:
+
+1. Create an expiring fine-grained GitHub personal access token for that collaborator. Grant only
+   the repositories and permissions they need. Most coding workflows need **Contents: read/write**
+   and **Pull requests: read/write**.
+2. Under **Users → GitHub profiles**, add a profile with the token, Git display name, and a verified
+   GitHub email or GitHub noreply email.
+3. Assign the profile to its Clerk user, test it, then enable **Use each thread owner's GitHub
+   identity**.
+4. Create a thread normally. T3 assigns its creator as owner and uses that user's GitHub profile;
+   clone and publish flows use the signed-in user's profile automatically.
+
+The token is write-only: T3 Code stores it in the server secret store and never sends it back to a
+client. Disconnecting a profile removes its token while keeping its label for historical threads.
+Archiving prevents new assignments without changing past attribution.
+
+Transferring durable thread ownership restarts its provider session and closes its integrated
+terminals. Work started after the transfer uses the new owner's assigned profile; existing commits
+and pull requests keep their original attribution. A transfer waits until the current turn,
+terminal command, and Git action are idle.
+
+GitHub remotes must use HTTPS in owner-based mode. If a repository uses a GitHub SSH remote, T3
+Code blocks authenticated network operations and offers to convert `origin` to a token-free HTTPS
+URL. It never falls back to the server's shared SSH key or machine-wide GitHub account.
+
+Externally hosted OpenCode runtimes cannot receive a thread's environment because T3 Code does not
+own that process. Built-in Git actions still use the durable owner's assigned profile, but
+agent-issued GitHub commands are unavailable for those runtimes in enforced mode.
+
 ### For GitLab
 
 1. Install the GitLab CLI:
@@ -129,6 +167,9 @@ Control settings**.
 - **Provider shows "Not authenticated"** – Run the login command for that provider (e.g., `gh auth login`) in a terminal on the server, then rescan in Settings
 - **Bitbucket not connecting** – Double-check your environment variables are set in the correct shell profile and the server was restarted
 - **Can't push to a remote** – Verify your Git remote URL matches the provider you've authenticated with (SSH vs HTTPS remotes may need different credentials)
+- **A thread cannot start GitHub activity** – Assign a connected GitHub profile to its durable owner under **Settings → Users**
+- **GitHub SSH remote is blocked** – Use the offered **Convert origin to HTTPS** action; no token is written into the URL
+- **Profile is invalid or disconnected** – Replace its token under **Settings → Users → GitHub profiles**
 
 **Need more help?** Check your provider's CLI documentation:
 

@@ -1,4 +1,6 @@
+import { suggestProjectNickname } from "@t3tools/client-runtime/operations/projects";
 import {
+  type EnvironmentId,
   type FilesystemBrowseEntry,
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
@@ -12,7 +14,7 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
 export const RECENT_THREAD_LIMIT = 12;
-export const ITEM_ICON_CLASS = "size-4 text-muted-foreground/80";
+export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
 /**
@@ -409,4 +411,72 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
     case "submenu-browse":
       return "Enter path (e.g. ~/projects/my-app)";
   }
+}
+
+export type AddProjectNicknameStep =
+  | {
+      readonly kind: "local";
+      readonly environmentId: EnvironmentId;
+      readonly workspaceRoot: string;
+      readonly returnQuery: string;
+    }
+  | {
+      readonly kind: "clone";
+      readonly environmentId: EnvironmentId;
+      readonly remoteUrl: string;
+      readonly destinationPath: string;
+      readonly repositoryTitle: string;
+      readonly returnQuery: string;
+      readonly clonedWorkspaceRoot: string | null;
+    };
+
+export function startLocalProjectNicknameStep(input: {
+  readonly environmentId: EnvironmentId;
+  readonly workspaceRoot: string;
+  readonly returnQuery?: string;
+}): { readonly step: AddProjectNicknameStep; readonly query: string } {
+  return {
+    step: {
+      kind: "local",
+      environmentId: input.environmentId,
+      workspaceRoot: input.workspaceRoot,
+      returnQuery: input.returnQuery ?? input.workspaceRoot,
+    },
+    query: suggestProjectNickname({ workspaceRoot: input.workspaceRoot }),
+  };
+}
+
+export function startCloneProjectNicknameStep(input: {
+  readonly environmentId: EnvironmentId;
+  readonly remoteUrl: string;
+  readonly destinationPath: string;
+  readonly repositoryTitle: string;
+  readonly repositoryName?: string | null;
+}): { readonly step: AddProjectNicknameStep; readonly query: string } {
+  return {
+    step: {
+      kind: "clone",
+      environmentId: input.environmentId,
+      remoteUrl: input.remoteUrl,
+      destinationPath: input.destinationPath,
+      repositoryTitle: input.repositoryTitle,
+      returnQuery: input.destinationPath,
+      clonedWorkspaceRoot: null,
+    },
+    query: suggestProjectNickname({
+      ...(input.repositoryName !== undefined ? { repositoryName: input.repositoryName } : {}),
+      remoteUrl: input.remoteUrl,
+    }),
+  };
+}
+
+export function markProjectNicknameCloneResolved(
+  step: AddProjectNicknameStep,
+  workspaceRoot: string,
+): AddProjectNicknameStep {
+  return step.kind === "clone" ? { ...step, clonedWorkspaceRoot: workspaceRoot } : step;
+}
+
+export function projectNicknameWorkspaceRoot(step: AddProjectNicknameStep): string | null {
+  return step.kind === "local" ? step.workspaceRoot : step.clonedWorkspaceRoot;
 }

@@ -15,6 +15,8 @@ import {
   type PermissionUpdate,
   type SDKMessage,
   type SDKControlGetContextUsageResponse,
+  type SDKControlGetUsageResponse,
+  type SDKRateLimitInfo,
   type SDKResultMessage,
   type SettingSource,
   type SDKUserMessage,
@@ -33,6 +35,8 @@ import {
   type ModelSelection,
   ProviderItemId,
   type ProviderRuntimeEvent,
+  type ProviderRateLimitUpdate,
+  type ProviderRateLimitWindow,
   type ProviderRuntimeTurnStatus,
   type ProviderSendTurnInput,
   type ProviderSession,
@@ -58,6 +62,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -65,6 +70,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -74,6 +80,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
@@ -92,12 +99,23 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
+
+// T3-CUSTOM(expbkt3): BEGIN rate-limit normalisation lives in claudeRateLimits.ts
+import {
+  claudeRateLimitRefreshError,
+  normalizeClaudeRateLimitEvent,
+  normalizeClaudeUsageResponse,
+} from "./claudeRateLimits.ts";
+export { normalizeClaudeRateLimitEvent, normalizeClaudeUsageResponse };
+// T3-CUSTOM(expbkt3): END
+
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
@@ -224,6 +242,8 @@ interface ClaudeSessionContext {
   readonly turns: Array<{
     id: TurnId;
     items: Array<unknown>;
+    // T3-CUSTOM(expbkt3): only explicit completion may suppress guarded recovery.
+    state: "completed" | "interrupted" | "failed";
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly claudeTasks: Map<string, ClaudeTaskState>;
@@ -255,6 +275,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<SDKControlGetUsageResponse>;
   readonly close: () => void;
 }
 
@@ -348,7 +369,29 @@ function resultErrorsText(result: SDKResultMessage): string {
     : "";
 }
 
+/**
+ * First user-facing error from a non-success result. "[ede_diagnostic] ..."
+ * entries are CLI-internal telemetry (the CLI hides them from its own UI too),
+ * so they must never become the error banner.
+ */
+function resultUserFacingError(result: SDKResultMessage): string | undefined {
+  if (result.subtype === "success" || !Array.isArray(result.errors)) {
+    return undefined;
+  }
+  return result.errors.find((error) => !error.startsWith("[ede_diagnostic]"));
+}
+
 function isInterruptedResult(result: SDKResultMessage): boolean {
+  // The CLI stamps user aborts explicitly: interrupting mid-tool-call yields
+  // "aborted_tools" (with an internal "[ede_diagnostic] ..." error and
+  // is_error: true), interrupting mid-stream yields "aborted_streaming".
+  if (
+    result.terminal_reason === "aborted_tools" ||
+    result.terminal_reason === "aborted_streaming"
+  ) {
+    return true;
+  }
+
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
@@ -1634,6 +1677,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+  const usageRefreshQueue = yield* Queue.unbounded<ClaudeSessionContext>();
+  const lastUsageRefreshAt = yield* Ref.make<number | null>(null);
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -1652,6 +1697,44 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+
+  const performUsageRefresh = Effect.fn("ClaudeAdapter.performUsageRefresh")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const readUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (readUsage === undefined || context.stopped) return;
+    const now = yield* Clock.currentTimeMillis;
+    const allowed = yield* Ref.modify(lastUsageRefreshAt, (previous) =>
+      previous !== null && now - previous < 60_000
+        ? ([false, previous] as const)
+        : ([true, now] as const),
+    );
+    if (!allowed) return;
+
+    const observedAt = yield* DateTime.now;
+    const update = yield* Effect.tryPromise(() => readUsage.call(context.query)).pipe(
+      Effect.map((response) => normalizeClaudeUsageResponse(response, observedAt)),
+      Effect.orElseSucceed(() => claudeRateLimitRefreshError(observedAt)),
+    );
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      payload: { rateLimits: update },
+      providerRefs: nativeProviderRefs(context),
+    });
+  });
+
+  const requestUsageRefresh = (context: ClaudeSessionContext) =>
+    Queue.offer(usageRefreshQueue, context).pipe(Effect.asVoid);
+
+  yield* Stream.fromQueue(usageRefreshQueue).pipe(
+    Stream.runForEach(performUsageRefresh),
+    Effect.forkScoped,
+  );
 
   const logNativeSdkMessage = Effect.fnUntraced(function* (
     context: ClaudeSessionContext,
@@ -1706,6 +1789,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       turns: context.turns.map((turn) => ({
         id: turn.id,
         items: [...turn.items],
+        state: turn.state,
       })),
     };
   });
@@ -2292,6 +2376,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     context.turns.push({
       id: turnState.turnId,
       items: [...turnState.items],
+      state:
+        status === "completed" ? "completed" : status === "cancelled" ? "interrupted" : "failed",
     });
 
     yield* emitThreadTokenUsage(context, usageSnapshot, {
@@ -2919,13 +3005,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     const status = turnStatusFromResult(message);
-    const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
+    const errorMessage = resultUserFacingError(message);
 
     if (status === "failed") {
       yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
     }
 
     yield* completeTurn(context, status, errorMessage, message);
+    yield* requestUsageRefresh(context);
   });
 
   /**
@@ -3034,9 +3121,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // error rows in client work logs. `background_tasks_changed` is a roster
     // snapshot ({tasks: [...]}) — the task_* lifecycle events carry the
     // authoritative per-agent data and the typed background_tasks control
-    // request is the reconciliation source.
-    if ((message.subtype as string) === "background_tasks_changed") {
-      return;
+    // request is the reconciliation source. `vcs_state_changed`
+    // ({kind: commit|push|rebase}) and `code_change_published`
+    // ({provider, url, repo}) are informational CLI notices; the work log
+    // already shows the underlying git/gh tool calls.
+    switch (message.subtype as string) {
+      case "background_tasks_changed":
+      case "vcs_state_changed":
+      case "code_change_published":
+        return;
     }
 
     switch (message.subtype) {
@@ -3048,6 +3141,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             config: message as Record<string, unknown>,
           },
         });
+        yield* requestUsageRefresh(context);
         return;
       case "status":
         yield* offerRuntimeEvent({
@@ -3447,7 +3541,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...base,
         type: "account.rate-limits.updated",
         payload: {
-          rateLimits: message,
+          rateLimits: normalizeClaudeRateLimitEvent(
+            message.rate_limit_info,
+            DateTime.makeUnsafe(stamp.createdAt),
+          ),
         },
       });
       return;
@@ -3613,7 +3710,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           cause,
         }),
     }).pipe(
-      Effect.catch((error) =>
+      Effect.tapError((error) =>
         emitRuntimeError(context, "Failed to close Claude runtime query.", {
           errorTag: error._tag,
           provider: error.provider,
@@ -3621,6 +3718,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           detail: error.detail,
         }),
       ),
+      Effect.onError(() => Effect.sync(() => (context.stopped = false))),
     );
 
     const updatedAt = yield* nowIso;
@@ -3674,7 +3772,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   };
 
   const startSession: ClaudeAdapterShape["startSession"] = Effect.fn("startSession")(
-    function* (input) {
+    function* (input, executionOptions) {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -3708,6 +3806,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
+      const sessionEnvironment = executionOptions?.environment
+        ? mergeSourceControlEnvironment(claudeEnvironment, executionOptions.environment)
+        : claudeEnvironment;
       const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
       const sessionId = existingResumeSessionId ?? newSessionId;
 
@@ -4083,7 +4184,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: claudeEnvironment,
+        env: {
+          ...sessionEnvironment,
+          ...(mcpSession
+            ? {
+                T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
+              }
+            : {}),
+        },
         ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
@@ -4093,9 +4201,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                   type: "http",
                   url: mcpSession.endpoint,
                   headers: {
-                    Authorization: mcpSession.authorizationHeader,
+                    // Claude Code expands environment references in HTTP MCP
+                    // headers. Keep the short-lived credential out of process
+                    // arguments and provider diagnostic payloads.
+                    Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
                   },
                 },
+                ...Object.fromEntries(
+                  mcpSession.upstreamServers.map((server) => [
+                    McpProviderSession.upstreamMcpServerName(server),
+                    {
+                      type: "http" as const,
+                      url: server.endpoint,
+                      headers: {
+                        Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
+                      },
+                    },
+                  ]),
+                ),
               },
             }
           : {}),
@@ -4391,11 +4514,40 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         yield* Effect.forEach(
           liveIds,
           (taskId) =>
-            Effect.tryPromise({
-              // Invoke through the query object: SDK methods rely on `this`.
-              try: () => context.query.stopTask!(taskId),
-              catch: () => undefined,
-            }).pipe(Effect.timeoutOption("3 seconds"), Effect.ignore),
+            Effect.gen(function* () {
+              const stopAcknowledged = yield* Effect.tryPromise({
+                // Invoke through the query object: SDK methods rely on `this`.
+                try: () => context.query.stopTask!(taskId),
+                catch: () => undefined,
+              }).pipe(
+                Effect.timeoutOption("3 seconds"),
+                Effect.orElseSucceed(() => Option.none()),
+              );
+              if (Option.isNone(stopAcknowledged) || !context.liveTaskIds.delete(taskId)) {
+                return;
+              }
+
+              // stopTask only acknowledges the control request. Its separate
+              // task_notification can lose the race with interrupt(), so make
+              // the acknowledged stop authoritative for the durable UI state.
+              const stamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                type: "task.completed",
+                eventId: stamp.eventId,
+                provider: PROVIDER,
+                createdAt: stamp.createdAt,
+                threadId: context.session.threadId,
+                ...(context.turnState
+                  ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                  : {}),
+                payload: {
+                  taskId: RuntimeTaskId.make(taskId),
+                  status: "stopped",
+                  ...taskLinkageFor(context.taskAgents, taskId),
+                },
+                providerRefs: nativeProviderRefs(context),
+              });
+            }).pipe(Effect.ignore),
           { concurrency: 8, discard: true },
         ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
       }
@@ -4499,13 +4651,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ),
       Effect.tap(() => Queue.shutdown(runtimeEventQueue)),
       Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
+      Effect.tap(() => Queue.shutdown(usageRefreshQueue)),
     ),
   );
 
-  return {
+  const adapter = {
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // T3-CUSTOM(expbkt3): coordinator behavior must not infer from provider name.
+      activeTurnInput: "steer",
+      durableResume: "supported",
     },
     startSession,
     sendTurn,
@@ -4521,5 +4677,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },
-  } satisfies ClaudeAdapterShape;
+  } satisfies Omit<
+    ClaudeAdapterShape,
+    "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+  >;
+  return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies ClaudeAdapterShape;
 });

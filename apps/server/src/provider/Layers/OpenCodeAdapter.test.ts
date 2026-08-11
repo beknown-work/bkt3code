@@ -39,6 +39,8 @@ import {
   mergeOpenCodeAssistantText,
 } from "./OpenCodeAdapter.ts";
 
+const decodeOpenCodeSettings = Schema.decodeEffect(OpenCodeSettings);
+
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
 class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterShape>()(
   "t3/provider/Layers/OpenCodeAdapter.test/OpenCodeAdapter",
@@ -74,6 +76,7 @@ const runtimeMock = {
     sessionDirectoryById: new Map<string, string>(),
     sessionUpdateCalls: [] as Array<{ sessionID: string; permission: unknown }>,
     forkCalls: [] as Array<{ sessionID: string; directory?: string }>,
+    connectEnvironments: [] as NodeJS.ProcessEnv[],
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -94,6 +97,7 @@ const runtimeMock = {
     this.state.sessionDirectoryById.clear();
     this.state.sessionUpdateCalls.length = 0;
     this.state.forkCalls.length = 0;
+    this.state.connectEnvironments.length = 0;
   },
 };
 
@@ -115,8 +119,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
+  connectToOpenCodeServer: ({ serverUrl, environment }) =>
     Effect.gen(function* () {
+      runtimeMock.state.connectEnvironments.push(environment ?? {});
       const url = serverUrl ?? "http://127.0.0.1:4301";
       // Always register a finalizer so the closeCalls/closeError probes fire;
       // production attaches none for external servers.
@@ -281,6 +286,69 @@ const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
+  it.effect("declares active-turn and durable-resume behavior", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      NodeAssert.deepStrictEqual(adapter.capabilities, {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      });
+    }),
+  );
+
+  it.effect("rejects thread-owned identity for an external OpenCode server", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const error = yield* Effect.flip(
+        adapter.startSession(
+          {
+            provider: ProviderDriverKind.make("opencode"),
+            threadId: asThreadId("thread-external-identity"),
+            runtimeMode: "full-access",
+          },
+          { environment: { GH_TOKEN: "alice-token" } },
+        ),
+      );
+
+      NodeAssert.match(error.message, /not supported by an external OpenCode server/i);
+      NodeAssert.deepEqual(runtimeMock.state.connectEnvironments, []);
+    }),
+  );
+
+  it.effect("injects thread-owned identity into a locally managed OpenCode server", () =>
+    Effect.gen(function* () {
+      const localSettings = yield* decodeOpenCodeSettings({
+        binaryPath: "fake-opencode",
+      });
+      const localLayer = Layer.effect(OpenCodeAdapter, makeOpenCodeAdapter(localSettings)).pipe(
+        Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession(
+          {
+            provider: ProviderDriverKind.make("opencode"),
+            threadId: asThreadId("thread-local-identity"),
+            runtimeMode: "full-access",
+          },
+          { environment: { GH_TOKEN: "alice-token", GIT_AUTHOR_NAME: "Alice Example" } },
+        );
+      }).pipe(Effect.provide(localLayer));
+
+      NodeAssert.equal(runtimeMock.state.connectEnvironments.at(-1)?.GH_TOKEN, "alice-token");
+      NodeAssert.equal(
+        runtimeMock.state.connectEnvironments.at(-1)?.GIT_AUTHOR_NAME,
+        "Alice Example",
+      );
+    }),
+  );
+
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -628,7 +696,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("clears session state even when cleanup finalizers throw", () =>
+  it.effect("retains session ownership until cleanup finalizers succeed", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       yield* adapter.startSession({
@@ -643,11 +711,6 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       });
 
       runtimeMock.state.closeError = new Error("close failed");
-      // `stopAll` relies on `stopOpenCodeContext`, which is typed as
-      // never-failing. A throwing finalizer surfaces as a defect — `Effect.exit`
-      // captures it so the assertions can still run. The key invariant we're
-      // validating is "the sessions map and close-call probes reflect cleanup
-      // attempts regardless of finalizer outcome".
       yield* Effect.exit(adapter.stopAll());
       const sessions = yield* adapter.listSessions();
 
@@ -655,7 +718,12 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         "http://127.0.0.1:9999",
         "http://127.0.0.1:9999",
       ]);
-      NodeAssert.deepEqual(sessions, []);
+      NodeAssert.equal(sessions.length, 2);
+
+      // A retry can now verify cleanup and only then clear ownership.
+      runtimeMock.state.closeError = null;
+      yield* adapter.stopAll();
+      NodeAssert.deepEqual(yield* adapter.listSessions(), []);
     }),
   );
 

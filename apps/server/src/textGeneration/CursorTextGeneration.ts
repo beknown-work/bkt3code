@@ -15,11 +15,24 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildCatchupSummaryPrompt,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  buildWorkSummaryPrompt,
+  // T3-CUSTOM(expbkt3): END
+  buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeCatchupSummary,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  sanitizeWorkSummary,
+  sanitizeWorkSummaryPercent,
+  sanitizeWorkSummaryRemaining,
+  sanitizeWorkSummaryStage,
+  // T3-CUSTOM(expbkt3): END
+  sanitizeRollingSummary,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import {
@@ -54,7 +67,12 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "updateRollingSummary"
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary";
+    // T3-CUSTOM(expbkt3): END
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -259,10 +277,84 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const updateRollingSummary: TextGeneration.TextGeneration["Service"]["updateRollingSummary"] =
+    Effect.fn("CursorTextGeneration.updateRollingSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRollingSummaryPrompt({
+        threadTitle: input.threadTitle,
+        previousSummary: input.previousSummary,
+        turnTranscript: input.turnTranscript,
+        dataLimitChars: input.dataLimitChars,
+      });
+
+      const generated = yield* runCursorJson({
+        operation: "updateRollingSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeRollingSummary(generated.summary),
+      } satisfies TextGeneration.RollingSummaryGenerationResult;
+    });
+
+  const generateCatchupSummary: TextGeneration.TextGeneration["Service"]["generateCatchupSummary"] =
+    Effect.fn("CursorTextGeneration.generateCatchupSummary")(function* (input) {
+      const { prompt, outputSchema } = buildCatchupSummaryPrompt({
+        threadTitle: input.threadTitle,
+        rollingSummary: input.rollingSummary,
+        turnTail: input.turnTail,
+        customInstructions: input.customInstructions,
+      });
+
+      const generated = yield* runCursorJson({
+        operation: "generateCatchupSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeCatchupSummary(generated.summary),
+      } satisfies TextGeneration.CatchupSummaryGenerationResult;
+    });
+
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  const generateWorkSummary: TextGeneration.TextGeneration["Service"]["generateWorkSummary"] =
+    Effect.fn("CursorTextGeneration.generateWorkSummary")(function* (input) {
+      const { prompt, outputSchema } = buildWorkSummaryPrompt({
+        context: input.context,
+        promptInstructions: input.promptInstructions,
+      });
+
+      const generated = yield* runCursorJson({
+        operation: "generateWorkSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeWorkSummary(generated.summary),
+        stage: sanitizeWorkSummaryStage(generated.stage),
+        remaining: sanitizeWorkSummaryRemaining(generated.remaining),
+        percent: sanitizeWorkSummaryPercent(generated.percent),
+      } satisfies TextGeneration.WorkSummaryGenerationResult;
+    });
+  // T3-CUSTOM(expbkt3): END
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    updateRollingSummary,
+    generateCatchupSummary,
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+    generateWorkSummary,
+    // T3-CUSTOM(expbkt3): END
   } satisfies TextGeneration.TextGeneration["Service"];
 });

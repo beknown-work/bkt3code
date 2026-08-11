@@ -23,6 +23,27 @@ export const StartupPresentation = Schema.Literals(["browser", "headless"]);
 export type StartupPresentation = typeof StartupPresentation.Type;
 
 /**
+ * Optional Clerk team-mode configuration.
+ *
+ * Present only when the deployment is configured with a Clerk secret. When
+ * `undefined` the server runs in single-user mode with zero behavior change:
+ * no Clerk verification, no per-user visibility filtering, everyone who pairs
+ * is an unrestricted operator (byte-for-byte the historical behavior).
+ */
+export interface ServerClerkAuthConfig {
+  /** Clerk backend secret key (`sk_...`). Enables token verification. */
+  readonly secretKey: string;
+  /** Clerk publishable key (`pk_...`), advertised to the SPA for its sign-in UI. */
+  readonly publishableKey: string | undefined;
+  /** When set, sign-in is hard-gated on membership of this Clerk org. */
+  readonly organizationId: string | undefined;
+  /** Explicit legacy-backfill owner user id; takes precedence over the email. */
+  readonly defaultOwnerUserId: string | undefined;
+  /** Fallback: resolve the legacy-backfill owner by email via Clerk. */
+  readonly defaultOwnerEmail: string | undefined;
+}
+
+/**
  * ServerDerivedPaths - Derived paths from the base directory.
  */
 export interface ServerDerivedPaths {
@@ -61,6 +82,11 @@ export class ServerConfig extends Context.Service<
     readonly traceBatchWindowMs: number;
     readonly traceMaxBytes: number;
     readonly traceMaxFiles: number;
+    /**
+     * Duration at or above which a `sql.execute` span is kept in the trace file.
+     * Faster successful statements are dropped at the sink; 0 keeps them all.
+     */
+    readonly traceSqlSlowMs: number;
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpExportIntervalMs: number;
@@ -83,6 +109,7 @@ export class ServerConfig extends Context.Service<
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
+    readonly clerkAuth: ServerClerkAuthConfig | undefined;
   }
 >()("t3/config/ServerConfig") {
   /** @deprecated Import and use `layerTest` from this module. */
@@ -174,6 +201,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     traceBatchWindowMs: 200,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
+    traceSqlSlowMs: 250,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
@@ -186,6 +214,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
+    clerkAuth: undefined,
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,

@@ -1,0 +1,215 @@
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ProviderRateLimitSnapshot,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  ProviderRateLimitsDetails,
+  SidebarProviderRateLimitsView,
+} from "./SidebarProviderRateLimits.tsx";
+import { buildProviderRateLimitRows } from "./SidebarProviderRateLimits.logic.ts";
+
+const now = Date.parse("2026-08-01T10:00:00.000Z");
+const codexSnapshot: ProviderRateLimitSnapshot = {
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  driverKind: ProviderDriverKind.make("codex"),
+  availability: "available",
+  windows: [
+    {
+      windowId: "codex:primary",
+      label: "Primary",
+      usedPercent: 26,
+      resetsAt: DateTime.makeUnsafe("2026-08-01T12:00:00.000Z"),
+      category: "rolling",
+    },
+  ],
+  observedAt: DateTime.makeUnsafe("2026-08-01T09:55:00.000Z"),
+  lastRefreshFailed: false,
+};
+const claudeSnapshot: ProviderRateLimitSnapshot = {
+  providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+  driverKind: ProviderDriverKind.make("claudeAgent"),
+  availability: "not-applicable",
+  windows: [],
+  observedAt: DateTime.makeUnsafe("2026-08-01T09:56:00.000Z"),
+  lastRefreshFailed: false,
+};
+const rows = buildProviderRateLimitRows({
+  providers: [
+    {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+    },
+    {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      driver: ProviderDriverKind.make("claudeAgent"),
+      enabled: true,
+    },
+  ],
+  entries: [codexSnapshot, claudeSnapshot],
+  now,
+});
+
+describe("SidebarProviderRateLimits", () => {
+  it("renders one accessible trigger with an exact 32px bar track", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarProviderRateLimitsView
+        environmentLabel="Workstation"
+        now={now}
+        onBackdrop={false}
+        rows={rows}
+      />,
+    );
+
+    expect(markup).toContain(
+      'aria-label="Provider usage limits: Codex 74% weekly remaining, resets in 2h; Claude unavailable"',
+    );
+    expect(markup.match(/w-8/g)?.length).toBe(2);
+    expect(markup.match(/bg-neutral-500\/20/g)?.length).toBe(2);
+    expect(markup.match(/border-neutral-500\/25/g)?.length).toBe(2);
+    expect(markup).toContain("74%");
+    expect(markup).not.toContain("animate-");
+  });
+
+  it("keeps cached percentages visible but gray and labels them as cached", () => {
+    const cachedRows = buildProviderRateLimitRows({
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      ],
+      entries: [],
+      cachedEntries: [codexSnapshot],
+      now,
+    });
+    const markup = renderToStaticMarkup(
+      <SidebarProviderRateLimitsView
+        environmentLabel="Workstation"
+        now={now}
+        onBackdrop={false}
+        rows={cachedRows}
+      />,
+    );
+
+    expect(markup).toContain("74%");
+    expect(markup).toContain('data-source="cache"');
+    expect(markup).toContain('data-freshness="stale"');
+    expect(markup).toContain("bg-muted-foreground/35");
+    expect(markup).toContain("opacity-60");
+    expect(markup).toContain("Codex 74% weekly remaining, resets in 2h, cached");
+  });
+
+  it("renders the rolling window beside the weekly meter once it dips below 50%", () => {
+    const rollingRows = buildProviderRateLimitRows({
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      ],
+      entries: [
+        {
+          ...codexSnapshot,
+          windows: [
+            {
+              windowId: "codex:primary",
+              label: "Primary",
+              usedPercent: 60,
+              resetsAt: DateTime.makeUnsafe("2026-08-01T11:08:00.000Z"),
+              windowDurationMinutes: 300,
+              category: "rolling",
+            },
+            {
+              windowId: "codex:secondary",
+              label: "Weekly",
+              usedPercent: 6,
+              resetsAt: DateTime.makeUnsafe("2026-08-06T00:00:00.000Z"),
+              category: "weekly",
+            },
+          ],
+        },
+      ],
+      now,
+    });
+    const markup = renderToStaticMarkup(
+      <SidebarProviderRateLimitsView
+        environmentLabel="Workstation"
+        now={now}
+        onBackdrop={false}
+        rows={rollingRows}
+      />,
+    );
+
+    expect(markup).toContain("94%");
+    expect(markup).toContain("5h 40%");
+    expect(markup).toContain("· 1h 8m");
+    expect(markup).toContain('data-rolling-window="true"');
+    expect(markup).toContain('title="5h window: 40% remaining, resets in 1h 8m"');
+    // The weekly countdown stays put while the rolling chip is on screen.
+    expect(markup).toContain('title="Usage resets in 5d"');
+  });
+
+  it("always shows the headline reset countdown in a single compact unit", () => {
+    const weeklyRows = buildProviderRateLimitRows({
+      providers: [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+        },
+      ],
+      entries: [
+        {
+          ...codexSnapshot,
+          windows: [
+            {
+              windowId: "codex:secondary",
+              label: "Weekly",
+              // Four and a half days out from the 2026-08-01T10:00Z clock.
+              usedPercent: 6,
+              resetsAt: DateTime.makeUnsafe("2026-08-05T22:00:00.000Z"),
+              windowDurationMinutes: 10_080,
+              category: "weekly",
+            },
+          ],
+        },
+      ],
+      now,
+    });
+    const markup = renderToStaticMarkup(
+      <SidebarProviderRateLimitsView
+        environmentLabel="Workstation"
+        now={now}
+        onBackdrop={false}
+        rows={weeklyRows}
+      />,
+    );
+
+    // Rounded up to whole days, so the label never exceeds three characters.
+    expect(markup).toContain('data-weekly-reset="true"');
+    expect(markup).toContain(">5d<");
+    expect(markup).toContain('title="Usage resets in 5d"');
+    // The countdown is unconditional: no rolling chip is on screen here.
+    expect(markup).not.toContain('data-rolling-window="true"');
+  });
+
+  it("renders complete read-only details and API-key degradation copy", () => {
+    const markup = renderToStaticMarkup(
+      <ProviderRateLimitsDetails environmentLabel="Workstation" now={now} rows={rows} />,
+    );
+
+    expect(markup).toContain("Workstation");
+    expect(markup).toContain("Primary");
+    expect(markup).toContain("74% remaining");
+    expect(markup).toContain("Last observed");
+    expect(markup).toContain("Subscription limits unavailable for API-key billing");
+  });
+});

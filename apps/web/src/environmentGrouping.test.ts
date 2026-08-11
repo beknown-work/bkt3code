@@ -36,6 +36,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   return {
     id: ProjectId.make("project-1"),
     environmentId: primaryEnvironmentId,
+    ownerUserId: null,
+    memberUserIds: [],
     title: "shared-repo",
     workspaceRoot: "/tmp/shared-repo",
     repositoryIdentity: null,

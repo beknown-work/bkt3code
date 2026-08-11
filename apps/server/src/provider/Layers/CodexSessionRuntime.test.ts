@@ -347,15 +347,20 @@ describe("codexSessionAppServerArgs", () => {
 
 describe("isRecoverableThreadResumeError", () => {
   it("matches missing thread errors", () => {
-    NodeAssert.equal(
-      isRecoverableThreadResumeError(
-        new CodexErrors.CodexAppServerRequestError({
-          code: -32603,
-          errorMessage: "Thread does not exist",
-        }),
-      ),
-      true,
-    );
+    for (const errorMessage of [
+      "Thread does not exist",
+      "no rollout found for thread id 019f8392-a04d-7991-86de-4e587e934349",
+    ]) {
+      NodeAssert.equal(
+        isRecoverableThreadResumeError(
+          new CodexErrors.CodexAppServerRequestError({
+            code: -32603,
+            errorMessage,
+          }),
+        ),
+        true,
+      );
+    }
   });
 
   it("ignores non-recoverable resume errors", () => {
@@ -407,7 +412,7 @@ describe("openCodexThread", () => {
             return Effect.fail(
               new CodexErrors.CodexAppServerRequestError({
                 code: -32603,
-                errorMessage: "thread not found",
+                errorMessage: "no rollout found for thread id 019f8392-a04d-7991-86de-4e587e934349",
               }),
             );
           }

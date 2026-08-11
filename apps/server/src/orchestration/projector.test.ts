@@ -7,6 +7,7 @@ import {
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
@@ -64,6 +65,7 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: now,
             updatedAt: now,
           },
@@ -85,7 +87,12 @@ describe("orchestration projector", () => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
+        // T3-CUSTOM(expbkt3): thread projections expose durable bootstrap readiness.
+        bootstrap: null,
         latestTurn: null,
+        ownerUserId: null,
+        memberUserIds: [],
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
@@ -93,11 +100,18 @@ describe("orchestration projector", () => {
         settledAt: null,
         snoozedUntil: null,
         snoozedAt: null,
+        priority: null,
+        // T3-CUSTOM(expbkt3): no manual Linear tag on a new thread.
+        linearIssueUrl: null,
+        // T3-CUSTOM(expbkt3): session lineage.
+        parentThreadId: null,
         deletedAt: null,
         messages: [],
         proposedPlans: [],
         activities: [],
         checkpoints: [],
+        rollingSummary: null,
+        turnSummaries: [],
         session: null,
       },
     ]);
@@ -128,6 +142,7 @@ describe("orchestration projector", () => {
               },
               branch: null,
               worktreePath: null,
+              sourceControlProfileId: null,
               createdAt: now,
               updatedAt: now,
             },
@@ -135,6 +150,60 @@ describe("orchestration projector", () => {
         ),
       ),
     ).rejects.toBeDefined();
+  });
+
+  it("projects a thread source-control owner change", async () => {
+    const now = "2026-07-31T00:00:00.000Z";
+    const created = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-owner",
+          occurredAt: now,
+          commandId: "cmd-create-owner",
+          payload: {
+            threadId: "thread-owner",
+            projectId: "project-owner",
+            title: "Owner projection",
+            modelSelection: { provider: "codex", model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            sourceControlProfileId: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+
+    const changedAt = "2026-07-31T00:01:00.000Z";
+    const changed = await Effect.runPromise(
+      projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.source-control-profile-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-owner",
+          occurredAt: changedAt,
+          commandId: "cmd-change-owner",
+          payload: {
+            threadId: "thread-owner",
+            previousSourceControlProfileId: null,
+            sourceControlProfileId: "alice",
+            changedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(changed.threads[0]?.sourceControlProfileId).toBe("alice");
+    expect(changed.threads[0]?.updatedAt).toBe(changedAt);
   });
 
   it("applies thread.archived and thread.unarchived events", async () => {
@@ -162,6 +231,7 @@ describe("orchestration projector", () => {
             interactionMode: "default",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: now,
             updatedAt: now,
           },
@@ -264,6 +334,7 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt,
             updatedAt: createdAt,
           },
@@ -369,6 +440,7 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt,
             updatedAt: createdAt,
           },
@@ -426,6 +498,7 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt,
             updatedAt: createdAt,
           },
@@ -513,6 +586,7 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt,
             updatedAt: createdAt,
           },
@@ -728,6 +802,7 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt,
             updatedAt: createdAt,
           },
@@ -856,12 +931,12 @@ describe("orchestration projector", () => {
     ).toEqual([{ id: "assistant-keep", role: "assistant", turnId: "turn-1" }]);
   });
 
-  it("caps message and checkpoint retention for long-lived threads", async () => {
-    const createdAt = "2026-03-01T10:00:00.000Z";
-    const model = createEmptyReadModel(createdAt);
+  effectIt.effect("caps message and checkpoint retention for long-lived threads", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-03-01T10:00:00.000Z";
+      const model = createEmptyReadModel(createdAt);
 
-    const afterCreate = await Effect.runPromise(
-      projectEvent(
+      const afterCreate = yield* projectEvent(
         model,
         makeEvent({
           sequence: 1,
@@ -881,79 +956,76 @@ describe("orchestration projector", () => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt,
             updatedAt: createdAt,
           },
         }),
-      ),
-    );
+      );
 
-    const messageEvents: ReadonlyArray<OrchestrationEvent> = Array.from(
-      { length: 2_100 },
-      (_, index) =>
-        makeEvent({
-          sequence: index + 2,
-          type: "thread.message-sent",
-          aggregateKind: "thread",
-          aggregateId: "thread-capped",
-          occurredAt: `2026-03-01T10:00:${String(index % 60).padStart(2, "0")}.000Z`,
-          commandId: `cmd-message-${index}`,
-          payload: {
-            threadId: "thread-capped",
-            messageId: `msg-${index}`,
-            role: "assistant",
-            text: `message-${index}`,
-            turnId: `turn-${index}`,
-            streaming: false,
-            createdAt: `2026-03-01T10:00:${String(index % 60).padStart(2, "0")}.000Z`,
-            updatedAt: `2026-03-01T10:00:${String(index % 60).padStart(2, "0")}.000Z`,
-          },
-        }),
-    );
-    const afterMessages = await messageEvents.reduce<
-      Promise<ReturnType<typeof createEmptyReadModel>>
-    >(
-      (statePromise, event) =>
-        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
-      Promise.resolve(afterCreate),
-    );
+      const messageEvents: ReadonlyArray<OrchestrationEvent> = Array.from(
+        { length: 2_100 },
+        (_, index) =>
+          makeEvent({
+            sequence: index + 2,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-capped",
+            occurredAt: `2026-03-01T10:00:${String(index % 60).padStart(2, "0")}.000Z`,
+            commandId: `cmd-message-${index}`,
+            payload: {
+              threadId: "thread-capped",
+              messageId: `msg-${index}`,
+              role: "assistant",
+              text: `message-${index}`,
+              turnId: `turn-${index}`,
+              streaming: false,
+              createdAt: `2026-03-01T10:00:${String(index % 60).padStart(2, "0")}.000Z`,
+              updatedAt: `2026-03-01T10:00:${String(index % 60).padStart(2, "0")}.000Z`,
+            },
+          }),
+      );
+      const afterMessages = yield* Effect.reduce(
+        messageEvents,
+        () => afterCreate,
+        (state, event) => projectEvent(state, event),
+      );
 
-    const checkpointEvents: ReadonlyArray<OrchestrationEvent> = Array.from(
-      { length: 600 },
-      (_, index) =>
-        makeEvent({
-          sequence: index + 2_102,
-          type: "thread.turn-diff-completed",
-          aggregateKind: "thread",
-          aggregateId: "thread-capped",
-          occurredAt: `2026-03-01T10:30:${String(index % 60).padStart(2, "0")}.000Z`,
-          commandId: `cmd-checkpoint-${index}`,
-          payload: {
-            threadId: "thread-capped",
-            turnId: `turn-${index}`,
-            checkpointTurnCount: index + 1,
-            checkpointRef: `refs/t3/checkpoints/thread-capped/turn/${index + 1}`,
-            status: "ready",
-            files: [],
-            assistantMessageId: `msg-${index}`,
-            completedAt: `2026-03-01T10:30:${String(index % 60).padStart(2, "0")}.000Z`,
-          },
-        }),
-    );
-    const finalState = await checkpointEvents.reduce<
-      Promise<ReturnType<typeof createEmptyReadModel>>
-    >(
-      (statePromise, event) =>
-        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
-      Promise.resolve(afterMessages),
-    );
+      const checkpointEvents: ReadonlyArray<OrchestrationEvent> = Array.from(
+        { length: 600 },
+        (_, index) =>
+          makeEvent({
+            sequence: index + 2_102,
+            type: "thread.turn-diff-completed",
+            aggregateKind: "thread",
+            aggregateId: "thread-capped",
+            occurredAt: `2026-03-01T10:30:${String(index % 60).padStart(2, "0")}.000Z`,
+            commandId: `cmd-checkpoint-${index}`,
+            payload: {
+              threadId: "thread-capped",
+              turnId: `turn-${index}`,
+              checkpointTurnCount: index + 1,
+              checkpointRef: `refs/t3/checkpoints/thread-capped/turn/${index + 1}`,
+              status: "ready",
+              files: [],
+              assistantMessageId: `msg-${index}`,
+              completedAt: `2026-03-01T10:30:${String(index % 60).padStart(2, "0")}.000Z`,
+            },
+          }),
+      );
+      const finalState = yield* Effect.reduce(
+        checkpointEvents,
+        () => afterMessages,
+        (state, event) => projectEvent(state, event),
+      );
 
-    const thread = finalState.threads[0];
-    expect(thread?.messages).toHaveLength(2_000);
-    expect(thread?.messages[0]?.id).toBe("msg-100");
-    expect(thread?.messages.at(-1)?.id).toBe("msg-2099");
-    expect(thread?.checkpoints).toHaveLength(500);
-    expect(thread?.checkpoints[0]?.turnId).toBe("turn-100");
-    expect(thread?.checkpoints.at(-1)?.turnId).toBe("turn-599");
-  });
+      const thread = finalState.threads[0];
+      expect(thread?.messages).toHaveLength(2_000);
+      expect(thread?.messages[0]?.id).toBe("msg-100");
+      expect(thread?.messages.at(-1)?.id).toBe("msg-2099");
+      expect(thread?.checkpoints).toHaveLength(500);
+      expect(thread?.checkpoints[0]?.turnId).toBe("turn-100");
+      expect(thread?.checkpoints.at(-1)?.turnId).toBe("turn-599");
+    }),
+  );
 });

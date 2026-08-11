@@ -10,6 +10,9 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Execution reliability](#execution-reliability)
+- [Environment users](#environment-users)
+- [Source-control identity](#source-control-identity)
 - [Checkpointing](#checkpointing)
 
 ## Concepts
@@ -27,6 +30,12 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 #### Worktree
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
+
+#### Thread bootstrap
+
+The durable preparation lifecycle that resolves new-thread defaults, creates or adopts a workspace,
+runs a new-worktree setup action, and only then dispatches an optional first agent turn. Its public
+projection is output-free and survives reconnects. See [thread-bootstrap.md][26].
 
 ### Thread timeline
 
@@ -60,6 +69,21 @@ Examples include `thread.create`, `thread.turn.start`, and `thread.checkpoint.re
 A persisted fact that something already happened. In [the contracts][1], events are the source of truth, and [projector.ts][4] shows how they are applied.
 Examples include `thread.created`, `thread.message-sent`, and `thread.turn-diff-completed`.
 
+#### Session lineage (child session, session tree)
+
+A thread created by another thread — today via the `t3_create_session` MCP tool — stores that thread
+in `parentThreadId`. A thread with a parent is a **child session**; a parent plus everything beneath
+it is a **session tree**. `parentThreadId` is null for a **root session**, which is what any
+person-started thread is.
+
+Lineage is always a forest: the invariant lives in [threadLineage.ts][28], and the decider rejects a
+re-parent that would close a cycle. The link is a bare `ThreadId` with no environment qualifier,
+because a session can only be created by a caller on the same server.
+
+The experimental phase-grouped sidebar renders a tree as nested rows and pulls a parent into the
+Implementing group whenever anything in its subtree is working. See [t3-mcp-control.md][29] for the
+agent-facing `createAsChild` control.
+
 #### Decider
 
 The pure orchestration logic that turns commands plus current state into events. The core implementation is in [decider.ts][8], with preconditions in [commandInvariants.ts][9].
@@ -88,6 +112,29 @@ A typed signal emitted when an async milestone completes, such as `checkpoint.ba
 
 "Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
 
+### Execution reliability
+
+#### Execution intent
+
+The durable statement that an accepted message should run. It contains the exact delivery payload,
+desired state, lifecycle phase, delivery certainty, and recovery state. It is distinct from the live
+provider session. See [execution-reliability.md][27].
+
+#### Desired state
+
+Whether the control plane intends a work item to be `running` or `stopped`. Desired state survives a
+server restart; observed provider state may not.
+
+#### Observed state
+
+Provider evidence such as session status and provider turn ID. Recovery reconciles desired state
+with observed state and requires provider-turn evidence before declaring success.
+
+#### Generation fence
+
+A monotonically increasing claim generation checked before side effects. Stop and other cancelling
+actions advance the generation so work claimed by an older generation cannot continue.
+
 ### Provider runtime
 
 The live backend agent implementation and its event stream. The main service is [ProviderService.ts][14], the adapter contract is [ProviderAdapter.ts][15], and the overview is in [providers.md][16].
@@ -115,6 +162,35 @@ Controls how assistant text reaches the thread timeline. In [the contracts][1], 
 #### Snapshot
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
+
+### Environment users
+
+#### Environment user
+
+A durable human identity local to one environment and keyed by a verified Clerk subject. It carries
+the local role, blocked state, public profile data, and optional source-control profile assignment.
+Device sessions remain separate records and reference the user when Clerk identity was supplied.
+
+#### Presence
+
+The derived online or offline state of an environment user. A user is online while at least one of
+their non-revoked environment sessions has a live WebSocket connection. Presence is not persisted as
+an independent source of truth.
+
+### Source-control identity
+
+#### Source-control profile
+
+A server-managed GitHub attribution identity containing public account and Git commit metadata plus
+a separately stored write-only credential. In thread-profile mode, a thread references one profile
+and all server-owned GitHub activity from that thread resolves through it. See
+[source-control-identity.md][25].
+
+#### Thread owner
+
+The source-control profile assigned to a thread. Ownership controls attribution, not authorization:
+trusted collaborators may work in or transfer one another's threads. An owner change affects only
+operations started after the durable owner-change event. See [source-control-identity.md][25].
 
 ### Checkpointing
 
@@ -179,3 +255,8 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./source-control-identity.md
+[26]: ./thread-bootstrap.md
+[27]: ./execution-reliability.md
+[28]: ../../apps/server/src/orchestration/threadLineage.ts
+[29]: ../user/t3-mcp-control.md

@@ -17,7 +17,11 @@ import {
   ProjectionPendingTurnStart,
   ProjectionTurn,
   ProjectionTurnById,
+  ProjectionTurnCatchupSummary,
   ProjectionTurnRepository,
+  ClearProjectionTurnCatchupSummaryInput,
+  ListProjectionTurnCatchupSummariesInput,
+  UpsertProjectionTurnCatchupSummaryInput,
   type ProjectionTurnRepositoryShape,
 } from "../Services/ProjectionTurns.ts";
 
@@ -229,6 +233,56 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  // Turn rows are created by turn lifecycle projection; this only annotates an
+  // existing row, so a missing row silently updates nothing.
+  const upsertCatchupSummaryRow = SqlSchema.void({
+    Request: UpsertProjectionTurnCatchupSummaryInput,
+    execute: ({ threadId, turnId, summary, status, createdAt }) =>
+      sql`
+        UPDATE projection_turns
+        SET
+          catchup_summary = ${summary},
+          catchup_summary_status = ${status},
+          catchup_summary_created_at = ${createdAt}
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+      `,
+  });
+
+  const clearCatchupSummaryRow = SqlSchema.void({
+    Request: ClearProjectionTurnCatchupSummaryInput,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        UPDATE projection_turns
+        SET
+          catchup_summary = NULL,
+          catchup_summary_status = NULL,
+          catchup_summary_created_at = NULL
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+      `,
+  });
+
+  const listCatchupSummaryRows = SqlSchema.findAll({
+    Request: ListProjectionTurnCatchupSummariesInput,
+    Result: ProjectionTurnCatchupSummary,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          turn_id AS "turnId",
+          assistant_message_id AS "assistantMessageId",
+          catchup_summary AS "summary",
+          catchup_summary_status AS "status",
+          catchup_summary_created_at AS "createdAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id IS NOT NULL
+          AND catchup_summary_status IS NOT NULL
+          AND catchup_summary_created_at IS NOT NULL
+        ORDER BY catchup_summary_created_at ASC
+      `,
+  });
+
   const clearCheckpointTurnConflictRow = SqlSchema.void({
     Request: ClearCheckpointTurnConflictInput,
     execute: ({ threadId, turnId, checkpointTurnCount }) =>
@@ -324,6 +378,37 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
+  const upsertCatchupSummary: ProjectionTurnRepositoryShape["upsertCatchupSummary"] = (input) =>
+    upsertCatchupSummaryRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTurnRepository.upsertCatchupSummary:query",
+          "ProjectionTurnRepository.upsertCatchupSummary:encodeRequest",
+        ),
+      ),
+    );
+
+  const clearCatchupSummary: ProjectionTurnRepositoryShape["clearCatchupSummary"] = (input) =>
+    clearCatchupSummaryRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTurnRepository.clearCatchupSummary:query",
+          "ProjectionTurnRepository.clearCatchupSummary:encodeRequest",
+        ),
+      ),
+    );
+
+  const listCatchupSummariesByThreadId: ProjectionTurnRepositoryShape["listCatchupSummariesByThreadId"] =
+    (input) =>
+      listCatchupSummaryRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionTurnRepository.listCatchupSummariesByThreadId:query",
+            "ProjectionTurnRepository.listCatchupSummariesByThreadId:decodeRows",
+          ),
+        ),
+      );
+
   const clearCheckpointTurnConflict: ProjectionTurnRepositoryShape["clearCheckpointTurnConflict"] =
     (input) =>
       clearCheckpointTurnConflictRow(input).pipe(
@@ -344,6 +429,9 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     deletePendingTurnStartByThreadId,
     listByThreadId,
     getByTurnId,
+    upsertCatchupSummary,
+    clearCatchupSummary,
+    listCatchupSummariesByThreadId,
     clearCheckpointTurnConflict,
     deleteByThreadId,
   } satisfies ProjectionTurnRepositoryShape;

@@ -1,5 +1,8 @@
 import type { EnvironmentId, VcsRef, ProjectId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+// T3-CUSTOM(expbkt3): BEGIN — memorable worktree codenames.
+import { resolveWorktreeCodename } from "@t3tools/shared/worktreeCodename";
+// T3-CUSTOM(expbkt3): END
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
   dedupeRemoteBranchesWithLocalMatches,
@@ -54,6 +57,14 @@ export function shouldShowEnvironmentIndicator(input: {
   return input.activeEnvironment !== null && !input.activeEnvironment.isPrimary;
 }
 
+export function shouldShowComposerContextStrip(input: {
+  hasActiveProject: boolean;
+  isGitRepo: boolean;
+  showEnvironmentIndicator: boolean;
+}): boolean {
+  return input.hasActiveProject && (input.isGitRepo || input.showEnvironmentIndicator);
+}
+
 export function resolveEnvModeLabel(mode: EnvMode): string {
   return mode === "worktree" ? "New worktree" : "Current checkout";
 }
@@ -62,9 +73,11 @@ export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null):
   return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — name the worktree instead of restating its kind.
 export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {
-  return activeWorktreePath ? "Worktree" : "Local checkout";
+  return activeWorktreePath ? resolveWorktreeCodename(activeWorktreePath) : "Local checkout";
 }
+// T3-CUSTOM(expbkt3): END
 
 export interface PreviousWorktreeSeed {
   branch: string | null;

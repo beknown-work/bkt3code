@@ -37,6 +37,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Equal from "effect/Equal";
@@ -142,6 +143,21 @@ export class TerminalManager extends Context.Service<
      */
     readonly write: (input: TerminalWriteInput) => Effect.Effect<void, TerminalError>;
 
+    // T3-CUSTOM(expbkt3): run one command in a PTY and await its actual exit.
+    readonly runCommand: (
+      input: TerminalOpenInput & {
+        readonly command: string;
+        readonly onStarted?: () => Effect.Effect<void>;
+      },
+    ) => Effect.Effect<TerminalCommandResult, TerminalError>;
+
+    // T3-CUSTOM(expbkt3): stop a one-shot setup process while retaining its
+    // terminal session and history for the checklist output action.
+    readonly stopCommand: (input: {
+      readonly threadId: string;
+      readonly terminalId: string;
+    }) => Effect.Effect<void, TerminalError>;
+
     /**
      * Resize the PTY backing a terminal session.
      */
@@ -167,6 +183,9 @@ export class TerminalManager extends Context.Service<
      * When `terminalId` is omitted, closes all sessions for the thread.
      */
     readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
+
+    /** Whether a terminal in the thread currently owns a running child command. */
+    readonly hasRunningCommand: (threadId: string) => Effect.Effect<boolean>;
 
     /**
      * Subscribe to terminal runtime events with a direct callback.
@@ -224,6 +243,20 @@ export interface ShellCandidate {
   args?: string[];
 }
 
+// T3-CUSTOM(expbkt3): terminal output remains in persisted history; callers
+// receive only completion metadata.
+export interface TerminalCommandResult {
+  readonly threadId: string;
+  readonly terminalId: string;
+  readonly exitCode: number | null;
+  readonly exitSignal: number | null;
+  readonly error: string | null;
+}
+
+interface TerminalCommandOpenInput extends TerminalOpenInput {
+  readonly command?: string;
+}
+
 export interface TerminalStartInput extends TerminalOpenInput {
   cols: number;
   rows: number;
@@ -254,6 +287,8 @@ export interface TerminalSessionState {
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
+  // T3-CUSTOM(expbkt3): null for interactive shells, otherwise a one-shot command.
+  launchCommand: string | null;
 }
 
 interface PersistHistoryRequest {
@@ -562,6 +597,26 @@ function resolveShellCandidates(
     shellCandidateFromCommand("bash", platform),
     shellCandidateFromCommand("sh", platform),
   ]);
+}
+
+// T3-CUSTOM(expbkt3): preserve the user's shell while running setup as a
+// single invocation, so its process exit is the setup exit and PTY input stays live.
+function withOneShotCommand(
+  candidates: ReadonlyArray<ShellCandidate>,
+  command: string | null,
+  platform: NodeJS.Platform,
+): ReadonlyArray<ShellCandidate> {
+  if (command === null) return candidates;
+  return candidates.map((candidate) => {
+    const shellName = basenameForPlatform(candidate.shell, platform).toLowerCase();
+    const args = [...(candidate.args ?? [])];
+    if (platform === "win32") {
+      return shellName === "cmd.exe" || shellName === "cmd"
+        ? { ...candidate, args: [...args, "/d", "/s", "/c", command] }
+        : { ...candidate, args: [...args, "-Command", command] };
+    }
+    return { ...candidate, args: [...args, "-lc", command] };
+  });
 }
 
 function isRetryableShellSpawnError(error: PtyAdapter.PtySpawnError): boolean {
@@ -1176,6 +1231,28 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+const TERMINAL_SENSITIVE_ENVIRONMENT_KEYS = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+] as const;
+
+function redactTerminalSensitiveOutput(
+  value: string,
+  runtimeEnv: Record<string, string> | null,
+): string {
+  if (runtimeEnv === null) return value;
+  let redacted = value;
+  for (const key of TERMINAL_SENSITIVE_ENVIRONMENT_KEYS) {
+    const secret = runtimeEnv[key];
+    if (secret && secret.length >= 8) {
+      redacted = redacted.replaceAll(secret, "[REDACTED]");
+    }
+  }
+  return redacted;
+}
+
 interface TerminalManagerOptions {
   logsDir: string;
   historyLineLimit?: number;
@@ -1708,9 +1785,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
 
         if (nextEvent.type === "output") {
+          const redactedOutput = redactTerminalSensitiveOutput(nextEvent.data, session.runtimeEnv);
           const sanitized = sanitizeTerminalHistoryChunk(
             session.pendingHistoryControlSequence,
-            nextEvent.data,
+            redactedOutput,
           );
           session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
           if (sanitized.visibleText.length > 0) {
@@ -1727,7 +1805,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             terminalId: session.terminalId,
             sequence: eventStamp.sequence,
             history: sanitized.visibleText.length > 0 ? session.history : null,
-            data: nextEvent.data,
+            data: redactedOutput,
           } as const;
         }
 
@@ -1920,7 +1998,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       increment(terminalSessionsTotal, { lifecycle: eventType }).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
+            // T3-CUSTOM(expbkt3): one-shot setup terminals use the same shell
+            // selection/fallback chain as interactive terminals.
+            const shellCandidates = withOneShotCommand(
+              resolveShellCandidates(shellResolver, platform, baseEnv),
+              session.launchCommand,
+              platform,
+            );
             const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv);
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;
@@ -2180,7 +2264,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }).pipe(Effect.ignoreCause({ log: true })),
   );
 
-  const openLocked = Effect.fn("terminal.openLocked")(function* (input: TerminalOpenInput) {
+  const openLocked = Effect.fn("terminal.openLocked")(function* (input: TerminalCommandOpenInput) {
     const terminalId = input.terminalId;
     yield* assertValidCwd(input.cwd);
 
@@ -2215,6 +2299,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         hasRunningSubprocess: false,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
+        // T3-CUSTOM(expbkt3): optional one-shot setup command.
+        launchCommand: input.command ?? null,
       };
 
       const createdSession = session;
@@ -2244,6 +2330,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const liveSession = existing.value;
     const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
     const currentRuntimeEnv = liveSession.runtimeEnv;
+    const nextLaunchCommand = input.command ?? null;
     const targetCols = input.cols ?? liveSession.cols;
     const targetRows = input.rows ?? liveSession.rows;
     const runtimeEnvChanged = !Equal.equals(currentRuntimeEnv, nextRuntimeEnv);
@@ -2252,13 +2339,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const launchContextChanged =
       liveSession.cwd !== input.cwd ||
       runtimeEnvChanged ||
-      liveSession.worktreePath !== nextWorktreePath;
+      liveSession.worktreePath !== nextWorktreePath ||
+      liveSession.launchCommand !== nextLaunchCommand;
 
     if (launchContextChanged) {
       yield* stopProcess(liveSession);
       liveSession.cwd = input.cwd;
       liveSession.worktreePath = nextWorktreePath;
       liveSession.runtimeEnv = nextRuntimeEnv;
+      liveSession.launchCommand = nextLaunchCommand;
       liveSession.history = "";
       liveSession.pendingHistoryControlSequence = "";
       liveSession.pendingProcessEvents = [];
@@ -2267,6 +2356,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
     } else if (liveSession.status === "exited" || liveSession.status === "error") {
       liveSession.runtimeEnv = nextRuntimeEnv;
+      liveSession.launchCommand = nextLaunchCommand;
       liveSession.worktreePath = nextWorktreePath;
       liveSession.history = "";
       liveSession.pendingHistoryControlSequence = "";
@@ -2384,6 +2474,52 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       return () => {
         terminalEventListeners.delete(listener);
       };
+    });
+
+  // T3-CUSTOM(expbkt3): completion-aware PTY command used by worktree setup.
+  // Subscribe before spawning so even an immediate exit cannot be missed.
+  const runCommand: TerminalManager["Service"]["runCommand"] = (input) =>
+    Effect.gen(function* () {
+      const completion = yield* Deferred.make<TerminalCommandResult>();
+      const unsubscribe = yield* subscribe((event) => {
+        if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
+          return Effect.void;
+        }
+        if (event.type === "exited") {
+          return Deferred.succeed(completion, {
+            threadId: input.threadId,
+            terminalId: input.terminalId,
+            exitCode: event.exitCode,
+            exitSignal: event.exitSignal === 0 ? null : event.exitSignal,
+            error: null,
+          }).pipe(Effect.asVoid);
+        }
+        if (event.type === "error") {
+          return Deferred.succeed(completion, {
+            threadId: input.threadId,
+            terminalId: input.terminalId,
+            exitCode: null,
+            exitSignal: null,
+            error: event.message,
+          }).pipe(Effect.asVoid);
+        }
+        if (event.type === "closed") {
+          return Deferred.succeed(completion, {
+            threadId: input.threadId,
+            terminalId: input.terminalId,
+            exitCode: null,
+            exitSignal: null,
+            error: "Terminal was stopped.",
+          }).pipe(Effect.asVoid);
+        }
+        return Effect.void;
+      });
+
+      return yield* open(input).pipe(
+        Effect.tap(() => input.onStarted?.() ?? Effect.void),
+        Effect.andThen(Deferred.await(completion)),
+        Effect.ensuring(Effect.sync(unsubscribe)),
+      );
     });
 
   const attachStream: TerminalManager["Service"]["attachStream"] = (input, listener) => {
@@ -2627,6 +2763,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             hasRunningSubprocess: false,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
+            // T3-CUSTOM(expbkt3): restart returns to an interactive shell.
+            launchCommand: null,
           };
           const createdSession = session;
           yield* modifyManagerState((state) => {
@@ -2641,6 +2779,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           session.cwd = input.cwd;
           session.worktreePath = input.worktreePath ?? null;
           session.runtimeEnv = normalizedRuntimeEnv(input.env);
+          session.launchCommand = null;
         }
 
         const cols = input.cols ?? session.cols;
@@ -2691,14 +2830,64 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }),
     );
 
+  // T3-CUSTOM(expbkt3): unlike close(), this keeps the terminal addressable so
+  // users can inspect partial output after stopping an interactive setup.
+  const stopCommand: TerminalManager["Service"]["stopCommand"] = (input) =>
+    withThreadLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const session = yield* requireSession(input.threadId, input.terminalId);
+        if (!session.process || session.status !== "running") {
+          return yield* new TerminalNotRunningError(input);
+        }
+        yield* stopProcess(session);
+        const event = yield* modifyManagerState((state) => {
+          session.status = "error";
+          session.exitCode = null;
+          session.exitSignal = null;
+          const stamp = advanceEventSequence(session);
+          return [
+            {
+              type: "error" as const,
+              threadId: session.threadId,
+              terminalId: session.terminalId,
+              sequence: stamp.sequence,
+              message: "Terminal was stopped.",
+            },
+            state,
+          ] as const;
+        });
+        yield* persistHistory(session.threadId, session.terminalId, session.history);
+        yield* flushPersist(session.threadId, session.terminalId);
+        yield* publishEvent(event);
+      }),
+    );
+
+  const hasRunningCommand: TerminalManager["Service"]["hasRunningCommand"] = (threadId) =>
+    SynchronizedRef.get(managerStateRef).pipe(
+      Effect.map((state) =>
+        Array.from(state.sessions.values()).some(
+          (session) =>
+            session.threadId === threadId &&
+            session.status === "running" &&
+            session.hasRunningSubprocess,
+        ),
+      ),
+    );
+
   return TerminalManager.of({
     open,
     attachStream,
     write,
+    // T3-CUSTOM(expbkt3): completion-aware project setup command.
+    runCommand,
+    // T3-CUSTOM(expbkt3): retained-history setup stop.
+    stopCommand,
     resize,
     clear,
     restart,
     close,
+    hasRunningCommand,
     subscribe,
     subscribeMetadata,
   });

@@ -24,6 +24,7 @@ import {
   GitCommandError,
   ProviderDriverKind,
   ProviderInstanceId,
+  SourceControlProfileId,
   TextGenerationError,
 } from "@t3tools/contracts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -36,6 +37,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { withSourceControlExecutionEnvironment } from "../sourceControl/SourceControlExecutionEnvironment.ts";
 import * as GitManager from "./GitManager.ts";
 
 interface FakeGhScenario {
@@ -292,6 +294,14 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    // T3-CUSTOM(expbkt3): catch-up summary members the fork adds to the
+    // TextGeneration service; unused by git tests but required by the type.
+    updateRollingSummary: () =>
+      Effect.die("updateRollingSummary is not exercised by GitManager tests"),
+    generateCatchupSummary: () =>
+      Effect.die("generateCatchupSummary is not exercised by GitManager tests"),
+    generateWorkSummary: () =>
+      Effect.die("generateWorkSummary is not exercised by GitManager tests"),
     ...overrides,
   };
 
@@ -340,6 +350,12 @@ function createTextGeneration(
             }),
         ),
       ),
+    // Git flows never summarize sessions; fail loudly if that changes.
+    updateRollingSummary: () =>
+      Effect.die("updateRollingSummary is not used by git text generation"),
+    generateCatchupSummary: () =>
+      Effect.die("generateCatchupSummary is not used by git text generation"),
+    generateWorkSummary: () => Effect.die("generateWorkSummary is not used by git text generation"),
   };
 }
 
@@ -871,6 +887,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         hasPrimaryRemote: false,
         isDefaultRef: false,
         refName: null,
+        baseRef: null,
         hasWorkingTreeChanges: false,
         workingTree: {
           files: [],
@@ -901,6 +918,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         hasPrimaryRemote: false,
         isDefaultRef: false,
         refName: null,
+        baseRef: null,
         hasWorkingTreeChanges: false,
         workingTree: {
           files: [],
@@ -945,6 +963,45 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(first.pr?.number).toBe(113);
       expect(second.pr?.number).toBe(113);
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(1);
+    }),
+  );
+
+  it.effect("separates remote status caches by source-control profile", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/profile-status-cache"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/profile-status-cache"]);
+
+      const existingPr = {
+        number: 114,
+        title: "Profile-scoped cached PR",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/114",
+        baseRefName: "main",
+        headRefName: "feature/profile-status-cache",
+      };
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          prListSequence: [JSON.stringify([existingPr]), JSON.stringify([existingPr])],
+        },
+      });
+      const alice = {
+        profileId: SourceControlProfileId.make("alice"),
+        environment: { GH_TOKEN: "alice-token" },
+      };
+      const bob = {
+        profileId: SourceControlProfileId.make("bob"),
+        environment: { GH_TOKEN: "bob-token" },
+      };
+
+      yield* withSourceControlExecutionEnvironment(manager.status({ cwd: repoDir }), alice);
+      yield* withSourceControlExecutionEnvironment(manager.status({ cwd: repoDir }), alice);
+      yield* withSourceControlExecutionEnvironment(manager.status({ cwd: repoDir }), bob);
+
+      expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
     }),
   );
 
@@ -1053,7 +1110,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           state: "open",
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,
@@ -3730,7 +3787,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("does not fail PR worktree prep when setup terminal startup fails", () =>
+  it.effect("keeps the PR worktree and returns its setup terminal when setup fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -3762,23 +3819,29 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
                 threadId: input.threadId,
                 worktreePath: input.worktreePath,
-                operation: "openTerminal",
+                operation: "runCommand",
+                terminalId: "setup-pr-184",
                 cause: new Error("terminal start failed"),
               }),
             ),
         },
       });
 
-      const result = yield* preparePullRequestThread(manager, {
+      const error = yield* preparePullRequestThread(manager, {
         cwd: repoDir,
         reference: "184",
         mode: "worktree",
         threadId: asThreadId("thread-pr-setup-failure"),
-      });
+      }).pipe(Effect.flip);
 
-      expect(result.branch).toBe("feature/pr-setup-failure");
-      expect(result.worktreePath).not.toBeNull();
-      expect(NodeFS.existsSync(result.worktreePath as string)).toBe(true);
+      expect(error._tag).toBe("GitManagerError");
+      if (error._tag !== "GitManagerError") {
+        throw new Error(`Expected GitManagerError, received ${error._tag}`);
+      }
+      expect(error.terminalId).toBe("setup-pr-184");
+      expect(error.message).toContain("Project setup script operation");
+      const worktrees = yield* runGit(repoDir, ["worktree", "list", "--porcelain"]);
+      expect(worktrees.stdout).toContain("branch refs/heads/feature/pr-setup-failure");
     }),
   );
 

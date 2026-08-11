@@ -86,6 +86,9 @@ const EnvServerConfig = Config.all({
   traceMaxBytes: Config.int("T3CODE_TRACE_MAX_BYTES").pipe(Config.withDefault(10 * 1024 * 1024)),
   traceMaxFiles: Config.int("T3CODE_TRACE_MAX_FILES").pipe(Config.withDefault(10)),
   traceBatchWindowMs: Config.int("T3CODE_TRACE_BATCH_WINDOW_MS").pipe(Config.withDefault(1_000)),
+  // One span per SQL statement dominates trace volume. Keep the slow ones,
+  // which is how a pathological query is actually found, and drop the rest.
+  traceSqlSlowMs: Config.int("T3CODE_TRACE_SQL_SLOW_MS").pipe(Config.withDefault(250)),
   otlpTracesUrl: Config.string("T3CODE_OTLP_TRACES_URL").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -136,6 +139,26 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   tailscaleServePort: Config.port("T3CODE_TAILSCALE_SERVE_PORT").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  clerkSecretKey: Config.string("T3CODE_CLERK_SECRET_KEY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  clerkPublishableKey: Config.string("T3CODE_CLERK_PUBLISHABLE_KEY").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  clerkOrganizationId: Config.string("T3CODE_CLERK_ORGANIZATION_ID").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  defaultOwnerUserId: Config.string("T3CODE_DEFAULT_OWNER_USER_ID").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  defaultOwnerEmail: Config.string("T3CODE_DEFAULT_OWNER_EMAIL").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
@@ -349,6 +372,24 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // Clerk team mode is opt-in: only enabled when a secret key is provided.
+    // Absent ⇒ single-user mode with no behavior change.
+    const trimToUndefined = (value: string | undefined): string | undefined => {
+      const trimmed = value?.trim();
+      return trimmed && trimmed.length > 0 ? trimmed : undefined;
+    };
+    const clerkSecretKey = trimToUndefined(env.clerkSecretKey);
+    const clerkAuth: ServerConfig.ServerClerkAuthConfig | undefined =
+      clerkSecretKey === undefined
+        ? undefined
+        : {
+            secretKey: clerkSecretKey,
+            publishableKey: trimToUndefined(env.clerkPublishableKey),
+            organizationId: trimToUndefined(env.clerkOrganizationId),
+            defaultOwnerUserId: trimToUndefined(env.defaultOwnerUserId),
+            defaultOwnerEmail: trimToUndefined(env.defaultOwnerEmail),
+          };
+
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
       traceMinLevel: env.traceMinLevel,
@@ -356,6 +397,7 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
+      traceSqlSlowMs: env.traceSqlSlowMs,
       otlpTracesUrl:
         env.otlpTracesUrl ??
         bootstrap?.otlpTracesUrl ??
@@ -386,6 +428,7 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      clerkAuth,
     };
 
     return config;

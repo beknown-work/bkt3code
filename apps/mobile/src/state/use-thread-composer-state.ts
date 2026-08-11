@@ -6,6 +6,7 @@ import {
   MessageId,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationTurnCatchupSummary,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
@@ -39,7 +40,12 @@ import {
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import {
+  enqueueThreadOutboxMessage,
+  removeThreadOutboxMessage,
+  retryQueuedThreadMessage,
+  updateThreadOutboxMessage,
+} from "./thread-outbox";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 export function appendReviewCommentToDraft(input: {
@@ -73,6 +79,8 @@ export function useThreadDraftForThread(input: {
   };
 }
 
+const EMPTY_TURN_SUMMARIES: ReadonlyArray<OrchestrationTurnCatchupSummary> = Object.freeze([]);
+
 export function useThreadComposerState() {
   const { selectedThread: selectedThreadShell } = useThreadSelection();
   const selectedThreadDetail = useSelectedThreadDetail();
@@ -90,31 +98,26 @@ export function useThreadComposerState() {
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
+  const failedOutboxMessage = selectedThreadQueuedMessages.find(
+    (message) => message.deliveryState === "failed",
+  );
   const selectedThreadFeed = useMemo(
     () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
     [selectedThreadDetail],
   );
+  // Catch-up summaries live on the thread detail, not the shell.
+  const selectedThreadTurnSummaries = selectedThreadDetail?.turnSummaries ?? EMPTY_TURN_SUMMARIES;
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
-  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
+  const selectedThreadQueueCount = selectedThreadQueuedMessages.filter(
+    (message) => message.deliveryState !== "failed",
+  ).length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
-
-  const selectedThreadSessionActivity = useMemo(() => {
-    const selectedThread = selectedThreadDetail ?? selectedThreadShell;
-    if (!selectedThread?.session) {
-      return null;
-    }
-
-    return {
-      orchestrationStatus: selectedThread.session.status,
-      activeTurnId: selectedThread.session.activeTurnId ?? undefined,
-    };
-  }, [selectedThreadDetail, selectedThreadShell]);
 
   const activeWorkStartedAt = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -124,14 +127,16 @@ export function useThreadComposerState() {
 
     return deriveActiveWorkStartedAt(
       selectedThread.latestTurn,
-      selectedThreadSessionActivity,
+      selectedThread.execution ?? null,
       null,
     );
-  }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
+  }, [selectedThreadDetail, selectedThreadShell]);
 
   const activeThreadBusy =
     !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
+    (selectedThread.execution?.activity === "active" ||
+      selectedThread.execution?.activity === "blocked" ||
+      selectedThread.execution?.activity === "stopping");
 
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
@@ -167,16 +172,14 @@ export function useThreadComposerState() {
       createdAt: metadata.createdAt,
     });
     clearComposerDraftContent(threadKey);
-    enqueuePromise.catch((error: unknown) => {
+    enqueuePromise.catch(() => {
       // Restore text via merge (idempotent) but attachments via the uncapped
       // append: the merge path slots existing attachments first and truncates
       // at the send limit, which would silently drop this message's images if
       // the user attached new ones while the write was in flight.
       void mergeComposerDraftContent(threadKey, { text, attachments: [] });
       appendComposerDraftAttachments(threadKey, attachments);
-      setPendingConnectionError(
-        error instanceof Error ? error.message : "Failed to save the queued message.",
-      );
+      setPendingConnectionError("Message could not be saved locally, so it was not sent.");
     });
     return messageId;
   }, [selectedThreadDetail, selectedThreadShell]);
@@ -299,9 +302,45 @@ export function useThreadComposerState() {
     [selectedThreadKey],
   );
 
+  const onRetryFailedOutboxMessage = useCallback(async () => {
+    if (!failedOutboxMessage) return;
+    try {
+      // A deterministic server rejection may already have a durable receipt.
+      // Explicit Retry is a new command while retaining the same user message.
+      await updateThreadOutboxMessage(
+        retryQueuedThreadMessage(
+          failedOutboxMessage,
+          CommandId.make(makeQueuedMessageMetadata().commandId),
+        ),
+      );
+    } catch (error) {
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to save the retry request.",
+      );
+    }
+  }, [failedOutboxMessage]);
+
+  const onEditFailedOutboxMessage = useCallback(async () => {
+    if (!failedOutboxMessage || !selectedThreadKey) return;
+    await mergeComposerDraftContent(selectedThreadKey, {
+      text: failedOutboxMessage.text,
+      attachments: [],
+    });
+    appendComposerDraftAttachments(selectedThreadKey, failedOutboxMessage.attachments);
+    try {
+      await removeThreadOutboxMessage(failedOutboxMessage);
+    } catch (error) {
+      setPendingConnectionError(
+        error instanceof Error ? error.message : "Failed to remove the rejected message.",
+      );
+    }
+  }, [failedOutboxMessage, selectedThreadKey]);
+
   return {
     selectedThreadFeed,
+    selectedThreadTurnSummaries,
     selectedThreadQueueCount,
+    failedOutboxDetail: failedOutboxMessage?.failureDetail ?? null,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
@@ -318,5 +357,7 @@ export function useThreadComposerState() {
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,
+    onRetryFailedOutboxMessage,
+    onEditFailedOutboxMessage,
   };
 }

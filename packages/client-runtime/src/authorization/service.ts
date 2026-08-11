@@ -21,6 +21,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as HttpClient from "effect/unstable/http/HttpClient";
+import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
 
 import type { PreparedHttpAuthorization } from "../connection/model.ts";
 
@@ -49,6 +50,7 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
     }) => Effect.Effect<AuthorizedRemoteEnvironment, ConnectionAttemptError>;
     readonly authorizeDpop: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
+      readonly identityToken?: string;
       readonly obtainBootstrap: Effect.Effect<
         RelayEnvironmentAuthorization,
         ConnectionAttemptError
@@ -60,6 +62,16 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
+
+function identitySubject(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const subject = decodeRelayJwt(token).sub;
+    return typeof subject === "string" && subject.length > 0 ? subject : null;
+  } catch {
+    return null;
+  }
+}
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {
   return error._tag === "ConnectionTransientError" || error._tag === "ConnectionBlockedError"
@@ -180,6 +192,7 @@ export const make = Effect.gen(function* () {
       readonly expectedEnvironmentId: Parameters<
         RemoteEnvironmentAuthorization["Service"]["authorizeDpop"]
       >[0]["expectedEnvironmentId"];
+      readonly identityToken?: string;
       readonly obtainBootstrap: Parameters<
         RemoteEnvironmentAuthorization["Service"]["authorizeDpop"]
       >[0]["obtainBootstrap"];
@@ -195,6 +208,7 @@ export const make = Effect.gen(function* () {
         Effect.withSpan("environment.authorization.dpopKey.resolve"),
       );
       const now = yield* Clock.currentTimeMillis;
+      const expectedIdentitySubject = identitySubject(input.identityToken);
       const cached = yield* tokenStore
         .get(input.expectedEnvironmentId)
         .pipe(Effect.withSpan("environment.authorization.accessToken.cache"));
@@ -202,6 +216,7 @@ export const make = Effect.gen(function* () {
         Option.isSome(cached) &&
         cached.value.environmentId === input.expectedEnvironmentId &&
         cached.value.dpopThumbprint === thumbprint &&
+        (cached.value.identitySubject ?? null) === expectedIdentitySubject &&
         cached.value.expiresAtEpochMs > now + TOKEN_EXPIRY_SAFETY_MARGIN_MS
       ) {
         yield* Effect.annotateCurrentSpan({
@@ -265,6 +280,7 @@ export const make = Effect.gen(function* () {
         dpopProof: bootstrapProof,
         scopes: presentation.scopes,
         clientMetadata: presentation.metadata,
+        ...(input.identityToken ? { identityToken: input.identityToken } : {}),
       }).pipe(
         Effect.mapError(mapRemoteEnvironmentError),
         Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -278,6 +294,7 @@ export const make = Effect.gen(function* () {
         accessToken: access.access_token,
         expiresAtEpochMs: issuedAt + access.expires_in * 1_000,
         dpopThumbprint: thumbprint,
+        ...(expectedIdentitySubject ? { identitySubject: expectedIdentitySubject } : {}),
       });
       const socketUrl = yield* createDpopSocketUrl(token).pipe(Effect.mapError(mapDpopSocketError));
       yield* tokenStore

@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 
 import {
   buildBranchNamePrompt,
+  buildCatchupSummaryPrompt,
+  buildWorkSummaryPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
-import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
+import {
+  normalizeCliError,
+  sanitizeCatchupSummary,
+  sanitizeRollingSummary,
+  sanitizeThreadTitle,
+  sanitizeWorkSummary,
+  sanitizeWorkSummaryPercent,
+  sanitizeWorkSummaryRemaining,
+  sanitizeWorkSummaryStage,
+  MAX_ROLLING_SUMMARY_CHARS,
+  MAX_WORK_SUMMARY_CHARS,
+  MAX_WORK_SUMMARY_REMAINING_CHARS,
+  WORK_SUMMARY_STAGES,
+} from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 
 describe("buildCommitMessagePrompt", () => {
@@ -301,5 +318,183 @@ describe("normalizeCliError", () => {
 
     expect(result.detail).toBe("Failed to generate a commit message");
     expect(result.message).not.toContain("secret-token");
+  });
+});
+
+describe("buildRollingSummaryPrompt", () => {
+  it("marks the first turn when there is no previous summary", () => {
+    const result = buildRollingSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      previousSummary: null,
+      turnTranscript: "user: do the thing\nassistant: did the thing",
+      dataLimitChars: 24_000,
+    });
+
+    expect(result.prompt).toContain("(none — first turn)");
+    expect(result.prompt).toContain("did the thing");
+    expect(Object.keys(result.outputSchema.fields)).toEqual(["summary"]);
+  });
+
+  it("keeps the tail of an oversized transcript and drops the head", () => {
+    const transcript = `HEAD_MARKER${"x".repeat(20_000)}TAIL_MARKER`;
+    const result = buildRollingSummaryPrompt({
+      threadTitle: "Long session",
+      previousSummary: "Earlier work.",
+      turnTranscript: transcript,
+      dataLimitChars: 4_000,
+    });
+
+    expect(result.prompt).toContain("TAIL_MARKER");
+    expect(result.prompt).not.toContain("HEAD_MARKER");
+    expect(result.prompt).toContain("Earlier work.");
+  });
+});
+
+describe("buildCatchupSummaryPrompt", () => {
+  it("appends user-supplied instructions when configured", () => {
+    const result = buildCatchupSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      rollingSummary: "Wiring the reactor.",
+      turnTail: "Finished the projector case.",
+      customInstructions: "Always name the files touched.",
+    });
+
+    expect(result.prompt).toContain("Additional instructions:");
+    expect(result.prompt).toContain("Always name the files touched.");
+  });
+
+  it("omits the instructions block when none is configured", () => {
+    const result = buildCatchupSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      rollingSummary: "Wiring the reactor.",
+      turnTail: "Finished the projector case.",
+    });
+
+    expect(result.prompt).not.toContain("Additional instructions:");
+  });
+
+  it("asks for a bounded plain-text note built from the rolling summary", () => {
+    const result = buildCatchupSummaryPrompt({
+      threadTitle: "Add catch-up card",
+      rollingSummary: "Wiring the reactor.",
+      turnTail: "Finished the projector case.",
+    });
+
+    expect(result.prompt).toContain("exactly 3 lines");
+    // Line 1 must re-establish what the session is for.
+    expect(result.prompt).toContain("what this session is working on overall");
+    expect(result.prompt).toContain("what still remains");
+    expect(result.prompt).toContain("Wiring the reactor.");
+    expect(result.prompt).toContain("Finished the projector case.");
+    expect(result.prompt).toContain("no markdown");
+    expect(Object.keys(result.outputSchema.fields)).toEqual(["summary"]);
+  });
+});
+
+describe("sanitizeCatchupSummary", () => {
+  it("clamps to three lines and strips markdown markers", () => {
+    const result = sanitizeCatchupSummary(
+      "- first line\n* second line\n1. third line\n- fourth line",
+    );
+
+    expect(result).toBe("first line\nsecond line\nthird line");
+  });
+
+  it("drops blank lines and surrounding whitespace", () => {
+    expect(sanitizeCatchupSummary("  \n only line \n\n ")).toBe("only line");
+  });
+});
+
+describe("sanitizeRollingSummary", () => {
+  it("truncates summaries past the stored bound", () => {
+    const result = sanitizeRollingSummary("y".repeat(MAX_ROLLING_SUMMARY_CHARS + 500));
+
+    expect(result.length).toBeLessThanOrEqual(MAX_ROLLING_SUMMARY_CHARS + 3);
+    expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("leaves a short summary untouched", () => {
+    expect(sanitizeRollingSummary("  short summary  ")).toBe("short summary");
+  });
+});
+
+// T3-CUSTOM(expbkt3): bulk session manager work summary prompt + sanitizers.
+describe("buildWorkSummaryPrompt", () => {
+  it("asks for the four structured fields the bulk table renders", () => {
+    const result = buildWorkSummaryPrompt({
+      context: "Session title: Ship the manager\n\nTranscript:\nuser: build it",
+    });
+
+    expect(Object.keys(result.outputSchema.fields)).toEqual([
+      "summary",
+      "stage",
+      "remaining",
+      "percent",
+    ]);
+    expect(result.prompt).toContain(
+      "Return a JSON object with keys: summary, stage, remaining, percent.",
+    );
+    expect(result.prompt).toContain("2 to 4 sentences");
+    expect(result.prompt).toContain(WORK_SUMMARY_STAGES.join(", "));
+    expect(result.prompt).toContain(String(MAX_WORK_SUMMARY_REMAINING_CHARS));
+    expect(result.prompt).toContain("Ship the manager");
+  });
+
+  it("accepts only the five sortable stage buckets", () => {
+    const isOutput = Schema.is(buildWorkSummaryPrompt({ context: "ctx" }).outputSchema);
+    const base = { summary: "did work", remaining: "land it", percent: 50 };
+
+    for (const stage of WORK_SUMMARY_STAGES) {
+      expect(isOutput({ ...base, stage })).toBe(true);
+    }
+    // A sixth bucket would be unsortable in the table and unmappable in the
+    // contract, so the provider must reject it rather than pass it through.
+    expect(isOutput({ ...base, stage: "shipping" })).toBe(false);
+    expect(isOutput({ ...base, stage: "done", percent: "50" })).toBe(false);
+  });
+
+  it("appends user-supplied instructions only when configured", () => {
+    const withInstructions = buildWorkSummaryPrompt({
+      context: "ctx",
+      promptInstructions: "Mention the Linear ticket.",
+    });
+    expect(withInstructions.prompt).toContain("Additional instructions:");
+    expect(withInstructions.prompt).toContain("Mention the Linear ticket.");
+
+    const without = buildWorkSummaryPrompt({ context: "ctx" });
+    expect(without.prompt).not.toContain("Additional instructions:");
+  });
+});
+
+describe("work summary sanitizers", () => {
+  it("collapses the summary to one plain-text paragraph", () => {
+    expect(sanitizeWorkSummary("- did a thing\n\n* then another")).toBe("did a thing then another");
+  });
+
+  it("truncates a summary past the table's bound", () => {
+    const result = sanitizeWorkSummary("z".repeat(MAX_WORK_SUMMARY_CHARS + 200));
+
+    expect(result.length).toBeLessThanOrEqual(MAX_WORK_SUMMARY_CHARS + 3);
+    expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("keeps remaining to a single capped line", () => {
+    expect(sanitizeWorkSummaryRemaining("- land the PR\nthen celebrate")).toBe("land the PR");
+    expect(sanitizeWorkSummaryRemaining("q".repeat(200)).length).toBe(
+      MAX_WORK_SUMMARY_REMAINING_CHARS,
+    );
+  });
+
+  it("falls back to implementing for an unknown stage", () => {
+    expect(sanitizeWorkSummaryStage("Awaiting Review")).toBe("awaiting-review");
+    expect(sanitizeWorkSummaryStage("shipping")).toBe("implementing");
+    expect(sanitizeWorkSummaryStage("")).toBe("implementing");
+  });
+
+  it("clamps percent into 0..100", () => {
+    expect(sanitizeWorkSummaryPercent(-40)).toBe(0);
+    expect(sanitizeWorkSummaryPercent(140)).toBe(100);
+    expect(sanitizeWorkSummaryPercent(61.6)).toBe(62);
+    expect(sanitizeWorkSummaryPercent(Number.NaN)).toBe(0);
   });
 });

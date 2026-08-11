@@ -2,6 +2,9 @@ import {
   ConnectionPersistenceError,
   EnvironmentCacheStore,
 } from "@t3tools/client-runtime/platform";
+// T3-CUSTOM(expbkt3): BEGIN — namespace sends by environment and identity.
+import { ANONYMOUS_OUTBOX_IDENTITY } from "@t3tools/client-runtime/outbox";
+// T3-CUSTOM(expbkt3): END
 import {
   type EnvironmentId,
   OrchestrationShellSnapshot,
@@ -15,9 +18,16 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as MobileDatabase from "../persistence/mobile-database";
+// T3-CUSTOM(expbkt3): BEGIN — expose the existing file-backed mobile outbox through
+// the same cache-store contract used by web and desktop.
+import { expoThreadOutboxStorage } from "../state/thread-outbox-storage";
+// T3-CUSTOM(expbkt3): END
 
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
-const THREAD_SNAPSHOT_CACHE_SCHEMA_VERSION = 2;
+// v3 adds windowed (paginated) snapshots carrying `page` metadata; the bump
+// makes pre-pagination clients discard the record instead of decoding a
+// partial thread as complete (rollback safety).
+const THREAD_SNAPSHOT_CACHE_SCHEMA_VERSION = 3;
 const SERVER_CONFIG_CACHE_SCHEMA_VERSION = 1;
 const VCS_REFS_CACHE_SCHEMA_VERSION = 1;
 
@@ -233,6 +243,35 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         .clearCacheKind(environmentId, "vcs-refs")
         .pipe(Effect.mapError(mapDatabaseError("clear-vcs-refs"))),
     ),
+    // T3-CUSTOM(expbkt3): BEGIN — shared durable outbox cache contract.
+    loadOutbox: Effect.fn("MobileEnvironmentCache.loadOutbox")((environmentId, identityKey) =>
+      Effect.tryPromise({
+        try: () =>
+          expoThreadOutboxStorage
+            .load()
+            .then((messages) =>
+              messages.filter(
+                (message) =>
+                  message.environmentId === environmentId &&
+                  (message.identityKey ?? ANONYMOUS_OUTBOX_IDENTITY) === identityKey,
+              ),
+            ),
+        catch: (cause) => persistenceError("load-outbox", cause),
+      }),
+    ),
+    saveOutbox: Effect.fn("MobileEnvironmentCache.saveOutbox")((message) =>
+      Effect.tryPromise({
+        try: () => expoThreadOutboxStorage.write(message),
+        catch: (cause) => persistenceError("save-outbox", cause),
+      }),
+    ),
+    removeOutbox: Effect.fn("MobileEnvironmentCache.removeOutbox")((message) =>
+      Effect.tryPromise({
+        try: () => expoThreadOutboxStorage.remove(message),
+        catch: (cause) => persistenceError("remove-outbox", cause),
+      }),
+    ),
+    // T3-CUSTOM(expbkt3): END
     clear: Effect.fn("MobileEnvironmentCache.clear")((environmentId) =>
       database
         .clearEnvironmentCache(environmentId)

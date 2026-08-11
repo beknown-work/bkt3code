@@ -8,6 +8,9 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+// T3-CUSTOM(expbkt3): BEGIN — share desired/observed phase derivation with web.
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
+// T3-CUSTOM(expbkt3): END
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
@@ -121,8 +124,12 @@ export function resolveThreadListV2Enabled(input: {
   return input.preference ?? true;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — durable intent participates in mobile status.
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
+  thread: Pick<
+    EnvironmentThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "session" | "execution"
+  >,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
@@ -130,6 +137,14 @@ export function resolveThreadListV2Status(
   if (thread.hasPendingUserInput) {
     return "input";
   }
+  // T3-CUSTOM(expbkt3): queued/recovering intent stays active without a live session.
+  const presentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem: false,
+    intent: thread.execution?.intent ?? null,
+    providerActivity: thread.execution?.activity ?? "idle",
+  });
+  if (presentation.needsAttention) return "failed";
+  if (presentation.active) return "working";
   if (thread.session?.status === "running" || thread.session?.status === "starting") {
     return "working";
   }
@@ -138,6 +153,7 @@ export function resolveThreadListV2Status(
   }
   return "ready";
 }
+// T3-CUSTOM(expbkt3): END
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */

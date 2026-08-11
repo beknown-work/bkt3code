@@ -39,7 +39,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode,
           branch,
           worktree_path,
+          source_control_profile_id,
           latest_turn_id,
+          owner_user_id,
           created_at,
           updated_at,
           archived_at,
@@ -47,6 +49,12 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           settled_at,
           snoozed_until,
           snoozed_at,
+          priority,
+          linear_issue_url,
+          parent_thread_id,
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary,
+          -- T3-CUSTOM(expbkt3): END
           pinned_at,
           title_regeneration_request_id,
           title_regeneration_started_at,
@@ -54,6 +62,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
+          rolling_summary,
           deleted_at
         )
         VALUES (
@@ -65,7 +74,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.interactionMode},
           ${row.branch},
           ${row.worktreePath},
+          ${row.sourceControlProfileId},
           ${row.latestTurnId},
+          ${row.ownerUserId},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.archivedAt},
@@ -73,6 +84,12 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.settledAt},
           ${row.snoozedUntil},
           ${row.snoozedAt},
+          ${row.priority},
+          ${row.linearIssueUrl ?? null},
+          ${row.parentThreadId ?? null},
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          ${row.workSummary ?? null},
+          -- T3-CUSTOM(expbkt3): END
           ${row.pinnedAt},
           ${row.titleRegenerationRequestId ?? null},
           ${row.titleRegenerationStartedAt ?? null},
@@ -80,6 +97,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
+          ${row.rollingSummary},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -91,7 +109,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode = excluded.interaction_mode,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
+          source_control_profile_id = excluded.source_control_profile_id,
           latest_turn_id = excluded.latest_turn_id,
+          owner_user_id = COALESCE(excluded.owner_user_id, projection_threads.owner_user_id),
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
@@ -99,6 +119,12 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           settled_at = excluded.settled_at,
           snoozed_until = excluded.snoozed_until,
           snoozed_at = excluded.snoozed_at,
+          priority = excluded.priority,
+          linear_issue_url = excluded.linear_issue_url,
+          parent_thread_id = excluded.parent_thread_id,
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary = excluded.work_summary,
+          -- T3-CUSTOM(expbkt3): END
           pinned_at = excluded.pinned_at,
           title_regeneration_request_id = excluded.title_regeneration_request_id,
           title_regeneration_started_at = excluded.title_regeneration_started_at,
@@ -106,6 +132,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
+          rolling_summary = excluded.rolling_summary,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -124,7 +151,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          source_control_profile_id AS "sourceControlProfileId",
           latest_turn_id AS "latestTurnId",
+          owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -132,6 +161,12 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
+          priority,
+          linear_issue_url AS "linearIssueUrl",
+          parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -139,6 +174,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -159,7 +195,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          source_control_profile_id AS "sourceControlProfileId",
           latest_turn_id AS "latestTurnId",
+          owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
@@ -167,6 +205,12 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
+          priority,
+          linear_issue_url AS "linearIssueUrl",
+          parent_thread_id AS "parentThreadId",
+          -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
+          work_summary AS "workSummary",
+          -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
@@ -174,6 +218,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}
@@ -187,6 +232,51 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       sql`
         DELETE FROM projection_threads
         WHERE thread_id = ${threadId}
+      `,
+  });
+
+  // T3-CUSTOM(expbkt3): session-history backfill coverage set.
+  const listArchivedOrDeletedRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadDbRow,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          title,
+          model_selection_json AS "modelSelection",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          branch,
+          worktree_path AS "worktreePath",
+          source_control_profile_id AS "sourceControlProfileId",
+          latest_turn_id AS "latestTurnId",
+          owner_user_id AS "ownerUserId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          settled_override AS "settledOverride",
+          settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snoozed_at AS "snoozedAt",
+          priority,
+          linear_issue_url AS "linearIssueUrl",
+          parent_thread_id AS "parentThreadId",
+          work_summary AS "workSummary",
+          pinned_at AS "pinnedAt",
+          title_regeneration_request_id AS "titleRegenerationRequestId",
+          title_regeneration_started_at AS "titleRegenerationStartedAt",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          rolling_summary AS "rollingSummary",
+          deleted_at AS "deletedAt"
+        FROM projection_threads
+        WHERE archived_at IS NOT NULL
+           OR deleted_at IS NOT NULL
+        ORDER BY created_at ASC, thread_id ASC
       `,
   });
 
@@ -210,11 +300,19 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:query")),
     );
 
+  const listArchivedOrDeleted: ProjectionThreadRepositoryShape["listArchivedOrDeleted"] = () =>
+    listArchivedOrDeletedRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadRepository.listArchivedOrDeleted:query"),
+      ),
+    );
+
   return {
     upsert,
     getById,
     listByProjectId,
     deleteById,
+    listArchivedOrDeleted,
   } satisfies ProjectionThreadRepositoryShape;
 });
 

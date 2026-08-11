@@ -19,6 +19,7 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
+  UserId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -30,16 +31,47 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /** T3-CUSTOM(expbkt3): explicit busy-thread delivery semantics. */
+  readonly activeTurnInput: "steer" | "queue";
+  /** T3-CUSTOM(expbkt3): whether a persisted resume cursor is sufficient for guarded recovery. */
+  readonly durableResume: "supported" | "unsupported";
+}
+
+export interface ProviderSessionExecutionOptions {
+  readonly environment?: NodeJS.ProcessEnv;
+  /** T3-CUSTOM(expbkt3): User whose delegated MCP grants back this ACP generation. */
+  readonly actorUserId?: UserId | null;
 }
 
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
+  /** T3-CUSTOM(expbkt3): recovery must distinguish terminal proof from mere history presence. */
+  readonly state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown";
 }
 
 export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
+}
+
+export interface ProviderSessionInspection {
+  readonly threadId: ThreadId;
+  readonly generation: number;
+  readonly state: "starting" | "ready" | "running" | "stopping" | "stopped" | "failed";
+  readonly activeProviderTurnId: TurnId | null;
+  readonly runtimeAlive: boolean;
+}
+
+export interface InterruptAcknowledgement {
+  readonly acknowledged: boolean;
+  readonly acknowledgedAt: string;
+}
+
+export interface VerifiedTermination {
+  readonly verified: boolean;
+  readonly graceful: boolean;
+  readonly processTreeExited: boolean;
 }
 
 export interface ProviderAdapterShape<TError> {
@@ -54,6 +86,7 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly startSession: (
     input: ProviderSessionStartInput,
+    options?: ProviderSessionExecutionOptions,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
@@ -67,6 +100,20 @@ export interface ProviderAdapterShape<TError> {
    * Interrupt an active turn.
    */
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
+
+  /** Observable lifecycle API used by the execution supervisor. */
+  readonly inspectSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderSessionInspection | null, TError>;
+  readonly requestTurnInterrupt: (
+    threadId: ThreadId,
+    turnId?: TurnId,
+  ) => Effect.Effect<InterruptAcknowledgement, TError>;
+  readonly terminateSession: (threadId: ThreadId) => Effect.Effect<VerifiedTermination, TError>;
+  readonly watchSession: (
+    threadId: ThreadId,
+    generation: number,
+  ) => Stream.Stream<ProviderRuntimeEvent, TError>;
 
   /**
    * Respond to an interactive approval request.

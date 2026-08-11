@@ -15,6 +15,7 @@ import {
   type ProviderEvent,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
+  type ProviderRateLimitUpdate,
   type ProviderRequestKind,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -28,6 +29,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -42,6 +44,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -52,6 +55,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -143,6 +147,15 @@ function readPayload<A>(
   const isPayload = Schema.is(schema);
   return isPayload(payload) ? payload : undefined;
 }
+
+// T3-CUSTOM(expbkt3): BEGIN rate-limit normalisation lives in codexRateLimits.ts
+import {
+  codexRateLimitRefreshError,
+  normalizeCodexRateLimitNotification,
+  normalizeCodexRateLimitRead,
+} from "./codexRateLimits.ts";
+export { normalizeCodexRateLimitNotification, normalizeCodexRateLimitRead };
+// T3-CUSTOM(expbkt3): END
 
 function trimText(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
@@ -1393,7 +1406,11 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "account/rateLimits/updated") {
-    if (!readPayload(EffectCodexSchema.V2AccountRateLimitsUpdatedNotification, event.payload)) {
+    const payload = readPayload(
+      EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+      event.payload,
+    );
+    if (!payload) {
       return [];
     }
     return [
@@ -1401,7 +1418,38 @@ function mapToRuntimeEvents(
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          rateLimits: event.payload ?? {},
+          rateLimits: normalizeCodexRateLimitNotification(
+            payload,
+            DateTime.makeUnsafe(event.createdAt),
+          ),
+        },
+      },
+    ];
+  }
+
+  if (event.method === "account/rateLimits/read") {
+    const payload = readPayload(EffectCodexSchema.V2GetAccountRateLimitsResponse, event.payload);
+    if (!payload) {
+      return [];
+    }
+    return [
+      {
+        type: "account.rate-limits.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          rateLimits: normalizeCodexRateLimitRead(payload, DateTime.makeUnsafe(event.createdAt)),
+        },
+      },
+    ];
+  }
+
+  if (event.method === "account/rateLimits/readFailed") {
+    return [
+      {
+        type: "account.rate-limits.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          rateLimits: codexRateLimitRefreshError(DateTime.makeUnsafe(event.createdAt)),
         },
       },
     ];
@@ -1642,7 +1690,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
 
-  const startSession: CodexAdapterShape["startSession"] = (input) =>
+  const startSession: CodexAdapterShape["startSession"] = (input, executionOptions) =>
     Effect.scoped(
       Effect.gen(function* () {
         if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1663,13 +1711,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const sessionEnvironment = executionOptions?.environment
+          ? mergeSourceControlEnvironment(
+              options?.environment ?? process.env,
+              executionOptions.environment,
+            )
+          : options?.environment;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
-          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          ...(options?.environment ? { environment: options.environment } : {}),
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, sessionEnvironment),
+          ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -1682,7 +1736,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...(options?.environment ?? process.env),
+                  ...(sessionEnvironment ?? process.env),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
                 appServerArgs: [
@@ -1690,6 +1744,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                  ...mcpSession.upstreamServers.flatMap((server) => {
+                    const name = McpProviderSession.upstreamMcpServerName(server);
+                    return [
+                      "-c",
+                      `mcp_servers.${name}.url=${server.endpoint}`,
+                      "-c",
+                      `mcp_servers.${name}.bearer_token_env_var="T3_MCP_BEARER_TOKEN"`,
+                    ];
+                  }),
                 ],
               }
             : {}),
@@ -1928,10 +1991,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       return;
     }
     session.stopped = true;
+    yield* session.runtime.close.pipe(
+      Effect.andThen(Scope.close(session.scope, Exit.void)),
+      Effect.andThen(Fiber.interrupt(session.eventFiber)),
+      Effect.onError(() => Effect.sync(() => (session.stopped = false))),
+    );
     sessions.delete(session.threadId);
-    yield* session.runtime.close.pipe(Effect.ignore);
-    yield* Effect.ignore(Scope.close(session.scope, Exit.void));
-    yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
@@ -1967,10 +2032,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     ),
   );
 
-  return {
+  const adapter = {
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // T3-CUSTOM(expbkt3): coordinator behavior must not infer from provider name.
+      activeTurnInput: "steer",
+      durableResume: "supported",
     },
     startSession,
     sendTurn,
@@ -1986,7 +2054,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     get streamEvents() {
       return Stream.fromQueue(runtimeEventQueue);
     },
-  } satisfies CodexAdapterShape;
+  } satisfies Omit<
+    CodexAdapterShape,
+    "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+  >;
+  return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies CodexAdapterShape;
 });
 
 // NOTE: the old `CodexAdapterLive` / `makeCodexAdapterLive` singleton Layer

@@ -1,6 +1,8 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+// T3-CUSTOM(expbkt3): BEGIN — ClipboardList is used by the fork's plannotator tab.
 import { Bot, ClipboardList, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+// T3-CUSTOM(expbkt3): END
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -213,8 +215,12 @@ function surfaceTitle(
         terminalLabelsById.get(surface.activeTerminalId) ??
         getTerminalLabel(surface.activeTerminalId)
       );
-    case "plan":
-      return "Plan";
+    // T3-CUSTOM(expbkt3): BEGIN — label the experimental review surface.
+    case "plannotator":
+      return "Plannotator";
+    case "planReview":
+      return "Plan review";
+    // T3-CUSTOM(expbkt3): END
     case "agents":
       return "Agents";
     case "preview": {
@@ -276,8 +282,12 @@ function SurfaceIcon({
       );
     case "terminal":
       return <TerminalSquare className="size-3 shrink-0" />;
-    case "plan":
-      return <ClipboardList className="size-3 shrink-0" />;
+    // T3-CUSTOM(expbkt3): BEGIN — icon for the experimental review surface.
+    case "plannotator":
+      return <ClipboardList className="size-3.5 shrink-0 text-violet-500" />;
+    case "planReview":
+      return <ClipboardList className="size-3.5 shrink-0 text-sky-500" />;
+    // T3-CUSTOM(expbkt3): END
     case "agents":
       return <Bot className="size-3 shrink-0" />;
   }

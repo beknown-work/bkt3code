@@ -9,11 +9,13 @@ import type {
   PermissionMode,
   PermissionResult,
   SDKMessage,
+  SDKControlGetUsageResponse,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -24,6 +26,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -34,16 +37,106 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  makeClaudeAdapter,
+  normalizeClaudeRateLimitEvent,
+  normalizeClaudeUsageResponse,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
 class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()(
   "t3/provider/Layers/ClaudeAdapter.test/ClaudeAdapter",
 ) {}
+
+const emptyUsageSession: SDKControlGetUsageResponse["session"] = {
+  total_cost_usd: 0,
+  total_api_duration_ms: 0,
+  total_duration_ms: 0,
+  total_lines_added: 0,
+  total_lines_removed: 0,
+  model_usage: {},
+};
+
+it("normalizes Claude five-hour, weekly, model, OAuth, and overage usage windows", () => {
+  const update = normalizeClaudeUsageResponse(
+    {
+      session: emptyUsageSession,
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 42, resets_at: "2026-08-01T12:00:00.000Z" },
+        seven_day: { utilization: 71, resets_at: "2026-08-07T00:00:00.000Z" },
+        seven_day_oauth_apps: {
+          utilization: 12,
+          resets_at: "2026-08-07T00:00:00.000Z",
+        },
+        seven_day_opus: { utilization: 80, resets_at: null },
+        seven_day_sonnet: { utilization: 30, resets_at: null },
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 100,
+          used_credits: 20,
+          utilization: 20,
+          currency: "USD",
+        },
+      },
+      behaviors: null,
+    },
+    DateTime.makeUnsafe("2026-08-01T10:00:00.000Z"),
+  );
+
+  assert.equal(update.mode, "replace");
+  assert.equal(update.availability, "available");
+  assert.deepEqual(
+    update.windows.map((entry) => [entry.windowId, entry.label, entry.category]),
+    [
+      ["claude:five-hour", "Five-hour", "rolling"],
+      ["claude:seven-day", "Seven-day", "weekly"],
+      ["claude:oauth-apps", "OAuth apps", "weekly"],
+      ["claude:opus", "Opus", "model"],
+      ["claude:sonnet", "Sonnet", "model"],
+      ["claude:overage", "Extra usage", "overage"],
+    ],
+  );
+});
+
+it("treats Claude API-key usage responses as not applicable", () => {
+  const update = normalizeClaudeUsageResponse(
+    {
+      session: emptyUsageSession,
+      subscription_type: null,
+      rate_limits_available: false,
+      rate_limits: null,
+      behaviors: null,
+    },
+    DateTime.makeUnsafe("2026-08-01T10:00:00.000Z"),
+  );
+  assert.equal(update.availability, "not-applicable");
+  assert.deepEqual(update.windows, []);
+});
+
+it("normalizes typed Claude rate-limit events as sparse merge updates", () => {
+  const update = normalizeClaudeRateLimitEvent(
+    {
+      status: "allowed_warning",
+      rateLimitType: "seven_day_opus",
+      utilization: 84,
+      resetsAt: 1_786_212_000,
+    },
+    DateTime.makeUnsafe("2026-08-01T10:00:00.000Z"),
+  );
+  assert.equal(update.mode, "merge");
+  assert.deepEqual(
+    update.windows.map((entry) => [entry.windowId, entry.usedPercent]),
+    [["claude:opus", 84]],
+  );
+});
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -59,7 +152,16 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
+  public usageCalls = 0;
+  public usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<SDKControlGetUsageResponse>;
   public closeCalls = 0;
+
+  setUsageHandler(handler: () => Promise<SDKControlGetUsageResponse>): void {
+    this.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = async () => {
+      this.usageCalls += 1;
+      return handler();
+    };
+  }
 
   emit(message: SDKMessage): void {
     if (this.done) {
@@ -272,7 +374,91 @@ async function readFirstPromptMessage(
 const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
+it.effect("refreshes Claude usage after initialization and coalesces for sixty seconds", () => {
+  const harness = makeHarness();
+  let failRefresh = false;
+  harness.query.setUsageHandler(async () => {
+    if (failRefresh) throw new Error("usage unavailable");
+    return {
+      session: emptyUsageSession,
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 25, resets_at: "2026-08-01T12:00:00.000Z" },
+        seven_day: { utilization: 70, resets_at: "2026-08-07T00:00:00.000Z" },
+      },
+      behaviors: null,
+    };
+  });
+
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: ProviderDriverKind.make("claudeAgent"),
+      runtimeMode: "full-access",
+    });
+
+    const nextRateLimitEvent = () =>
+      adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "account.rate-limits.updated"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+    const emitInit = () =>
+      harness.query.emit({
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-session",
+        uuid: "system-init",
+      } as unknown as SDKMessage);
+
+    const firstFiber = yield* nextRateLimitEvent();
+    emitInit();
+    const first = yield* Fiber.join(firstFiber);
+    assert.equal(harness.query.usageCalls, 1);
+    assert.equal(first._tag, "Some");
+    if (first._tag === "Some" && first.value.type === "account.rate-limits.updated") {
+      assert.equal(first.value.payload.rateLimits.windows[1]?.usedPercent, 70);
+    }
+
+    emitInit();
+    yield* Effect.yieldNow;
+    assert.equal(harness.query.usageCalls, 1);
+
+    yield* TestClock.adjust("60 seconds");
+    failRefresh = true;
+    const failedFiber = yield* nextRateLimitEvent();
+    emitInit();
+    const failed = yield* Fiber.join(failedFiber);
+    assert.equal(harness.query.usageCalls, 2);
+    assert.equal(failed._tag, "Some");
+    if (failed._tag === "Some" && failed.value.type === "account.rate-limits.updated") {
+      assert.equal(failed.value.payload.rateLimits.availability, "error");
+      assert.deepEqual(failed.value.payload.rateLimits.windows, []);
+    }
+  }).pipe(
+    Effect.provideService(Random.Random, makeDeterministicRandomService()),
+    Effect.provide(harness.layer),
+  );
+});
+
 describe("ClaudeAdapterLive", () => {
+  it.effect("declares active-turn and durable-resume behavior", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      assert.deepEqual(adapter.capabilities, {
+        sessionModelSwitch: "in-session",
+        activeTurnInput: "steer",
+        durableResume: "supported",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -356,6 +542,62 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
     }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("registers Bifrost while keeping MCP credentials out of process arguments", () => {
+    const harness = makeHarness();
+    const bearerToken = "short-lived-provider-token";
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make("environment-claude-test"),
+      threadId: THREAD_ID,
+      providerSessionId: "provider-session-claude-test",
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      actorUserId: null,
+      endpoint: "http://127.0.0.1:18085/mcp",
+      authorizationHeader: `Bearer ${bearerToken}`,
+      upstreamServers: [
+        {
+          id: "bifrost",
+          name: "Bifrost",
+          endpoint: "http://127.0.0.1:18085/mcp/upstream/bifrost",
+          authMode: "x-bf-vk",
+          allowedTools: [],
+        },
+      ],
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.equal(options?.env?.T3_MCP_BEARER_TOKEN, bearerToken);
+      assert.equal(
+        options?.mcpServers?.["t3-code"]?.type === "http"
+          ? options.mcpServers["t3-code"].headers?.Authorization
+          : undefined,
+        "Bearer ${T3_MCP_BEARER_TOKEN}",
+      );
+      assert.deepEqual(options?.mcpServers?.bifrost, {
+        type: "http",
+        url: "http://127.0.0.1:18085/mcp/upstream/bifrost",
+        headers: {
+          Authorization: "Bearer ${T3_MCP_BEARER_TOKEN}",
+        },
+      });
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          McpProviderSession.clearMcpProviderSession(THREAD_ID);
+        }),
+      ),
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
@@ -1450,7 +1692,68 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("interruptTurn stops every live task before interrupting the turn", () => {
+  it.effect("treats aborted_tools results as interrupted and hides ede_diagnostic errors", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      // Exact shape the CLI emits when Stop lands mid-tool-call: is_error
+      // is true and the only error is internal diagnostic telemetry.
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"],
+        stop_reason: "tool_use",
+        terminal_reason: "aborted_tools",
+        session_id: "sdk-session-abort-tools",
+        uuid: "result-abort-tools",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "turn.started",
+          "thread.started",
+          "turn.completed",
+        ],
+      );
+
+      const turnCompleted = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(String(turnCompleted.turnId), String(turn.turnId));
+        assert.equal(turnCompleted.payload.state, "interrupted");
+        assert.equal(turnCompleted.payload.errorMessage, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("interruptTurn settles every acknowledged live task before interrupting", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1507,11 +1810,28 @@ describe("ClaudeAdapterLive", () => {
 
       yield* Fiber.join(taskEventsFiber);
 
+      const stoppedTaskEventFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.completed"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
       yield* adapter.interruptTurn(session.threadId);
 
       // Only the still-live task is stopped; interrupt always fires after.
       assert.deepEqual(harness.query.stopTaskCalls, ["task-live"]);
       assert.equal(harness.query.interruptCalls.length, 1);
+
+      const stoppedTaskEvents = Array.from(yield* Fiber.join(stoppedTaskEventFiber));
+      assert.equal(stoppedTaskEvents.length, 1);
+      const stoppedTaskEvent = stoppedTaskEvents[0];
+      assert.equal(stoppedTaskEvent?.type, "task.completed");
+      if (stoppedTaskEvent?.type === "task.completed") {
+        assert.equal(String(stoppedTaskEvent.payload.taskId), "task-live");
+        assert.equal(stoppedTaskEvent.payload.status, "stopped");
+        assert.equal(stoppedTaskEvent.payload.taskType, "local_agent");
+        assert.equal(stoppedTaskEvent.payload.title, "Agent A");
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2020,6 +2340,24 @@ describe("ClaudeAdapterLive", () => {
           tasks: [{ task_id: "t1", task_type: "local_agent", description: "Say hi" }],
           session_id: "session",
           uuid: "roster",
+        },
+        {
+          type: "system",
+          subtype: "vcs_state_changed",
+          kind: "push",
+          cwd: "/tmp/worktree",
+          session_id: "session",
+          uuid: "vcs",
+        },
+        {
+          type: "system",
+          subtype: "code_change_published",
+          provider: "github",
+          url: "https://github.com/pingdotgg/t3code/pull/1",
+          repo: "pingdotgg/t3code",
+          identifier: "1",
+          session_id: "session",
+          uuid: "ccp",
         },
         {
           type: "system",

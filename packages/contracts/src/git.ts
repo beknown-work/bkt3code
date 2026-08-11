@@ -101,17 +101,20 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 
 export const VcsStatusInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
+  threadId: Schema.optional(ThreadId),
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
+  threadId: Schema.optional(ThreadId),
 });
 export type VcsPullInput = typeof VcsPullInput.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
+  threadId: Schema.optional(ThreadId),
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
@@ -146,6 +149,7 @@ export type VcsCreateWorktreeInput = typeof VcsCreateWorktreeInput.Type;
 export const GitPullRequestRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   reference: GitPullRequestReference,
+  threadId: Schema.optional(ThreadId),
 });
 export type GitPullRequestRefInput = typeof GitPullRequestRefInput.Type;
 
@@ -197,6 +201,14 @@ const VcsStatusChangeRequest = Schema.Struct({
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
+  isDraft: Schema.optional(Schema.Boolean),
+  mergeability: Schema.optional(Schema.Literals(["mergeable", "conflicting", "unknown"])),
+  mergeStateStatus: Schema.optional(TrimmedNonEmptyStringSchema),
+  reviewDecision: Schema.optional(
+    Schema.Literals(["approved", "changes-requested", "review-required", "unknown"]),
+  ),
+  checksStatus: Schema.optional(Schema.Literals(["pass", "fail", "pending", "unknown"])),
+  autoMergeEnabled: Schema.optional(Schema.Boolean),
 });
 
 const VcsStatusLocalShape = {
@@ -205,6 +217,8 @@ const VcsStatusLocalShape = {
   hasPrimaryRemote: Schema.Boolean,
   isDefaultRef: Schema.Boolean,
   refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  // T3-CUSTOM(expbkt3): Base ref recorded when T3 created a dedicated worktree.
+  baseRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   hasWorkingTreeChanges: Schema.Boolean,
   workingTree: Schema.Struct({
     files: Schema.Array(
@@ -355,6 +369,9 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
   operation: Schema.String,
   cwd: Schema.String,
   detail: Schema.String,
+  // T3-CUSTOM(expbkt3): setup failures keep the created PR worktree and expose
+  // the interactive terminal containing the failure output.
+  terminalId: Schema.optional(TrimmedNonEmptyStringSchema),
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {

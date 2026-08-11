@@ -14,8 +14,16 @@ For the wider system diagram, see
 
 ## Application Keys
 
-T3 Connect is disabled in a fresh clone. To enable it for source builds, add a repository-root `.env`
-or `.env.local` file:
+T3 Connect is disabled in a fresh clone. To enable it for source builds against the production
+deployment, copy the repository-root example file:
+
+```sh
+cp .env.example .env
+```
+
+`.env.example` carries the production public identifiers (the same values baked into official
+release builds). To target a different Clerk application or relay, set the values yourself in a
+repository-root `.env` or `.env.local` file:
 
 ```dotenv
 T3CODE_CLERK_PUBLISHABLE_KEY=<publishable key>
@@ -131,10 +139,25 @@ ssh -L 34338:127.0.0.1:34338 <host>
 
 In **Clerk Dashboard > JWT templates**, create a template with:
 
-| Setting | Value                        |
-| ------- | ---------------------------- |
-| Name    | `t3-relay`                   |
-| Claims  | `{ "aud": "t3-code-relay" }` |
+| Setting | Value                    |
+| ------- | ------------------------ |
+| Name    | `t3-relay`               |
+| Claims  | See the JSON block below |
+
+```json
+{
+  "aud": "t3-code-relay",
+  "name": "{{user.full_name}}",
+  "email": "{{user.primary_email_address}}",
+  "picture": "{{user.image_url}}"
+}
+```
+
+The `sub` claim is supplied by Clerk. T3 uses it as the durable environment-user ID; the additional
+claims populate the name, primary email, and avatar shown in **Settings → Users**. The environment
+verifies the token's RS256 signature through the Clerk instance JWKS, requires the Clerk issuer, and
+requires the configured audience. `T3CODE_CLERK_JWT_AUDIENCE` can override the environment-server
+audience, but it must match the template and normally remains `t3-code-relay`.
 
 Set `T3CODE_CLERK_JWT_TEMPLATE=t3-relay` in the repository-root `.env`, and set
 `CLERK_JWT_AUDIENCE=t3-code-relay` in `infra/relay/.env`. Define `CLERK_JWT_TEMPLATE` and

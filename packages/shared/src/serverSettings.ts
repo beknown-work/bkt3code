@@ -206,8 +206,35 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval: resolvedBackgroundActivity.providerHealthRefreshInterval,
     backgroundActivityProfile: resolvedBackgroundActivity.profile,
   };
+  // The catch-up summarizer model selection follows the same
+  // replace-on-provider/model rule as textGenerationModelSelection.
+  const summarySelectionPatch = patch.experimental?.sessionSummary?.modelSelection;
+  const withSummarySelection = summarySelectionPatch
+    ? {
+        ...nextWithReplacements,
+        experimental: {
+          ...nextWithReplacements.experimental,
+          sessionSummary: {
+            ...nextWithReplacements.experimental.sessionSummary,
+            modelSelection: createModelSelection(
+              summarySelectionPatch.instanceId ??
+                current.experimental.sessionSummary.modelSelection.instanceId,
+              summarySelectionPatch.model ??
+                current.experimental.sessionSummary.modelSelection.model,
+              shouldReplaceTextGenerationModelSelection(summarySelectionPatch)
+                ? summarySelectionPatch.options
+                : mergeModelSelectionOptionsById({
+                    current: current.experimental.sessionSummary.modelSelection.options,
+                    patch: summarySelectionPatch.options,
+                  }),
+            ),
+          },
+        },
+      }
+    : nextWithReplacements;
+
   if (!selectionPatch) {
-    return nextWithReplacements;
+    return withSummarySelection;
   }
 
   const instanceId = selectionPatch.instanceId ?? current.textGenerationModelSelection.instanceId;
@@ -220,7 +247,7 @@ export function applyServerSettingsPatch(
       });
 
   return {
-    ...nextWithReplacements,
+    ...withSummarySelection,
     textGenerationModelSelection: createModelSelection(instanceId, model, options),
   };
 }

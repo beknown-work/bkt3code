@@ -1,9 +1,16 @@
-import { SettingsIcon } from "lucide-react";
-import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { LoaderIcon, SettingsIcon, TriangleAlertIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
+import { useDesktopLocalBootstraps } from "../../connection/useDesktopLocalBootstraps";
+import { EXPERIMENTAL_CONTROL_CENTER_ENABLED } from "../../experimentalFeatures";
+import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { useServerConfigs, useThreadShells } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -13,6 +20,7 @@ import {
 import { Badge } from "../ui/badge";
 import {
   SidebarFooter,
+  SidebarGroup,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -21,7 +29,10 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
+import { SidebarProviderRateLimits } from "./SidebarProviderRateLimits";
+import { SidebarResourceMonitorPill } from "./SidebarResourceMonitorPill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { summarizeSidebarSessions } from "./sidebarSessionCounters";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -42,7 +53,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative h-auto min-h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-0 px-3 py-0 md:px-0",
         isElectron && "drag-region",
       )}
     >
@@ -70,25 +81,127 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 });
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+  const { environments } = useEnvironments();
+  // T3-CUSTOM(expbkt3): BEGIN — derive experimental global unsettled/running counters.
+  const threads = useThreadShells();
+  const serverConfigs = useServerConfigs();
+  const stageLabel = useEnvironmentStageLabel();
+  const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
+  const counts = useMemo(() => {
+    void snoozeWakeTick;
+    return summarizeSidebarSessions(threads, {
+      now: new Date().toISOString(),
+      snoozeSupported: (thread) =>
+        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true,
+    });
+  }, [serverConfigs, snoozeWakeTick, threads]);
+  useEffect(() => {
+    const nextWakeAtMs = Date.parse(counts.nextSnoozeWakeAt ?? "");
+    if (!Number.isFinite(nextWakeAtMs)) return;
+    const delayMs = Math.min(Math.max(0, nextWakeAtMs - Date.now()) + 50, 2_147_483_647);
+    const id = window.setTimeout(() => bumpSnoozeWakeTick((tick) => tick + 1), delayMs);
+    return () => window.clearTimeout(id);
+  }, [counts.nextSnoozeWakeAt]);
+  const providerRateLimitsEnabled = useClientSettings(
+    (settings) => settings.providerRateLimitsEnabled,
+  );
+  const showProviderRateLimits = EXPERIMENTAL_CONTROL_CENTER_ENABLED && providerRateLimitsEnabled;
+  // T3-CUSTOM(expbkt3): END
+  const syncing = environments.some(
+    (environment) =>
+      environment.connection.phase === "connecting" ||
+      environment.connection.phase === "reconnecting",
+  );
+
   return (
-    <Link
-      aria-label="Go to threads"
-      className={cn(
-        "sidebar-brand relative z-10 ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2",
-        onBackdrop ? "text-white" : "text-foreground",
-      )}
-      to="/"
+    <div
+      className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex min-w-0 max-w-full flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden"
+      data-testid="sidebar-brand-layout"
     >
-      <T3Wordmark />
-      <span
+      <Link
+        aria-label="Go to threads"
         className={cn(
-          "truncate text-sm font-medium tracking-tight",
-          onBackdrop ? "text-white/70" : "text-muted-foreground",
+          "sidebar-brand h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2",
+          onBackdrop ? "text-white" : "text-foreground",
         )}
+        to="/"
       >
-        Code
-      </span>
-    </Link>
+        <T3Wordmark />
+        <span
+          className={cn(
+            "truncate text-sm font-medium tracking-tight",
+            onBackdrop ? "text-white/70" : "text-muted-foreground",
+          )}
+        >
+          Code
+        </span>
+        <span
+          className={cn(
+            "sidebar-brand-stage shrink-0 items-center whitespace-nowrap rounded-full px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em]",
+            onBackdrop ? "bg-white/10 text-white/60" : "bg-muted/50 text-muted-foreground/60",
+          )}
+        >
+          {stageLabel}
+        </span>
+      </Link>
+      {/* T3-CUSTOM(expbkt3): BEGIN — compact lifecycle counters beside the wordmark. */}
+      {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
+        <div className="flex shrink-0 items-center gap-1" aria-label="Session status summary">
+          <span
+            className={cn(
+              "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+              counts.nonRunning >= 2
+                ? onBackdrop
+                  ? "border-orange-400/50 bg-orange-500/15 text-orange-400"
+                  : "border-orange-500/45 bg-orange-500/12 text-orange-600 dark:text-orange-300"
+                : onBackdrop
+                  ? "border-emerald-200/60 bg-emerald-400/30 text-white"
+                  : "border-emerald-500/35 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+            )}
+            data-attention-state={counts.nonRunning >= 2 ? "attention" : "clear"}
+            role="status"
+            title={`${counts.nonRunning} non-running session${counts.nonRunning === 1 ? "" : "s"}`}
+          >
+            {counts.nonRunning}
+          </span>
+          <span
+            className={cn(
+              "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+              onBackdrop
+                ? "border-white/25 bg-white/12 text-white"
+                : "border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
+            )}
+            title={`${counts.running} session${counts.running === 1 ? "" : "s"} running`}
+          >
+            {counts.running}
+          </span>
+        </div>
+      ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
+      {showProviderRateLimits || syncing ? (
+        <div
+          className="flex h-7 max-w-full shrink-0 items-center gap-1.5 overflow-hidden"
+          data-testid="sidebar-provider-rate-limits-slot"
+        >
+          {showProviderRateLimits ? <SidebarProviderRateLimits onBackdrop={onBackdrop} /> : null}
+          {syncing ? (
+            <span
+              aria-label="Connection interrupted; syncing"
+              className="inline-flex shrink-0"
+              role="status"
+              title="Connection interrupted. Syncing…"
+            >
+              <LoaderIcon
+                className={cn(
+                  "size-3 animate-spin",
+                  onBackdrop ? "text-white/70" : "text-muted-foreground/70",
+                )}
+              />
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -120,6 +233,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
+      <SidebarResourceMonitorPill />
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
@@ -133,3 +247,67 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     </SidebarFooter>
   );
 });
+
+export function SidebarEnvironmentNotices() {
+  const { environments } = useEnvironments();
+  const secondaries = useDesktopLocalBootstraps();
+  const localEnvByUrl = useMemo(() => {
+    const map = new Map<string, { phase: string; error: string | null }>();
+    for (const environment of environments) {
+      if (
+        isDesktopLocalConnectionTarget(environment.entry.target) &&
+        environment.displayUrl !== null
+      ) {
+        map.set(environment.displayUrl, {
+          phase: environment.connection.phase,
+          error: environment.connection.error,
+        });
+      }
+    }
+    return map;
+  }, [environments]);
+
+  const connecting: string[] = [];
+  const failed: Array<{ label: string; error: string | null }> = [];
+  for (const bootstrap of secondaries) {
+    const environment = bootstrap.httpBaseUrl
+      ? localEnvByUrl.get(bootstrap.httpBaseUrl)
+      : undefined;
+    if (environment?.phase === "connected") continue;
+    if (environment?.phase === "error") {
+      failed.push({ label: bootstrap.label, error: environment.error });
+    } else {
+      connecting.push(bootstrap.label);
+    }
+  }
+
+  if (connecting.length === 0 && failed.length === 0) return null;
+
+  return (
+    <SidebarGroup className="px-2 pt-2 pb-0">
+      {connecting.length > 0 ? (
+        <Alert
+          variant="default"
+          className="rounded-2xl border-border/40 bg-accent/40 text-muted-foreground"
+        >
+          <LoaderIcon className="animate-spin" />
+          <AlertTitle className="text-xs font-medium text-foreground">
+            Connecting {connecting.join(", ")}
+          </AlertTitle>
+        </Alert>
+      ) : null}
+      {failed.length > 0 ? (
+        <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
+          <TriangleAlertIcon />
+          <AlertTitle>Couldn't connect {failed.map((entry) => entry.label).join(", ")}</AlertTitle>
+          <AlertDescription>
+            {failed
+              .map((entry) => entry.error)
+              .filter(Boolean)
+              .join("; ") || "The backend didn't respond."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+    </SidebarGroup>
+  );
+}

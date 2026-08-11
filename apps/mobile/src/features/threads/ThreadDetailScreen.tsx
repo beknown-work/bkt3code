@@ -1,5 +1,6 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import type {
@@ -8,6 +9,7 @@ import type {
   MessageId,
   ModelSelection,
   OrchestrationThreadShell,
+  OrchestrationTurnCatchupSummary,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,
@@ -16,12 +18,13 @@ import type {
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Platform, View, type GestureResponderEvent } from "react-native";
+import { Platform, Pressable, View, type GestureResponderEvent } from "react-native";
 import { KeyboardController, KeyboardStickyView } from "react-native-keyboard-controller";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
+import { AppText as Text } from "../../components/AppText";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
@@ -49,6 +52,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly selectedThreadTurnSummaries: ReadonlyArray<OrchestrationTurnCatchupSummary>;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
@@ -61,11 +65,14 @@ export interface ThreadDetailScreenProps {
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
+  /** Non-null when older turns exist beyond the loaded window. */
+  readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly failedOutboxDetail: string | null;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -76,6 +83,10 @@ export interface ThreadDetailScreenProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  readonly onRetryRecovery: () => void;
+  readonly onDismissRecovery: () => void;
+  readonly onRetryFailedOutbox: () => void;
+  readonly onEditFailedOutbox: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
@@ -183,6 +194,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
   const composerBottomInset = composerExpanded ? 0 : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
+  const durableExecutionPresentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem: false,
+    intent: props.selectedThread.execution?.intent ?? null,
+    providerActivity: props.selectedThread.execution?.activity ?? "idle",
+  });
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
   // data yet → "Loading messages", cached data reconciling → "Syncing".
@@ -359,6 +375,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}
+            execution={props.selectedThread.execution ?? null}
+            turnSummaries={props.selectedThreadTurnSummaries}
             activeWorkStartedAt={props.activeWorkStartedAt}
             listRef={listRef}
             freeze={freeze}
@@ -371,6 +389,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             usesAutomaticContentInsets={props.usesAutomaticContentInsets}
             onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
             skills={selectedProviderSkills}
+            loadEarlier={props.loadEarlier ?? null}
           />
         </View>
       ) : (
@@ -388,6 +407,59 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               pushes the resting content floor up by the same amount. */}
           <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+              {durableExecutionPresentation.needsAttention ? (
+                <View className="mx-4 mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                  <Text className="text-sm font-t3-medium text-red-700 dark:text-red-300">
+                    Recovery failed
+                  </Text>
+                  <Text className="mt-1 text-xs text-foreground-muted">
+                    Automatic recovery stopped after ten attempts. Retry safely or dismiss this
+                    notice without deleting the thread.
+                  </Text>
+                  <View className="mt-3 flex-row gap-3">
+                    <Pressable
+                      accessibilityRole="button"
+                      className="rounded-lg bg-red-600 px-3 py-2"
+                      onPress={props.onRetryRecovery}
+                    >
+                      <Text className="text-xs font-t3-medium text-white">Retry</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      className="rounded-lg border border-border px-3 py-2"
+                      onPress={props.onDismissRecovery}
+                    >
+                      <Text className="text-xs font-t3-medium text-foreground">Dismiss</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+              {!durableExecutionPresentation.needsAttention && props.failedOutboxDetail ? (
+                <View className="mx-4 mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                  <Text className="text-sm font-t3-medium text-red-700 dark:text-red-300">
+                    Message was not accepted
+                  </Text>
+                  <Text className="mt-1 text-xs text-foreground-muted">
+                    {props.failedOutboxDetail}
+                  </Text>
+                  <View className="mt-3 flex-row gap-3">
+                    <Pressable
+                      accessibilityRole="button"
+                      className="rounded-lg bg-red-600 px-3 py-2"
+                      onPress={props.onRetryFailedOutbox}
+                    >
+                      <Text className="text-xs font-t3-medium text-white">Retry</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      className="rounded-lg border border-border px-3 py-2"
+                      onPress={props.onEditFailedOutbox}
+                    >
+                      <Text className="text-xs font-t3-medium text-foreground">Edit</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
               {props.activePendingApproval || props.activePendingUserInput ? (
                 <Animated.View
                   className="shrink-0 gap-3 px-4 pb-3"

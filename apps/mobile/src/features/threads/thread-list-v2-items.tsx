@@ -34,6 +34,9 @@ import {
   resolveThreadListV2SwipeActions,
   type ThreadListV2Status,
 } from "./threadListV2";
+// T3-CUSTOM(expbkt3): BEGIN — render durable execution phases in the list.
+import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state/thread-execution-presentation";
+// T3-CUSTOM(expbkt3): END
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -238,7 +241,17 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         <Text className="flex-1 text-sm font-t3-medium text-foreground-muted" numberOfLines={1}>
           {projectTitle}
         </Text>
-        <Text className="text-xs text-foreground-tertiary">Queued</Text>
+        {/* T3-CUSTOM(expbkt3): BEGIN — retain failed queued work as attention. */}
+        <Text
+          className={
+            pendingTask.message.deliveryState === "failed"
+              ? "text-xs text-red-700 dark:text-red-300"
+              : "text-xs text-foreground-tertiary"
+          }
+        >
+          {pendingTask.message.deliveryState === "failed" ? "Failed" : "Queued"}
+        </Text>
+        {/* T3-CUSTOM(expbkt3): END */}
       </View>
       {/* One line, unlike the two an active row allows: a queued title is
           derived from the whole prompt rather than written as a title, so the
@@ -403,7 +416,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
 
   const status = resolveThreadListV2Status(thread);
-  const statusLabel = STATUS_LABEL_BY_STATUS[status];
+  // T3-CUSTOM(expbkt3): BEGIN — durable phases are not generic Working.
+  const durablePresentation = deriveThreadExecutionPresentation({
+    hasPendingOutboxItem: false,
+    intent: thread.execution?.intent ?? null,
+    providerActivity: thread.execution?.activity ?? "idle",
+  });
+  const statusLabel = durablePresentation.label
+    ? {
+        label: durablePresentation.label,
+        className: durablePresentation.needsAttention
+          ? "text-red-700 dark:text-red-300"
+          : "text-sky-600 dark:text-sky-400",
+      }
+    : STATUS_LABEL_BY_STATUS[status];
+  // T3-CUSTOM(expbkt3): END
   const timeLabel = threadTimeLabel(thread);
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);

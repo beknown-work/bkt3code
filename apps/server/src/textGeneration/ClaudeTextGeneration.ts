@@ -23,12 +23,25 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildCatchupSummaryPrompt,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  buildWorkSummaryPrompt,
+  // T3-CUSTOM(expbkt3): END
+  buildRollingSummaryPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
+  sanitizeCatchupSummary,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  sanitizeWorkSummary,
+  sanitizeWorkSummaryPercent,
+  sanitizeWorkSummaryRemaining,
+  sanitizeWorkSummaryStage,
+  // T3-CUSTOM(expbkt3): END
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeRollingSummary,
   sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
@@ -85,7 +98,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "updateRollingSummary"
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary",
+    // T3-CUSTOM(expbkt3): END
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -115,7 +133,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "updateRollingSummary"
+      | "generateCatchupSummary"
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+      | "generateWorkSummary";
+    // T3-CUSTOM(expbkt3): END
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -359,10 +382,84 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const updateRollingSummary: TextGeneration.TextGeneration["Service"]["updateRollingSummary"] =
+    Effect.fn("ClaudeTextGeneration.updateRollingSummary")(function* (input) {
+      const { prompt, outputSchema } = buildRollingSummaryPrompt({
+        threadTitle: input.threadTitle,
+        previousSummary: input.previousSummary,
+        turnTranscript: input.turnTranscript,
+        dataLimitChars: input.dataLimitChars,
+      });
+
+      const generated = yield* runClaudeJson({
+        operation: "updateRollingSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeRollingSummary(generated.summary),
+      } satisfies TextGeneration.RollingSummaryGenerationResult;
+    });
+
+  const generateCatchupSummary: TextGeneration.TextGeneration["Service"]["generateCatchupSummary"] =
+    Effect.fn("ClaudeTextGeneration.generateCatchupSummary")(function* (input) {
+      const { prompt, outputSchema } = buildCatchupSummaryPrompt({
+        threadTitle: input.threadTitle,
+        rollingSummary: input.rollingSummary,
+        turnTail: input.turnTail,
+        customInstructions: input.customInstructions,
+      });
+
+      const generated = yield* runClaudeJson({
+        operation: "generateCatchupSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeCatchupSummary(generated.summary),
+      } satisfies TextGeneration.CatchupSummaryGenerationResult;
+    });
+
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  const generateWorkSummary: TextGeneration.TextGeneration["Service"]["generateWorkSummary"] =
+    Effect.fn("ClaudeTextGeneration.generateWorkSummary")(function* (input) {
+      const { prompt, outputSchema } = buildWorkSummaryPrompt({
+        context: input.context,
+        promptInstructions: input.promptInstructions,
+      });
+
+      const generated = yield* runClaudeJson({
+        operation: "generateWorkSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return {
+        summary: sanitizeWorkSummary(generated.summary),
+        stage: sanitizeWorkSummaryStage(generated.stage),
+        remaining: sanitizeWorkSummaryRemaining(generated.remaining),
+        percent: sanitizeWorkSummaryPercent(generated.percent),
+      } satisfies TextGeneration.WorkSummaryGenerationResult;
+    });
+  // T3-CUSTOM(expbkt3): END
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    updateRollingSummary,
+    generateCatchupSummary,
+    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+    generateWorkSummary,
+    // T3-CUSTOM(expbkt3): END
   } satisfies TextGeneration.TextGeneration["Service"];
 });

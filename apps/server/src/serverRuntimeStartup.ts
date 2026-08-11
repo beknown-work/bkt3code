@@ -28,12 +28,19 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
+import { runOwnershipBackfill } from "./orchestration/ownershipBackfill.ts";
+import { runStaleSessionReconciliation } from "./orchestration/staleSessionReconciliation.ts";
+import { ClerkDirectoryLive } from "./auth/ClerkDirectory.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+// T3-CUSTOM(expbkt3): archived-session worktree reclaim
+import * as SessionArchiveSweeper from "./sessionArchive/SessionArchiveSweeper.ts";
+// T3-CUSTOM(expbkt3): automatic session recovery.
+import { SessionRecovery } from "./recovery/SessionRecovery.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
@@ -234,6 +241,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt,
         });
         bootstrapProjectId = nextProjectId;
@@ -302,6 +310,12 @@ export const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+    // T3-CUSTOM(expbkt3): archived-session worktree reclaim; no-ops unless the
+    // operator has switched the automatic sweep on.
+    const sessionArchiveSweeper = yield* SessionArchiveSweeper.SessionArchiveSweeper;
+    // T3-CUSTOM(expbkt3): v1 remains wired for rollback compatibility but its
+    // sweep is disabled while the durable coordinator owns recovery.
+    yield* SessionRecovery;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -351,7 +365,36 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+          // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+          yield* sessionArchiveSweeper.start().pipe(Scope.provide(reactorScope));
         }),
+      );
+
+      // A turn cannot outlive the process that ran it: settle any session still
+      // marked running/starting by the previous process before commands open.
+      yield* Effect.logDebug("startup phase: stale session reconciliation");
+      yield* runStartupPhase("sessions.reconcile", runStaleSessionReconciliation);
+
+      // T3-CUSTOM(expbkt3): durable startup scan runs after stale projections
+      // settle. The v1 two-minute sweep must not run concurrently with v2.
+      yield* Effect.logDebug("startup phase: durable execution recovery");
+      yield* runStartupPhase(
+        "sessions.recover",
+        (orchestrationReactor.startDurableRecovery?.() ?? Effect.void).pipe(
+          Scope.provide(reactorScope),
+        ),
+      );
+
+      // Team mode only: converge pre-ownership records. This is idempotent and
+      // fail-soft, so it is parked alongside the other auxiliary roots rather
+      // than holding readiness — a full pass once cost bkt3.dev ~146 s of
+      // blocked startup on every restart.
+      yield* Effect.logDebug("startup phase: ownership backfill");
+      yield* forkParked(
+        runStartupPhase(
+          "ownership.backfill",
+          runOwnershipBackfill.pipe(Effect.provide(ClerkDirectoryLive)),
+        ),
       );
 
       const welcomeBase = yield* resolveWelcomeBase;

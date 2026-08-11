@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  canReconnectThreadSession,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
@@ -37,6 +38,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
 
 import {
@@ -252,6 +254,7 @@ function makeLatestTurn(overrides?: {
       overrides?.startedAt !== undefined ? overrides.startedAt : "2026-03-09T10:00:00.000Z",
     completedAt:
       overrides?.completedAt !== undefined ? overrides.completedAt : "2026-03-09T10:05:00.000Z",
+    durationMs: null,
   };
 }
 
@@ -874,6 +877,35 @@ describe("formatWorkingDurationLabel", () => {
 });
 
 describe("resolveThreadStatusPill", () => {
+  const makeExecution = (
+    activity: ThreadExecutionSnapshot["activity"],
+    state: NonNullable<ThreadExecutionSnapshot["turn"]>["state"],
+  ): ThreadExecutionSnapshot => ({
+    threadId: ThreadId.make("thread-1"),
+    authorityEpoch: "server-epoch",
+    revision: 1,
+    observedAt: "2026-03-09T10:05:00.000Z",
+    activity,
+    canStop: activity !== "idle",
+    providerSession: {
+      state: activity === "failed" ? "failed" : "ready",
+      generation: 1,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      startedAt: "2026-03-09T10:00:00.000Z",
+      lastObservedAt: "2026-03-09T10:05:00.000Z",
+      lastError: activity === "failed" ? "failed" : null,
+    },
+    turn: {
+      executionId: "execution-1",
+      providerTurnId: "turn-1" as never,
+      state,
+      startedAt: "2026-03-09T10:00:00.000Z",
+      stopRequestedAt: null,
+      completedAt: activity === "idle" ? "2026-03-09T10:05:00.000Z" : null,
+      lastError: activity === "failed" ? "failed" : null,
+    },
+  });
+
   const baseThread = {
     hasActionableProposedPlan: false,
     hasPendingApprovals: false,
@@ -881,6 +913,7 @@ describe("resolveThreadStatusPill", () => {
     interactionMode: "plan" as const,
     latestTurn: null,
     lastVisitedAt: undefined,
+    execution: makeExecution("active", "running"),
     session: {
       threadId: ThreadId.make("thread-1"),
       status: "running" as const,
@@ -900,6 +933,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasPendingApprovals: true,
           hasPendingUserInput: true,
+          execution: makeExecution("blocked", "waiting-for-approval"),
         },
       }),
     ).toMatchObject({ label: "Pending Approval", pulse: false });
@@ -911,17 +945,18 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           hasPendingUserInput: true,
+          execution: makeExecution("blocked", "waiting-for-input"),
         },
       }),
     ).toMatchObject({ label: "Awaiting Input", pulse: false });
   });
 
-  it("falls back to working when the thread is actively running without blockers", () => {
+  it("shows the implementation phase when the default-mode agent is active", () => {
     expect(
       resolveThreadStatusPill({
-        thread: baseThread,
+        thread: { ...baseThread, interactionMode: "default" },
       }),
-    ).toMatchObject({ label: "Working", pulse: true });
+    ).toMatchObject({ label: "Implementing", pulse: true });
   });
 
   it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {
@@ -931,6 +966,7 @@ describe("resolveThreadStatusPill", () => {
           ...baseThread,
           hasActionableProposedPlan: true,
           latestTurn: makeLatestTurn(),
+          execution: makeExecution("idle", "completed"),
           session: {
             ...baseThread.session,
             status: "ready",
@@ -947,6 +983,7 @@ describe("resolveThreadStatusPill", () => {
         thread: {
           ...baseThread,
           latestTurn: makeLatestTurn(),
+          execution: makeExecution("idle", "completed"),
           session: {
             ...baseThread.session,
             status: "ready",
@@ -965,6 +1002,7 @@ describe("resolveThreadStatusPill", () => {
           interactionMode: "default",
           latestTurn: makeLatestTurn(),
           lastVisitedAt: "2026-03-09T10:04:00.000Z",
+          execution: makeExecution("idle", "completed"),
           session: {
             ...baseThread.session,
             status: "ready",
@@ -973,6 +1011,87 @@ describe("resolveThreadStatusPill", () => {
         },
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
+  });
+
+  it("shows a checking state until a current authority snapshot arrives", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...baseThread, execution: null },
+      }),
+    ).toMatchObject({ label: "Checking agent status", pulse: true });
+  });
+});
+
+describe("canReconnectThreadSession", () => {
+  const stoppedSession = {
+    threadId: ThreadId.make("thread-1"),
+    status: "stopped" as const,
+    providerName: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerThreadId: "provider-thread-1",
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    activeTurnId: null,
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+
+  it("allows a stopped provider conversation to reconnect", () => {
+    expect(
+      canReconnectThreadSession({
+        session: stoppedSession,
+        execution: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("uses the execution snapshot as the lifecycle authority", () => {
+    expect(
+      canReconnectThreadSession({
+        session: { ...stoppedSession, status: "ready" },
+        execution: {
+          threadId: ThreadId.make("thread-1"),
+          authorityEpoch: "server-epoch",
+          revision: 1,
+          observedAt: "2026-03-09T10:05:00.000Z",
+          activity: "idle",
+          canStop: false,
+          providerSession: {
+            state: "failed",
+            generation: 1,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            startedAt: "2026-03-09T10:00:00.000Z",
+            lastObservedAt: "2026-03-09T10:05:00.000Z",
+            lastError: "Provider exited",
+          },
+          turn: null,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not replace a healthy provider session", () => {
+    expect(
+      canReconnectThreadSession({
+        session: { ...stoppedSession, status: "ready" },
+        execution: {
+          threadId: ThreadId.make("thread-1"),
+          authorityEpoch: "server-epoch",
+          revision: 1,
+          observedAt: "2026-03-09T10:05:00.000Z",
+          activity: "idle",
+          canStop: false,
+          providerSession: {
+            state: "ready",
+            generation: 1,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            startedAt: "2026-03-09T10:00:00.000Z",
+            lastObservedAt: "2026-03-09T10:05:00.000Z",
+            lastError: null,
+          },
+          turn: null,
+        },
+      }),
+    ).toBe(false);
   });
 });
 
@@ -1019,7 +1138,7 @@ describe("resolveProjectStatusIndicator", () => {
           pulse: false,
         },
         {
-          label: "Working",
+          label: "Implementing",
           colorClass: "text-sky-600",
           dotClass: "bg-sky-500",
           pulse: true,
@@ -1104,6 +1223,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   return {
     id: ProjectId.make("project-1"),
     environmentId: localEnvironmentId,
+    ownerUserId: null,
+    memberUserIds: [],
     title: "Project",
     workspaceRoot: "/tmp/project",
     repositoryIdentity: null,
@@ -1124,6 +1245,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     id: ThreadId.make("thread-1"),
     environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
+    ownerUserId: null,
+    memberUserIds: [],
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
@@ -1144,7 +1267,10 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    sourceControlProfileId: null,
     checkpoints: [],
+    rollingSummary: null,
+    turnSummaries: [],
     activities: [],
     ...overrides,
   };
@@ -1235,6 +1361,7 @@ describe("sortProjectsForSidebar", () => {
             createdAt: "2026-03-09T10:01:00.000Z",
             updatedAt: "2026-03-09T10:01:00.000Z",
             streaming: false,
+            sentByUserId: null,
           },
         ],
       }),
@@ -1251,6 +1378,7 @@ describe("sortProjectsForSidebar", () => {
             createdAt: "2026-03-09T10:05:00.000Z",
             updatedAt: "2026-03-09T10:05:00.000Z",
             streaming: false,
+            sentByUserId: null,
           },
         ],
       }),

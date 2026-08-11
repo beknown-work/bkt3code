@@ -4,12 +4,25 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import {
+  DEFAULT_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
-import { ModelSelection } from "./orchestration.ts";
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  ModelSelection,
+  ProviderInteractionMode,
+  RuntimeMode,
+} from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  GitHubSourceControlProfileMetadata,
+  SourceControlIdentityMode,
+  SourceControlProfileId,
+} from "./sourceControlProfiles.ts";
+import { EnvironmentUserIdentityMode } from "./users.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -111,7 +124,6 @@ export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200))
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
-  autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -168,6 +180,18 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  phaseGroupedSidebarEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  providerRateLimitsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  resourceMonitorEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Legacy plan mode. The composer's Build/Plan toggle was removed from the
+  // default UI; this beta flag restores it (plus the /plan and /default slash
+  // commands) for users who still rely on the old workflow.
+  planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // T3-CUSTOM(expbkt3): native plan review. On by default; turning it off hides
+  // the Preview entry points and leaves Plannotator as the only review path.
+  nativePlanReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -474,6 +498,219 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+export const MIN_SESSION_SUMMARY_DATA_LIMIT_CHARS = 4_000;
+export const MAX_SESSION_SUMMARY_DATA_LIMIT_CHARS = 100_000;
+export const DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS = 24_000;
+export const SessionSummaryDataLimitChars = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_SESSION_SUMMARY_DATA_LIMIT_CHARS,
+    maximum: MAX_SESSION_SUMMARY_DATA_LIMIT_CHARS,
+  }),
+);
+
+export const MIN_SESSION_SUMMARY_TURN_DURATION_MINUTES = 0;
+export const MAX_SESSION_SUMMARY_TURN_DURATION_MINUTES = 120;
+export const DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES = 5;
+export const SessionSummaryTurnDurationMinutes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_SESSION_SUMMARY_TURN_DURATION_MINUTES,
+    maximum: MAX_SESSION_SUMMARY_TURN_DURATION_MINUTES,
+  }),
+);
+
+/**
+ * Catch-up summary settings. Summarization runs entirely on the server, so
+ * every knob lives in `ServerSettings` rather than the client tier.
+ */
+export const SessionSummarySettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  modelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_TEXT_GENERATION_MODEL,
+      }),
+    ),
+  ),
+  dataLimitChars: SessionSummaryDataLimitChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  minTurnDurationMinutes: SessionSummaryTurnDurationMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES)),
+  ),
+  // Appended to the catch-up prompt so the note can be tailored (tone, what to
+  // emphasize, language). Empty means "use the built-in prompt as-is".
+  promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type SessionSummarySettings = typeof SessionSummarySettings.Type;
+
+/**
+ * T3-CUSTOM(expbkt3): BEGIN — Bulk session manager work summaries.
+ *
+ * Deliberately a peer of `SessionSummarySettings` rather than a reuse of it.
+ * The catch-up note answers "what just happened in this turn" for one open
+ * session; the work summary answers "what has this session achieved and how far
+ * is it" for thirty sessions at once. Different reader, different prompt, and
+ * different cost profile — so it gets its own model, character budget, and
+ * prompt instructions instead of inheriting the catch-up ones.
+ */
+export const SessionWorkSummarySettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  modelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_TEXT_GENERATION_MODEL,
+      }),
+    ),
+  ),
+  dataLimitChars: SessionSummaryDataLimitChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  // Appended to the work-summary prompt. Empty means "use the built-in prompt".
+  promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type SessionWorkSummarySettings = typeof SessionWorkSummarySettings.Type;
+// T3-CUSTOM(expbkt3): END
+
+export const ExternalMcpSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  publicUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type ExternalMcpSettings = typeof ExternalMcpSettings.Type;
+
+/**
+ * T3-CUSTOM(expbkt3): Keep a session's title describing what it actually became.
+ *
+ * Upstream titles a thread once, from the first prompt. A long session drifts
+ * away from that opening line, so the title stops being a useful way to find it.
+ * `refreshEveryUserPrompts` re-runs the existing regeneration flow every N user
+ * prompts (0 disables it) using the configured text-generation model.
+ */
+export const ThreadTitleMaintenanceSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  refreshEveryUserPrompts: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 20 })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(3)),
+  ),
+});
+export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettings.Type;
+
+/**
+ * T3-CUSTOM(expbkt3): Bounds for the stalled-execution watchdog.
+ *
+ * Execution activity only moves on events, so a turn that is admitted and then
+ * produces nothing reads as "running" forever. These bounds decide when silence
+ * becomes evidence. They are deliberately asymmetric: a missing provider
+ * runtime is proof that nothing can produce output, while a live runtime with no
+ * output could equally be a long quiet tool call, so it gets a much longer
+ * backstop. See `apps/server/src/execution/StalledExecutionPolicy.ts`.
+ *
+ * `dispatchDeadlineMs` bounds the durable coordinator's dispatch instead, timed
+ * from after worktree bootstrap so setup work never consumes it.
+ */
+export const StalledExecutionWatchdogSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  pollIntervalMs: Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(30_000)),
+  ),
+  startedButNotTakenMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 30_000, maximum: 3_600_000 }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(90_000))),
+  dispatchDeadlineMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 60_000, maximum: 3_600_000 }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(300_000))),
+  deadRuntimeGraceMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 15_000, maximum: 600_000 }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(60_000))),
+  silentTurnMs: Schema.Int.check(Schema.isBetween({ minimum: 300_000, maximum: 86_400_000 })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(5_400_000)),
+  ),
+});
+export type StalledExecutionWatchdogSettings = typeof StalledExecutionWatchdogSettings.Type;
+
+/**
+ * T3-CUSTOM(expbkt3): How much of an archived session's worktree to give back.
+ *
+ * `slim` deletes only regenerable directories (`node_modules`, build output,
+ * caches) and leaves a usable checkout behind. `remove` runs
+ * `git worktree remove`, which reclaims everything but means reopening the
+ * session has to re-create the worktree first.
+ */
+export const SessionArchiveReclaimMode = Schema.Literals(["slim", "remove"]);
+export type SessionArchiveReclaimMode = typeof SessionArchiveReclaimMode.Type;
+
+/** Days an archived thread must sit untouched before the sweeper may reclaim it. */
+export const SessionArchiveMinArchivedDays = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 365 }),
+);
+
+export const DEFAULT_SESSION_ARCHIVE_MIN_ARCHIVED_DAYS = 14;
+
+/**
+ * T3-CUSTOM(expbkt3): Reclaim archived sessions' worktrees without losing what
+ * the session did.
+ *
+ * Upstream only removes a worktree when a thread is *deleted*, so the sole way
+ * to get the disk back is to destroy the history. Archived worktrees therefore
+ * accumulate indefinitely. This exports a durable history file pair (digest
+ * Markdown plus a full transcript sidecar) outside the worktree first, then
+ * reclaims the worktree per `SessionArchiveReclaimMode`.
+ *
+ * `historyDir` is blank by default, meaning `<baseDir>/session-history`.
+ * `autoSweep` is off by default: the panel drives this by hand until an
+ * operator opts into the timer.
+ */
+export const SessionArchiveAutoSweepSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  mode: SessionArchiveReclaimMode.pipe(Schema.withDecodingDefault(Effect.succeed("slim" as const))),
+  minArchivedDays: SessionArchiveMinArchivedDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_ARCHIVE_MIN_ARCHIVED_DAYS)),
+  ),
+});
+export type SessionArchiveAutoSweepSettings = typeof SessionArchiveAutoSweepSettings.Type;
+
+export const SessionArchiveSettings = Schema.Struct({
+  // On by default so archiving a session exports its history immediately.
+  // Destructive reclaim stays separately gated behind `autoSweep.enabled`.
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  historyDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  includeTranscriptSidecar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Tool-call activity sidecar (`.activities.jsonl`) alongside the transcript. */
+  includeActivities: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Gzipped copies of the provider's own transcript files (`-raw/` directory).
+   * Captured at export time because the provider files are keyed by worktree
+   * path, a mapping that dies when the worktree is reclaimed.
+   */
+  includeRawProviderTranscripts: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
+  autoSweep: SessionArchiveAutoSweepSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+export type SessionArchiveSettings = typeof SessionArchiveSettings.Type;
+
+export const ExperimentalSettings = Schema.Struct({
+  sessionSummary: SessionSummarySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
+  sessionWorkSummary: SessionWorkSummarySettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // T3-CUSTOM(expbkt3): END
+  externalMcp: ExternalMcpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // T3-CUSTOM(expbkt3): periodic title refresh.
+  threadTitleMaintenance: ThreadTitleMaintenanceSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+  sessionArchive: SessionArchiveSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // T3-CUSTOM(expbkt3): revive-or-fail bounds for stalled executions.
+  stalledExecutionWatchdog: StalledExecutionWatchdogSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+});
+export type ExperimentalSettings = typeof ExperimentalSettings.Type;
+
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -559,6 +796,22 @@ export const ServerSettings = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
+  // T3-CUSTOM(expbkt3): agent-session defaults are separate from the small
+  // text-generation model used for titles, summaries, and source-control copy.
+  defaultThreadModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_MODEL,
+      }),
+    ),
+  ),
+  defaultThreadRuntimeMode: RuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE)),
+  ),
+  defaultThreadInteractionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
@@ -580,6 +833,16 @@ export const ServerSettings = Schema.Struct({
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  sourceControlIdentityMode: SourceControlIdentityMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("machine" as const)),
+  ),
+  environmentUserIdentityMode: EnvironmentUserIdentityMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("optional" as const)),
+  ),
+  sourceControlProfiles: Schema.Record(
+    SourceControlProfileId,
+    GitHubSourceControlProfileMetadata,
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -603,6 +866,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  experimental: ExperimentalSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -713,6 +977,9 @@ export const ServerSettingsPatch = Schema.Struct({
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
+  defaultThreadModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  defaultThreadRuntimeMode: Schema.optionalKey(RuntimeMode),
+  defaultThreadInteractionMode: Schema.optionalKey(ProviderInteractionMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
@@ -723,10 +990,93 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  sourceControlIdentityMode: Schema.optionalKey(SourceControlIdentityMode),
+  environmentUserIdentityMode: Schema.optionalKey(EnvironmentUserIdentityMode),
+  sourceControlProfiles: Schema.optionalKey(
+    Schema.Record(SourceControlProfileId, GitHubSourceControlProfileMetadata),
+  ),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  experimental: Schema.optionalKey(
+    Schema.Struct({
+      externalMcp: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          apiKey: Schema.optionalKey(TrimmedString),
+          publicUrl: Schema.optionalKey(TrimmedString),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): periodic title refresh.
+      threadTitleMaintenance: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          refreshEveryUserPrompts: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 20 })),
+          ),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): revive-or-fail bounds for stalled executions.
+      stalledExecutionWatchdog: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          pollIntervalMs: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })),
+          ),
+          startedButNotTakenMs: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 30_000, maximum: 3_600_000 })),
+          ),
+          dispatchDeadlineMs: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 60_000, maximum: 3_600_000 })),
+          ),
+          deadRuntimeGraceMs: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })),
+          ),
+          silentTurnMs: Schema.optionalKey(
+            Schema.Int.check(Schema.isBetween({ minimum: 300_000, maximum: 86_400_000 })),
+          ),
+        }),
+      ),
+      sessionSummary: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          modelSelection: Schema.optionalKey(ModelSelectionPatch),
+          dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          minTurnDurationMinutes: Schema.optionalKey(SessionSummaryTurnDurationMinutes),
+          promptInstructions: Schema.optionalKey(TrimmedString),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
+      sessionArchive: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          historyDir: Schema.optionalKey(TrimmedString),
+          includeTranscriptSidecar: Schema.optionalKey(Schema.Boolean),
+          includeActivities: Schema.optionalKey(Schema.Boolean),
+          includeRawProviderTranscripts: Schema.optionalKey(Schema.Boolean),
+          autoSweep: Schema.optionalKey(
+            Schema.Struct({
+              enabled: Schema.optionalKey(Schema.Boolean),
+              mode: Schema.optionalKey(SessionArchiveReclaimMode),
+              minArchivedDays: Schema.optionalKey(SessionArchiveMinArchivedDays),
+            }),
+          ),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries are patched
+      // independently of the catch-up summary block.
+      sessionWorkSummary: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          modelSelection: Schema.optionalKey(ModelSelectionPatch),
+          dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          promptInstructions: Schema.optionalKey(TrimmedString),
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): END
     }),
   ),
   providers: Schema.optionalKey(
@@ -747,7 +1097,6 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
-  autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -783,6 +1132,12 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  phaseGroupedSidebarEnabled: Schema.optionalKey(Schema.Boolean),
+  providerRateLimitsEnabled: Schema.optionalKey(Schema.Boolean),
+  resourceMonitorEnabled: Schema.optionalKey(Schema.Boolean),
+  planModeEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): native plan review.
+  nativePlanReviewEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

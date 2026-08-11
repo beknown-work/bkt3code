@@ -22,6 +22,7 @@ import {
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
+  ThreadExecutionSnapshot,
   ThreadTurnStartRequestedPayload,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -36,6 +37,7 @@ const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartC
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
+const decodeThreadExecutionSnapshot = Schema.decodeUnknownEffect(ThreadExecutionSnapshot);
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
@@ -173,6 +175,71 @@ it.effect("decodes historical project.created payloads with a default provider",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.instanceId, "codex");
+    assert.deepStrictEqual(parsed.threadCreationDefaults, {
+      environmentMode: null,
+      worktreeBaseRef: null,
+      runtimeMode: null,
+      interactionMode: null,
+    });
+  }),
+);
+
+it.effect("decodes project creation defaults with an exact origin branch", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Project Title",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      threadCreationDefaults: {
+        environmentMode: "worktree",
+        worktreeBaseRef: {
+          kind: "branch",
+          source: "origin",
+          branch: "develop",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      },
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.threadCreationDefaults, {
+      environmentMode: "worktree",
+      worktreeBaseRef: {
+        kind: "branch",
+        source: "origin",
+        branch: "develop",
+      },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+  }),
+);
+
+it.effect("accepts a bootstrap request whose creation settings are omitted", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.bootstrap.request",
+      commandId: "cmd-bootstrap-request",
+      bootstrapId: "bootstrap-1",
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Prepared thread",
+      initialTurn: {
+        messageId: "message-1",
+        text: "Start after setup",
+        attachments: [],
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.bootstrap.request");
+    if (parsed.type !== "thread.bootstrap.request") return;
+    assert.strictEqual(parsed.overrides, undefined);
+    assert.strictEqual(parsed.initialTurn?.text, "Start after setup");
   }),
 );
 
@@ -223,6 +290,31 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+  }),
+);
+
+it.effect("preserves idle admission preconditions in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-precondition",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-precondition",
+        role: "user",
+        text: "automated repair",
+        attachments: [],
+      },
+      precondition: {
+        requireIdle: true,
+        expectedExecutionRevision: 12,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepEqual(parsed.precondition, {
+      requireIdle: true,
+      expectedExecutionRevision: 12,
+    });
   }),
 );
 
@@ -288,9 +380,67 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.bootstrap?.createThread?.projectId, "project-1");
+    assert.strictEqual(parsed.bootstrap?.createThread?.sourceControlProfileId, null);
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.baseBranch, "main");
     assert.strictEqual(parsed.bootstrap?.prepareWorktree?.startFromOrigin, true);
     assert.strictEqual(parsed.bootstrap?.runSetupScript, true);
+  }),
+);
+
+// T3-CUSTOM(expbkt3): delegated creators can nominate the durable thread owner.
+it.effect("accepts ownerUserId in direct and bootstrapped thread creation", () =>
+  Effect.gen(function* () {
+    const direct = yield* decodeOrchestrationCommand({
+      type: "thread.create",
+      commandId: "cmd-thread-owner",
+      threadId: "thread-owner",
+      projectId: "project-1",
+      title: "Owned thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      ownerUserId: "user-linear-starter",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const bootstrapped = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-owner",
+      threadId: "thread-owner",
+      message: {
+        messageId: "msg-owner",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      bootstrap: {
+        createThread: {
+          projectId: "project-1",
+          title: "Owned bootstrap thread",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          ownerUserId: "user-linear-starter",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(direct.type, "thread.create");
+    if (direct.type === "thread.create") {
+      assert.strictEqual(direct.ownerUserId, "user-linear-starter");
+    }
+    assert.strictEqual(bootstrapped.bootstrap?.createThread?.ownerUserId, "user-linear-starter");
   }),
 );
 
@@ -313,6 +463,7 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.modelSelection.instanceId, "codex");
+    assert.strictEqual(parsed.sourceControlProfileId, null);
   }),
 );
 
@@ -754,6 +905,111 @@ it.effect("decodes thread.turn-start-requested title seed when present", () =>
   }),
 );
 
+it.effect("preserves optional bootstrap data on thread.turn-start-requested", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartRequestedPayload({
+      threadId: "thread-2",
+      messageId: "msg-2",
+      bootstrap: {
+        prepareWorktree: {
+          projectCwd: "/workspace/project",
+          baseBranch: "main",
+          branch: "task/durable-recovery",
+        },
+        runSetupScript: true,
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.bootstrap, {
+      prepareWorktree: {
+        projectCwd: "/workspace/project",
+        baseBranch: "main",
+        branch: "task/durable-recovery",
+      },
+      runSetupScript: true,
+    });
+  }),
+);
+
+it.effect("preserves a durable bootstrap request in a turn command", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "command-bootstrap-turn",
+      threadId: "thread-2",
+      message: {
+        messageId: "msg-2",
+        role: "user",
+        text: "Start durably",
+        attachments: [],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      bootstrap: {
+        request: {
+          createThread: true,
+          bootstrapId: "bootstrap-2",
+          projectId: "project-1",
+          title: "Durable thread",
+          overrides: {
+            workspace: {
+              mode: "new-worktree",
+              baseRef: { kind: "repository-default", source: "origin" },
+            },
+          },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.bootstrap?.request?.createThread, true);
+    assert.strictEqual(parsed.bootstrap?.request?.bootstrapId, "bootstrap-2");
+  }),
+);
+
+it.effect("decodes optional durable intent state on execution snapshots", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadExecutionSnapshot({
+      threadId: "thread-1",
+      authorityEpoch: "epoch-1",
+      revision: 1,
+      observedAt: "2026-01-01T00:00:01.000Z",
+      activity: "active",
+      canStop: true,
+      providerSession: {
+        state: "starting",
+        generation: 1,
+        providerInstanceId: null,
+        startedAt: null,
+        lastObservedAt: null,
+        lastError: null,
+      },
+      turn: null,
+      intent: {
+        workItemId: "work-item-1",
+        messageId: "msg-1",
+        desiredState: "running",
+        phase: "retry-wait",
+        acceptedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+        recovery: {
+          attempt: 2,
+          maximumAttempts: 10,
+          nextAttemptAt: "2026-01-01T00:00:03.000Z",
+          reason: "provider-process-exited",
+          userActionRequired: false,
+        },
+      },
+    });
+
+    assert.strictEqual(parsed.intent?.workItemId, "work-item-1");
+    assert.strictEqual(parsed.intent?.phase, "retry-wait");
+    assert.strictEqual(parsed.intent?.recovery.attempt, 2);
+  }),
+);
+
 it.effect("decodes latest turn source proposed plan metadata when present", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationLatestTurn({
@@ -788,6 +1044,7 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.providerThreadId, null);
   }),
 );
 

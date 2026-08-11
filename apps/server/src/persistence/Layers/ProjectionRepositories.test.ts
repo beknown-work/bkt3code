@@ -33,10 +33,18 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
+        // T3-CUSTOM(expbkt3): project projections include inherited creation defaults.
+        threadCreationDefaults: {
+          environmentMode: null,
+          worktreeBaseRef: null,
+          runtimeMode: null,
+          interactionMode: null,
+        },
         scripts: [],
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         deletedAt: null,
+        ownerUserId: null,
       });
 
       const rows = yield* sql<{
@@ -87,7 +95,9 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         latestTurnId: null,
+        ownerUserId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         archivedAt: null,
@@ -95,11 +105,13 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         settledAt: null,
         snoozedUntil: null,
         snoozedAt: null,
+        priority: null,
         pinnedAt: null,
         latestUserMessageAt: null,
         pendingApprovalCount: 0,
         pendingUserInputCount: 0,
         hasActionableProposedPlan: 0,
+        rollingSummary: null,
         deletedAt: null,
       });
 
@@ -150,7 +162,9 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        sourceControlProfileId: null,
         latestTurnId: null,
+        ownerUserId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-25T00:00:00.000Z",
         archivedAt: null,
@@ -158,11 +172,13 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         settledAt: "2026-03-25T00:00:00.000Z",
         snoozedUntil: "2026-03-26T09:00:00.000Z",
         snoozedAt: "2026-03-25T00:00:00.000Z",
+        priority: 0,
         pinnedAt: "2026-03-25T00:00:00.000Z",
         latestUserMessageAt: null,
         pendingApprovalCount: 0,
         pendingUserInputCount: 0,
         hasActionableProposedPlan: 0,
+        rollingSummary: null,
         deletedAt: null,
       });
 
@@ -177,6 +193,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(row.settledAt, "2026-03-25T00:00:00.000Z");
       assert.strictEqual(row.snoozedUntil, "2026-03-26T09:00:00.000Z");
       assert.strictEqual(row.snoozedAt, "2026-03-25T00:00:00.000Z");
+      assert.strictEqual(row.priority, 0);
       assert.strictEqual(row.pinnedAt, "2026-03-25T00:00:00.000Z");
 
       // Un-settle to the keep-active pin and wake the snooze; confirm the
@@ -187,6 +204,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         settledAt: null,
         snoozedUntil: null,
         snoozedAt: null,
+        priority: null,
         pinnedAt: null,
       });
       const repersisted = yield* threads.getById({
@@ -197,6 +215,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(updated?.settledAt, null);
       assert.strictEqual(updated?.snoozedUntil, null);
       assert.strictEqual(updated?.snoozedAt, null);
+      assert.strictEqual(updated?.priority, null);
       assert.strictEqual(updated?.pinnedAt, null);
     }),
   );

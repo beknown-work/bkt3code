@@ -29,6 +29,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   ProviderAdapterProcessError,
@@ -38,6 +39,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -166,6 +168,8 @@ export function isSameOpenCodeDirectory(
 interface OpenCodeTurnSnapshot {
   readonly id: TurnId;
   readonly items: Array<unknown>;
+  // T3-CUSTOM(expbkt3): a partial assistant record is not completion evidence.
+  state: "completed" | "interrupted" | "failed" | "in-progress";
 }
 
 type OpenCodeSubscribedEvent =
@@ -351,7 +355,7 @@ function resolveTurnSnapshot(
     return existing;
   }
 
-  const created: OpenCodeTurnSnapshot = { id: turnId, items: [] };
+  const created: OpenCodeTurnSnapshot = { id: turnId, items: [], state: "in-progress" };
   context.turns.push(created);
   return created;
 }
@@ -549,14 +553,31 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   // Best-effort remote abort. The scope close below tears down the local
   // handles (event-pump fiber, server-exit fiber, event-subscribe fetch),
   // but we still want to tell OpenCode that this session is done.
-  yield* runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
+  const abortExit = yield* Effect.exit(
+    runOpenCodeSdk("session.abort", () =>
+      context.client.session.abort({ sessionID: context.openCodeSessionId }),
+    ).pipe(Effect.mapError(toRequestError)),
+  );
 
   // Closing the session scope interrupts every fiber forked into it and
   // runs each finalizer we registered — the `AbortController.abort()` call,
   // the child-process termination, etc.
-  yield* Scope.close(context.sessionScope, Exit.void);
+  yield* Scope.close(context.sessionScope, Exit.void).pipe(
+    Effect.onError(() => Ref.set(context.stopped, false)),
+  );
+  if (!context.server.external && context.server.exitCode !== null) {
+    const exited = yield* context.server.exitCode.pipe(Effect.timeoutOption("2 seconds"));
+    if (Option.isNone(exited)) {
+      return yield* Effect.die(
+        new Error(
+          `OpenCode process tree for thread '${context.session.threadId}' remained alive after close.`,
+        ),
+      );
+    }
+  }
+  if (Exit.isFailure(abortExit)) {
+    return yield* Effect.failCause(abortExit.cause);
+  }
   return true;
 });
 
@@ -1057,6 +1078,7 @@ export function makeOpenCodeAdapter(
           }
 
           if (event.properties.status.type === "idle" && turnId) {
+            resolveTurnSnapshot(context, turnId).state = "completed";
             context.activeTurnId = undefined;
             yield* updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
             yield* emit({
@@ -1087,6 +1109,7 @@ export function makeOpenCodeAdapter(
             { clearActiveTurnId: true },
           );
           if (activeTurnId) {
+            resolveTurnSnapshot(context, activeTurnId).state = "failed";
             yield* emit({
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
@@ -1185,16 +1208,31 @@ export function makeOpenCodeAdapter(
     });
 
     const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
-      function* (input) {
+      function* (input, executionOptions) {
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
+        if (serverUrl && executionOptions?.environment) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue:
+              "Thread-owned GitHub attribution is not supported by an external OpenCode server.",
+          });
+        }
+        const sessionEnvironment = executionOptions?.environment
+          ? mergeSourceControlEnvironment(
+              options?.environment ?? process.env,
+              executionOptions.environment,
+            )
+          : options?.environment;
         const directory = input.cwd ?? serverConfig.cwd;
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
         const existing = sessions.get(input.threadId);
         if (existing) {
-          yield* stopOpenCodeContext(existing);
-          sessions.delete(input.threadId);
+          const stopExit = yield* Effect.exit(stopOpenCodeContext(existing));
+          if (yield* Ref.get(existing.stopped)) sessions.delete(input.threadId);
+          if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
         }
 
         const started = yield* Effect.gen(function* () {
@@ -1207,7 +1245,7 @@ export function makeOpenCodeAdapter(
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
                 serverUrl,
-                ...(options?.environment ? { environment: options.environment } : {}),
+                ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
@@ -1216,19 +1254,27 @@ export function makeOpenCodeAdapter(
               });
               const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
               if (mcpSession && !server.external) {
-                yield* runOpenCodeSdk("mcp.add", () =>
-                  client.mcp.add({
-                    name: "t3-code",
-                    config: {
-                      type: "remote",
-                      url: mcpSession.endpoint,
-                      headers: {
-                        Authorization: mcpSession.authorizationHeader,
+                for (const configured of [
+                  { name: "t3-code", url: mcpSession.endpoint },
+                  ...mcpSession.upstreamServers.map((upstream) => ({
+                    name: McpProviderSession.upstreamMcpServerName(upstream),
+                    url: upstream.endpoint,
+                  })),
+                ]) {
+                  yield* runOpenCodeSdk("mcp.add", () =>
+                    client.mcp.add({
+                      name: configured.name,
+                      config: {
+                        type: "remote",
+                        url: configured.url,
+                        headers: {
+                          Authorization: mcpSession.authorizationHeader,
+                        },
+                        oauth: false,
                       },
-                      oauth: false,
-                    },
-                  }),
-                );
+                    }),
+                  );
+                }
               }
               // Resume: re-adopt the session named by the durable cursor —
               // OpenCode scopes history by session id. The probe recovers only
@@ -1608,8 +1654,10 @@ export function makeOpenCodeAdapter(
             threadId,
           });
         }
-        const stopped = yield* stopOpenCodeContext(context);
-        sessions.delete(threadId);
+        const stopExit = yield* Effect.exit(stopOpenCodeContext(context));
+        if (yield* Ref.get(context.stopped)) sessions.delete(threadId);
+        if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
+        const stopped = stopExit.value;
         if (!stopped) {
           return;
         }
@@ -1646,6 +1694,12 @@ export function makeOpenCodeAdapter(
             turns.push({
               id: TurnId.make(entry.info.id),
               items: [entry.info, ...entry.parts],
+              state:
+                entry.info.time.completed === undefined
+                  ? "in-progress"
+                  : entry.info.error === undefined
+                    ? "completed"
+                    : "failed",
             });
           }
         }
@@ -1685,22 +1739,29 @@ export function makeOpenCodeAdapter(
     const stopAll: OpenCodeAdapterShape["stopAll"] = () =>
       Effect.gen(function* () {
         const contexts = [...sessions.values()];
-        sessions.clear();
-        // `stopOpenCodeContext` is typed as never-failing — SDK aborts are
-        // already `Effect.ignore`'d inside it. `ignoreCause` here also
-        // swallows defects from throwing finalizers so one bad close can't
-        // interrupt the sibling fibers. Same pattern as the layer finalizer.
-        yield* Effect.forEach(
+        const exits = yield* Effect.forEach(
           contexts,
-          (context) => Effect.ignoreCause(stopOpenCodeContext(context)),
-          { concurrency: "unbounded", discard: true },
+          (context) =>
+            Effect.exit(
+              Effect.gen(function* () {
+                const stopExit = yield* Effect.exit(stopOpenCodeContext(context));
+                if (yield* Ref.get(context.stopped)) sessions.delete(context.session.threadId);
+                if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
+              }),
+            ),
+          { concurrency: "unbounded" },
         );
+        const failed = exits.find(Exit.isFailure);
+        if (failed && Exit.isFailure(failed)) return yield* Effect.failCause(failed.cause);
       });
 
-    return {
+    const adapter = {
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        // T3-CUSTOM(expbkt3): coordinator behavior must not infer from provider name.
+        activeTurnInput: "steer",
+        durableResume: "supported",
       },
       startSession,
       sendTurn,
@@ -1716,6 +1777,10 @@ export function makeOpenCodeAdapter(
       get streamEvents() {
         return Stream.fromQueue(runtimeEvents);
       },
-    } satisfies OpenCodeAdapterShape;
+    } satisfies Omit<
+      OpenCodeAdapterShape,
+      "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+    >;
+    return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies OpenCodeAdapterShape;
   });
 }

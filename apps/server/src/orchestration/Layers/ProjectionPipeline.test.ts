@@ -7,6 +7,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  UserId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -32,6 +33,7 @@ import {
 } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
@@ -103,6 +105,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -236,6 +239,106 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         WHERE thread_id = 'thread-1'
       `;
       assert.deepEqual(unsettledRows, [{ settledOverride: "active", settledAt: null }]);
+    }),
+  );
+
+  it.effect("projects ownership transfers without dropping the previous owner's access", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-owner-transfer");
+      const previousOwner = UserId.make("user-owner-before");
+      const ownerUserId = UserId.make("user-owner-after");
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-owner-transfer-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-23T00:00:00.000Z",
+        commandId: CommandId.make("cmd-owner-transfer-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-owner-transfer-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-owner-transfer"),
+          title: "Ownership transfer",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdByUserId: previousOwner,
+          createdAt: "2026-07-23T00:00:00.000Z",
+          updatedAt: "2026-07-23T00:00:00.000Z",
+        },
+      });
+      // T3-CUSTOM(expbkt3): A creator is tagged in the same SQL projection as
+      // ownership, before any follow-up membership command can run.
+      const creatorMemberRows = yield* sql<{ readonly userId: string }>`
+        SELECT user_id AS "userId"
+        FROM projection_thread_members
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(creatorMemberRows, [{ userId: previousOwner }]);
+      yield* appendAndProject({
+        type: "thread.member-added",
+        eventId: EventId.make("evt-owner-transfer-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-23T00:00:01.000Z",
+        commandId: CommandId.make("cmd-owner-transfer-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-owner-transfer-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          userId: ownerUserId,
+          addedByUserId: previousOwner,
+          addedAt: "2026-07-23T00:00:01.000Z",
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.owner-transferred",
+        eventId: EventId.make("evt-owner-transfer-3"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-23T00:00:02.000Z",
+        commandId: CommandId.make("cmd-owner-transfer-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-owner-transfer-3"),
+        metadata: {},
+        payload: {
+          threadId,
+          previousOwnerUserId: previousOwner,
+          ownerUserId,
+          transferredByUserId: previousOwner,
+          transferredAt: "2026-07-23T00:00:02.000Z",
+        },
+      });
+
+      const threadRows = yield* sql<{ readonly ownerUserId: string | null }>`
+        SELECT owner_user_id AS "ownerUserId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const memberRows = yield* sql<{ readonly userId: string }>`
+        SELECT user_id AS "userId"
+        FROM projection_thread_members
+        WHERE thread_id = ${threadId}
+        ORDER BY user_id
+      `;
+      assert.deepEqual(threadRows, [{ ownerUserId }]);
+      assert.deepEqual(memberRows, [{ userId: previousOwner }]);
     }),
   );
 });
@@ -441,6 +544,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: now,
             updatedAt: now,
           },
@@ -570,6 +674,7 @@ it.layer(
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -719,6 +824,7 @@ it.layer(
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -848,6 +954,7 @@ it.layer(
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -1056,6 +1163,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: now,
             updatedAt: now,
           },
@@ -1219,6 +1327,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -1327,6 +1436,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -1430,6 +1540,18 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.deepEqual(settledRows, [
         { state: "completed", completedAt: "2026-01-01T00:01:00.000Z" },
       ]);
+
+      // A settling session carries activeTurnId: null. Assigning that straight
+      // to latest_turn_id wiped the thread's reference to the turn that just
+      // finished, which both dropped its state/duration from the UI and made a
+      // completed thread look like a half-finished bootstrap to a retried
+      // turn-start (which then "resumed" it and ran a fresh turn).
+      const threadRows = yield* sql<{ readonly latestTurnId: string | null }>`
+        SELECT latest_turn_id AS "latestTurnId"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      assert.deepEqual(threadRows, [{ latestTurnId: turnId }]);
     }),
   );
 
@@ -1464,6 +1586,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -1567,6 +1690,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: now,
           updatedAt: now,
         },
@@ -1707,6 +1831,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             runtimeMode: "full-access",
             branch: null,
             worktreePath: null,
+            sourceControlProfileId: null,
             createdAt: "2026-02-26T13:00:01.000Z",
             updatedAt: "2026-02-26T13:00:01.000Z",
           },
@@ -1852,6 +1977,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           interactionMode: "default",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: "2026-02-26T12:30:01.000Z",
           updatedAt: "2026-02-26T12:30:01.000Z",
         },
@@ -1995,6 +2121,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           interactionMode: "default",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: "2026-02-26T12:35:01.000Z",
           updatedAt: "2026-02-26T12:35:01.000Z",
         },
@@ -2075,6 +2202,112 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         WHERE thread_id = 'thread-stale-user-input'
       `;
       assert.deepEqual(threadRows, [{ pendingUserInputCount: 0 }]);
+
+      const turnId = TurnId.make("turn-stale-user-input");
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-stale-user-input-5"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:04.000Z",
+        commandId: CommandId.make("cmd-stale-user-input-5"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-user-input-5"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-user-input"),
+          session: {
+            threadId: ThreadId.make("thread-stale-user-input"),
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-26T12:35:04.000Z",
+          },
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-stale-user-input-6"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:05.000Z",
+        commandId: CommandId.make("cmd-stale-user-input-6"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-user-input-6"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-user-input"),
+          activity: {
+            id: EventId.make("activity-terminal-user-input-requested"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "User input requested",
+            payload: {
+              requestId: "user-input-request-terminal-1",
+              questions: [
+                {
+                  id: "activation",
+                  header: "Activation",
+                  question: "How should this be activated?",
+                  options: [
+                    {
+                      label: "PR label",
+                      description: "Activate with a pull request label",
+                    },
+                  ],
+                },
+              ],
+            },
+            turnId,
+            createdAt: "2026-02-26T12:35:05.000Z",
+          },
+        },
+      });
+
+      const openThreadRows = yield* sql<{
+        readonly pendingUserInputCount: number;
+      }>`
+        SELECT pending_user_input_count AS "pendingUserInputCount"
+        FROM projection_threads
+        WHERE thread_id = 'thread-stale-user-input'
+      `;
+      assert.deepEqual(openThreadRows, [{ pendingUserInputCount: 1 }]);
+
+      yield* appendAndProject({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-stale-user-input-7"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-stale-user-input"),
+        occurredAt: "2026-02-26T12:35:06.000Z",
+        commandId: CommandId.make("cmd-stale-user-input-7"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-stale-user-input-7"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-stale-user-input"),
+          session: {
+            threadId: ThreadId.make("thread-stale-user-input"),
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: "Session stopped",
+            updatedAt: "2026-02-26T12:35:06.000Z",
+          },
+        },
+      });
+
+      const settledThreadRows = yield* sql<{
+        readonly pendingUserInputCount: number;
+      }>`
+        SELECT pending_user_input_count AS "pendingUserInputCount"
+        FROM projection_threads
+        WHERE thread_id = 'thread-stale-user-input'
+      `;
+      assert.deepEqual(settledThreadRows, [{ pendingUserInputCount: 0 }]);
     }),
   );
 
@@ -2131,6 +2364,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           interactionMode: "default",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: "2026-02-26T12:45:01.000Z",
           updatedAt: "2026-02-26T12:45:01.000Z",
         },
@@ -2310,6 +2544,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sourceControlProfileId: null,
           createdAt: "2026-02-26T12:00:01.000Z",
           updatedAt: "2026-02-26T12:00:01.000Z",
         },
@@ -2477,6 +2712,30 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
         for (const [index, status] of (["error", "interrupted", "stopped"] as const).entries()) {
           const threadId = ThreadId.make(`thread-terminal-${status}`);
           const requestedAt = `2026-02-26T14:00:0${index}.000Z`;
+          // T3-CUSTOM(expbkt3): accepted turn intent projection requires the
+          // exact user message to have been projected first, as production does.
+          yield* eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.make(`evt-terminal-message-${status}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: requestedAt,
+            commandId: CommandId.make(`cmd-terminal-message-${status}`),
+            causationEventId: null,
+            correlationId: CorrelationId.make(`cmd-terminal-message-${status}`),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make(`message-terminal-${status}`),
+              role: "user",
+              text: "start the terminal-state test",
+              attachments: [],
+              turnId: null,
+              streaming: false,
+              createdAt: requestedAt,
+              updatedAt: requestedAt,
+            },
+          });
           yield* eventStore.append({
             type: "thread.turn-start-requested",
             eventId: EventId.make(`evt-terminal-pending-${status}`),
@@ -2558,6 +2817,30 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       const eventStore = yield* OrchestrationEventStore;
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
 
+      // T3-CUSTOM(expbkt3): restart replay retains the same message-before-intent
+      // ordering produced by the atomic turn-start transaction.
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-restart-message"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: turnStartedAt,
+        commandId: CommandId.make("cmd-restart-message"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-restart-message"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "restart projection",
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: turnStartedAt,
+          updatedAt: turnStartedAt,
+        },
+      });
       yield* eventStore.append({
         type: "thread.turn-start-requested",
         eventId: EventId.make("evt-restart-1"),
@@ -2666,6 +2949,7 @@ const engineLayer = it.layer(
   OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(ThreadBackgroundLiveness.layer),
+    Layer.provide(ThreadPlanProgress.layer),
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),

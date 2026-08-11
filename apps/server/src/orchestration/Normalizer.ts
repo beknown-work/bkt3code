@@ -27,7 +27,8 @@ export const canonicalizeClientCommandTimestamps = (
         }
       : command;
 
-  if (canonicalCommand.type !== "thread.turn.start" || !canonicalCommand.bootstrap?.createThread) {
+  // T3-CUSTOM(expbkt3): BEGIN — canonicalize embedded durable-bootstrap timestamps with the turn.
+  if (canonicalCommand.type !== "thread.turn.start" || !canonicalCommand.bootstrap) {
     return canonicalCommand;
   }
 
@@ -35,12 +36,25 @@ export const canonicalizeClientCommandTimestamps = (
     ...canonicalCommand,
     bootstrap: {
       ...canonicalCommand.bootstrap,
-      createThread: {
-        ...canonicalCommand.bootstrap.createThread,
-        createdAt: receivedAt,
-      },
+      ...(canonicalCommand.bootstrap.createThread
+        ? {
+            createThread: {
+              ...canonicalCommand.bootstrap.createThread,
+              createdAt: receivedAt,
+            },
+          }
+        : {}),
+      ...(canonicalCommand.bootstrap.request
+        ? {
+            request: {
+              ...canonicalCommand.bootstrap.request,
+              createdAt: receivedAt,
+            },
+          }
+        : {}),
     },
   };
+  // T3-CUSTOM(expbkt3): END
 };
 
 export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
@@ -79,6 +93,78 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           ),
         );
 
+    // T3-CUSTOM(expbkt3): BEGIN — bootstrap initial turns use the same bounded,
+    // persisted attachment normalization as ordinary turn starts.
+    const normalizeAttachments = (input: {
+      readonly threadId: string;
+      readonly attachments: ReadonlyArray<{
+        readonly dataUrl: string;
+        readonly name: string;
+      }>;
+    }) =>
+      Effect.forEach(
+        input.attachments,
+        (attachment) =>
+          Effect.gen(function* () {
+            const parsed = parseBase64DataUrl(attachment.dataUrl);
+            if (!parsed || !parsed.mimeType.startsWith("image/")) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Invalid image attachment payload for '${attachment.name}'.`,
+              });
+            }
+
+            const bytes = Buffer.from(parsed.base64, "base64");
+            if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Image attachment '${attachment.name}' is empty or too large.`,
+              });
+            }
+
+            const attachmentId = createAttachmentId(input.threadId);
+            if (!attachmentId) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: "Failed to create a safe attachment id.",
+              });
+            }
+
+            const persistedAttachment = {
+              type: "image" as const,
+              id: attachmentId,
+              name: attachment.name,
+              mimeType: parsed.mimeType.toLowerCase(),
+              sizeBytes: bytes.byteLength,
+            };
+            const attachmentPath = resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment: persistedAttachment,
+            });
+            if (!attachmentPath) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Failed to resolve persisted path for '${attachment.name}'.`,
+              });
+            }
+            yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  }),
+              ),
+            );
+            yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Failed to persist attachment '${attachment.name}'.`,
+                  }),
+              ),
+            );
+            return persistedAttachment;
+          }),
+        { concurrency: 1 },
+      );
+
+    // T3-CUSTOM(expbkt3): END
     if (canonicalCommand.type === "project.create") {
       return {
         ...canonicalCommand,
@@ -100,74 +186,29 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies OrchestrationCommand;
     }
 
+    // T3-CUSTOM(expbkt3): BEGIN — normalize both public and embedded bootstrap turns.
+    if (canonicalCommand.type === "thread.bootstrap.request") {
+      if (!canonicalCommand.initialTurn) return canonicalCommand as OrchestrationCommand;
+      return {
+        ...canonicalCommand,
+        initialTurn: {
+          ...canonicalCommand.initialTurn,
+          attachments: yield* normalizeAttachments({
+            threadId: canonicalCommand.threadId,
+            attachments: canonicalCommand.initialTurn.attachments,
+          }),
+        },
+      } satisfies OrchestrationCommand;
+    }
+
     if (canonicalCommand.type !== "thread.turn.start") {
       return canonicalCommand as OrchestrationCommand;
     }
 
-    const normalizedAttachments = yield* Effect.forEach(
-      canonicalCommand.message.attachments,
-      (attachment) =>
-        Effect.gen(function* () {
-          const parsed = parseBase64DataUrl(attachment.dataUrl);
-          if (!parsed || !parsed.mimeType.startsWith("image/")) {
-            return yield* new OrchestrationDispatchCommandError({
-              message: `Invalid image attachment payload for '${attachment.name}'.`,
-            });
-          }
-
-          const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-            return yield* new OrchestrationDispatchCommandError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
-            });
-          }
-
-          const attachmentId = createAttachmentId(canonicalCommand.threadId);
-          if (!attachmentId) {
-            return yield* new OrchestrationDispatchCommandError({
-              message: "Failed to create a safe attachment id.",
-            });
-          }
-
-          const persistedAttachment = {
-            type: "image" as const,
-            id: attachmentId,
-            name: attachment.name,
-            mimeType: parsed.mimeType.toLowerCase(),
-            sizeBytes: bytes.byteLength,
-          };
-
-          const attachmentPath = resolveAttachmentPath({
-            attachmentsDir: serverConfig.attachmentsDir,
-            attachment: persistedAttachment,
-          });
-          if (!attachmentPath) {
-            return yield* new OrchestrationDispatchCommandError({
-              message: `Failed to resolve persisted path for '${attachment.name}'.`,
-            });
-          }
-
-          yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-            Effect.mapError(
-              () =>
-                new OrchestrationDispatchCommandError({
-                  message: `Failed to create attachment directory for '${attachment.name}'.`,
-                }),
-            ),
-          );
-          yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-            Effect.mapError(
-              () =>
-                new OrchestrationDispatchCommandError({
-                  message: `Failed to persist attachment '${attachment.name}'.`,
-                }),
-            ),
-          );
-
-          return persistedAttachment;
-        }),
-      { concurrency: 1 },
-    );
+    const normalizedAttachments = yield* normalizeAttachments({
+      threadId: canonicalCommand.threadId,
+      attachments: canonicalCommand.message.attachments,
+    });
 
     return {
       ...canonicalCommand,
@@ -176,4 +217,5 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         attachments: normalizedAttachments,
       },
     } satisfies OrchestrationCommand;
+    // T3-CUSTOM(expbkt3): END
   });

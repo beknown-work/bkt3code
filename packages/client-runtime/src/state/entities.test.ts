@@ -90,9 +90,12 @@ const THREAD_SHELL = {
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  sourceControlProfileId: null,
   branch: null,
   worktreePath: null,
   latestTurn: null,
+  ownerUserId: null,
+  memberUserIds: [],
   createdAt: "2026-06-01T00:00:00.000Z",
   updatedAt: "2026-06-01T00:00:00.000Z",
   archivedAt: null,
@@ -116,6 +119,8 @@ const SNAPSHOT: OrchestrationShellSnapshot = {
       repositoryIdentity: null,
       defaultModelSelection: null,
       scripts: [],
+      ownerUserId: null,
+      memberUserIds: [],
       createdAt: "2026-06-01T00:00:00.000Z",
       updatedAt: "2026-06-01T00:00:00.000Z",
     },
@@ -126,6 +131,8 @@ const SNAPSHOT: OrchestrationShellSnapshot = {
       repositoryIdentity: null,
       defaultModelSelection: null,
       scripts: [],
+      ownerUserId: null,
+      memberUserIds: [],
       createdAt: "2026-06-01T00:00:00.000Z",
       updatedAt: "2026-06-01T00:00:00.000Z",
     },
@@ -210,6 +217,8 @@ describe("environment entity projections", () => {
       proposedPlans: [],
       activities: [],
       checkpoints: [],
+      rollingSummary: null,
+      turnSummaries: [],
     } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
     const shell = {
       ...THREAD_SHELL,
@@ -325,6 +334,8 @@ describe("environment entity projections", () => {
       proposedPlans: [],
       activities: [],
       checkpoints: [],
+      rollingSummary: null,
+      turnSummaries: [],
     } satisfies OrchestrationThread;
 
     harness.registry.set(
@@ -333,6 +344,7 @@ describe("environment entity projections", () => {
         data: Option.some(detail),
         status: "live",
         error: Option.none(),
+        page: Option.none(),
       }),
     );
 
@@ -361,6 +373,7 @@ describe("environment entity projections", () => {
         }),
         status: "live",
         error: Option.none(),
+        page: Option.none(),
       }),
     );
 

@@ -17,9 +17,14 @@ import type {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadDetailWindow,
   OrchestrationThreadShell,
+  // T3-CUSTOM(expbkt3): bounded list/startup projection reads.
+  OrchestrationProposedPlan,
+  OrchestrationTurnCatchupSummary,
   ProjectId,
   ThreadId,
+  UserId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
@@ -54,6 +59,30 @@ export interface ProjectionFullThreadDiffContext {
 }
 
 /**
+ * Ownership/tag fields for a single thread, read without the active-only
+ * filter so archived threads remain authorizable.
+ */
+export interface ProjectionThreadAccess {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly ownerUserId: UserId | null;
+  readonly memberUserIds: ReadonlyArray<UserId>;
+}
+
+// T3-CUSTOM(expbkt3): t3_list_sessions needs catch-up data, never full thread history.
+export interface ProjectionSessionListDetail {
+  readonly threadId: ThreadId;
+  readonly rollingSummary: string | null;
+  readonly latestTurnSummary: OrchestrationTurnCatchupSummary | null;
+}
+
+// T3-CUSTOM(expbkt3): Plannotator startup needs only the newest active plan per thread.
+export interface ProjectionLatestProposedPlan {
+  readonly threadId: ThreadId;
+  readonly proposedPlan: OrchestrationProposedPlan;
+}
+
+/**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
 export interface ProjectionSnapshotQueryShape {
@@ -73,6 +102,17 @@ export interface ProjectionSnapshotQueryShape {
    * projector cursor state.
    */
   readonly getSnapshot: () => Effect.Effect<OrchestrationReadModel, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): bounded bulk detail for the capped MCP session list.
+  readonly getSessionListDetails: (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<ProjectionSessionListDetail>, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): bounded Plannotator startup reconciliation candidates.
+  readonly listLatestProposedPlansForActiveThreads: () => Effect.Effect<
+    ReadonlyArray<ProjectionLatestProposedPlan>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the latest orchestration shell snapshot.
@@ -163,6 +203,24 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
+   * Read the ownership/tag fields for a thread regardless of archived state
+   * (team mode authorization). Archived threads are still owned by someone and
+   * must stay actionable — unarchiving, deleting or retagging one would
+   * otherwise be denied as "not found".
+   */
+  readonly getThreadAccessById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionThreadAccess>, ProjectionRepositoryError>;
+
+  /**
+   * Read active thread shells for a project (team mode: used when a project tag
+   * changes so the affected threads can be pushed to a subscriber's sidebar).
+   */
+  readonly listThreadShellsByProjectId: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active thread detail snapshot by id.
    */
   readonly getThreadDetailById: (
@@ -174,9 +232,16 @@ export interface ProjectionSnapshotQueryShape {
    * sequence in one consistent transaction, so the returned `snapshotSequence`
    * exactly matches the state reflected in `thread` (no interleaving projector
    * update between the two reads).
+   *
+   * When `window` is provided, the thread's messages, activities, proposed
+   * plans, and checkpoints are bounded to a page of recent turns and the
+   * response carries `page` metadata (see `OrchestrationThreadDetailWindow`).
+   * Without a window the full thread is returned with no `page` field —
+   * pagination is strictly opt-in.
    */
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
+    window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

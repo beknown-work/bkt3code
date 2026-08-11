@@ -9,7 +9,17 @@
 import * as Schema from "effect/Schema";
 import type { ChatAttachment } from "@t3tools/contracts";
 
-import { limitSection } from "./TextGenerationUtils.ts";
+import {
+  limitSection,
+  limitSectionTail,
+  MAX_CATCHUP_SUMMARY_LINES,
+  MAX_ROLLING_SUMMARY_CHARS,
+  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+  MAX_WORK_SUMMARY_CHARS,
+  MAX_WORK_SUMMARY_REMAINING_CHARS,
+  WORK_SUMMARY_STAGES,
+  // T3-CUSTOM(expbkt3): END
+} from "./TextGenerationUtils.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
 const EARLIER_CONTENT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
@@ -316,3 +326,156 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Session catch-up summaries
+// ---------------------------------------------------------------------------
+
+export interface RollingSummaryPromptInput {
+  threadTitle: string;
+  previousSummary: string | null;
+  turnTranscript: string;
+  /** Character budget for the transcript section. */
+  dataLimitChars: number;
+}
+
+/**
+ * Folds the newest turn into a thread's rolling summary. Keeping one bounded
+ * running text (instead of re-reading the whole session) is what keeps
+ * summarization cost flat as a session grows.
+ */
+export function buildRollingSummaryPrompt(input: RollingSummaryPromptInput) {
+  const transcriptBudget = Math.min(Math.max(input.dataLimitChars, 1_000), 60_000);
+
+  const prompt = [
+    "You maintain a running summary of an ongoing coding session.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    `- merge the previous summary with what happened in the new turn`,
+    `- keep the result under ${MAX_ROLLING_SUMMARY_CHARS} characters`,
+    "- preserve the overall goal, key decisions, current state, and what remains",
+    "- prefer concrete specifics (files, features, errors) over vague narration",
+    "- drop detail that no longer matters; this text is rewritten every turn",
+    "- plain prose, no markdown headings or bullets",
+    "",
+    `Session title: ${input.threadTitle}`,
+    "",
+    "Previous summary:",
+    input.previousSummary ? limitSection(input.previousSummary, 4_000) : "(none — first turn)",
+    "",
+    "New turn transcript:",
+    limitSectionTail(input.turnTranscript, transcriptBudget),
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
+
+export interface CatchupSummaryPromptInput {
+  threadTitle: string;
+  rollingSummary: string;
+  turnTail: string;
+  /** Optional user-supplied instructions appended to the prompt. */
+  customInstructions?: string | undefined;
+}
+
+/**
+ * Writes the short note shown under a long turn's final output.
+ *
+ * The first line deliberately restates what the session is *for*: the reader is
+ * coming back from other tabs and repositories and needs the goal before the
+ * detail. Progress and remaining work follow.
+ */
+export function buildCatchupSummaryPrompt(input: CatchupSummaryPromptInput) {
+  const prompt = [
+    "You write a very short catch-up note for a developer returning to this tab",
+    "after working in other tabs and repositories. They have lost the thread and",
+    "need to be reminded what this session is actually about.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    `- exactly ${MAX_CATCHUP_SUMMARY_LINES} lines, separated by newlines`,
+    "- line 1: what this session is working on overall (the goal), in plain terms",
+    "- line 2: where it just got to at the END of the latest turn",
+    "- line 3: what still remains to reach the goal",
+    "- each line must be a short sentence of roughly 90 characters or less",
+    "- plain text only: no markdown, no bullets, no headings, no labels, no preamble",
+    "- be concrete and specific: name the feature, files, or errors involved",
+    '- never start a line with words like "Line 1" or "Goal:"',
+    ...policyInstruction(input.customInstructions),
+    "",
+    `Session title: ${input.threadTitle}`,
+    "",
+    "Session summary so far:",
+    limitSection(input.rollingSummary, 4_000),
+    "",
+    "How the latest turn ended:",
+    limitSectionTail(input.turnTail, 4_000),
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt, outputSchema };
+}
+
+// T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary prompt.
+
+export interface WorkSummaryPromptInput {
+  /** Rendered session context: title, goal, and a budget-capped transcript. */
+  context: string;
+  /** Optional user-supplied instructions appended to the prompt. */
+  promptInstructions?: string | undefined;
+}
+
+/**
+ * Writes the two AI columns of the bulk session manager: a work summary and an
+ * assigned progress (stage, what remains, percent).
+ *
+ * The reader here is not returning to one session — they are scanning thirty
+ * rows deciding which to open. So the summary answers "what did this actually
+ * do and where does it stand", not "what happened in the last turn", and the
+ * progress fields are shaped to be sortable rather than descriptive.
+ */
+export function buildWorkSummaryPrompt(input: WorkSummaryPromptInput) {
+  const prompt = [
+    "You summarize one coding session for an operator who is scanning a table of",
+    "about thirty sessions at once, deciding which ones need attention.",
+    "Return a JSON object with keys: summary, stage, remaining, percent.",
+    "Rules:",
+    "- summary: 2 to 4 sentences describing what this session actually did so far",
+    "  and where it now stands; write it to be read at a glance next to 29 others",
+    `- summary must be plain prose under ${MAX_WORK_SUMMARY_CHARS} characters: no markdown,`,
+    "  no bullets, no headings, no labels, no preamble",
+    "- summary must be concrete: name the feature, files, commands, or errors involved",
+    `- stage: exactly one of ${WORK_SUMMARY_STAGES.join(", ")}`,
+    "- stage is judged from what remains, not from how much text the session has:",
+    '  "planning" before implementation starts, "implementing" while work is in',
+    '  progress, "blocked" when it cannot proceed without a decision, an answer, or',
+    '  a fix, "awaiting-review" when the work is done but unmerged or unverified,',
+    '  and "done" only when nothing remains',
+    `- remaining: ONE line of at most ${MAX_WORK_SUMMARY_REMAINING_CHARS} characters saying what is left`,
+    '- remaining must be the empty string "" when stage is "done"',
+    "- percent: an integer from 0 to 100, the rough completion of the session's",
+    "  stated goal; do not report 100 unless stage is done",
+    "- never invent progress the transcript does not support; an idle session that",
+    "  never started work is 0 percent and planning",
+    ...policyInstruction(input.promptInstructions),
+    "",
+    "Session context:",
+    input.context,
+  ].join("\n");
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+    stage: Schema.Literals([...WORK_SUMMARY_STAGES]),
+    remaining: Schema.String,
+    percent: Schema.Int,
+  });
+
+  return { prompt, outputSchema };
+}
+// T3-CUSTOM(expbkt3): END
