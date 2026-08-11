@@ -106,8 +106,9 @@ export const preparePairingRegistration = Effect.fn(
     credential: target.credential,
     scopes: presentation.scopes,
     clientMetadata: presentation.metadata,
-    // T3-CUSTOM(expbkt3): bind the operator to the session this pairing creates.
+    // T3-CUSTOM(expbkt3): BEGIN — bind the operator to the session this pairing creates.
     ...(Option.isSome(identityToken) ? { identityToken: identityToken.value } : {}),
+    // T3-CUSTOM(expbkt3): END
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   const connectionId = `bearer:${descriptor.environmentId}`;
 
@@ -260,10 +261,11 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
-  // T3-CUSTOM(expbkt3): capture the optional identity capability the same way the
-  // other services here are captured, so pairing presents the operator regardless
-  // of which runtime invokes `registerPairing`.
+  // T3-CUSTOM(expbkt3): BEGIN — capture the optional identity capability the same
+  // way the other services here are captured, so pairing presents the operator
+  // regardless of which runtime invokes `registerPairing`.
   const environmentIdentity = yield* Effect.serviceOption(ClientCapabilities.EnvironmentIdentity);
+  // T3-CUSTOM(expbkt3): END
 
   return ConnectionOnboarding.of({
     registerPairing: (input) =>
@@ -271,7 +273,7 @@ export const make = Effect.gen(function* () {
         Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
         Effect.provideService(ClientCapabilities.ClientPresentation, presentation),
         Effect.provideService(HttpClient.HttpClient, httpClient),
-        // T3-CUSTOM(expbkt3): forward the identity capability when this client has one.
+        // T3-CUSTOM(expbkt3): BEGIN — forward the identity capability when this client has one.
         (effect) =>
           Option.isSome(environmentIdentity)
             ? effect.pipe(
@@ -281,6 +283,7 @@ export const make = Effect.gen(function* () {
                 ),
               )
             : effect,
+        // T3-CUSTOM(expbkt3): END
       ),
     registerSsh: (input) =>
       registerSshConnection(input).pipe(
