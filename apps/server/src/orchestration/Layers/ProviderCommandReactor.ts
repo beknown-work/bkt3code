@@ -2061,16 +2061,19 @@ const make = Effect.gen(function* () {
       });
       return yield* fail("bootstrap-setup-uncertain", detail, false);
     } else if (setupStep.value === "uncertain") {
+      // T3-CUSTOM(expbkt3): the fallback is what the user actually reads when a
+      // previous retry cleared the recorded detail, so it has to name the step
+      // and the one action that can move it.
       return yield* fail(
         "bootstrap-setup-uncertain",
         operation.value.lastFailureDetail ??
-          "Setup delivery is uncertain and cannot be launched again automatically.",
+          "The setup script may already have run for this session, so it will not be launched again automatically. Retry to run it again.",
         false,
       );
     } else if (setupStep.value === "failed") {
       return yield* fail(
         "bootstrap-setup-failed",
-        operation.value.lastFailureDetail ?? "Setup failed and requires an explicit retry.",
+        operation.value.lastFailureDetail ?? "The setup script failed. Retry to run it again.",
         false,
       );
     } else {

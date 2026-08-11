@@ -1350,10 +1350,25 @@ const make = Effect.gen(function* () {
           RETURNING work_item_id AS "workItemId"
         `;
           if (rows.length === 0) return false;
+          // An explicit retry is the only thing that may clear "uncertain", and
+          // it is the whole point of the button. Automatic recovery must never
+          // do this: "uncertain" means a side effect — a worktree, a setup
+          // script — might already have run, and at-most-once holds precisely
+          // because nothing can prove otherwise. A human looking at the banner
+          // can decide that running it again is fine; the machine cannot.
+          //
+          // Leaving it stuck was worse than either: Retry reset only "failed",
+          // so an uncertain step re-failed identically on every press while
+          // this same statement cleared the detail explaining why — turning an
+          // actionable message into a generic one and the button into a no-op.
           yield* sql`
           UPDATE thread_execution_bootstrap_operations
-          SET worktree_phase = CASE WHEN worktree_phase = 'failed' THEN 'pending' ELSE worktree_phase END,
-              setup_phase = CASE WHEN setup_phase = 'failed' THEN 'pending' ELSE setup_phase END,
+          SET worktree_phase = CASE
+                WHEN worktree_phase IN ('failed', 'uncertain') THEN 'pending' ELSE worktree_phase
+              END,
+              setup_phase = CASE
+                WHEN setup_phase IN ('failed', 'uncertain') THEN 'pending' ELSE setup_phase
+              END,
               last_failure_detail = NULL,
               updated_at = ${at}
           WHERE work_item_id = ${rows[0]!.workItemId}
