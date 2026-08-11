@@ -131,8 +131,8 @@ function environmentAuthInvalidDetail(reason: EnvironmentAuthInvalidReason): str
       return "The environment credential is invalid.";
   }
 }
-// T3-CUSTOM(expbkt3): END
 
+// T3-CUSTOM(expbkt3): END
 export function mapRemoteEnvironmentError(
   error: RemoteEnvironmentAuthError,
 ): ConnectionAttemptError {
