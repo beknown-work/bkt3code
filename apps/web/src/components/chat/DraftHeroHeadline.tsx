@@ -1,7 +1,7 @@
-// T3-CUSTOM(expbkt3): BEGIN
+// T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker imports.
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
-// T3-CUSTOM(expbkt3): END
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+// T3-CUSTOM(expbkt3): END
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
@@ -9,15 +9,14 @@ import { openCommandPalette } from "~/commandPaletteBus";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
+// T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker dependencies.
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
-  // T3-CUSTOM(expbkt3): BEGIN — per-environment rows in the project picker.
   type SidebarProjectGroupMember,
-  // T3-CUSTOM(expbkt3): END
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
-// T3-CUSTOM(expbkt3): BEGIN
+// T3-CUSTOM(expbkt3): BEGIN — environment identity in the new-thread picker.
 import {
   // T3-CUSTOM(expbkt3): environment identity in the new-thread picker.
   useEnvironmentAppearances,
@@ -116,7 +115,6 @@ export function DraftHeroHeadline({
             (projectRef) => scopedProjectKey(projectRef) === scopedProjectKey(activeProjectRef),
           ),
         ) ?? null);
-  // T3-CUSTOM(expbkt3): BEGIN
   // T3-CUSTOM(expbkt3): BEGIN — a logical project can exist on more than one
   // machine, and the picker previously collapsed those into one row that silently
   // chose an environment for you. Offer each environment explicitly, so starting a
@@ -157,7 +155,6 @@ export function DraftHeroHeadline({
       new Set(activeProjectGroup.memberProjects.map((member) => member.environmentId)).size > 1
     );
   }, [activeProjectGroup]);
-  // T3-CUSTOM(expbkt3): END
   const activeProjectKey =
     activeProjectGroup === null
       ? ""
@@ -183,9 +180,9 @@ export function DraftHeroHeadline({
         <MenuRadioGroup
           value={activeProjectKey}
           onValueChange={(value) => {
-            // T3-CUSTOM(expbkt3): BEGIN
+            // T3-CUSTOM(expbkt3): BEGIN — select an exact environment-qualified project.
             if (value === activeProjectKey) return;
-            // T3-CUSTOM(expbkt3): BEGIN — an environment-qualified value names the
+            // An environment-qualified value names the
             // exact project to start in; a bare key keeps the previous behaviour of
             // letting the group choose its representative.
             const selected = pickerItems.find((item) => item.value === value);
@@ -196,8 +193,6 @@ export function DraftHeroHeadline({
               });
               return;
             }
-            // T3-CUSTOM(expbkt3): END
-            // T3-CUSTOM(expbkt3): END
             const entry = projectEntryByKey.get(value as string);
             if (!entry) {
               return;
@@ -206,15 +201,15 @@ export function DraftHeroHeadline({
             void handleNewThread(scopeProjectRef(project.environmentId, project.id), {
               replace: true,
             });
+            // T3-CUSTOM(expbkt3): END
           }}
         >
-          {/* T3-CUSTOM(expbkt3): BEGIN — per-environment rows. */}
+          {/* T3-CUSTOM(expbkt3): BEGIN — render per-environment project rows. */}
           {pickerItems.map((item) => {
             // T3-CUSTOM(expbkt3): the environment is named only when this project
             // exists on more than one, which is the only time it is ambiguous.
             const appearance =
               item.environmentId === null ? null : (appearances.get(item.environmentId) ?? null);
-            // T3-CUSTOM(expbkt3): the environment glyph in this row is fork-added.
             return (
               <MenuRadioItem key={item.value} value={item.value} closeOnClick>
                 <span className="flex min-w-0 items-center gap-1.5" title={item.displayName}>
@@ -260,8 +255,8 @@ export function DraftHeroHeadline({
       ? (appearances.get(activeProjectRef.environmentId) ?? null)
       : null;
 
-  // T3-CUSTOM(expbkt3): the environment line in the markup below is fork-added.
   // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): BEGIN — show the selected machine beneath the draft prompt.
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-2">
       <h1 className="w-full text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
@@ -282,4 +277,5 @@ export function DraftHeroHeadline({
       ) : null}
     </div>
   );
+  // T3-CUSTOM(expbkt3): END
 }

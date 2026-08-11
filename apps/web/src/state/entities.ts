@@ -23,7 +23,7 @@ import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
-// T3-CUSTOM(expbkt3): BEGIN
+// T3-CUSTOM(expbkt3): BEGIN — expose per-environment shell readiness.
 import {
   allEnvironmentShellsBootstrappedAtom,
   environmentShellReadinessAtom,

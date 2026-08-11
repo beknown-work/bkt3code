@@ -261,9 +261,9 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
   const credentials = yield* ConnectionCredentialStore.ConnectionCredentialStore;
-  // T3-CUSTOM(expbkt3): BEGIN — capture the optional identity capability the same
-  // way the other services here are captured, so pairing presents the operator
-  // regardless of which runtime invokes `registerPairing`.
+  // T3-CUSTOM(expbkt3): BEGIN — capture the optional identity capability the same way the
+  // other services here are captured, so pairing presents the operator regardless
+  // of which runtime invokes `registerPairing`.
   const environmentIdentity = yield* Effect.serviceOption(ClientCapabilities.EnvironmentIdentity);
   // T3-CUSTOM(expbkt3): END
 

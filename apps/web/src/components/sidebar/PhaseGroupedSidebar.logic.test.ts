@@ -34,6 +34,7 @@ import {
   phaseSidebarGroupHeaderClassName,
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
+  phaseSidebarRowActionsClassName,
   phaseSidebarRowClassName,
   phaseSidebarNeedsUserInput,
   phaseSidebarPriorityRank,
@@ -107,6 +108,23 @@ describe("phaseSidebarRowClassName", () => {
 
     expect(className).toContain("items-center");
     expect(className).not.toContain("items-start");
+  });
+});
+
+describe("phaseSidebarRowActionsClassName", () => {
+  it("unpins closed row actions without losing hover or keyboard visibility", () => {
+    const closed = phaseSidebarRowActionsClassName(false).split(/\s+/);
+    const open = phaseSidebarRowActionsClassName(true).split(/\s+/);
+    const closedAgain = phaseSidebarRowActionsClassName(false).split(/\s+/);
+
+    expect(closed).toContain("hidden");
+    expect(closed).not.toContain("flex");
+    expect(closed).toContain("group-hover/phase-row:flex");
+    expect(closed).toContain("group-focus-visible/phase-row:flex");
+    expect(closed).toContain("group-has-[:focus-visible]/phase-row:flex");
+    expect(closed).not.toContain("group-focus-within/phase-row:flex");
+    expect(open).toContain("flex");
+    expect(closedAgain).toEqual(closed);
   });
 });
 

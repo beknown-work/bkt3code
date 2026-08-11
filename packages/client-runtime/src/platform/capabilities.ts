@@ -42,7 +42,6 @@ export class ClientPresentation extends Context.Service<
     readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   }
 >()("@t3tools/client-runtime/platform/capabilities/ClientPresentation") {}
-
 // T3-CUSTOM(expbkt3): BEGIN — team-mode Clerk identity for remote pairing.
 /**
  * The operator's own Clerk session token, when this client runs in team mode.
