@@ -10,6 +10,9 @@ import pkg from "./package.json" with { type: "json" };
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+// T3-CUSTOM(expbkt3): BEGIN - managed BK builds bake in the central server they run on.
+import { resolveBkManagedEnvironment } from "../../scripts/lib/bk-managed-environment";
+// T3-CUSTOM(expbkt3): END
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -174,6 +177,13 @@ export default defineConfig(() => {
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
+      // T3-CUSTOM(expbkt3): BEGIN - the central server a managed BK build orchestrates,
+      // or null for every other build. Baked in, not read from the environment, for
+      // the same reason as __T3CODE_BUILD_BRAND__: nothing sets it on a user's machine.
+      __T3CODE_BK_MANAGED_ENVIRONMENT__: JSON.stringify(
+        resolveBkManagedEnvironment(process.env) ?? null,
+      ),
+      // T3-CUSTOM(expbkt3): END
     },
     resolve: {
       tsconfigPaths: true,
