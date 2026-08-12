@@ -56,6 +56,8 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+// T3-CUSTOM(expbkt3): member self-service device pairing.
+import { MemberDevicesSection } from "../../fork/MemberDevicesSection";
 import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -1935,6 +1937,8 @@ export function ConnectionsSettings() {
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
+  // T3-CUSTOM(expbkt3): the operator a self-service member view belongs to, if any.
+  const memberDevicesUserId = primarySessionState.data?.userId ?? null;
   const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   const authAccessChanges = useEnvironmentQuery(
     canManageLocalBackend && primaryEnvironmentId !== null
@@ -3108,6 +3112,12 @@ export function ConnectionsSettings() {
           </div>
         </SettingsSection>
       ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
+      {/* T3-CUSTOM(expbkt3): BEGIN - members without `access:write` get a self-service
+          "Your devices" panel instead of the administrative one. Renders only for a
+          session that carries a Clerk identity, so upstream single-user and bootstrap
+          clients see exactly what they see today. */}
+      {!canManageLocalBackend && memberDevicesUserId !== null ? <MemberDevicesSection /> : null}
       {/* T3-CUSTOM(expbkt3): END */}
       {canManageLocalBackend ? (
         <>

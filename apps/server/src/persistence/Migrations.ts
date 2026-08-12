@@ -99,6 +99,8 @@ import Migration1012 from "./Migrations/1012_ProjectionThreadsWorkSummary.ts";
 import Migration1013 from "./Migrations/1013_ProjectionThreadsTitleManual.ts";
 // T3-CUSTOM(expbkt3): pairing links that must be redeemed with a DPoP proof.
 import Migration1014 from "./Migrations/1014_AuthPairingRequiresProofOfPossession.ts";
+// T3-CUSTOM(expbkt3): member self-service pairing links.
+import Migration1015 from "./Migrations/1015_AuthPairingSelfIssued.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -197,6 +199,8 @@ const migrationEntries = [
   [1013, "ProjectionThreadsTitleManual", Migration1013],
   // T3-CUSTOM(expbkt3): proof-of-possession requirement on pairing links.
   [1014, "AuthPairingRequiresProofOfPossession", Migration1014],
+  // T3-CUSTOM(expbkt3): member self-service pairing links.
+  [1015, "AuthPairingSelfIssued", Migration1015],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

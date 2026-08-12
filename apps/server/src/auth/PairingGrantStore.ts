@@ -31,6 +31,11 @@ export interface BootstrapGrant {
   // Distinct from `proofKeyThumbprint`, which pre-binds to a key already known to
   // the issuer. Optional so seeded (desktop-bootstrap) grants are unaffected.
   readonly requiresProofOfPossession?: boolean;
+  /**
+   * Minted by a member for one of their own devices. Carries a shorter session
+   * life and counts against that member's device cap.
+   */
+  readonly selfIssued?: boolean;
   // T3-CUSTOM(expbkt3): END
   readonly expiresAt: DateTime.DateTime;
 }
@@ -223,8 +228,10 @@ export class PairingGrantStore extends Context.Service<
       readonly subject?: string;
       readonly label?: string;
       readonly proofKeyThumbprint?: string;
-      // T3-CUSTOM(expbkt3): require a DPoP proof at redemption; see BootstrapGrant.
+      // T3-CUSTOM(expbkt3): BEGIN - see BootstrapGrant.
       readonly requiresProofOfPossession?: boolean;
+      readonly selfIssued?: boolean;
+      // T3-CUSTOM(expbkt3): END
       /**
        * "startup" marks the credential the server mints for itself at boot,
        * which gets the long dev TTL when a dev URL is configured.
@@ -431,8 +438,11 @@ export const make = Effect.gen(function* () {
         subject,
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
-        // T3-CUSTOM(expbkt3): proof-of-possession requirement, default off.
+        // T3-CUSTOM(expbkt3): BEGIN - both default off, so every existing caller
+        // writes exactly the row it writes today.
         requiresProofOfPossession: input?.requiresProofOfPossession === true,
+        selfIssued: input?.selfIssued === true,
+        // T3-CUSTOM(expbkt3): END
         createdAt: now,
         expiresAt: expiresAt,
       })
@@ -558,8 +568,11 @@ export const make = Effect.gen(function* () {
           ...(consumed.value.proofKeyThumbprint
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }
             : {}),
-          // T3-CUSTOM(expbkt3): carried so callers can assert the rule a second time.
+          // T3-CUSTOM(expbkt3): BEGIN - carried so callers can assert the rule a second
+          // time, and so redemption knows to shorten the session it issues.
           requiresProofOfPossession: consumed.value.requiresProofOfPossession,
+          selfIssued: consumed.value.selfIssued,
+          // T3-CUSTOM(expbkt3): END
           expiresAt: consumed.value.expiresAt,
         } satisfies BootstrapGrant;
       }
