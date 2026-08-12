@@ -275,6 +275,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           parent_thread_id AS "parentThreadId",
           work_summary AS "workSummary",
           pinned_at AS "pinnedAt",
+          -- T3-CUSTOM(expbkt3): manual-title ownership.
+          title_manually_set AS "titleManuallySet",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
