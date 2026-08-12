@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { isExempt, markedLines } from "./check-fork-markers.ts";
+import { isExempt, markedLines, unmarkedInHunk } from "./check-fork-markers.ts";
 
 describe("markedLines", () => {
   it("covers every line inside a BEGIN/END block", () => {
@@ -43,6 +43,21 @@ describe("markedLines", () => {
     expect(marked.has(5)).toBe(false);
   });
 
+  it("covers the wrapped explanation and the block a comment marker introduces", () => {
+    const marked = markedLines(
+      [
+        "const upstream = 1;",
+        "// T3-CUSTOM(expbkt3): capture the optional identity capability the same",
+        "// way the other services here are captured.",
+        "const fork = yield* Effect.serviceOption(EnvironmentIdentity);",
+        "",
+        "const upstreamAgain = 2;",
+      ].join("\n"),
+    );
+    expect([...marked].sort((a, b) => a - b)).toEqual([2, 3, 4]);
+    expect(marked.has(6)).toBe(false);
+  });
+
   it("handles two blocks in one file", () => {
     const marked = markedLines(
       [
@@ -58,6 +73,32 @@ describe("markedLines", () => {
     expect(marked.has(2)).toBe(true);
     expect(marked.has(4)).toBe(false);
     expect(marked.has(6)).toBe(true);
+  });
+});
+
+describe("unmarkedInHunk", () => {
+  const file = [
+    "const upstream = 1;", // 1
+    "", // 2
+    "// T3-CUSTOM(expbkt3): BEGIN", // 3
+    "const fork = 2;", // 4
+    "// T3-CUSTOM(expbkt3): END", // 5
+    "", // 6
+    "const upstreamAgain = 3;", // 7
+  ];
+  const marked = markedLines(file.join("\n"));
+
+  it("ignores the blank line git folds into a marked block's hunk", () => {
+    // `git diff -U0` reports the insertion as lines 3-6, trailing blank included.
+    expect(unmarkedInHunk(file, marked, 3, 4)).toEqual([]);
+  });
+
+  it("ignores a hunk that is only whitespace", () => {
+    expect(unmarkedInHunk(file, marked, 6, 1)).toEqual([]);
+  });
+
+  it("still reports real code outside the markers", () => {
+    expect(unmarkedInHunk(file, marked, 3, 5)).toEqual([7]);
   });
 });
 
