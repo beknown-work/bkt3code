@@ -89,7 +89,13 @@ describe("pairing credential payload", () => {
   it("cannot carry a subject", () => {
     // The whole point of deriving the subject server-side: a client must never be
     // able to mint a credential that impersonates a teammate.
-    expect(Object.keys(AuthCreatePairingCredentialInput.fields)).toEqual(["label", "scopes"]);
+    // `requireProofOfPossession` only ever *restricts* redemption, so it is safe to
+    // accept from a client. A subject would not be, and still is not accepted.
+    expect(Object.keys(AuthCreatePairingCredentialInput.fields)).toEqual([
+      "label",
+      "scopes",
+      "requireProofOfPossession",
+    ]);
     expect(Object.keys(AuthCreatePairingCredentialInput.fields)).not.toContain("subject");
 
     const payload: AuthCreatePairingCredentialInput = {

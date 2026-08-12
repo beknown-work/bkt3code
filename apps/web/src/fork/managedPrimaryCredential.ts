@@ -10,7 +10,10 @@
  *
  * The token is bound to the base URL it was issued for, so a build switched
  * between channels — or a stale token left by an older build — is discarded
- * rather than presented to the wrong server.
+ * rather than presented to the wrong server. It is also bound to the DPoP key
+ * that redeemed the pairing credential: the server pins the session to that
+ * key's thumbprint, so a token kept alongside a different key is unusable and is
+ * dropped rather than presented and rejected.
  *
  * Persisted in `localStorage` so a restart does not force re-pairing, with an
  * in-memory mirror so the module also works where storage is unavailable
@@ -20,6 +23,7 @@
  * @module fork/managedPrimaryCredential
  */
 import { readBkManagedEnvironment } from "./managedEnvironment";
+import { readManagedPrimaryDpopThumbprint } from "./managedPrimaryDpop";
 
 const STORAGE_KEY = "expbkt3:managed-primary-credential";
 
@@ -30,6 +34,8 @@ interface StoredManagedPrimaryCredential {
   readonly httpBaseUrl: string;
   readonly accessToken: string;
   readonly expiresAtEpochMs: number;
+  /** Thumbprint of the device key the server bound this token to. */
+  readonly dpopThumbprint: string;
 }
 
 let cachedCredential: StoredManagedPrimaryCredential | null = null;
@@ -64,7 +70,9 @@ export function parseStoredManagedPrimaryCredential(
     typeof candidate.accessToken !== "string" ||
     candidate.accessToken.length === 0 ||
     typeof candidate.expiresAtEpochMs !== "number" ||
-    !Number.isFinite(candidate.expiresAtEpochMs)
+    !Number.isFinite(candidate.expiresAtEpochMs) ||
+    typeof candidate.dpopThumbprint !== "string" ||
+    candidate.dpopThumbprint.length === 0
   ) {
     return null;
   }
@@ -72,6 +80,7 @@ export function parseStoredManagedPrimaryCredential(
     httpBaseUrl: candidate.httpBaseUrl,
     accessToken: candidate.accessToken,
     expiresAtEpochMs: candidate.expiresAtEpochMs,
+    dpopThumbprint: candidate.dpopThumbprint,
   };
 }
 
@@ -80,12 +89,14 @@ export function isManagedPrimaryCredentialUsable(
   credential: StoredManagedPrimaryCredential | null,
   managedHttpBaseUrl: string | null,
   nowEpochMs: number,
+  dpopThumbprint: string | null,
 ): boolean {
-  if (credential === null || managedHttpBaseUrl === null) {
+  if (credential === null || managedHttpBaseUrl === null || dpopThumbprint === null) {
     return false;
   }
   return (
     credential.httpBaseUrl === managedHttpBaseUrl &&
+    credential.dpopThumbprint === dpopThumbprint &&
     nowEpochMs < credential.expiresAtEpochMs - EXPIRY_SKEW_MS
   );
 }
@@ -106,12 +117,22 @@ function hydrate(): void {
   }
 }
 
-/** The access token to present to the managed primary environment, or null. */
-export function readManagedPrimaryAccessToken(): string | null {
+/**
+ * The access token to present to the managed primary environment, or null.
+ *
+ * Async because validity now depends on the device key: a token whose thumbprint
+ * no longer matches this device is dead weight, and presenting it would just
+ * produce a 401 loop instead of the pairing gate.
+ */
+export async function readManagedPrimaryAccessToken(): Promise<string | null> {
   hydrate();
   const managed = readBkManagedEnvironment();
+  if (managed === null) {
+    return null;
+  }
+  const thumbprint = await readManagedPrimaryDpopThumbprint();
   if (
-    !isManagedPrimaryCredentialUsable(cachedCredential, managed?.httpBaseUrl ?? null, Date.now())
+    !isManagedPrimaryCredentialUsable(cachedCredential, managed.httpBaseUrl, Date.now(), thumbprint)
   ) {
     return null;
   }
@@ -122,6 +143,7 @@ export function readManagedPrimaryAccessToken(): string | null {
 export function writeManagedPrimaryAccessToken(input: {
   readonly accessToken: string;
   readonly expiresInSeconds: number;
+  readonly dpopThumbprint: string;
 }): void {
   hydrated = true;
   const managed = readBkManagedEnvironment();
@@ -132,6 +154,7 @@ export function writeManagedPrimaryAccessToken(input: {
     httpBaseUrl: managed.httpBaseUrl,
     accessToken: input.accessToken,
     expiresAtEpochMs: Date.now() + Math.max(0, input.expiresInSeconds) * 1_000,
+    dpopThumbprint: input.dpopThumbprint,
   };
   cachedCredential = credential;
   try {

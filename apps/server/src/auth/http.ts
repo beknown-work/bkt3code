@@ -609,6 +609,10 @@ export const authHttpApiLayer = HttpApiBuilder.group(
               principal: session,
               scopes: delegatedScopes,
               ...(args.payload.label ? { label: args.payload.label } : {}),
+              // T3-CUSTOM(expbkt3): opt-in, default off — a device-bound credential for
+              // a managed BK desktop. Only ever restricts redemption, so unlike a
+              // subject it is safe to take from the payload.
+              ...(args.payload.requireProofOfPossession ? { requireProofOfPossession: true } : {}),
             });
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>

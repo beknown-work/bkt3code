@@ -23,6 +23,8 @@ export const AuthPairingLinkRecord = Schema.Struct({
   subject: Schema.String,
   label: Schema.NullOr(Schema.String),
   proofKeyThumbprint: Schema.NullOr(Schema.String),
+  // T3-CUSTOM(expbkt3): redeem only with a DPoP proof; see migration 1014.
+  requiresProofOfPossession: Schema.Boolean,
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   consumedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -38,6 +40,8 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   subject: Schema.String,
   label: Schema.NullOr(Schema.String),
   proofKeyThumbprint: Schema.NullOr(Schema.String),
+  // T3-CUSTOM(expbkt3): see AuthPairingLinkRecord.
+  requiresProofOfPossession: Schema.Boolean,
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 });
@@ -75,13 +79,34 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   subject: Schema.Unknown,
   label: Schema.Unknown,
   proofKeyThumbprint: Schema.Unknown,
+  // T3-CUSTOM(expbkt3): proof-of-possession requirement.
+  requiresProofOfPossession: Schema.Unknown,
   createdAt: Schema.Unknown,
   expiresAt: Schema.Unknown,
   consumedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
 });
 
-const decodeAuthPairingLinkDbRow = Schema.decodeUnknownEffect(AuthPairingLinkRecord);
+const decodeAuthPairingLinkRecord = Schema.decodeUnknownEffect(AuthPairingLinkRecord);
+
+// T3-CUSTOM(expbkt3): BEGIN - SQLite has no boolean type, so the fork's
+// requires_proof_of_possession column arrives as 0/1 (and as NULL from a row written
+// before migration 1014 on some drivers). Normalizing here rather than at each decode
+// site keeps every read path in agreement.
+const decodeAuthPairingLinkDbRow = (row: unknown) =>
+  decodeAuthPairingLinkRecord(
+    typeof row === "object" && row !== null
+      ? {
+          ...row,
+          requiresProofOfPossession:
+            (row as { readonly requiresProofOfPossession?: unknown }).requiresProofOfPossession ===
+              1 ||
+            (row as { readonly requiresProofOfPossession?: unknown }).requiresProofOfPossession ===
+              true,
+        }
+      : row,
+  );
+// T3-CUSTOM(expbkt3): END
 
 export class AuthPairingLinkRepository extends Context.Service<
   AuthPairingLinkRepository,
@@ -134,6 +159,8 @@ export const make = Effect.gen(function* () {
           subject,
           label,
           proof_key_thumbprint,
+          -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
+          requires_proof_of_possession,
           created_at,
           expires_at,
           consumed_at,
@@ -147,6 +174,8 @@ export const make = Effect.gen(function* () {
           ${input.subject},
           ${input.label},
           ${input.proofKeyThumbprint},
+          -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
+          ${input.requiresProofOfPossession ? 1 : 0},
           ${input.createdAt},
           ${input.expiresAt},
           NULL,
@@ -170,6 +199,13 @@ export const make = Effect.gen(function* () {
             proof_key_thumbprint IS NULL
             OR proof_key_thumbprint = ${proofKeyThumbprint}
           )
+          -- T3-CUSTOM(expbkt3): a link that requires proof-of-possession only consumes
+          -- when the caller presented a verified DPoP proof. Gating here rather than
+          -- after the fact means a redemption without one does not burn the credential.
+          AND (
+            requires_proof_of_possession = 0
+            OR ${proofKeyThumbprint} IS NOT NULL
+          )
         RETURNING
           id AS "id",
           credential AS "credential",
@@ -178,6 +214,8 @@ export const make = Effect.gen(function* () {
           subject AS "subject",
           label AS "label",
           proof_key_thumbprint AS "proofKeyThumbprint",
+          -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
+          requires_proof_of_possession AS "requiresProofOfPossession",
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
@@ -198,6 +236,8 @@ export const make = Effect.gen(function* () {
           subject AS "subject",
           label AS "label",
           proof_key_thumbprint AS "proofKeyThumbprint",
+          -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
+          requires_proof_of_possession AS "requiresProofOfPossession",
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
@@ -237,6 +277,8 @@ export const make = Effect.gen(function* () {
           subject AS "subject",
           label AS "label",
           proof_key_thumbprint AS "proofKeyThumbprint",
+          -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
+          requires_proof_of_possession AS "requiresProofOfPossession",
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",

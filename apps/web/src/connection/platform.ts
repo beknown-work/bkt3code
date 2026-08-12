@@ -54,8 +54,10 @@ import {
   readPrimaryEnvironmentTarget,
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
-// T3-CUSTOM(expbkt3): BEGIN - cache slot for the primary registration in managed builds.
+// T3-CUSTOM(expbkt3): BEGIN - cache slot for the primary registration in managed builds,
+// and the DPoP authorization a managed primary connection is prepared with.
 import { bkPrimaryRegistrationCacheKey } from "../fork/managedEnvironment";
+import { readManagedPrimaryDpopAuthorization } from "../fork/managedPrimaryConnection";
 // T3-CUSTOM(expbkt3): END
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
 import { isHostedStaticApp } from "../hostedPairing";
@@ -256,6 +258,10 @@ const capabilitiesLayer = Layer.effectContext(
             detail: `Could not load the desktop primary credential: ${String(cause)}`,
           }),
       }).pipe(Effect.map(Option.fromNullishOr)),
+      // T3-CUSTOM(expbkt3): BEGIN - a managed BK build's primary token is DPoP-bound.
+      // Absent in every other build, which leaves the bearer path above untouched.
+      dpopAuthorization: readManagedPrimaryDpopAuthorization,
+      // T3-CUSTOM(expbkt3): END
     });
     const ssh = SshEnvironmentGateway.of({
       provision: Effect.fn("web.connectionPlatform.ssh.provision")(function* (target) {
