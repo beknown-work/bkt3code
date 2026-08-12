@@ -81,6 +81,12 @@ export interface SessionHistoryPaths {
   readonly projectDir: string;
   readonly digestPath: string;
   readonly transcriptPath: string;
+  /** Tool-call activity sidecar. */
+  readonly activitiesPath: string;
+  /** Machine-readable metadata record. */
+  readonly manifestPath: string;
+  /** Directory holding gzipped copies of the provider's own transcripts. */
+  readonly rawDir: string;
   readonly indexPath: string;
   readonly baseName: string;
 }
@@ -101,6 +107,9 @@ export function sessionHistoryPaths(input: SessionHistoryPathsInput): SessionHis
     baseName,
     digestPath: `${projectDir}/${baseName}.md`,
     transcriptPath: `${projectDir}/${baseName}.jsonl`,
+    activitiesPath: `${projectDir}/${baseName}.activities.jsonl`,
+    manifestPath: `${projectDir}/${baseName}.manifest.json`,
+    rawDir: `${projectDir}/${baseName}-raw`,
     indexPath: `${projectDir}/${SESSION_HISTORY_INDEX_FILENAME}`,
   };
 }

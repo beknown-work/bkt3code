@@ -671,9 +671,21 @@ export const SessionArchiveAutoSweepSettings = Schema.Struct({
 export type SessionArchiveAutoSweepSettings = typeof SessionArchiveAutoSweepSettings.Type;
 
 export const SessionArchiveSettings = Schema.Struct({
-  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // On by default so archiving a session exports its history immediately.
+  // Destructive reclaim stays separately gated behind `autoSweep.enabled`.
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   historyDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   includeTranscriptSidecar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Tool-call activity sidecar (`.activities.jsonl`) alongside the transcript. */
+  includeActivities: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Gzipped copies of the provider's own transcript files (`-raw/` directory).
+   * Captured at export time because the provider files are keyed by worktree
+   * path, a mapping that dies when the worktree is reclaimed.
+   */
+  includeRawProviderTranscripts: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   autoSweep: SessionArchiveAutoSweepSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type SessionArchiveSettings = typeof SessionArchiveSettings.Type;
@@ -1043,6 +1055,8 @@ export const ServerSettingsPatch = Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
           historyDir: Schema.optionalKey(TrimmedString),
           includeTranscriptSidecar: Schema.optionalKey(Schema.Boolean),
+          includeActivities: Schema.optionalKey(Schema.Boolean),
+          includeRawProviderTranscripts: Schema.optionalKey(Schema.Boolean),
           autoSweep: Schema.optionalKey(
             Schema.Struct({
               enabled: Schema.optionalKey(Schema.Boolean),

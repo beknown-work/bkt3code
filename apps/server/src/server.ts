@@ -72,6 +72,8 @@ import { WorkSummaryReactorLive } from "./orchestration/Layers/WorkSummaryReacto
 // T3-CUSTOM(expbkt3): END
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+// T3-CUSTOM(expbkt3): archive-time session history export.
+import { ArchiveExportReactorLive } from "./orchestration/Layers/ArchiveExportReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -130,6 +132,10 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
 import * as SessionArchiveSweeper from "./sessionArchive/SessionArchiveSweeper.ts";
 import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages.ts";
+// T3-CUSTOM(expbkt3): archive-time history export reads activities, thread
+// rows (for the soft-deleted backfill), and provider resume cursors.
+import { ProjectionThreadActivityRepositoryLive } from "./persistence/Layers/ProjectionThreadActivities.ts";
+import { ProjectionThreadRepositoryLive } from "./persistence/Layers/ProjectionThreads.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
 import { ThreadExecutionSupervisorLive } from "./execution/ThreadExecutionSupervisorLive.ts";
 // T3-CUSTOM(expbkt3): durable execution state machine repository.
@@ -273,6 +279,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(WorkSummaryReactorLive),
   // T3-CUSTOM(expbkt3): END
   Layer.provideMerge(ThreadDeletionReactorLive),
+  // T3-CUSTOM(expbkt3): archive-time session history export.
+  Layer.provideMerge(ArchiveExportReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
@@ -464,6 +472,12 @@ const SessionArchiveLayerLive = SessionArchiveService.layer.pipe(
   Layer.provide(ServerSettingsLayerLive),
   Layer.provide(OrchestrationLayerLive),
   Layer.provide(ProjectionThreadMessageRepositoryLive),
+  // T3-CUSTOM(expbkt3): archive-time export deps — activities sidecar, the
+  // soft-deleted backfill row source, and provider resume cursors for raw
+  // transcript capture.
+  Layer.provide(ProjectionThreadActivityRepositoryLive),
+  Layer.provide(ProjectionThreadRepositoryLive),
+  Layer.provide(ProviderSessionRuntime.layer),
   Layer.provide(GitWorkflowLayerLive),
   Layer.provide(PersistenceLayerLive),
 );

@@ -66,9 +66,9 @@ it.effect("registers four compact tools while listing the complete virtual surfa
       expect(listed.isError).toBe(false);
       expect(listed.structuredContent).toMatchObject({
         ok: true,
-        rpcCount: 115,
+        rpcCount: 116,
         streamCount: 20,
-        matchedCount: 115,
+        matchedCount: 116,
       });
 
       const schema = yield* withInvocation(

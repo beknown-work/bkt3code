@@ -44,6 +44,8 @@ import {
 import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
 import { ServerResourceSample } from "./server.ts";
 import {
+  SessionArchiveBackfillInput,
+  SessionArchiveBackfillResult,
   SessionArchiveError,
   SessionArchiveExportInput,
   SessionArchiveExportResult,
@@ -106,6 +108,7 @@ export const WS_FORK_METHODS = {
   sessionArchiveScan: "sessionArchive.scan",
   sessionArchiveExport: "sessionArchive.export",
   sessionArchiveReclaim: "sessionArchive.reclaim",
+  sessionArchiveBackfill: "sessionArchive.backfill",
   threadContextExport: "threadContext.export",
 } as const;
 
@@ -288,6 +291,12 @@ export const WsSessionArchiveReclaimRpc = Rpc.make(WS_FORK_METHODS.sessionArchiv
   error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
 });
 
+export const WsSessionArchiveBackfillRpc = Rpc.make(WS_FORK_METHODS.sessionArchiveBackfill, {
+  payload: SessionArchiveBackfillInput,
+  success: SessionArchiveBackfillResult,
+  error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
+});
+
 // T3-CUSTOM(expbkt3): on-demand context handoff digest for live or archived threads.
 export const WsThreadContextExportRpc = Rpc.make(WS_FORK_METHODS.threadContextExport, {
   payload: ThreadContextExportInput,
@@ -402,6 +411,7 @@ export const FORK_WS_RPCS = [
   WsSessionArchiveScanRpc,
   WsSessionArchiveExportRpc,
   WsSessionArchiveReclaimRpc,
+  WsSessionArchiveBackfillRpc,
   WsThreadContextExportRpc,
   WsOrchestrationStopExecutionRpc,
   WsOrchestrationReplayEventsRpc,

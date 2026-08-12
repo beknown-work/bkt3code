@@ -143,11 +143,35 @@ export const SessionArchiveExportInput = Schema.Struct({
 });
 export type SessionArchiveExportInput = typeof SessionArchiveExportInput.Type;
 
+/**
+ * One provider transcript file the export tried to preserve.
+ *
+ * `missing` is a normal outcome, not an error: old sessions whose provider
+ * files were pruned, or whose resume cursor never resolved, still export
+ * everything else. The record keeps the attempt honest either way.
+ */
+export const SessionArchiveRawTranscript = Schema.Struct({
+  provider: Schema.String,
+  sourcePath: Schema.String,
+  /** Where the gzipped copy landed; null when `status` is not `copied`. */
+  archivedPath: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["copied", "missing"]),
+});
+export type SessionArchiveRawTranscript = typeof SessionArchiveRawTranscript.Type;
+
 export const SessionArchiveExportedFile = Schema.Struct({
   threadId: ThreadId,
   digestPath: Schema.String,
   transcriptPath: Schema.NullOr(Schema.String),
   messageCount: NonNegativeInt,
+  /** Null when the activities sidecar is disabled. */
+  activitiesPath: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  manifestPath: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  rawTranscripts: Schema.Array(SessionArchiveRawTranscript).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type SessionArchiveExportedFile = typeof SessionArchiveExportedFile.Type;
 
@@ -190,6 +214,32 @@ export const SessionArchiveReclaimResult = Schema.Struct({
   totalFreedBytes: NonNegativeInt,
 });
 export type SessionArchiveReclaimResult = typeof SessionArchiveReclaimResult.Type;
+
+/**
+ * One-shot export of every archived or soft-deleted session that has no
+ * history file yet. Counts rather than per-file records: a backfill touches
+ * hundreds of threads and the caller only needs to know it converged.
+ */
+export const SessionArchiveBackfillInput = Schema.Struct({
+  /** Re-export sessions whose digest already exists instead of skipping them. */
+  force: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type SessionArchiveBackfillInput = typeof SessionArchiveBackfillInput.Type;
+
+export const SessionArchiveBackfillResult = Schema.Struct({
+  exported: NonNegativeInt,
+  /** Digest already on disk and `force` was not set. */
+  skipped: NonNegativeInt,
+  /** Threads exported whose raw provider transcripts could not all be found. */
+  rawTranscriptsMissing: NonNegativeInt,
+  failures: Schema.Array(
+    Schema.Struct({
+      threadId: ThreadId,
+      message: Schema.String,
+    }),
+  ),
+});
+export type SessionArchiveBackfillResult = typeof SessionArchiveBackfillResult.Type;
 
 /**
  * Whole-request failure only. A single thread that could not be reclaimed comes
