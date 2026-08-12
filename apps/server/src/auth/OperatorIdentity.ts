@@ -114,6 +114,12 @@ export const issuePairingCredentialForPrincipal = Effect.fn(
    * managed BK desktop; every other caller leaves it off and is unaffected.
    */
   readonly requireProofOfPossession?: boolean;
+  /**
+   * Minted by a member for one of their own devices rather than by an
+   * environment administrator: caps the member's concurrent pairings and
+   * shortens the session it produces. See `SelfServicePairing.ts`.
+   */
+  readonly selfIssued?: boolean;
 }) {
   const issued = yield* input.serverAuth.createPairingLink({
     scopes: input.scopes,
@@ -122,6 +128,7 @@ export const issuePairingCredentialForPrincipal = Effect.fn(
     ...(input.requireProofOfPossession
       ? { requiresProofOfPossession: true, ttl: PROOF_OF_POSSESSION_PAIRING_TTL }
       : {}),
+    ...(input.selfIssued ? { selfIssued: true } : {}),
   });
   return {
     id: issued.id,

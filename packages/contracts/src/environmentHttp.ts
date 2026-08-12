@@ -85,6 +85,12 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
+  // T3-CUSTOM(expbkt3): BEGIN - member self-service pairing limits. `limit_reached`
+  // means revoke a device first; `not_own_resource` means the target belongs to
+  // someone else and needs an environment administrator.
+  "self_pairing_limit_reached",
+  "self_pairing_not_own_resource",
+  // T3-CUSTOM(expbkt3): END
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -302,6 +308,9 @@ const EnvironmentTokenExchangeErrors = [
 ] as const;
 const EnvironmentScopedOperationErrors = [
   EnvironmentScopeRequiredError,
+  // T3-CUSTOM(expbkt3): member self-service pairing refuses over-cap or not-yours
+  // operations with a 403 rather than a scope error; see auth/SelfServicePairing.ts.
+  EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
 const EnvironmentPairingCredentialErrors = [

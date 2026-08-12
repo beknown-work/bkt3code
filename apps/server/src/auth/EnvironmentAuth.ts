@@ -32,6 +32,8 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 // T3-CUSTOM(expbkt3): the acting operator reported on `/api/auth/session`.
 import { operatorSessionStateFields } from "./OperatorIdentity.ts";
+// T3-CUSTOM(expbkt3): shorter sessions for member self-service pairings.
+import { selfIssuedSessionTtlFields } from "./SelfServicePairing.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -468,8 +470,11 @@ export class EnvironmentAuth extends Context.Service<
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
       readonly proofKeyThumbprint?: string;
-      // T3-CUSTOM(expbkt3): redeem only with a DPoP proof; see OperatorIdentity.ts.
+      // T3-CUSTOM(expbkt3): BEGIN - redeem only with a DPoP proof, and/or a member
+      // self-service link. See OperatorIdentity.ts and SelfServicePairing.ts.
       readonly requiresProofOfPossession?: boolean;
+      readonly selfIssued?: boolean;
+      // T3-CUSTOM(expbkt3): END
       readonly purpose?: "startup";
     }) => Effect.Effect<IssuedPairingLink, ServerAuthInternalError>;
     readonly issuePairingCredential: (
@@ -702,6 +707,8 @@ export const make = Effect.gen(function* () {
             subject: grant.subject,
             scopes: grant.scopes,
             ...(input?.userId ? { userId: input.userId } : {}),
+            // T3-CUSTOM(expbkt3): a member's own pairing yields a shorter session.
+            ...selfIssuedSessionTtlFields(grant),
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -790,6 +797,11 @@ export const make = Effect.gen(function* () {
                       ttl: Duration.hours(1),
                     }
                   : {}),
+                // T3-CUSTOM(expbkt3): a member's own pairing yields a shorter session
+                // than the 30-day default — and a longer one than the DPoP hour above,
+                // which it deliberately overrides: a device-bound token does not need
+                // re-pairing every hour to stay safe. Spread order is the mechanism.
+                ...selfIssuedSessionTtlFields(grant),
                 ...(input?.userId ? { userId: input.userId } : {}),
                 client: {
                   ...requestMetadata,
@@ -859,8 +871,10 @@ export const make = Effect.gen(function* () {
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
         ...(input?.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
-        // T3-CUSTOM(expbkt3): proof-of-possession requirement, default off.
+        // T3-CUSTOM(expbkt3): BEGIN - both default off.
         ...(input?.requiresProofOfPossession ? { requiresProofOfPossession: true } : {}),
+        ...(input?.selfIssued ? { selfIssued: true } : {}),
+        // T3-CUSTOM(expbkt3): END
         ...(input?.purpose ? { purpose: input.purpose } : {}),
       });
       return {

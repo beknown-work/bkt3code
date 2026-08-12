@@ -25,6 +25,8 @@ export const AuthPairingLinkRecord = Schema.Struct({
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   // T3-CUSTOM(expbkt3): redeem only with a DPoP proof; see migration 1014.
   requiresProofOfPossession: Schema.Boolean,
+  // T3-CUSTOM(expbkt3): minted by a member for their own device; see migration 1015.
+  selfIssued: Schema.Boolean,
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   consumedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -42,6 +44,8 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   // T3-CUSTOM(expbkt3): see AuthPairingLinkRecord.
   requiresProofOfPossession: Schema.Boolean,
+  // T3-CUSTOM(expbkt3): see AuthPairingLinkRecord.
+  selfIssued: Schema.Boolean,
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 });
@@ -81,6 +85,8 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   proofKeyThumbprint: Schema.Unknown,
   // T3-CUSTOM(expbkt3): proof-of-possession requirement.
   requiresProofOfPossession: Schema.Unknown,
+  // T3-CUSTOM(expbkt3): member self-service marker.
+  selfIssued: Schema.Unknown,
   createdAt: Schema.Unknown,
   expiresAt: Schema.Unknown,
   consumedAt: Schema.Unknown,
@@ -103,6 +109,9 @@ const decodeAuthPairingLinkDbRow = (row: unknown) =>
               1 ||
             (row as { readonly requiresProofOfPossession?: unknown }).requiresProofOfPossession ===
               true,
+          selfIssued:
+            (row as { readonly selfIssued?: unknown }).selfIssued === 1 ||
+            (row as { readonly selfIssued?: unknown }).selfIssued === true,
         }
       : row,
   );
@@ -161,6 +170,8 @@ export const make = Effect.gen(function* () {
           proof_key_thumbprint,
           -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
           requires_proof_of_possession,
+          -- T3-CUSTOM(expbkt3): member self-service marker.
+          self_issued,
           created_at,
           expires_at,
           consumed_at,
@@ -176,6 +187,8 @@ export const make = Effect.gen(function* () {
           ${input.proofKeyThumbprint},
           -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
           ${input.requiresProofOfPossession ? 1 : 0},
+          -- T3-CUSTOM(expbkt3): member self-service marker.
+          ${input.selfIssued ? 1 : 0},
           ${input.createdAt},
           ${input.expiresAt},
           NULL,
@@ -216,6 +229,8 @@ export const make = Effect.gen(function* () {
           proof_key_thumbprint AS "proofKeyThumbprint",
           -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
           requires_proof_of_possession AS "requiresProofOfPossession",
+          -- T3-CUSTOM(expbkt3): member self-service marker.
+          self_issued AS "selfIssued",
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
@@ -238,6 +253,8 @@ export const make = Effect.gen(function* () {
           proof_key_thumbprint AS "proofKeyThumbprint",
           -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
           requires_proof_of_possession AS "requiresProofOfPossession",
+          -- T3-CUSTOM(expbkt3): member self-service marker.
+          self_issued AS "selfIssued",
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
@@ -279,6 +296,8 @@ export const make = Effect.gen(function* () {
           proof_key_thumbprint AS "proofKeyThumbprint",
           -- T3-CUSTOM(expbkt3): proof-of-possession requirement.
           requires_proof_of_possession AS "requiresProofOfPossession",
+          -- T3-CUSTOM(expbkt3): member self-service marker.
+          self_issued AS "selfIssued",
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
