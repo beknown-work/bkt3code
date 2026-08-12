@@ -8,7 +8,7 @@ name: Fork markers
 
 on:
   pull_request:
-    branches: [bkmain, expbkmain]
+    branches: [bkmain, expbkmain, alphabkmain]
   workflow_dispatch:
 
 concurrency:
