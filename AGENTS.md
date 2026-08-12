@@ -8,13 +8,14 @@ You can think of T3 Code as an open source "bring-your-own-subscription" alterna
 
 ## Beknown fork and deployments
 
-This repository is the Beknown fork of T3 Code (`origin` = `beknown-work/bkt3code`, `upstream` = `pingdotgg/t3code`). Three environments run on the shared dev server from one git repository and three linked worktrees:
+This repository is the Beknown fork of T3 Code (`origin` = `beknown-work/bkt3code`, `upstream` = `pingdotgg/t3code`). Four environments run on the shared dev server from one git repository and four linked worktrees:
 
-| Environment            | Branch      | Worktree                            | Domain                     | Port  | Service              |
-| ---------------------- | ----------- | ----------------------------------- | -------------------------- | ----- | -------------------- |
-| t3 (upstream-style)    | `t3main`    | `/home/ubuntu/repos/t3code`         | `t3.dev.beknown.live`      | 18082 | `t3-beknown.service` |
-| bkt3 (fork production) | `bkmain`    | `/home/ubuntu/repos/t3code-bkmain`  | `bkt3.dev.beknown.live`    | 18083 | `t3-bkmain.service`  |
-| expbkt3 (fork staging) | `expbkmain` | `/home/ubuntu/repos/t3code-expbkt3` | `expbkt3.dev.beknown.live` | 18085 | `t3-expbkt3.service` |
+| Environment               | Branch        | Worktree                                | Domain                       | Port  | Service                  |
+| ------------------------- | ------------- | --------------------------------------- | ---------------------------- | ----- | ------------------------ |
+| t3 (upstream-style)       | `t3main`      | `/home/ubuntu/repos/t3code`             | `t3.dev.beknown.live`        | 18082 | `t3-beknown.service`     |
+| bkt3 (fork production)    | `bkmain`      | `/home/ubuntu/repos/t3code-bkmain`      | `bkt3.dev.beknown.live`      | 18083 | `t3-bkmain.service`      |
+| expbkt3 (fork staging)    | `expbkmain`   | `/home/ubuntu/repos/t3code-expbkt3`     | `expbkt3.dev.beknown.live`   | 18085 | `t3-expbkt3.service`     |
+| alphabkt3 (identity soak) | `alphabkmain` | `/home/ubuntu/repos/t3code-alphabkmain` | `alphabkt3.dev.beknown.live` | 18086 | `t3-alphabkmain.service` |
 
 Branch semantics:
 
@@ -22,6 +23,7 @@ Branch semantics:
 - `t3main` — `main` plus two fork-owned files: `.github/workflows/deploy-t3.yml` and a `.gitmodules` entry declaring the vendored alchemy gitlink so `actions/checkout` can clean credentials. Deploys t3.dev. Updated by merging `main` in; never force-pushed.
 - `bkmain` — the fork's production line. Deploys bkt3. All fork work merges here through pull requests.
 - `expbkmain` — long-lived staging branch for drastic changes, above all upstream merges. Deploys expbkt3, and is reset from `bkmain` between experiments.
+- `alphabkmain` — long-lived soak branch for the BK Identity Service integration. Deploys alphabkt3, and is reset from `bkmain` between experiments like `expbkmain`. It exists so a multi-day identity soak does not occupy expbkt3's staging role; do not stage ordinary fork changes here.
 
 Coding sessions always run on the bkt3 instance, in worktrees under `/home/ubuntu/.t3/bkt3-dev/worktrees/`. Do not start work in a deployment worktree; those are checkouts the deploy scripts fast-forward.
 
