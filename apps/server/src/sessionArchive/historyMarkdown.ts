@@ -259,9 +259,12 @@ be read as context by a later agent session.
 
 ## Layout
 
-    <project>/INDEX.md                          entry point — every session, newest first
-    <project>/YYYY-MM-DD-<title>-<id>.md        digest for one session
-    <project>/YYYY-MM-DD-<title>-<id>.jsonl     full transcript for that session
+    <project>/INDEX.md                                    entry point — every session, newest first
+    <project>/YYYY-MM-DD-<title>-<id>.md                  digest for one session
+    <project>/YYYY-MM-DD-<title>-<id>.jsonl               conversation transcript (user + assistant text)
+    <project>/YYYY-MM-DD-<title>-<id>.activities.jsonl    tool calls and commands, one per line
+    <project>/YYYY-MM-DD-<title>-<id>.manifest.json       metadata: who did what, provider, git, file inventory
+    <project>/YYYY-MM-DD-<title>-<id>-raw/                gzipped provider transcripts (read with zgrep/zcat)
 
 ## How to use this
 
@@ -271,11 +274,17 @@ be read as context by a later agent session.
    metadata, summary, git state, changed files, and every user prompt verbatim.
 3. Only open the \`.jsonl\` if the digest is not enough. It is one JSON object per
    line and can be large — grep it for the term you need rather than reading it
-   whole.
+   whole. The \`.activities.jsonl\` beside it lists every tool call.
+4. The \`-raw/\` directory holds the provider CLI's own transcript files,
+   gzipped. They are the most complete record (tool outputs included); search
+   them with \`zgrep <term> <file>.gz\` rather than decompressing.
+5. \`.manifest.json\` is the machine-readable summary — owner, per-sender
+   message counts, provider session ids, and byte sizes of every file here.
 
 ## What is not here
 
-Assistant output lives only in the \`.jsonl\`. Reclaimed worktrees are gone; the
-branch named in the digest is the place to look for the code itself.
+Reclaimed worktrees are gone; the branch named in the digest is the place to
+look for the code itself. Sessions exported before raw-transcript capture
+existed have only the digest and \`.jsonl\`.
 `;
 }

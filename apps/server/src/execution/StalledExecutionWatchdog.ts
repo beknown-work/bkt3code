@@ -60,8 +60,10 @@ export interface StalledExecutionWatchdogShape {
 
 interface CandidateRow {
   readonly threadId: string;
-  readonly workItemId: string;
-  readonly phase: string;
+  /** Null when no durable intent is attached, or none that can be revived. */
+  readonly workItemId: string | null;
+  readonly phase: string | null;
+  readonly revivable: number;
 }
 
 export const makeStalledExecutionWatchdog = Effect.fn("makeStalledExecutionWatchdog")(function* (
@@ -73,33 +75,47 @@ export const makeStalledExecutionWatchdog = Effect.fn("makeStalledExecutionWatch
   const now = options.now ?? (() => Effect.map(DateTime.now, DateTime.toEpochMillis));
 
   /**
-   * Candidates come from the projection rather than supervisor memory because
-   * the durable work item id lives here too, and a stall is only actionable
-   * when both halves agree there is something in flight. `activity = 'active'`
-   * is doing real work in this filter: it excludes "blocked", which is a
-   * session waiting on a human.
+   * The execution row is the only gate, and that is the whole point.
+   *
+   * This filter used to require a durable intent with `desired_state = 'running'`,
+   * which handed the intent a veto it had not earned — the same mistake as
+   * gating on liveness, in a different coat. A recovery attempt that concluded
+   * "the provider's history proves this turn completed" writes
+   * `desired_state = 'stopped'` and leaves the supervisor untouched, so four
+   * live sessions went invisible to this sweep the instant the durable layer
+   * decided they were finished, while their executions still read
+   * `active/starting` and the UI still said Running. `stopThread` and
+   * `markStopped` blind it the same way.
+   *
+   * So: select on the execution, LEFT JOIN the intent, and let the intent say
+   * only whether the ladder can still be climbed. `activity = 'active'` is
+   * doing real work here — it excludes "blocked", a session waiting on a human.
    */
   const listCandidates = sql<CandidateRow>`
     SELECT execution.thread_id AS "threadId",
            intent.work_item_id AS "workItemId",
-           intent.phase AS phase
+           intent.phase AS phase,
+           CASE
+             WHEN intent.work_item_id IS NOT NULL
+               AND intent.desired_state = 'running'
+               AND intent.dismissed_at IS NULL
+               AND intent.recovery_attempts < intent.maximum_recovery_attempts
+               AND intent.phase IN ('preparing', 'starting', 'running', 'recovering')
+             THEN 1 ELSE 0
+           END AS revivable
     FROM projection_thread_executions AS execution
-    JOIN projection_thread_execution_intents AS intent
-      ON intent.thread_id = execution.thread_id
-    WHERE execution.activity = 'active'
-      AND execution.turn_state IN ('starting', 'running')
-      AND execution.stop_requested_at IS NULL
-      AND intent.desired_state = 'running'
-      AND intent.dismissed_at IS NULL
-      AND intent.phase IN ('preparing', 'starting', 'running', 'recovering')
-      AND intent.work_item_id = (
+    LEFT JOIN projection_thread_execution_intents AS intent
+      ON intent.work_item_id = (
         SELECT newest.work_item_id
         FROM projection_thread_execution_intents AS newest
         WHERE newest.thread_id = execution.thread_id
-          AND newest.desired_state = 'running'
+          AND newest.dismissed_at IS NULL
         ORDER BY newest.request_event_sequence DESC, newest.accepted_at DESC
         LIMIT 1
       )
+    WHERE execution.activity = 'active'
+      AND execution.turn_state IN ('starting', 'running')
+      AND execution.stop_requested_at IS NULL
   `;
 
   /**
@@ -164,19 +180,40 @@ export const makeStalledExecutionWatchdog = Effect.fn("makeStalledExecutionWatch
       });
       return;
     }
+    const revivable = candidate.revivable !== 0 && candidate.workItemId !== null;
     yield* Effect.logWarning("stalled execution reported to durable recovery", {
       threadId,
       workItemId: candidate.workItemId,
       phase: candidate.phase,
       failureType: verdict.failureType,
       stalledForMs: verdict.stalledForMs,
+      revivable,
     });
-    yield* increment(stalledExecutionRevivalsTotal, { reason: verdict.failureType });
-    yield* options.failObserved({
+    yield* increment(stalledExecutionRevivalsTotal, {
+      reason: verdict.failureType,
+      outcome: revivable ? "revive" : "fail",
+    });
+    if (revivable && candidate.workItemId !== null) {
+      yield* options.failObserved({
+        workItemId: candidate.workItemId,
+        failureType: verdict.failureType,
+        detail: verdict.detail,
+      });
+      return;
+    }
+    // No ladder left to climb: the durable item is stopped, spent, dismissed or
+    // was never there. Ending the execution here is the only thing that stops
+    // the session claiming to run, and `failObserved` cannot help — it needs a
+    // claim, and a stopped item refuses one.
+    const turn = snapshot.turn;
+    if (turn === null) return;
+    yield* Effect.logWarning("stalled execution failed without a revivable work item", {
+      threadId,
       workItemId: candidate.workItemId,
+      phase: candidate.phase,
       failureType: verdict.failureType,
-      detail: verdict.detail,
     });
+    yield* supervisor.failExecution(threadId, turn.executionId, verdict.detail);
   });
 
   const sweep: StalledExecutionWatchdogShape["sweep"] = Effect.gen(function* () {

@@ -685,7 +685,11 @@ const handlers = {
           type: "thread.meta.update",
           commandId,
           threadId: sessionId,
-          ...(input.title === undefined ? {} : { title: input.title }),
+          // T3-CUSTOM(expbkt3): renaming a session over MCP is a deliberate
+          // choice, so it takes ownership of the title just like typing one.
+          ...(input.title === undefined
+            ? {}
+            : { title: input.title, titleOrigin: "user" as const }),
           ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
           ...(input.branch === undefined ? {} : { branch: input.branch }),
           // T3-CUSTOM(expbkt3): undefined leaves priority unchanged; null clears it.
@@ -1190,6 +1194,12 @@ const handlers = {
               runtimeMode: input.runtimeMode ?? "full-access",
               interactionMode: input.interactionMode ?? "default",
               bootstrap: { request: bootstrapRequest },
+              // T3-CUSTOM(expbkt3): when the caller did not name the session we
+              // clipped one out of the prompt above. Declaring it as the seed
+              // marks it replaceable, so the first turn titles the session the
+              // same way it does for one started from a client. A title the
+              // caller passed explicitly is theirs and is not seeded.
+              ...(input.title?.trim() ? {} : { titleSeed: title }),
               createdAt,
             }
           : {

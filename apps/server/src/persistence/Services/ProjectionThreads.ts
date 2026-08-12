@@ -59,6 +59,10 @@ export const ProjectionThread = Schema.Struct({
   workSummary: Schema.optional(Schema.NullOr(Schema.String)),
   // T3-CUSTOM(expbkt3): END
   pinnedAt: Schema.NullOr(IsoDateTime),
+  // T3-CUSTOM(expbkt3): 1 once a human named this session. Stored as an int
+  // like the other boolean columns here; optional so rows read before
+  // migration 1013 still decode.
+  titleManuallySet: Schema.optional(NonNegativeInt),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -119,6 +123,14 @@ export interface ProjectionThreadRepositoryShape {
   readonly deleteById: (
     input: DeleteProjectionThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  // T3-CUSTOM(expbkt3): every thread the session-history backfill must cover.
+  // Soft-deleted rows are included deliberately: their messages are still in
+  // the projection, and the archive is the only record that survives them.
+  readonly listArchivedOrDeleted: () => Effect.Effect<
+    ReadonlyArray<ProjectionThread>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**

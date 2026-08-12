@@ -474,6 +474,10 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             ...(payload.title !== undefined ? { title: payload.title } : {}),
+            // T3-CUSTOM(expbkt3): manual-title ownership.
+            ...(payload.titleManuallySet !== undefined
+              ? { titleManuallySet: payload.titleManuallySet }
+              : {}),
             ...(payload.titleRegeneration !== undefined
               ? { titleRegeneration: payload.titleRegeneration }
               : {}),

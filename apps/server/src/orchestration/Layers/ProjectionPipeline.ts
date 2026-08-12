@@ -754,6 +754,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             workSummary: null,
             // T3-CUSTOM(expbkt3): END
             pinnedAt: null,
+            // T3-CUSTOM(expbkt3): a thread is created with a placeholder or a
+            // seeded title, never a chosen one.
+            titleManuallySet: 0,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -972,6 +975,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+            // T3-CUSTOM(expbkt3): manual-title ownership.
+            ...(event.payload.titleManuallySet !== undefined
+              ? { titleManuallySet: event.payload.titleManuallySet ? 1 : 0 }
+              : {}),
             ...(event.payload.titleRegeneration !== undefined
               ? {
                   titleRegenerationRequestId: event.payload.titleRegeneration?.requestId ?? null,

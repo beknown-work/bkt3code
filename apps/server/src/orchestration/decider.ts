@@ -836,6 +836,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(command.title !== undefined ? { title: command.title } : {}),
+          // T3-CUSTOM(expbkt3): only a stated origin moves title ownership. An
+          // unstated one leaves it alone, because clients also use this command
+          // to apply the prompt-derived title they showed optimistically.
+          ...(command.title !== undefined && command.titleOrigin !== undefined
+            ? { titleManuallySet: command.titleOrigin === "user" }
+            : {}),
           ...(command.regenerateTitle === true
             ? {
                 regenerateTitle: true as const,
@@ -888,6 +894,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(requestIsCurrent && command.title !== undefined ? { title: command.title } : {}),
+          // T3-CUSTOM(expbkt3): a completed regeneration is a generated title,
+          // even when the user asked for it — the next one may replace it too.
+          ...(requestIsCurrent && command.title !== undefined ? { titleManuallySet: false } : {}),
           ...(requestIsCurrent ? { titleRegeneration: null } : {}),
           updatedAt: requestIsCurrent ? occurredAt : thread.updatedAt,
         },

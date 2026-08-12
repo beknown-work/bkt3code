@@ -65,7 +65,7 @@ export function ThreadTitleMaintenanceSettingsSection() {
       />
       <SettingsRow
         title="Retitle every"
-        description="How many of your prompts pass between retitles. A rename you make yourself is replaced by the next refresh, so switch this off if you want a title to stick."
+        description="How many of your prompts pass between retitles. Sessions you have renamed yourself are left alone — use “Regenerate title” on a session to hand its name back to the model."
         status={cadenceLabel}
         resetAction={
           maintenance.refreshEveryUserPrompts !== DEFAULTS.refreshEveryUserPrompts ? (

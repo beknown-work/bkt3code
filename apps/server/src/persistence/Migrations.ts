@@ -94,6 +94,9 @@ import Migration1011 from "./Migrations/1011_PlanDocumentFormat.ts";
 // execute on a database that already applied 1011.
 import Migration1012 from "./Migrations/1012_ProjectionThreadsWorkSummary.ts";
 // T3-CUSTOM(expbkt3): END
+// T3-CUSTOM(expbkt3): manual-title ownership, so a generated rename never
+// replaces a name the user typed.
+import Migration1013 from "./Migrations/1013_ProjectionThreadsTitleManual.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -188,6 +191,8 @@ const migrationEntries = [
   // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summaries.
   [1012, "ProjectionThreadsWorkSummary", Migration1012],
   // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): manual-title ownership.
+  [1013, "ProjectionThreadsTitleManual", Migration1013],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
