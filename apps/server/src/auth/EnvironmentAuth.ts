@@ -468,6 +468,8 @@ export class EnvironmentAuth extends Context.Service<
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
       readonly proofKeyThumbprint?: string;
+      // T3-CUSTOM(expbkt3): redeem only with a DPoP proof; see OperatorIdentity.ts.
+      readonly requiresProofOfPossession?: boolean;
       readonly purpose?: "startup";
     }) => Effect.Effect<IssuedPairingLink, ServerAuthInternalError>;
     readonly issuePairingCredential: (
@@ -763,6 +765,16 @@ export const make = Effect.gen(function* () {
         Effect.mapError(toBootstrapExchangeError),
         Effect.flatMap((grant) =>
           Effect.gen(function* () {
+            // T3-CUSTOM(expbkt3): BEGIN - second gate on the proof-of-possession rule.
+            // `PairingGrantStore.consume` already refuses to consume such a grant without
+            // a proof; this makes it impossible for a future consume path to leak a plain
+            // bearer token from a credential that must be device-bound.
+            if (grant.requiresProofOfPossession && !input?.proofKeyThumbprint) {
+              return yield* new ServerAuthInvalidCredentialError({
+                diagnostic: "Pairing credential must be redeemed with a DPoP proof.",
+              });
+            }
+            // T3-CUSTOM(expbkt3): END
             const grantedScopes = requestedScopes ?? grant.scopes;
             if (!grantedScopes.every((scope) => grant.scopes.includes(scope))) {
               return yield* new ServerAuthScopeNotGrantedError({});
@@ -847,6 +859,8 @@ export const make = Effect.gen(function* () {
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
         ...(input?.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
+        // T3-CUSTOM(expbkt3): proof-of-possession requirement, default off.
+        ...(input?.requiresProofOfPossession ? { requiresProofOfPossession: true } : {}),
         ...(input?.purpose ? { purpose: input.purpose } : {}),
       });
       return {

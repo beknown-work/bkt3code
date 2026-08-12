@@ -511,6 +511,8 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
 export async function createServerPairingCredential(input?: {
   readonly label?: string;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
+  // T3-CUSTOM(expbkt3): mint a device-bound credential for a managed BK desktop.
+  readonly requireProofOfPossession?: boolean;
 }): Promise<AuthPairingCredentialResult> {
   const trimmedLabel = input?.label?.trim();
   try {
@@ -522,6 +524,9 @@ export async function createServerPairingCredential(input?: {
             payload: {
               ...(trimmedLabel ? { label: trimmedLabel } : {}),
               ...(input?.scopes ? { scopes: input.scopes } : {}),
+              // T3-CUSTOM(expbkt3): omitted unless asked for, so the request body is
+              // unchanged for every existing caller.
+              ...(input?.requireProofOfPossession ? { requireProofOfPossession: true } : {}),
             },
           }),
         ),

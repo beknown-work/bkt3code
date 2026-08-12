@@ -26,6 +26,12 @@ export interface BootstrapGrant {
   readonly subject: string;
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
+  // T3-CUSTOM(expbkt3): BEGIN - the grant may only be redeemed by a caller that
+  // presented a verified DPoP proof, and the issued token is bound to that key.
+  // Distinct from `proofKeyThumbprint`, which pre-binds to a key already known to
+  // the issuer. Optional so seeded (desktop-bootstrap) grants are unaffected.
+  readonly requiresProofOfPossession?: boolean;
+  // T3-CUSTOM(expbkt3): END
   readonly expiresAt: DateTime.DateTime;
 }
 
@@ -56,6 +62,19 @@ export class BootstrapCredentialProofKeyMismatchError extends Schema.TaggedError
   }
 }
 
+// T3-CUSTOM(expbkt3): BEGIN - redemption of a proof-of-possession credential with no
+// DPoP proof. Separate from the pre-bound `ProofKeyMismatch` case so the diagnostic
+// says which of the two rules was broken.
+export class BootstrapCredentialProofOfPossessionRequiredError extends Schema.TaggedErrorClass<BootstrapCredentialProofOfPossessionRequiredError>()(
+  "BootstrapCredentialProofOfPossessionRequiredError",
+  {},
+) {
+  override get message(): string {
+    return "Bootstrap credential must be redeemed with a DPoP proof.";
+  }
+}
+// T3-CUSTOM(expbkt3): END
+
 export class UnavailableBootstrapCredentialError extends Schema.TaggedErrorClass<UnavailableBootstrapCredentialError>()(
   "UnavailableBootstrapCredentialError",
   {},
@@ -69,6 +88,8 @@ export const BootstrapCredentialInvalidError = Schema.Union([
   UnknownBootstrapCredentialError,
   ExpiredBootstrapCredentialError,
   BootstrapCredentialProofKeyMismatchError,
+  // T3-CUSTOM(expbkt3): proof-of-possession rule.
+  BootstrapCredentialProofOfPossessionRequiredError,
   UnavailableBootstrapCredentialError,
 ]);
 export type BootstrapCredentialInvalidError = typeof BootstrapCredentialInvalidError.Type;
@@ -202,6 +223,8 @@ export class PairingGrantStore extends Context.Service<
       readonly subject?: string;
       readonly label?: string;
       readonly proofKeyThumbprint?: string;
+      // T3-CUSTOM(expbkt3): require a DPoP proof at redemption; see BootstrapGrant.
+      readonly requiresProofOfPossession?: boolean;
       /**
        * "startup" marks the credential the server mints for itself at boot,
        * which gets the long dev TTL when a dev URL is configured.
@@ -408,6 +431,8 @@ export const make = Effect.gen(function* () {
         subject,
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
+        // T3-CUSTOM(expbkt3): proof-of-possession requirement, default off.
+        requiresProofOfPossession: input?.requiresProofOfPossession === true,
         createdAt: now,
         expiresAt: expiresAt,
       })
@@ -533,6 +558,8 @@ export const make = Effect.gen(function* () {
           ...(consumed.value.proofKeyThumbprint
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }
             : {}),
+          // T3-CUSTOM(expbkt3): carried so callers can assert the rule a second time.
+          requiresProofOfPossession: consumed.value.requiresProofOfPossession,
           expiresAt: consumed.value.expiresAt,
         } satisfies BootstrapGrant;
       }
@@ -562,6 +589,14 @@ export const make = Effect.gen(function* () {
       ) {
         return yield* new BootstrapCredentialProofKeyMismatchError({});
       }
+
+      // T3-CUSTOM(expbkt3): BEGIN - the link is otherwise redeemable, so the only
+      // remaining reason `consumeAvailable` declined it is the proof-of-possession
+      // gate. The credential is deliberately still unconsumed.
+      if (matching.value.requiresProofOfPossession && !input?.proofKeyThumbprint) {
+        return yield* new BootstrapCredentialProofOfPossessionRequiredError({});
+      }
+      // T3-CUSTOM(expbkt3): END
 
       return yield* new UnavailableBootstrapCredentialError({});
     },
