@@ -30,6 +30,8 @@ import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
+// T3-CUSTOM(expbkt3): the acting operator reported on `/api/auth/session`.
+import { operatorSessionStateFields } from "./OperatorIdentity.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -670,6 +672,9 @@ export const make = Effect.gen(function* () {
             scopes: session.scopes,
             sessionMethod: session.method,
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
+            // T3-CUSTOM(expbkt3): report the acting operator so a client with no
+            // ClerkProvider can resolve its own identity. See OperatorIdentity.ts.
+            ...operatorSessionStateFields(session),
           }) satisfies AuthSessionState,
       ),
       Effect.catchIf(isServerAuthCredentialError, () =>
