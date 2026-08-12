@@ -371,11 +371,33 @@ and the completion records the result as generated, so the cadence resumes.
 
 ### First-prompt naming
 
-Sessions started over MCP had a second gap: `t3_create_session` clips a title
-out of the first ten words of the prompt but sent no `titleSeed`, so the first
-turn saw a title it had no reason to believe was a placeholder and never named
-the session. It now seeds that derived title, and only that one — a title the
-caller passed explicitly is theirs and is left alone.
+**First-prompt naming does not work on this fork through upstream's code path,
+and the failure is silent.** Upstream forks title generation into the turn-start
+scope (`Effect.forkScoped`). That is fine upstream, where turn start runs the
+provider start inline, but this fork hands turn start to the durable execution
+coordinator and returns as soon as the work is queued — the scope closes and
+takes the forked fiber with it, seconds before the model answers. Because the
+interrupt is delivered during finalization, the generator's own `catchCause`
+never logs, so nothing appears in the journal at all. Symptom: every session on
+bkt3 and expbkt3 kept its prompt-derived title forever, while the upstream-style
+`t3.dev` deployment titled the same sessions correctly.
+
+`shouldNameThreadFromFirstPrompt` routes the first prompt through the **durable**
+regeneration flow instead — the same worker the cadence and the sidebar's
+"Regenerate title" use, with request ids, supersede checks and interrupted-run
+recovery. One consequence worth knowing: the generator receives speaker-labelled
+thread context (`USER:\n…`) rather than the bare first message, and it uses the
+regenerate prompt rather than the initial one.
+
+Sessions started over MCP had a second, independent gap: `t3_create_session`
+clips a title out of the first ten words of the prompt but sent no `titleSeed`,
+so the first turn saw a title it had no reason to believe was a placeholder. It
+now seeds that derived title, and only that one — a title the caller passed
+explicitly is theirs and is left alone. That fix was necessary but not
+sufficient; it opened a gate onto the interrupted path above.
+
+If a future upstream merge makes turn start hold its scope until the provider
+session is live, the durable route can be retired in favour of upstream's.
 
 `isPlaceholderTitle` also accepts a _truncation_ of the seed, not just an exact
 match, so a client that displays `truncate(prompt)` while seeding the full

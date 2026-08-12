@@ -73,3 +73,38 @@ export function canGeneratedTitleReplace(input: {
   }
   return isPlaceholderTitle({ title: input.title, titleSeed: input.titleSeed });
 }
+
+/**
+ * Whether the first prompt should name this session through the *durable*
+ * regeneration flow rather than upstream's forked fiber.
+ *
+ * Upstream names the first turn from a fiber forked into the turn-start scope.
+ * That works upstream, where turn start runs the provider start inline, but this
+ * fork hands turn start to the durable execution coordinator and returns as
+ * soon as the work is queued. The scope dies with it, taking the forked fiber
+ * with it — and because an interrupt is delivered during finalization, the
+ * generator's own `catchCause` never gets to log, so the failure is completely
+ * silent. Sessions on bkt3 and expbkt3 kept their prompt-derived titles forever
+ * while the upstream-style deployment titled the same sessions correctly.
+ *
+ * The regeneration flow already survives all of this: it runs in a drainable
+ * worker with request ids, supersede checks and interrupted-run recovery. So the
+ * first prompt asks for a regeneration like every later refresh does, and the
+ * only thing left to decide is whether this turn is the one that should ask.
+ */
+export function shouldNameThreadFromFirstPrompt(input: {
+  /** User messages in the thread *including* the one starting this turn. */
+  readonly userMessageCount: number;
+  readonly title: string;
+  readonly titleManuallySet?: boolean | undefined;
+  readonly titleSeed?: string | undefined;
+}): boolean {
+  if (input.userMessageCount !== 1) {
+    return false;
+  }
+  return canGeneratedTitleReplace({
+    title: input.title,
+    ...(input.titleManuallySet !== undefined ? { titleManuallySet: input.titleManuallySet } : {}),
+    ...(input.titleSeed !== undefined ? { titleSeed: input.titleSeed } : {}),
+  });
+}

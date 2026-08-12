@@ -6,6 +6,7 @@ import {
   DEFAULT_THREAD_TITLE,
   canGeneratedTitleReplace,
   isPlaceholderTitle,
+  shouldNameThreadFromFirstPrompt,
 } from "./titleAuthorship.ts";
 
 const LONG_PROMPT =
@@ -77,5 +78,59 @@ describe("canGeneratedTitleReplace", () => {
     expect(canGeneratedTitleReplace({ title: truncate(LONG_PROMPT), titleSeed: LONG_PROMPT })).toBe(
       true,
     );
+  });
+});
+
+describe("shouldNameThreadFromFirstPrompt", () => {
+  const firstTurn = { userMessageCount: 1 } as const;
+
+  it("names the session on its first prompt", () => {
+    expect(shouldNameThreadFromFirstPrompt({ ...firstTurn, title: DEFAULT_THREAD_TITLE })).toBe(
+      true,
+    );
+    // The real shape: the client titled the thread from the prompt and declared
+    // that same value as the seed.
+    expect(
+      shouldNameThreadFromFirstPrompt({
+        ...firstTurn,
+        title: "what you can do for me ?",
+        titleSeed: "what you can do for me ?",
+      }),
+    ).toBe(true);
+    // And an MCP-created session, whose derived title is a clipped prompt.
+    expect(
+      shouldNameThreadFromFirstPrompt({
+        ...firstTurn,
+        title: truncate(LONG_PROMPT),
+        titleSeed: LONG_PROMPT,
+      }),
+    ).toBe(true);
+  });
+
+  it("only fires on the first prompt", () => {
+    for (const userMessageCount of [0, 2, 3, 7]) {
+      expect(
+        shouldNameThreadFromFirstPrompt({ userMessageCount, title: DEFAULT_THREAD_TITLE }),
+      ).toBe(false);
+    }
+  });
+
+  it("leaves a name the user typed before their first prompt alone", () => {
+    expect(
+      shouldNameThreadFromFirstPrompt({
+        ...firstTurn,
+        title: "Release checklist",
+        titleManuallySet: true,
+      }),
+    ).toBe(false);
+    // Even without the flag, a title that is neither placeholder nor seed is
+    // someone's choice.
+    expect(
+      shouldNameThreadFromFirstPrompt({
+        ...firstTurn,
+        title: "Release checklist",
+        titleSeed: "something else entirely",
+      }),
+    ).toBe(false);
   });
 });

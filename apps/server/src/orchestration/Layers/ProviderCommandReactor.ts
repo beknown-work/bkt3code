@@ -81,7 +81,10 @@ import { resolveAvailableWorktreeBase } from "../../thread-bootstrap/WorktreeBas
 // T3-CUSTOM(expbkt3): periodic title refresh cadence.
 import { shouldRefreshThreadTitle } from "../../thread-title/titleRefreshCadence.ts";
 // T3-CUSTOM(expbkt3): who owns a session title, and when generation may replace it.
-import { canGeneratedTitleReplace } from "../../thread-title/titleAuthorship.ts";
+import {
+  canGeneratedTitleReplace,
+  shouldNameThreadFromFirstPrompt,
+} from "../../thread-title/titleAuthorship.ts";
 // T3-CUSTOM(expbkt3): durable dispatch control plane; provider mechanics stay here.
 import {
   DurableExecutionDispatchError,
@@ -1435,13 +1438,46 @@ const make = Effect.gen(function* () {
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
-      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed, thread.titleManuallySet)) {
+      // T3-CUSTOM(expbkt3): BEGIN — name the session through the durable
+      // regeneration flow instead of upstream's forked fiber, which this fork's
+      // durable turn dispatch interrupts before the model answers. See
+      // shouldNameThreadFromFirstPrompt for the full reasoning.
+      if (
+        shouldNameThreadFromFirstPrompt({
+          userMessageCount,
+          title: thread.title,
+          titleManuallySet: thread.titleManuallySet,
+          ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
+        })
+      ) {
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: yield* serverCommandId("thread-title-first-prompt"),
+            threadId: event.payload.threadId,
+            regenerateTitle: true,
+          })
+          .pipe(
+            // A title is cosmetic; never let it interfere with starting the turn.
+            Effect.catchCause((cause) =>
+              Effect.logWarning("first-prompt thread title naming failed to dispatch", {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
+      } else if (
+        canReplaceThreadTitle(thread.title, event.payload.titleSeed, thread.titleManuallySet)
+      ) {
+        // Retained for upstream parity: reachable only when the durable route
+        // declines but the title is still replaceable.
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,
           ...generationInput,
         }).pipe(Effect.forkScoped);
       }
+      // T3-CUSTOM(expbkt3): END
     }
 
     const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
