@@ -2482,6 +2482,37 @@ const make = Effect.gen(function* () {
         // banner saying it failed. Read the execution id from the live snapshot:
         // `failExecution` matches on it, and assuming it equals the durable work
         // item id would silently no-op.
+        // T3-CUSTOM(expbkt3): the provider says this turn finished, but none of
+        // its output ever reached us — the execution is still at "starting" and
+        // would render as running for good. Ending it as a failure is the
+        // honest reading: an empty completed turn is indistinguishable from the
+        // hang, and saying "completed" would hide that nothing was recorded.
+        onCompletedFromHistory: ({ intent }) =>
+          Effect.gen(function* () {
+            const snapshot = yield* executionSupervisor.getSnapshot(intent.threadId);
+            const turn = snapshot.turn;
+            if (
+              turn === null ||
+              turn.state === "completed" ||
+              turn.state === "interrupted" ||
+              turn.state === "failed"
+            ) {
+              return;
+            }
+            yield* executionSupervisor.failExecution(
+              intent.threadId,
+              turn.executionId,
+              "The provider reported this turn as already completed, but none of its output reached T3. Nothing was recorded, so the turn was ended.",
+            );
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to settle a history-completed execution", {
+                threadId: intent.threadId,
+                workItemId: intent.workItemId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
         onExhausted: ({ intent, detail }) =>
           Effect.gen(function* () {
             const snapshot = yield* executionSupervisor.getSnapshot(intent.threadId);

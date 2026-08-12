@@ -198,6 +198,8 @@ interface HarnessInput {
   /** "error" makes `inspectSession` fail, which must not skip the candidate. */
   readonly runtimeAlive: boolean | null | "error";
   readonly enabled?: boolean;
+  /** Supplied by tests that assert the watchdog ended the execution itself. */
+  readonly failures?: Ref.Ref<Array<{ readonly executionId: string; readonly detail: string }>>;
 }
 
 /**
@@ -233,6 +235,11 @@ const runSweep = Effect.fnUntraced(function* (input: HarnessInput) {
           ? input.snapshot
           : { ...makeSnapshot(threadId), activity: "idle" as const, turn: null },
       ),
+    failExecution: (threadId: ThreadId, executionId: string, detail: string) =>
+      (input.failures === undefined
+        ? Effect.void
+        : Ref.update(input.failures, (all) => [...all, { executionId, detail }])
+      ).pipe(Effect.as(makeSnapshot(threadId))),
   } as unknown as typeof ThreadExecutionSupervisor.Service;
 
   const watchdog = yield* makeStalledExecutionWatchdog({
@@ -283,6 +290,90 @@ layer("StalledExecutionWatchdog", (it) => {
       assert.strictEqual(reported.length, 1);
       assert.strictEqual(reported[0]?.failureType, "provider-turn-never-started");
       assert.include(reported[0]?.detail ?? "", "was ready but never started the turn");
+    }),
+  );
+
+  // The expbkt3 incident of 2026-08-11, in full. Four sessions launched seconds
+  // apart into one worktree: codex accepted every turn and returned a turn id,
+  // none of the turn events ever arrived, and the detector fired exactly as
+  // designed. Then recovery attempt two asked codex for the thread history, was
+  // told that same turn id had `state: "completed"`, and marked the work item
+  // finished — `desired_state='stopped'`, `runnable=0`, phase left at 'running',
+  // failure detail cleared. The execution stayed at active/starting forever, and
+  // the sweep went silent because its candidate filter required a *running*
+  // intent. Detection without a landing is worse than no detection: it looks
+  // handled.
+  it.effect("still ends a session after recovery declares the turn complete from history", () =>
+    Effect.gen(function* () {
+      const { threadId, workItemId } = yield* seedIntent("history-completed", 23);
+      yield* Effect.flatMap(
+        SqlClient.SqlClient,
+        (sql) => sql`
+          UPDATE projection_thread_execution_intents
+          SET desired_state = 'stopped', phase = 'running', runnable = 0,
+              delivery_certainty = 'completed', recovery_attempts = 2,
+              next_attempt_at = NULL, claim_owner = NULL,
+              last_failure_type = NULL, last_failure_detail = NULL,
+              terminal_at = ${nowIso}
+          WHERE work_item_id = ${workItemId}
+        `,
+      ).pipe(Effect.orDie);
+      yield* seedExecutionRow({
+        threadId,
+        activity: "active",
+        turnState: "starting",
+        turnStartedAt: minutesAgo(15),
+      });
+
+      const failures = yield* Ref.make<Array<{ executionId: string; detail: string }>>([]);
+      const reported = yield* runSweep({
+        workItemId,
+        snapshot: makeSnapshot(threadId, {
+          turnState: "starting",
+          providerSessionState: "ready",
+          turnStartedAt: minutesAgo(15),
+        }),
+        runtimeAlive: true,
+        failures,
+      });
+
+      // The ladder is gone — a stopped item refuses a claim — so there is
+      // nothing to revive and the sweep must end the execution itself.
+      assert.deepStrictEqual(reported, []);
+      const failed = yield* Ref.get(failures);
+      assert.strictEqual(failed.length, 1);
+      assert.strictEqual(failed[0]?.executionId, `execution-${String(threadId)}`);
+      assert.include(failed[0]?.detail ?? "", "never started the turn");
+    }),
+  );
+
+  it.effect("ends a stalled session that has no durable work item at all", () =>
+    Effect.gen(function* () {
+      // Threads predating durable intents, and anything whose item was
+      // dismissed, must not be permanently invisible either.
+      const threadId = ThreadId.make("thread-no-intent");
+      yield* seedExecutionRow({
+        threadId,
+        activity: "active",
+        turnState: "starting",
+        turnStartedAt: minutesAgo(15),
+      });
+
+      const failures = yield* Ref.make<Array<{ executionId: string; detail: string }>>([]);
+      yield* runSweep({
+        workItemId: "no-such-work-item",
+        snapshot: makeSnapshot(threadId, {
+          turnState: "starting",
+          providerSessionState: "ready",
+          turnStartedAt: minutesAgo(15),
+        }),
+        runtimeAlive: true,
+        failures,
+      });
+
+      const failed = yield* Ref.get(failures);
+      assert.strictEqual(failed.length, 1);
+      assert.include(failed[0]?.detail ?? "", "never started the turn");
     }),
   );
 

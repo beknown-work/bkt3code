@@ -564,6 +564,52 @@ layer("DurableExecutionCoordinator", (it) => {
     }),
   );
 
+  it.effect("hands a history-completed turn back so the execution can be settled", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("history-settle", 46, "history-settle");
+      yield* acceptEvent(repository, event);
+      const workItemId = String(event.commandId);
+      const settled = yield* Ref.make<Array<string>>([]);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-history-settle",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () =>
+          Effect.fail(
+            new DurableExecutionDispatchError({
+              failureType: "transport-lost",
+              detail: "lost before acknowledgement",
+              retryable: true,
+            }),
+          ),
+        // What codex actually said on expbkt3: that turn id is completed. The
+        // durable item is finished by that answer, but the execution is not —
+        // none of the output ever arrived, so it is still at "starting".
+        recover: () =>
+          Effect.succeed({
+            providerTurnId: "provider-turn-history",
+            providerInstanceId: "codex",
+            completed: true,
+          }),
+        onCompletedFromHistory: ({ providerTurnId }) =>
+          Ref.update(settled, (all) => [...all, providerTurnId]),
+      });
+
+      yield* coordinator.run(workItemId);
+      yield* coordinator.run(workItemId);
+
+      const finished = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(finished._tag === "Some");
+      if (finished._tag === "None") return;
+      assert.strictEqual(finished.value.desiredState, "stopped");
+      assert.strictEqual(finished.value.deliveryCertainty, "completed");
+      // The callback is the only thing standing between this and a session that
+      // renders as running for good.
+      assert.deepStrictEqual(yield* Ref.get(settled), ["provider-turn-history"]);
+    }),
+  );
+
   it.effect("fails a work item whose every revive was acknowledged and then stalled", () =>
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
