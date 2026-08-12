@@ -24,6 +24,10 @@ import { runPrimaryHttp } from "../../lib/runtime";
 import { readManagedClerkIdentityToken } from "../../cloud/managedIdentity";
 // T3-CUSTOM(expbkt3): identify the direct hosted build in server diagnostics.
 import { APP_VERSION } from "../../branding";
+// T3-CUSTOM(expbkt3): a managed BK build pairs with a central server by token exchange.
+import { isBkManagedPrimary } from "../../fork/managedEnvironment";
+import { clearManagedPrimaryAccessToken } from "../../fork/managedPrimaryCredential";
+import { pairManagedPrimaryEnvironment } from "../../fork/managedPrimaryPairing";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
@@ -184,6 +188,12 @@ export function takePairingTokenFromUrl(): string | null {
 }
 
 function getDesktopBootstrapCredential(): string | null {
+  // T3-CUSTOM(expbkt3): a managed BK build's primary is a remote central server. The
+  // local backend's bootstrap token is worthless there and must not be sent to it,
+  // so the operator pairs explicitly instead.
+  if (isBkManagedPrimary()) {
+    return null;
+  }
   // Both backends share the same bootstrap token (DesktopBackendConfiguration
   // mints one tokenRef and feeds it to both resolvers), so picking the
   // primary entry is fine even when the WSL backend is also registered.
@@ -226,6 +236,9 @@ export async function logoutPrimaryEnvironment(): Promise<void> {
     });
   }
 
+  // T3-CUSTOM(expbkt3): drop the paired bearer token too, or the next request would
+  // re-present a credential the server has just revoked.
+  clearManagedPrimaryAccessToken();
   resolvedAuthenticatedGateState = null;
   bootstrapPromise = null;
 }
@@ -259,6 +272,12 @@ function readEnvironmentHttpErrorStatus(error: EnvironmentHttpCommonErrorType): 
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBrowserSessionResult> {
   return retryTransientBootstrap(async () => {
     try {
+      // T3-CUSTOM(expbkt3): a managed BK build is not same-origin with its primary and
+      // sends `credentials: "omit"`, so a session cookie would never come back. Pair by
+      // OAuth token exchange and keep the bearer token instead.
+      if (isBkManagedPrimary()) {
+        return await pairManagedPrimaryEnvironment(credential);
+      }
       const identityToken = await readManagedClerkIdentityToken();
       return await runPrimaryHttp(
         PrimaryEnvironmentHttpClient.pipe(

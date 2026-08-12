@@ -13,6 +13,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/unstable/reactivity";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+// T3-CUSTOM(expbkt3): identity for clients that pair instead of signing in.
+import { useEnvironmentOperatorUserId } from "~/fork/environmentOperatorIdentity";
 
 export const currentClerkUserAtom = Atom.make<UserId | null>(null).pipe(
   Atom.keepAlive,
@@ -25,5 +27,11 @@ export function setCurrentClerkUser(userId: UserId | null): void {
 
 /** The current operator's Clerk user id, or null outside team mode. */
 export function useCurrentUserId(): UserId | null {
-  return useAtomValue(currentClerkUserAtom);
+  // T3-CUSTOM(expbkt3): a paired client (the BK desktop) mounts no ClerkProvider,
+  // so fall back to the operator the environment session reports. Clerk still
+  // wins wherever it is mounted and signed in, leaving browser and upstream
+  // builds byte-identical in behaviour.
+  const clerkUserId = useAtomValue(currentClerkUserAtom);
+  const environmentUserId = useEnvironmentOperatorUserId();
+  return clerkUserId ?? environmentUserId;
 }

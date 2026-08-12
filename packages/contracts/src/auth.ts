@@ -405,5 +405,9 @@ export const AuthSessionState = Schema.Struct({
   scopes: Schema.optionalKey(AuthEnvironmentScopes),
   sessionMethod: Schema.optionalKey(ServerAuthSessionMethod),
   expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+  // T3-CUSTOM(expbkt3): the acting operator, absent outside team mode. A client
+  // with no ClerkProvider (the BK desktop, paired by credential) reads its own
+  // identity back from here; see apps/server/src/auth/OperatorIdentity.ts.
+  userId: Schema.optionalKey(UserId),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;

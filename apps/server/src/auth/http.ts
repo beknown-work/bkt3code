@@ -39,6 +39,8 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { resolveClerkBrowserIdentity } from "./ClerkBrowserIdentity.ts";
 // T3-CUSTOM(expbkt3): direct-vs-relay identity policy for the token exchange.
 import { resolveExchangeIdentity } from "./ExchangeIdentity.ts";
+// T3-CUSTOM(expbkt3): pairing credentials carry the operator that created them.
+import { issuePairingCredentialForPrincipal } from "./OperatorIdentity.ts";
 import { ClerkDirectory } from "./ClerkDirectory.ts";
 import * as ClerkIdentityVerifier from "./ClerkIdentityVerifier.ts";
 import * as EnvironmentUserService from "./EnvironmentUserService.ts";
@@ -598,7 +600,16 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 return yield* failEnvironmentScopeRequired(delegatedScope);
               }
             }
-            return yield* serverAuth.issuePairingCredential(args.payload);
+            // T3-CUSTOM(expbkt3): stamp the authenticated operator on the credential
+            // so a client paired with it acts as them. The subject comes from the
+            // session, never from the payload — `AuthCreatePairingCredentialInput`
+            // has no `subject` field, so no client can mint one for a teammate.
+            return yield* issuePairingCredentialForPrincipal({
+              serverAuth,
+              principal: session,
+              scopes: delegatedScopes,
+              ...(args.payload.label ? { label: args.payload.label } : {}),
+            });
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("pairing_credential_issuance_failed", error),

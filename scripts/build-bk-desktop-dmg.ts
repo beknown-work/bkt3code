@@ -8,6 +8,8 @@
  *
  *   node scripts/build-bk-desktop-dmg.ts                  # arm64 DMG, auto version
  *   node scripts/build-bk-desktop-dmg.ts --build-version 0.0.32-nightly.20260810.1
+ *   node scripts/build-bk-desktop-dmg.ts --channel staging   # orchestrate expbkt3
+ *   node scripts/build-bk-desktop-dmg.ts --channel production # orchestrate bkt3
  *
  * See docs/operations/bk-desktop-build.md.
  */
@@ -31,6 +33,12 @@ import {
   BK_DESKTOP_UPDATE_REPOSITORY,
   DESKTOP_BRAND_ENV_VAR,
 } from "./lib/bk-desktop-brand.ts";
+import {
+  BK_MANAGED_CHANNEL_ENV_VAR,
+  BK_MANAGED_ENVIRONMENTS,
+  isBkManagedChannel,
+  type BkManagedChannel,
+} from "./lib/bk-managed-environment.ts";
 import {
   BK_DESKTOP_RELEASE_REPOSITORY,
   composeNightlyVersion,
@@ -89,6 +97,21 @@ export class BuildNumberUnavailableError extends Schema.TaggedErrorClass<BuildNu
       `Could not list releases from ${BK_DESKTOP_RELEASE_REPOSITORY} to pick the next build ` +
       `number. Authenticate with \`gh auth login\`, or pass ` +
       `--build-version ${this.suggestedVersion} explicitly.`
+    );
+  }
+}
+
+export class InvalidBkManagedChannelError extends Schema.TaggedErrorClass<InvalidBkManagedChannelError>()(
+  "InvalidBkManagedChannelError",
+  {
+    channel: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `--channel must be one of ${Object.keys(BK_MANAGED_ENVIRONMENTS).join(", ")}, got ` +
+      `"${this.channel}". Omit it to build an ordinary desktop app whose primary ` +
+      `environment is the bundled local backend.`
     );
   }
 }
@@ -189,6 +212,7 @@ const runBuild = Effect.fn("runBuild")(function* (options: {
   readonly version: string;
   readonly arch: string;
   readonly verbose: boolean;
+  readonly managedChannel: BkManagedChannel | undefined;
 }) {
   const path = yield* Path.Path;
   const repoRoot = yield* RepoRoot;
@@ -212,6 +236,11 @@ const runBuild = Effect.fn("runBuild")(function* (options: {
     ...process.env,
     ...repoEnv,
     [DESKTOP_BRAND_ENV_VAR]: BK_DESKTOP_BRAND_ID,
+    // Bakes the central server this build orchestrates into the renderer bundle.
+    // Absent ⇒ the primary environment stays the bundled local backend.
+    ...(options.managedChannel
+      ? { [BK_MANAGED_CHANNEL_ENV_VAR]: options.managedChannel }
+      : { [BK_MANAGED_CHANNEL_ENV_VAR]: undefined }),
     // Points electron-updater at the fork's releases instead of upstream's.
     T3CODE_DESKTOP_UPDATE_REPOSITORY: BK_DESKTOP_UPDATE_REPOSITORY,
     VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true",
@@ -265,6 +294,13 @@ const command = Command.make(
       Flag.withDescription("Nightly version to stamp, for example 0.0.32-nightly.20260810.1."),
       Flag.optional,
     ),
+    channel: Flag.string("channel").pipe(
+      Flag.withDescription(
+        "Central server this build orchestrates: staging (expbkt3) or production (bkt3). " +
+          "Omit for a local-only build.",
+      ),
+      Flag.optional,
+    ),
     arch: Flag.string("arch").pipe(
       Flag.withDescription("Target architecture (arm64 or x64)."),
       Flag.withDefault("arm64"),
@@ -274,16 +310,31 @@ const command = Command.make(
       Flag.withDefault(true),
     ),
   },
-  ({ buildVersion, arch, verbose }) =>
+  ({ buildVersion, arch, channel, verbose }) =>
     Effect.gen(function* () {
+      // Channel first, so a typo is caught anywhere — including from a Linux shell,
+      // where the macOS host check below would otherwise mask it.
+      const requestedChannel = Option.map(channel, (value) => value.trim().toLowerCase());
+      if (Option.isSome(requestedChannel) && !isBkManagedChannel(requestedChannel.value)) {
+        return yield* new InvalidBkManagedChannelError({ channel: requestedChannel.value });
+      }
+      const managedChannel = Option.isSome(requestedChannel)
+        ? (requestedChannel.value as BkManagedChannel)
+        : undefined;
+
       const hostPlatform = yield* HostProcessPlatform;
       if (hostPlatform !== "darwin") {
         return yield* new UnsupportedBuildHostError({ hostPlatform });
       }
 
       const version = yield* resolveBuildVersion(buildVersion);
-      yield* Console.log(`Building BK T3 Code ${version} (mac/${arch}, unsigned)...`);
-      yield* runBuild({ version, arch, verbose });
+      yield* Console.log(
+        `Building BK T3 Code ${version} (mac/${arch}, unsigned)` +
+          (managedChannel
+            ? `, orchestrating ${BK_MANAGED_ENVIRONMENTS[managedChannel].httpBaseUrl}...`
+            : ", local backend only..."),
+      );
+      yield* runBuild({ version, arch, verbose, managedChannel });
       yield* Console.log(
         `Done. Artifacts are in release/. Publish them with:\n` +
           `  node scripts/publish-bk-desktop-dmg.ts --build-version ${version}`,
