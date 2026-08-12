@@ -59,6 +59,10 @@ export const ProjectionThread = Schema.Struct({
   workSummary: Schema.optional(Schema.NullOr(Schema.String)),
   // T3-CUSTOM(expbkt3): END
   pinnedAt: Schema.NullOr(IsoDateTime),
+  // T3-CUSTOM(expbkt3): 1 once a human named this session. Stored as an int
+  // like the other boolean columns here; optional so rows read before
+  // migration 1013 still decode.
+  titleManuallySet: Schema.optional(NonNegativeInt),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),

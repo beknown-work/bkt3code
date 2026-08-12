@@ -876,6 +876,8 @@ interface PhaseThreadRowProps {
   readonly onSetPriority: (row: PhaseSidebarRow, priority: 0 | 1 | 2 | 3 | 4 | null) => void;
   // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
   readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
+  // T3-CUSTOM(expbkt3): re-derive the title from the conversation.
+  readonly onRegenerateTitle: (row: PhaseSidebarRow) => void;
   readonly linearIssueStatus: LinearIssueStatusSummary | null;
   // T3-CUSTOM(expbkt3): start a side-by-side session from this row. Offered on
   // shelf rows too — a parked session is a perfectly good place to branch from.
@@ -959,6 +961,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onUnsnooze,
     onSetPriority,
     onSetLinearIssueUrl,
+    onRegenerateTitle,
     linearIssueStatus,
     onCreateThread,
     treeActions,
@@ -1223,12 +1226,26 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           },
         ]
       : [];
+    // T3-CUSTOM(expbkt3): BEGIN — ask the server to re-derive this title.
+    const isRegeneratingTitle = row.thread.titleRegeneration != null;
+    const titleRegenerationItems = row.titleRegenerationSupported
+      ? [
+          {
+            id: "regenerate-title",
+            label: isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
+            disabled: isRegeneratingTitle,
+          },
+        ]
+      : [];
     // T3-CUSTOM(expbkt3): END
     const action = await api.contextMenu.show(
       [
         // T3-CUSTOM(expbkt3): side-by-side sessions.
         ...newThreadItems,
         { id: "rename", label: "Rename" },
+        // T3-CUSTOM(expbkt3): a manual rename is durable, so re-deriving the
+        // title from the conversation has to be something you can ask for.
+        ...titleRegenerationItems,
         { id: "mark-unread", label: "Mark unread" },
         ...priorityItems,
         ...linearItems,
@@ -1280,6 +1297,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     }
     if (action === "tag-linear") setLinearTagDialogOpen(true);
     if (action === "remove-linear") onSetLinearIssueUrl(row, null);
+    if (action === "regenerate-title") onRegenerateTitle(row);
     // T3-CUSTOM(expbkt3): END
     if (action === "force-stop-agent") onForceStop(row);
     if (action === "dismiss-recovery") onForceStop(row);
@@ -2093,6 +2111,8 @@ export function PhaseGroupedSidebar() {
           snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
           prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
           linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
+          titleRegenerationSupported:
+            serverConfig?.environment.capabilities.threadTitleRegeneration === true,
           threadBootstrapSupported:
             serverConfig?.environment.capabilities.durableThreadBootstrap === true,
           changeRequestState: vcsStatus?.pr?.state ?? null,
@@ -2535,7 +2555,8 @@ export function PhaseGroupedSidebar() {
       }
       void updateThreadMetadata({
         environmentId: row.thread.environmentId,
-        input: { threadId: row.thread.id, title },
+        // T3-CUSTOM(expbkt3): a typed name is durable — see titleAuthorship.ts.
+        input: { threadId: row.thread.id, title, titleOrigin: "user" },
       })
         .then((result) => {
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -2598,6 +2619,30 @@ export function PhaseGroupedSidebar() {
     },
     [updateThreadMetadata],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — hand the title back to the generator. This is
+  // the only way past a manual rename, which is otherwise durable.
+  const regenerateThreadTitle = useCallback(
+    (row: PhaseSidebarRow) => {
+      if (row.thread.titleRegeneration != null) return;
+      void updateThreadMetadata({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id, regenerateTitle: true },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to regenerate thread title",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [updateThreadMetadata],
+  );
+  // T3-CUSTOM(expbkt3): END
   const forceStopAgent = useCallback(
     (row: PhaseSidebarRow) => {
       void forceStopThreadSession({
@@ -2968,6 +3013,7 @@ export function PhaseGroupedSidebar() {
         onUnsnooze={attemptUnsnooze}
         onSetPriority={setThreadPriority}
         onSetLinearIssueUrl={setThreadLinearIssueUrl}
+        onRegenerateTitle={regenerateThreadTitle}
         onCreateThread={createThreadFromRow}
         linearIssueStatus={(() => {
           const issue = resolvePhaseSidebarLinearIssue(

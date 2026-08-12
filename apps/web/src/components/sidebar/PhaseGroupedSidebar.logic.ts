@@ -441,6 +441,9 @@ export interface PhaseSidebarRow {
   readonly prioritySupported: boolean;
   /** Same version-skew contract for manual Linear tags on thread.meta.update. */
   readonly linearIssueSupported?: boolean;
+  /** Same version-skew contract for regenerateTitle on thread.meta.update,
+      which backs "Regenerate title" on the row's context menu. */
+  readonly titleRegenerationSupported?: boolean;
   /** Same version-skew contract for thread.bootstrap.request, which backs
       "Create new thread" on the row's context menu. */
   readonly threadBootstrapSupported?: boolean;

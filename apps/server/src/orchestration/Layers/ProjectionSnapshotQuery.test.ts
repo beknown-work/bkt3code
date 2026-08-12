@@ -339,6 +339,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           // T3-CUSTOM(expbkt3): no work summary was ever requested here.
           workSummary: null,
           pinnedAt: null,
+          // T3-CUSTOM(expbkt3): nothing renamed these threads by hand.
+          titleManuallySet: false,
           titleRegeneration: null,
           deletedAt: null,
           messages: [
@@ -479,6 +481,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           // T3-CUSTOM(expbkt3): no work summary was ever requested here.
           workSummary: null,
           pinnedAt: null,
+          // T3-CUSTOM(expbkt3): nothing renamed these threads by hand.
+          titleManuallySet: false,
           titleRegeneration: null,
           session: {
             threadId: ThreadId.make("thread-1"),

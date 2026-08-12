@@ -80,6 +80,8 @@ import {
 import { resolveAvailableWorktreeBase } from "../../thread-bootstrap/WorktreeBaseResolver.ts";
 // T3-CUSTOM(expbkt3): periodic title refresh cadence.
 import { shouldRefreshThreadTitle } from "../../thread-title/titleRefreshCadence.ts";
+// T3-CUSTOM(expbkt3): who owns a session title, and when generation may replace it.
+import { canGeneratedTitleReplace } from "../../thread-title/titleAuthorship.ts";
 // T3-CUSTOM(expbkt3): durable dispatch control plane; provider mechanics stay here.
 import {
   DurableExecutionDispatchError,
@@ -344,16 +346,21 @@ export function providerErrorLabelFromInstanceHint(input: {
   );
 }
 
-function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
-  const trimmedCurrentTitle = currentTitle.trim();
-  if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
-    return true;
-  }
-
-  const trimmedTitleSeed = titleSeed?.trim();
-  return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
-    : false;
+// T3-CUSTOM(expbkt3): title ownership moved to apps/server/src/thread-title.
+// Upstream compared the current title to the raw seed, but clients title a new
+// thread with `truncate(prompt)` while seeding the full prompt, so no prompt
+// over the truncation budget was ever auto-named. `titleManuallySet` is the
+// durable "a human chose this" flag the periodic refresh also honors.
+function canReplaceThreadTitle(
+  currentTitle: string,
+  titleSeed?: string,
+  titleManuallySet?: boolean,
+): boolean {
+  return canGeneratedTitleReplace({
+    title: currentTitle,
+    ...(titleSeed !== undefined ? { titleSeed } : {}),
+    ...(titleManuallySet !== undefined ? { titleManuallySet } : {}),
+  });
 }
 
 function findProviderAdapterRequestError(
@@ -1135,7 +1142,9 @@ const make = Effect.gen(function* () {
 
         const thread = yield* resolveThread(input.threadId);
         if (!thread) return;
-        if (!canReplaceThreadTitle(thread.title, input.titleSeed)) {
+        // T3-CUSTOM(expbkt3): a rename that landed while the model was thinking
+        // wins — including one the user typed.
+        if (!canReplaceThreadTitle(thread.title, input.titleSeed, thread.titleManuallySet)) {
           return;
         }
 
@@ -1144,6 +1153,8 @@ const make = Effect.gen(function* () {
           commandId: yield* serverCommandId("thread-title-rename"),
           threadId: input.threadId,
           title: generated.title,
+          // T3-CUSTOM(expbkt3): generated, so a later refresh may replace it.
+          titleOrigin: "generated",
         });
       }).pipe(
         Effect.catchCause((cause) =>
@@ -1381,6 +1392,7 @@ const make = Effect.gen(function* () {
       if (
         shouldRefreshThreadTitle({
           userMessageCount,
+          titleManuallySet: thread.titleManuallySet,
           settings: experimental.threadTitleMaintenance,
         })
       ) {
@@ -1423,7 +1435,7 @@ const make = Effect.gen(function* () {
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
-      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
+      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed, thread.titleManuallySet)) {
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,
