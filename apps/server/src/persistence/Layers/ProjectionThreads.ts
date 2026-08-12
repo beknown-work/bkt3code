@@ -245,6 +245,51 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       `,
   });
 
+  // T3-CUSTOM(expbkt3): session-history backfill coverage set.
+  const listArchivedOrDeletedRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadDbRow,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          title,
+          model_selection_json AS "modelSelection",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          branch,
+          worktree_path AS "worktreePath",
+          source_control_profile_id AS "sourceControlProfileId",
+          latest_turn_id AS "latestTurnId",
+          owner_user_id AS "ownerUserId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          settled_override AS "settledOverride",
+          settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snoozed_at AS "snoozedAt",
+          priority,
+          linear_issue_url AS "linearIssueUrl",
+          parent_thread_id AS "parentThreadId",
+          work_summary AS "workSummary",
+          pinned_at AS "pinnedAt",
+          title_regeneration_request_id AS "titleRegenerationRequestId",
+          title_regeneration_started_at AS "titleRegenerationStartedAt",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          rolling_summary AS "rollingSummary",
+          deleted_at AS "deletedAt"
+        FROM projection_threads
+        WHERE archived_at IS NOT NULL
+           OR deleted_at IS NOT NULL
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
   const upsert: ProjectionThreadRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:query")),
@@ -265,11 +310,19 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:query")),
     );
 
+  const listArchivedOrDeleted: ProjectionThreadRepositoryShape["listArchivedOrDeleted"] = () =>
+    listArchivedOrDeletedRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadRepository.listArchivedOrDeleted:query"),
+      ),
+    );
+
   return {
     upsert,
     getById,
     listByProjectId,
     deleteById,
+    listArchivedOrDeleted,
   } satisfies ProjectionThreadRepositoryShape;
 });
 

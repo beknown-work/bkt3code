@@ -49,6 +49,7 @@ export const FORK_RPC_REQUIRED_SCOPES = {
   [WS_FORK_METHODS.sessionArchiveScan]: AuthOrchestrationReadScope,
   [WS_FORK_METHODS.sessionArchiveExport]: AuthOrchestrationOperateScope,
   [WS_FORK_METHODS.sessionArchiveReclaim]: AuthOrchestrationOperateScope,
+  [WS_FORK_METHODS.sessionArchiveBackfill]: AuthOrchestrationOperateScope,
   // T3-CUSTOM(expbkt3): context handoff renders a string and writes nothing.
   [WS_FORK_METHODS.threadContextExport]: AuthOrchestrationReadScope,
 } as const;
