@@ -18,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -1667,13 +1668,16 @@ export const makeCodexSessionRuntime = (
     yield* Stream.fromQueue(serverNotifications).pipe(
       Stream.runForEach((notification) =>
         handleRawNotification(notification).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("Dropped a Codex notification its handler could not process.", {
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.failCause(cause);
+            }
+            return Effect.logError("Dropped a Codex notification its handler could not process.", {
               threadId: options.threadId,
               method: notification.method,
-              cause,
-            }),
-          ),
+              cause: Cause.pretty(cause),
+            });
+          }),
         ),
       ),
       Effect.forkIn(runtimeScope),
