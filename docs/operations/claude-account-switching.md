@@ -80,7 +80,7 @@ Two caveats:
 
 ## Automatic switching on usage limits
 
-`claude-autoswitch` runs every five minutes from `claude-autoswitch.timer` and elects a
+`claude-autoswitch` runs every 30 seconds from `claude-autoswitch.timer` and elects a
 different profile when the active account is nearly spent.
 
 It makes **no network requests and never spawns `claude`**. Usage comes from
@@ -97,23 +97,27 @@ tail ~/.claude-profiles/.autoswitch.jsonl        # every decision, with its inpu
 
 Config lives in `~/.claude-profiles/.autoswitch.json`:
 
-| key                       | default                        | meaning                                                  |
-| ------------------------- | ------------------------------ | -------------------------------------------------------- |
-| `rotation`                | `["tushar","agent","default"]` | order tried; first entry is the primary                  |
-| `five_hour_trip_pct`      | `85`                           | trip when the 5-hour window is this **used**             |
-| `weekly_trip_pct`         | `95`                           | trip when the weekly window is this **used**             |
-| `healthy_below_pct`       | `60`                           | deadband: an account counts as recovered only below this |
-| `count_weekly_scoped`     | `false`                        | include the model-scoped weekly window                   |
-| `min_switch_interval_sec` | `900`                          | anti-flap floor between switches                         |
-| `failback_to_primary`     | `true`                         | return to the primary once it has recovered              |
-| `notify_command`          | `""`                           | optional shell command; `{from} {to} {reason}`           |
+| key                       | default       | meaning                                                               |
+| ------------------------- | ------------- | --------------------------------------------------------------------- |
+| `rotation`                | profile names | order tried; first entry is the primary                               |
+| `five_hour_trip_pct`      | `85`          | trip when the 5-hour window is this **used**                          |
+| `weekly_trip_pct`         | `95`          | trip when the weekly window is this **used**                          |
+| `healthy_below_pct`       | `60`          | deadband: an account counts as recovered only below this              |
+| `degraded_min_gain_sec`   | `120`         | when all are spent, only move if the target recovers this much sooner |
+| `count_weekly_scoped`     | `false`       | include the model-scoped weekly window                                |
+| `min_switch_interval_sec` | `120`         | anti-flap floor between switches                                      |
+| `failback_to_primary`     | `true`        | return to the primary once it has recovered                           |
+| `notify_command`          | `""`          | optional shell command; `{from} {to} {reason}`                        |
+
+`rotation` names host-local profiles, so the live value is whatever
+`claude-profile list` shows rather than anything committed here.
 
 The percentages are **used**, not remaining: "switch when under 15% of the 5-hour window
 is left" is `five_hour_trip_pct: 85`. The T3 Code panel reports **remaining**, so a
 provider showing `5h 18%` is an account at 82% used. `claude-autoswitch --status` prints
 both framings side by side to make that comparison direct.
 
-Three rules in the implementation are not obvious and should not be simplified away:
+Four rules in the implementation are not obvious and should not be simplified away:
 
 1. **Reset-discounted staleness.** An exhausted account stops running sessions, so its
    cache stops refreshing; a plain freshness check would refuse to act exactly when
@@ -131,6 +135,17 @@ Three rules in the implementation are not obvious and should not be simplified a
    below the trip line before it is chosen as a fallback or failed back to. When no
    account is recovered, the fallback with the most headroom wins rather than the first
    one that merely squeaks under the line.
+4. **When everything is spent, rank by time-to-reset, not by percentage.** Sitting on a
+   dead account is what stops sessions, so the switcher moves to whichever account
+   recovers soonest — the `RECOVERS` column in `--status`. An account whose _weekly_
+   window is also spent ranks behind every account whose weekly still has room, however
+   soon its 5-hour window rolls: a fresh 5-hour window is worthless under an exhausted
+   weekly cap. `degraded_min_gain_sec` keeps it from shuffling between equally dead
+   accounts.
+
+Recurring conditions (`all_exhausted`, `suppressed_by_interval`) are logged at most once
+every five minutes. They are re-evaluated on every tick, and at a 30-second cadence
+logging each one buries the real decisions.
 
 Disable with `"enabled": false`, or:
 
