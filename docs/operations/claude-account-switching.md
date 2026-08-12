@@ -97,20 +97,23 @@ tail ~/.claude-profiles/.autoswitch.jsonl        # every decision, with its inpu
 
 Config lives in `~/.claude-profiles/.autoswitch.json`:
 
-| key                       | default                        | meaning                                        |
-| ------------------------- | ------------------------------ | ---------------------------------------------- |
-| `rotation`                | `["tushar","agent","default"]` | order tried; first entry is the primary        |
-| `five_hour_trip_pct`      | `88`                           | trip when the 5-hour window is this **used**   |
-| `weekly_trip_pct`         | `95`                           | trip when the weekly window is this **used**   |
-| `count_weekly_scoped`     | `false`                        | include the model-scoped weekly window         |
-| `min_switch_interval_sec` | `900`                          | anti-flap floor between switches               |
-| `failback_to_primary`     | `true`                         | return to the primary once it has headroom     |
-| `notify_command`          | `""`                           | optional shell command; `{from} {to} {reason}` |
+| key                       | default                        | meaning                                                  |
+| ------------------------- | ------------------------------ | -------------------------------------------------------- |
+| `rotation`                | `["tushar","agent","default"]` | order tried; first entry is the primary                  |
+| `five_hour_trip_pct`      | `85`                           | trip when the 5-hour window is this **used**             |
+| `weekly_trip_pct`         | `95`                           | trip when the weekly window is this **used**             |
+| `healthy_below_pct`       | `60`                           | deadband: an account counts as recovered only below this |
+| `count_weekly_scoped`     | `false`                        | include the model-scoped weekly window                   |
+| `min_switch_interval_sec` | `900`                          | anti-flap floor between switches                         |
+| `failback_to_primary`     | `true`                         | return to the primary once it has recovered              |
+| `notify_command`          | `""`                           | optional shell command; `{from} {to} {reason}`           |
 
-The percentages are **used**, not remaining: "switch when under 12% of the 5-hour window
-is left" is `five_hour_trip_pct: 88`.
+The percentages are **used**, not remaining: "switch when under 15% of the 5-hour window
+is left" is `five_hour_trip_pct: 85`. The T3 Code panel reports **remaining**, so a
+provider showing `5h 18%` is an account at 82% used. `claude-autoswitch --status` prints
+both framings side by side to make that comparison direct.
 
-Two rules in the implementation are not obvious and should not be simplified away:
+Three rules in the implementation are not obvious and should not be simplified away:
 
 1. **Reset-discounted staleness.** An exhausted account stops running sessions, so its
    cache stops refreshing; a plain freshness check would refuse to act exactly when
@@ -121,6 +124,13 @@ Two rules in the implementation are not obvious and should not be simplified awa
    when state records `auto_moved: true` and `last_to` equals the current profile, so
    the timer only ever reverses its own move. Without this it silently overrides an
    operator who ran `claude-profile use`.
+3. **The deadband is what stops it flapping.** Trip thresholds alone are not enough:
+   an account one point under the trip line reads as available, gets elected, and
+   crosses back over within the hour. Observed in practice as round trips as short as
+   35 minutes. `healthy_below_pct` is the resume threshold — an account must fall well
+   below the trip line before it is chosen as a fallback or failed back to. When no
+   account is recovered, the fallback with the most headroom wins rather than the first
+   one that merely squeaks under the line.
 
 Disable with `"enabled": false`, or:
 
