@@ -32,6 +32,24 @@ describe("shouldRefreshThreadTitle", () => {
     expect(shouldRefreshThreadTitle({ userMessageCount: 3, settings: every1 })).toBe(true);
   });
 
+  it("never overwrites a title the user typed", () => {
+    const every3 = settings();
+    expect(
+      shouldRefreshThreadTitle({ userMessageCount: 3, titleManuallySet: true, settings: every3 }),
+    ).toBe(false);
+    expect(
+      shouldRefreshThreadTitle({ userMessageCount: 9, titleManuallySet: true, settings: every3 }),
+    ).toBe(false);
+    // Absent (rows written before the flag existed) still refreshes.
+    expect(
+      shouldRefreshThreadTitle({
+        userMessageCount: 3,
+        titleManuallySet: undefined,
+        settings: every3,
+      }),
+    ).toBe(true);
+  });
+
   it("treats zero as off, and never fires when disabled", () => {
     expect(
       shouldRefreshThreadTitle({

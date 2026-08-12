@@ -11,6 +11,8 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+// T3-CUSTOM(expbkt3): archive-time session history export.
+import { ArchiveExportReactor } from "../Services/ArchiveExportReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
@@ -84,6 +86,16 @@ describe("OrchestrationReactor", () => {
             drain: Effect.void,
           }),
         ),
+        // T3-CUSTOM(expbkt3): archive-time session history export.
+        Layer.provideMerge(
+          Layer.succeed(ArchiveExportReactor, {
+            start: () => {
+              started.push("archive-export-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
         Layer.provideMerge(
           Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
             publishThread: () => Effect.void,
@@ -107,6 +119,7 @@ describe("OrchestrationReactor", () => {
       "catchup-summary-reactor",
       "work-summary-reactor",
       "thread-deletion-reactor",
+      "archive-export-reactor",
       "agent-awareness-relay",
     ]);
 

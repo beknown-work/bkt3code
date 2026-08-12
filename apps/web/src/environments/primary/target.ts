@@ -1,5 +1,8 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID, type DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+// T3-CUSTOM(expbkt3): BEGIN - the central server a managed BK build points primary at.
+import { readBkManagedPrimaryEnvironmentTarget } from "../../fork/managedEnvironment";
+// T3-CUSTOM(expbkt3): END
 
 const PrimaryEnvironmentTargetSource = Schema.Literals([
   "configured",
@@ -287,6 +290,12 @@ export function resolvePrimaryEnvironmentHttpUrl(
 
 export function readPrimaryEnvironmentTarget(): PrimaryEnvironmentTarget {
   return (
+    // T3-CUSTOM(expbkt3): BEGIN - a managed BK build orchestrates a central server, so
+    // its primary target is baked in and outranks the desktop's bundled local backend.
+    // That backend keeps running and stays available as its own environment; only
+    // where "primary" points changes, never PRIMARY_LOCAL_ENVIRONMENT_ID.
+    readBkManagedPrimaryEnvironmentTarget() ??
+    // T3-CUSTOM(expbkt3): END
     resolveDesktopPrimaryTarget() ??
     resolveConfiguredPrimaryTarget() ??
     resolveWindowOriginPrimaryTarget()

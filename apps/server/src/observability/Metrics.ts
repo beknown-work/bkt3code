@@ -104,11 +104,6 @@ export const durableExecutionLeaseRecoveriesTotal = Metric.counter(
   { description: "Expired durable execution leases reclaimed by a server authority." },
 );
 
-// T3-CUSTOM(expbkt3): stalled executions handed back to durable recovery.
-export const stalledExecutionRevivalsTotal = Metric.counter("t3_stalled_execution_revivals_total", {
-  description: "Silent or runtime-less executions reported to durable recovery, by reason.",
-});
-
 export const durableExecutionFencingRejectionsTotal = Metric.counter(
   "t3_durable_execution_fencing_rejections_total",
   { description: "Durable execution side effects rejected by generation fencing." },

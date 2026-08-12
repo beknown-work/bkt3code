@@ -2004,6 +2004,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         input: {
           threadId: threadRef.threadId,
           title: trimmed,
+          // T3-CUSTOM(expbkt3): a typed name is durable — see titleAuthorship.ts.
+          titleOrigin: "user",
         },
       });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {

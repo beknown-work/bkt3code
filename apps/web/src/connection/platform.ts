@@ -54,6 +54,9 @@ import {
   readPrimaryEnvironmentTarget,
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
+// T3-CUSTOM(expbkt3): BEGIN - cache slot for the primary registration in managed builds.
+import { bkPrimaryRegistrationCacheKey } from "../fork/managedEnvironment";
+// T3-CUSTOM(expbkt3): END
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
 import { isHostedStaticApp } from "../hostedPairing";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -452,7 +455,12 @@ export function primaryRegistrationToRetainAfterTopologyRead(
   previous: ReadonlyMap<string, CachedPlatformRegistration>,
   topologyRead: PrimaryEnvironmentTargetRead,
 ): CachedPlatformRegistration | undefined {
-  return topologyRead._tag === "Failure" ? previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID) : undefined;
+  // T3-CUSTOM(expbkt3): BEGIN - the primary registration keeps its own cache slot, which
+  // is the upstream id everywhere except a managed BK build; see fork/managedEnvironment.
+  return topologyRead._tag === "Failure"
+    ? previous.get(bkPrimaryRegistrationCacheKey(PRIMARY_LOCAL_ENVIRONMENT_ID))
+    : undefined;
+  // T3-CUSTOM(expbkt3): END
 }
 
 export function canReuseCachedPlatformRegistration(
@@ -513,13 +521,18 @@ const platformConnectionSourceLayer = Layer.effect(
       const next = new Map<string, CachedPlatformRegistration>();
       const registrations: Array<PlatformConnectionRegistration> = [];
 
+      // T3-CUSTOM(expbkt3): BEGIN - `primaryCacheKey` is PRIMARY_LOCAL_ENVIRONMENT_ID in
+      // every build except a managed BK one, where the primary is the central server and
+      // the bundled local backend registers as a secondary under that same id. Block ends
+      // after the primary registration below.
+      const primaryCacheKey = bkPrimaryRegistrationCacheKey(PRIMARY_LOCAL_ENVIRONMENT_ID);
       const primaryTopologyRead = readPrimaryEnvironmentTargetResult();
       const retainedPrimary = primaryRegistrationToRetainAfterTopologyRead(
         previous,
         primaryTopologyRead,
       );
       if (retainedPrimary !== undefined) {
-        next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, retainedPrimary);
+        next.set(primaryCacheKey, retainedPrimary);
         registrations.push(retainedPrimary.registration);
       }
 
@@ -530,12 +543,12 @@ const platformConnectionSourceLayer = Layer.effect(
       } else if (primaryTopologyRead.target !== null) {
         const primaryTarget = primaryTopologyRead.target;
         const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}`;
-        const cached = previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID);
+        const cached = previous.get(primaryCacheKey);
         if (
           cached !== undefined &&
           canReuseCachedPlatformRegistration(cached, signature, nowEpochMs)
         ) {
-          next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, cached);
+          next.set(primaryCacheKey, cached);
           registrations.push(cached.registration);
         } else {
           const built = yield* loadPrimaryConnectionRegistration(primaryTarget).pipe(
@@ -546,11 +559,12 @@ const platformConnectionSourceLayer = Layer.effect(
           );
           if (Option.isSome(built)) {
             const cacheEntry = { signature, registration: built.value };
-            next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, cacheEntry);
+            next.set(primaryCacheKey, cacheEntry);
             registrations.push(built.value);
           }
         }
       }
+      // T3-CUSTOM(expbkt3): END
 
       const topologyRead = readDesktopSecondaryBootstrapsResult();
       for (const [id, cached] of secondaryRegistrationsToRetainAfterTopologyRead(

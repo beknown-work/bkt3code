@@ -2061,7 +2061,8 @@ export default function SidebarV2() {
         if (trimmed === originalTitle) return;
         const result = await updateThreadMetadata({
           environmentId: threadRef.environmentId,
-          input: { threadId: threadRef.threadId, title: trimmed },
+          // T3-CUSTOM(expbkt3): a typed name is durable — see titleAuthorship.ts.
+          input: { threadId: threadRef.threadId, title: trimmed, titleOrigin: "user" },
         });
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);

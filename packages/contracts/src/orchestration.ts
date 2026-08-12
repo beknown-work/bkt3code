@@ -730,6 +730,10 @@ export const OrchestrationThread = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // T3-CUSTOM(expbkt3): true once a human named this session, which stops the
+  // periodic refresh from replacing it. Optional so payloads from pre-flag
+  // servers decode; absent means "generated", the historical behavior.
+  titleManuallySet: Schema.optional(Schema.Boolean),
   // T3-CUSTOM(expbkt3): absent on historical and pre-capability servers.
   bootstrap: Schema.optional(Schema.NullOr(ThreadBootstrapProgress)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -819,6 +823,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // T3-CUSTOM(expbkt3): manual-title ownership (see the Thread struct above).
+  titleManuallySet: Schema.optional(Schema.Boolean),
   // T3-CUSTOM(expbkt3): session priority (see ThreadPriority).
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): durable manual Linear issue URL.
@@ -1282,6 +1288,12 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
   regenerateTitle: Schema.optional(Schema.Literal(true)),
+  // T3-CUSTOM(expbkt3): who chose this title. "user" is a rename typed into a
+  // client and becomes durable — generated renames stop overwriting it.
+  // "generated" hands ownership back. Absent leaves ownership unchanged, which
+  // is what the clients' optimistic first-prompt title needs: it is derived
+  // from the prompt, not chosen, so it must stay replaceable.
+  titleOrigin: Schema.optional(Schema.Literals(["user", "generated"])),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1997,6 +2009,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   previousTitle: Schema.optional(TrimmedNonEmptyString),
   /** Pending state shared with clients. Null clears a matching request. */
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
+  // T3-CUSTOM(expbkt3): who owns the title after this update. Only ever emitted
+  // alongside `title`; absent leaves the recorded ownership unchanged.
+  titleManuallySet: Schema.optional(Schema.Boolean),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

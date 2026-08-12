@@ -792,8 +792,11 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    // T3-CUSTOM(expbkt3): the first prompt is named through the durable
+    // regeneration flow, so the prompt arrives as speaker-labelled thread
+    // context rather than the bare message. See shouldNameThreadFromFirstPrompt.
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
-      message: "Please investigate reconnect failures after restarting the session.",
+      message: "USER:\nPlease investigate reconnect failures after restarting the session.",
     });
 
     await waitFor(async () => {

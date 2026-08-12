@@ -1,8 +1,6 @@
 import {
   type ChatAttachment,
   CommandId,
-  // T3-CUSTOM(expbkt3): watchdog fallback bounds when settings cannot be read.
-  DEFAULT_SERVER_SETTINGS,
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
@@ -31,8 +29,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-// T3-CUSTOM(expbkt3): stalled-execution watchdog projection reads.
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -80,14 +76,17 @@ import {
 import { resolveAvailableWorktreeBase } from "../../thread-bootstrap/WorktreeBaseResolver.ts";
 // T3-CUSTOM(expbkt3): periodic title refresh cadence.
 import { shouldRefreshThreadTitle } from "../../thread-title/titleRefreshCadence.ts";
+// T3-CUSTOM(expbkt3): who owns a session title, and when generation may replace it.
+import {
+  canGeneratedTitleReplace,
+  shouldNameThreadFromFirstPrompt,
+} from "../../thread-title/titleAuthorship.ts";
 // T3-CUSTOM(expbkt3): durable dispatch control plane; provider mechanics stay here.
 import {
   DurableExecutionDispatchError,
   makeDurableExecutionCoordinator,
 } from "../../execution/DurableExecutionCoordinator.ts";
 import { DurableExecutionIntentRepository } from "../../execution/DurableExecutionIntentRepository.ts";
-// T3-CUSTOM(expbkt3): notices executions that went silent after admission.
-import { makeStalledExecutionWatchdog } from "../../execution/StalledExecutionWatchdog.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isProjectSetupScriptCommandError = Schema.is(ProjectSetupScriptCommandError);
@@ -344,16 +343,21 @@ export function providerErrorLabelFromInstanceHint(input: {
   );
 }
 
-function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
-  const trimmedCurrentTitle = currentTitle.trim();
-  if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
-    return true;
-  }
-
-  const trimmedTitleSeed = titleSeed?.trim();
-  return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
-    : false;
+// T3-CUSTOM(expbkt3): title ownership moved to apps/server/src/thread-title.
+// Upstream compared the current title to the raw seed, but clients title a new
+// thread with `truncate(prompt)` while seeding the full prompt, so no prompt
+// over the truncation budget was ever auto-named. `titleManuallySet` is the
+// durable "a human chose this" flag the periodic refresh also honors.
+function canReplaceThreadTitle(
+  currentTitle: string,
+  titleSeed?: string,
+  titleManuallySet?: boolean,
+): boolean {
+  return canGeneratedTitleReplace({
+    title: currentTitle,
+    ...(titleSeed !== undefined ? { titleSeed } : {}),
+    ...(titleManuallySet !== undefined ? { titleManuallySet } : {}),
+  });
 }
 
 function findProviderAdapterRequestError(
@@ -444,9 +448,6 @@ const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* Effect.serviceOption(ProjectSetupScriptRunner);
   // T3-CUSTOM(expbkt3): optional keeps isolated upstream reactor tests lightweight.
   const durableIntentRepository = yield* Effect.serviceOption(DurableExecutionIntentRepository);
-  // T3-CUSTOM(expbkt3): the stalled-execution watchdog reads two projections
-  // directly; optional for the same reason as the repository above.
-  const stalledExecutionSql = yield* Effect.serviceOption(SqlClient.SqlClient);
   const sourceControlProfiles = yield* Effect.serviceOption(SourceControlProfileService);
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -1135,7 +1136,9 @@ const make = Effect.gen(function* () {
 
         const thread = yield* resolveThread(input.threadId);
         if (!thread) return;
-        if (!canReplaceThreadTitle(thread.title, input.titleSeed)) {
+        // T3-CUSTOM(expbkt3): a rename that landed while the model was thinking
+        // wins — including one the user typed.
+        if (!canReplaceThreadTitle(thread.title, input.titleSeed, thread.titleManuallySet)) {
           return;
         }
 
@@ -1144,6 +1147,8 @@ const make = Effect.gen(function* () {
           commandId: yield* serverCommandId("thread-title-rename"),
           threadId: input.threadId,
           title: generated.title,
+          // T3-CUSTOM(expbkt3): generated, so a later refresh may replace it.
+          titleOrigin: "generated",
         });
       }).pipe(
         Effect.catchCause((cause) =>
@@ -1381,6 +1386,7 @@ const make = Effect.gen(function* () {
       if (
         shouldRefreshThreadTitle({
           userMessageCount,
+          titleManuallySet: thread.titleManuallySet,
           settings: experimental.threadTitleMaintenance,
         })
       ) {
@@ -1423,13 +1429,46 @@ const make = Effect.gen(function* () {
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
-      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
+      // T3-CUSTOM(expbkt3): BEGIN — name the session through the durable
+      // regeneration flow instead of upstream's forked fiber, which this fork's
+      // durable turn dispatch interrupts before the model answers. See
+      // shouldNameThreadFromFirstPrompt for the full reasoning.
+      if (
+        shouldNameThreadFromFirstPrompt({
+          userMessageCount,
+          title: thread.title,
+          titleManuallySet: thread.titleManuallySet,
+          ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
+        })
+      ) {
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: yield* serverCommandId("thread-title-first-prompt"),
+            threadId: event.payload.threadId,
+            regenerateTitle: true,
+          })
+          .pipe(
+            // A title is cosmetic; never let it interfere with starting the turn.
+            Effect.catchCause((cause) =>
+              Effect.logWarning("first-prompt thread title naming failed to dispatch", {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
+      } else if (
+        canReplaceThreadTitle(thread.title, event.payload.titleSeed, thread.titleManuallySet)
+      ) {
+        // Retained for upstream parity: reachable only when the durable route
+        // declines but the title is still replaceable.
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,
           ...generationInput,
         }).pipe(Effect.forkScoped);
       }
+      // T3-CUSTOM(expbkt3): END
     }
 
     const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
@@ -2061,19 +2100,16 @@ const make = Effect.gen(function* () {
       });
       return yield* fail("bootstrap-setup-uncertain", detail, false);
     } else if (setupStep.value === "uncertain") {
-      // T3-CUSTOM(expbkt3): the fallback is what the user actually reads when a
-      // previous retry cleared the recorded detail, so it has to name the step
-      // and the one action that can move it.
       return yield* fail(
         "bootstrap-setup-uncertain",
         operation.value.lastFailureDetail ??
-          "The setup script may already have run for this session, so it will not be launched again automatically. Retry to run it again.",
+          "Setup delivery is uncertain and cannot be launched again automatically.",
         false,
       );
     } else if (setupStep.value === "failed") {
       return yield* fail(
         "bootstrap-setup-failed",
-        operation.value.lastFailureDetail ?? "The setup script failed. Retry to run it again.",
+        operation.value.lastFailureDetail ?? "Setup failed and requires an explicit retry.",
         false,
       );
     } else {
@@ -2461,49 +2497,6 @@ const make = Effect.gen(function* () {
               }),
             ),
           ),
-        // T3-CUSTOM(expbkt3): a stalled delivery is only stuck because nothing
-        // times it. The bound is read per dispatch so retuning it does not need
-        // a restart.
-        dispatchDeadlineMs: () =>
-          serverSettingsService.getSettings.pipe(
-            Effect.map((settings) =>
-              settings.experimental.stalledExecutionWatchdog.enabled
-                ? settings.experimental.stalledExecutionWatchdog.dispatchDeadlineMs
-                : null,
-            ),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to read stalled execution dispatch deadline", {
-                cause: Cause.pretty(cause),
-              }).pipe(Effect.as(null)),
-            ),
-          ),
-        // T3-CUSTOM(expbkt3): the intent phase alone leaves activity on
-        // "active", so an exhausted session keeps rendering as running beside a
-        // banner saying it failed. Read the execution id from the live snapshot:
-        // `failExecution` matches on it, and assuming it equals the durable work
-        // item id would silently no-op.
-        onExhausted: ({ intent, detail }) =>
-          Effect.gen(function* () {
-            const snapshot = yield* executionSupervisor.getSnapshot(intent.threadId);
-            const turn = snapshot.turn;
-            if (
-              turn === null ||
-              turn.state === "completed" ||
-              turn.state === "interrupted" ||
-              turn.state === "failed"
-            ) {
-              return;
-            }
-            yield* executionSupervisor.failExecution(intent.threadId, turn.executionId, detail);
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to fail exhausted durable execution", {
-                threadId: intent.threadId,
-                workItemId: intent.workItemId,
-                cause: Cause.pretty(cause),
-              }),
-            ),
-          ),
         loadEvent: (intent) =>
           Stream.runHead(
             orchestrationEngine.readEvents((intent.requestEventSequence ?? 1) - 1, 1),
@@ -2867,52 +2860,13 @@ const make = Effect.gen(function* () {
     }
   });
 
-  // T3-CUSTOM(expbkt3): BEGIN — stalled-execution watchdog.
-  //
-  // Started beside durable recovery because it is the observer half of the same
-  // mechanism: it only reports stalls, and every retry decision stays in the
-  // coordinator. Dependencies come from this reactor's own services rather than
-  // the watchdog's context so upstream reactor tests keep their light layer set.
-  const startStalledExecutionWatchdog =
-    durableCoordinator === null || Option.isNone(stalledExecutionSql)
-      ? Effect.void
-      : Effect.suspend(() =>
-          makeStalledExecutionWatchdog({
-            settings: () =>
-              serverSettingsService.getSettings.pipe(
-                Effect.map((settings) => settings.experimental.stalledExecutionWatchdog),
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("failed to read stalled execution watchdog settings", {
-                    cause: Cause.pretty(cause),
-                  }).pipe(Effect.as(DEFAULT_SERVER_SETTINGS.experimental.stalledExecutionWatchdog)),
-                ),
-              ),
-            failObserved: (input) => durableCoordinator.failObserved(input),
-          }).pipe(
-            Effect.flatMap((watchdog) => watchdog.start()),
-            Effect.provideService(SqlClient.SqlClient, stalledExecutionSql.value),
-            Effect.provideService(ProviderService, providerService),
-            Effect.provideService(ThreadExecutionSupervisor, executionSupervisor),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to start stalled execution watchdog", {
-                cause: Cause.pretty(cause),
-              }),
-            ),
-          ),
-        );
-  // T3-CUSTOM(expbkt3): END
-
   return {
     start,
     // T3-CUSTOM(expbkt3): startup invokes this after stale-session reconciliation.
     startDurableRecovery: () =>
       durableCoordinator === null
         ? Effect.void
-        : refreshDurablePhaseMetrics.pipe(
-            Effect.andThen(durableCoordinator.start()),
-            // T3-CUSTOM(expbkt3): the watchdog shares this scope and start gate.
-            Effect.andThen(startStalledExecutionWatchdog),
-          ),
+        : refreshDurablePhaseMetrics.pipe(Effect.andThen(durableCoordinator.start())),
     drain: Effect.gen(function* () {
       yield* worker.drain;
       yield* threadTitleRegenerationWorker.drain;

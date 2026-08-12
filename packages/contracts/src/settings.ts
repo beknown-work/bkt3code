@@ -597,39 +597,6 @@ export const ThreadTitleMaintenanceSettings = Schema.Struct({
 export type ThreadTitleMaintenanceSettings = typeof ThreadTitleMaintenanceSettings.Type;
 
 /**
- * T3-CUSTOM(expbkt3): Bounds for the stalled-execution watchdog.
- *
- * Execution activity only moves on events, so a turn that is admitted and then
- * produces nothing reads as "running" forever. These bounds decide when silence
- * becomes evidence. They are deliberately asymmetric: a missing provider
- * runtime is proof that nothing can produce output, while a live runtime with no
- * output could equally be a long quiet tool call, so it gets a much longer
- * backstop. See `apps/server/src/execution/StalledExecutionPolicy.ts`.
- *
- * `dispatchDeadlineMs` bounds the durable coordinator's dispatch instead, timed
- * from after worktree bootstrap so setup work never consumes it.
- */
-export const StalledExecutionWatchdogSettings = Schema.Struct({
-  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pollIntervalMs: Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })).pipe(
-    Schema.withDecodingDefault(Effect.succeed(30_000)),
-  ),
-  startedButNotTakenMs: Schema.Int.check(
-    Schema.isBetween({ minimum: 30_000, maximum: 3_600_000 }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed(90_000))),
-  dispatchDeadlineMs: Schema.Int.check(
-    Schema.isBetween({ minimum: 60_000, maximum: 3_600_000 }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed(300_000))),
-  deadRuntimeGraceMs: Schema.Int.check(
-    Schema.isBetween({ minimum: 15_000, maximum: 600_000 }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed(60_000))),
-  silentTurnMs: Schema.Int.check(Schema.isBetween({ minimum: 300_000, maximum: 86_400_000 })).pipe(
-    Schema.withDecodingDefault(Effect.succeed(5_400_000)),
-  ),
-});
-export type StalledExecutionWatchdogSettings = typeof StalledExecutionWatchdogSettings.Type;
-
-/**
  * T3-CUSTOM(expbkt3): How much of an archived session's worktree to give back.
  *
  * `slim` deletes only regenerable directories (`node_modules`, build output,
@@ -671,9 +638,21 @@ export const SessionArchiveAutoSweepSettings = Schema.Struct({
 export type SessionArchiveAutoSweepSettings = typeof SessionArchiveAutoSweepSettings.Type;
 
 export const SessionArchiveSettings = Schema.Struct({
-  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // On by default so archiving a session exports its history immediately.
+  // Destructive reclaim stays separately gated behind `autoSweep.enabled`.
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   historyDir: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   includeTranscriptSidecar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Tool-call activity sidecar (`.activities.jsonl`) alongside the transcript. */
+  includeActivities: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Gzipped copies of the provider's own transcript files (`-raw/` directory).
+   * Captured at export time because the provider files are keyed by worktree
+   * path, a mapping that dies when the worktree is reclaimed.
+   */
+  includeRawProviderTranscripts: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   autoSweep: SessionArchiveAutoSweepSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type SessionArchiveSettings = typeof SessionArchiveSettings.Type;
@@ -692,10 +671,6 @@ export const ExperimentalSettings = Schema.Struct({
   ),
   // T3-CUSTOM(expbkt3): archived-session worktree reclaim.
   sessionArchive: SessionArchiveSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  // T3-CUSTOM(expbkt3): revive-or-fail bounds for stalled executions.
-  stalledExecutionWatchdog: StalledExecutionWatchdogSettings.pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
 });
 export type ExperimentalSettings = typeof ExperimentalSettings.Type;
 
@@ -1007,27 +982,6 @@ export const ServerSettingsPatch = Schema.Struct({
           ),
         }),
       ),
-      // T3-CUSTOM(expbkt3): revive-or-fail bounds for stalled executions.
-      stalledExecutionWatchdog: Schema.optionalKey(
-        Schema.Struct({
-          enabled: Schema.optionalKey(Schema.Boolean),
-          pollIntervalMs: Schema.optionalKey(
-            Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })),
-          ),
-          startedButNotTakenMs: Schema.optionalKey(
-            Schema.Int.check(Schema.isBetween({ minimum: 30_000, maximum: 3_600_000 })),
-          ),
-          dispatchDeadlineMs: Schema.optionalKey(
-            Schema.Int.check(Schema.isBetween({ minimum: 60_000, maximum: 3_600_000 })),
-          ),
-          deadRuntimeGraceMs: Schema.optionalKey(
-            Schema.Int.check(Schema.isBetween({ minimum: 15_000, maximum: 600_000 })),
-          ),
-          silentTurnMs: Schema.optionalKey(
-            Schema.Int.check(Schema.isBetween({ minimum: 300_000, maximum: 86_400_000 })),
-          ),
-        }),
-      ),
       sessionSummary: Schema.optionalKey(
         Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
@@ -1043,6 +997,8 @@ export const ServerSettingsPatch = Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
           historyDir: Schema.optionalKey(TrimmedString),
           includeTranscriptSidecar: Schema.optionalKey(Schema.Boolean),
+          includeActivities: Schema.optionalKey(Schema.Boolean),
+          includeRawProviderTranscripts: Schema.optionalKey(Schema.Boolean),
           autoSweep: Schema.optionalKey(
             Schema.Struct({
               enabled: Schema.optionalKey(Schema.Boolean),

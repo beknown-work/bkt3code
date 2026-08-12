@@ -50,6 +50,15 @@ const EXEMPT_PATTERNS: ReadonlyArray<RegExp> = [
 /** How far above a hunk a single-line marker still counts as covering it. */
 const MARKER_LOOKBEHIND_LINES = 3;
 
+/**
+ * A comment-only line, which is where the single-line marker form is written.
+ * A marker here documents the region beneath it; one trailing a statement
+ * documents only that statement. Block-comment continuations (`*`) are
+ * deliberately absent: a marker in a file header would otherwise swallow
+ * everything down to the first blank line.
+ */
+const COMMENT_ONLY_LINE = /^\s*(?:\/\/|#|<!--)/;
+
 interface Violation {
   readonly file: string;
   readonly startLine: number;
@@ -69,28 +78,51 @@ function isExempt(path: string): boolean {
 
 /**
  * Line numbers (1-indexed, in the HEAD version of the file) that sit inside a
- * BEGIN/END marker block or on a line carrying a single-line marker.
+ * BEGIN/END marker block, carry a single-line marker, or sit in the contiguous
+ * run of lines a comment-only marker introduces.
+ *
+ * That last case is what the error message promises — "put a single-line
+ * marker comment directly above it" — and it has to cover more than the
+ * comment's own line, because the edit it documents is the code underneath,
+ * and the explanation itself usually wraps onto a second and third line. The
+ * run ends at the first blank line, which is where a marked region naturally
+ * ends in this codebase.
  */
 function markedLines(contents: string): ReadonlySet<number> {
   const marked = new Set<number>();
   const lines = contents.split("\n");
   let blockDepth = 0;
+  let coversBelow = false;
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
     const hasMarker = line.includes(MARKER);
     if (hasMarker && line.includes("BEGIN")) {
       blockDepth += 1;
+      coversBelow = false;
       marked.add(lineNumber);
       return;
     }
     if (hasMarker && line.includes("END")) {
       marked.add(lineNumber);
       blockDepth = Math.max(0, blockDepth - 1);
+      coversBelow = false;
       return;
     }
-    if (blockDepth > 0 || hasMarker) {
+    if (hasMarker) {
       marked.add(lineNumber);
+      coversBelow = COMMENT_ONLY_LINE.test(line);
+      return;
     }
+    if (blockDepth > 0) {
+      marked.add(lineNumber);
+      return;
+    }
+    if (!coversBelow) return;
+    if (line.trim() === "") {
+      coversBelow = false;
+      return;
+    }
+    marked.add(lineNumber);
   });
   return marked;
 }
@@ -133,6 +165,25 @@ function addedHunks(base: string, file: string): ReadonlyArray<readonly [number,
   return hunks;
 }
 
+/**
+ * The lines of one added hunk that still need a marker.
+ *
+ * Blank lines carry no ownership and cannot hold a marker. `git diff -U0`
+ * routinely folds the blank line that separates a new marked block from its
+ * neighbours into the same hunk, so counting whitespace as fork code fails an
+ * edit that is in fact marked correctly.
+ */
+function unmarkedInHunk(
+  lines: ReadonlyArray<string>,
+  marked: ReadonlySet<number>,
+  start: number,
+  count: number,
+): number[] {
+  return Array.from({ length: count }, (_, offset) => start + offset).filter(
+    (line) => !marked.has(line) && (lines[line - 1] ?? "").trim() !== "",
+  );
+}
+
 function findViolations(base: string, files: ReadonlyArray<string>): Violation[] {
   const violations: Violation[] = [];
   for (const file of files) {
@@ -141,18 +192,19 @@ function findViolations(base: string, files: ReadonlyArray<string>): Violation[]
     // file often carries a marked fork import near the top, and sniffing for
     // that would exempt the entire file from the check.
     const contents = NodeFS.readFileSync(file, "utf8");
+    const lines = contents.split("\n");
     const marked = markedLines(contents);
     for (const [start, count] of addedHunks(base, file)) {
-      const covered = Array.from({ length: count }, (_, offset) => start + offset).every((line) =>
-        marked.has(line),
-      );
-      if (covered) continue;
+      const unmarked = unmarkedInHunk(lines, marked, start, count);
+      if (unmarked.length === 0) continue;
+      const first = unmarked[0] ?? start;
       const lookbehind = Array.from(
         { length: MARKER_LOOKBEHIND_LINES },
-        (_, offset) => start - offset - 1,
+        (_, offset) => first - offset - 1,
       ).some((line) => marked.has(line));
       if (lookbehind) continue;
-      violations.push({ file, startLine: start, lineCount: count });
+      const last = unmarked[unmarked.length - 1] ?? first;
+      violations.push({ file, startLine: first, lineCount: last - first + 1 });
     }
   }
   return violations;
@@ -235,4 +287,4 @@ if (
   process.exit(main());
 }
 
-export { isExempt, markedLines };
+export { isExempt, markedLines, unmarkedInHunk };

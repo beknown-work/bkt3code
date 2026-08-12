@@ -585,6 +585,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
+          -- T3-CUSTOM(expbkt3): manual-title ownership.
+          title_manually_set AS "titleManuallySet",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -668,6 +670,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
+          -- T3-CUSTOM(expbkt3): manual-title ownership.
+          title_manually_set AS "titleManuallySet",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -714,6 +718,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
+          -- T3-CUSTOM(expbkt3): manual-title ownership.
+          title_manually_set AS "titleManuallySet",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -1165,6 +1171,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
+          -- T3-CUSTOM(expbkt3): manual-title ownership.
+          title_manually_set AS "titleManuallySet",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -1232,6 +1240,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
           pinned_at AS "pinnedAt",
+          -- T3-CUSTOM(expbkt3): manual-title ownership.
+          title_manually_set AS "titleManuallySet",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -2065,6 +2075,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 workSummary: mapWorkSummary(row.workSummary),
                 // T3-CUSTOM(expbkt3): END
                 pinnedAt: row.pinnedAt,
+                // T3-CUSTOM(expbkt3): manual-title ownership.
+                titleManuallySet: row.titleManuallySet === 1,
                 titleRegeneration: mapTitleRegeneration(row),
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
@@ -2376,6 +2388,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   workSummary: mapWorkSummary(row.workSummary),
                   // T3-CUSTOM(expbkt3): END
                   pinnedAt: row.pinnedAt,
+                  // T3-CUSTOM(expbkt3): manual-title ownership.
+                  titleManuallySet: row.titleManuallySet === 1,
                   titleRegeneration: mapTitleRegeneration(row),
                   deletedAt: row.deletedAt,
                   messages: [],
@@ -2554,6 +2568,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         workSummary: mapWorkSummary(row.workSummary),
                         // T3-CUSTOM(expbkt3): END
                         pinnedAt: row.pinnedAt,
+                        // T3-CUSTOM(expbkt3): manual-title ownership.
+                        titleManuallySet: row.titleManuallySet === 1,
                         titleRegeneration: mapTitleRegeneration(row),
                         session: sessionByThread.get(row.threadId) ?? null,
                         latestUserMessageAt: row.latestUserMessageAt,
@@ -2738,6 +2754,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     workSummary: mapWorkSummary(row.workSummary),
                     // T3-CUSTOM(expbkt3): END
                     pinnedAt: row.pinnedAt,
+                    // T3-CUSTOM(expbkt3): manual-title ownership.
+                    titleManuallySet: row.titleManuallySet === 1,
                     titleRegeneration: mapTitleRegeneration(row),
                     session: sessionByThread.get(row.threadId) ?? null,
                     latestUserMessageAt: row.latestUserMessageAt,
@@ -3062,6 +3080,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         workSummary: mapWorkSummary(threadRow.value.workSummary),
         // T3-CUSTOM(expbkt3): END
         pinnedAt: threadRow.value.pinnedAt,
+        // T3-CUSTOM(expbkt3): manual-title ownership.
+        titleManuallySet: threadRow.value.titleManuallySet === 1,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
@@ -3270,6 +3290,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         workSummary: mapWorkSummary(threadRow.value.workSummary),
         // T3-CUSTOM(expbkt3): END
         pinnedAt: threadRow.value.pinnedAt,
+        // T3-CUSTOM(expbkt3): manual-title ownership.
+        titleManuallySet: threadRow.value.titleManuallySet === 1,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         deletedAt: null,
         messages: messageRows.map((row) => {
