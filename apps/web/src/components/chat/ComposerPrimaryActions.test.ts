@@ -29,6 +29,8 @@ function renderPendingActions(isRunning: boolean) {
         isComplete: true,
       },
       isRunning,
+      // T3-CUSTOM(expbkt3): fork-required prop; no stop request is in flight here.
+      isStopPending: false,
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -50,6 +52,8 @@ function renderStandaloneStop() {
       compact: true,
       pendingAction: null,
       isRunning: true,
+      // T3-CUSTOM(expbkt3): fork-required prop; no stop request is in flight here.
+      isStopPending: false,
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -71,6 +75,8 @@ function renderSendButton() {
       compact: true,
       pendingAction: null,
       isRunning: false,
+      // T3-CUSTOM(expbkt3): fork-required prop; no stop request is in flight here.
+      isStopPending: false,
       showPlanFollowUpPrompt: false,
       promptHasText: true,
       isSendBusy: false,
