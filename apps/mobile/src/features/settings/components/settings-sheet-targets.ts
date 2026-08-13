@@ -4,6 +4,8 @@ export type SettingsSheetTarget =
   | "SettingsAppearance"
   | "SettingsProjectGrouping"
   | "SettingsClientStorage"
+  | "SettingsUsage"
+  // T3-CUSTOM(expbkt3): fork Users settings screen.
   | "SettingsSourceControl";
 
 export type SettingsLegalDocumentTarget = "SettingsLegal";

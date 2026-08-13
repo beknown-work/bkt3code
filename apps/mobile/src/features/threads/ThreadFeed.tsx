@@ -52,17 +52,12 @@ import {
 import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, {
-  FadeIn,
-  FadeInUp,
-  useSharedValue,
-  withTiming,
-  type LayoutAnimationsValues,
-  type SharedValue,
-} from "react-native-reanimated";
+import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   hasNativeSelectableMarkdownText,
   SelectableMarkdownText,
@@ -103,6 +98,10 @@ import {
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
+  resolveThreadFeedLiveFollow,
+  type ThreadFeedLiveFollowEvent,
+} from "./thread-feed-live-follow";
+import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
   ThreadWorkLog,
@@ -111,6 +110,10 @@ import {
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
+
+const WIDE_MARKDOWN_BLOCK_OPTIONS = {
+  includeOrderedLists: Platform.OS === "android",
+} as const;
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -123,14 +126,6 @@ function formatMessageTime(input: string): string {
   }
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
-
-// Rows shift when content above them grows (streaming text, work-log folds);
-// animating the container position turns those jumps into slides. Applied
-// conditionally — see the gated transition in ThreadFeed: while browsing
-// history the animation must NOT run, or every estimate→actual size
-// correction plays as a visible slide against the instant scroll-offset
-// compensation from maintainVisibleContentPosition.
-const FEED_ITEM_LAYOUT_DURATION_MS = 180;
 
 // Pre-measurement heights for getFixedItemSize, mirroring renderFeedEntry's
 // classNames. The fold row's min-h-11 (44px) stays taller than its single
@@ -172,6 +167,7 @@ export interface ThreadFeedProps {
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
+  readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: {
@@ -955,6 +951,12 @@ function renderFeedEntry(
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
     const hasReviewCommentContext = message.text.includes("<review_comment");
+    // A bubble that sizes itself from its content cannot lay out a block whose
+    // intrinsic width overflows `maxWidth`: Android positions the bubble's
+    // children during the unclamped pass and never moves them once the width
+    // is clamped, so the paragraphs around the block end up drawn on top of
+    // each other. Pinning the width removes that pass.
+    const hasWideBlock = hasWideMarkdownBlock(message.text, WIDE_MARKDOWN_BLOCK_OPTIONS);
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
@@ -977,7 +979,11 @@ function renderFeedEntry(
             style={{
               backgroundColor: userBubbleColor,
               maxWidth: props.userBubbleMaxWidth,
-              ...(hasReviewCommentContext ? { width: props.reviewCommentBubbleWidth } : null),
+              ...(hasReviewCommentContext
+                ? { width: props.reviewCommentBubbleWidth }
+                : hasWideBlock
+                  ? { width: props.userBubbleMaxWidth }
+                  : null),
             }}
           >
             {message.text.trim().length > 0 ? (
@@ -1395,6 +1401,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const headerMaterialVisibleRef = useRef(false);
   const previousLatestTurnRef = useRef(props.latestTurn);
+  const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
   const [viewportWidth, setViewportWidth] = useState(() =>
@@ -1413,13 +1420,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // momentum; only motion inside a session can break follow, so MVCP
   // compensations and programmatic scrolls never strand a follower.
   const userScrollSessionRef = useRef(false);
-  const setEndFollow = useCallback((enabled: boolean) => {
-    if (endFollowEnabledRef.current === enabled) {
-      return;
-    }
-    endFollowEnabledRef.current = enabled;
-    setEndFollowEnabled(enabled);
-  }, []);
+  const setEndFollow = useCallback(
+    (enabled: boolean) => {
+      if (endFollowEnabledRef.current === enabled) {
+        return;
+      }
+      endFollowEnabledRef.current = enabled;
+      setEndFollowEnabled(enabled);
+      props.onEndFollowEnabledChange?.(enabled);
+    },
+    [props.onEndFollowEnabledChange],
+  );
+  const transitionEndFollow = useCallback(
+    (event: ThreadFeedLiveFollowEvent) => {
+      setEndFollow(resolveThreadFeedLiveFollow(endFollowEnabledRef.current, event));
+    },
+    [setEndFollow],
+  );
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
@@ -1524,11 +1541,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.onHeaderMaterialVisibilityChange],
   );
-  // True while the viewport sits within ~one screen of the list end — the
-  // only region where layout shifts should animate. Starts true because the
-  // list opens pinned to the end.
-  const nearListEnd = useSharedValue(true);
-
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -1536,72 +1548,73 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      nearListEnd.value =
-        contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
-
-      // Latch bookkeeping. LegendList recomputes its inset-aware end distance
-      // before invoking this handler, so getState() is current. Returning to
-      // the end re-arms follow no matter who scrolled (the user, or our own
-      // scroll-to-end); moving away breaks it only during a user-initiated
-      // scroll session, so MVCP compensations and programmatic repositioning
-      // can never strand a follower.
+      // LegendList recomputes its inset-aware end distance before invoking
+      // this handler, so getState() is current. Only the actual end re-arms
+      // follow: its broader maintain-scroll threshold is large enough for a
+      // streaming chunk to pull a user back before their upward drag escapes.
+      // A live user-scroll session still wins even if the first scroll event
+      // remains inside LegendList's at-end tolerance.
       const listState = props.listRef.current?.getState();
       if (listState) {
-        if (listState.isWithinMaintainScrollAtEndThreshold) {
-          setEndFollow(true);
-        } else if (userScrollSessionRef.current) {
-          setEndFollow(false);
-        }
+        transitionEndFollow({
+          type: "scroll",
+          isAtEnd: listState.isAtEnd,
+          userScrollSessionActive: userScrollSessionRef.current,
+        });
       }
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd, props.listRef, setEndFollow],
+    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, transitionEndFollow],
   );
-  const handleScrollBeginDrag = useCallback(() => {
-    userScrollSessionRef.current = true;
-  }, []);
-  // The session must survive past finger-lift so momentum that carries the
-  // user away from the end still breaks follow; a drag released with no
-  // momentum ends its session at the release itself, otherwise at momentum
-  // end. Leaving a session open would let a later animated maintain-scroll
-  // read as user motion and break follow spuriously.
-  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const velocity = event.nativeEvent.velocity?.y ?? 0;
-    if (Math.abs(velocity) < 0.05) {
-      userScrollSessionRef.current = false;
+  const clearUserScrollSettle = useCallback(() => {
+    if (userScrollSettleTimerRef.current !== null) {
+      clearTimeout(userScrollSettleTimerRef.current);
+      userScrollSettleTimerRef.current = null;
     }
   }, []);
+  const handleScrollBeginDrag = useCallback(() => {
+    clearUserScrollSettle();
+    userScrollSessionRef.current = true;
+    // Pause before the first scroll event. Otherwise a stream update can run
+    // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
+    transitionEndFollow({ type: "user-scroll-begin" });
+  }, [clearUserScrollSettle, transitionEndFollow]);
+  const finishUserScroll = useCallback(
+    (releaseIsAtEnd?: boolean) => {
+      clearUserScrollSettle();
+      const userScrollSessionActive = userScrollSessionRef.current;
+      userScrollSessionRef.current = false;
+      transitionEndFollow({
+        type: "user-scroll-end",
+        // With no momentum, preserve the finger-release position. Streaming
+        // growth during the native momentum-detection window must not turn a
+        // release at the live edge into an opt-out from follow.
+        isAtEnd: releaseIsAtEnd ?? props.listRef.current?.getState().isAtEnd ?? false,
+        userScrollSessionActive,
+      });
+    },
+    [clearUserScrollSettle, props.listRef, transitionEndFollow],
+  );
+  // Finger-lift velocity is not a reliable momentum signal: a gentle fling
+  // can report zero and still decelerate. Give native momentum a short window
+  // to announce itself; if it does, onMomentumScrollBegin cancels this fallback
+  // and the session survives until the settled momentum-end position. This
+  // mirrors the native-event handoff used by the home thread list's scroll gate.
+  const handleScrollEndDrag = useCallback(() => {
+    clearUserScrollSettle();
+    const releaseIsAtEnd = props.listRef.current?.getState().isAtEnd ?? false;
+    userScrollSettleTimerRef.current = setTimeout(() => finishUserScroll(releaseIsAtEnd), 160);
+  }, [clearUserScrollSettle, finishUserScroll, props.listRef]);
+  const handleMomentumScrollBegin = useCallback(() => {
+    if (userScrollSessionRef.current) {
+      clearUserScrollSettle();
+    }
+  }, [clearUserScrollSettle]);
   const handleMomentumScrollEnd = useCallback(() => {
-    userScrollSessionRef.current = false;
-  }, []);
+    finishUserScroll();
+  }, [finishUserScroll]);
 
-  // Gated variant of the 180ms feed layout slide. Instant while browsing
-  // history: maintainVisibleContentPosition compensates the scroll offset in
-  // the same frame a row's measured size lands, so an instant reposition is
-  // invisible — animating it is exactly what made cold upward scrolls slide
-  // and jump. Near the end the slide stays on: streaming growth and sends
-  // shift rows at rest, where the animation is the thing preventing a hard
-  // visual snap.
-  const feedItemLayoutTransition = useMemo(() => {
-    return (values: LayoutAnimationsValues) => {
-      "worklet";
-      const duration = nearListEnd.value ? FEED_ITEM_LAYOUT_DURATION_MS : 0;
-      return {
-        initialValues: {
-          originX: values.currentOriginX,
-          originY: values.currentOriginY,
-          width: values.currentWidth,
-          height: values.currentHeight,
-        },
-        animations: {
-          originX: withTiming(values.targetOriginX, { duration }),
-          originY: withTiming(values.targetOriginY, { duration }),
-          width: withTiming(values.targetWidth, { duration }),
-          height: withTiming(values.targetHeight, { duration }),
-        },
-      };
-    };
-  }, [nearListEnd]);
+  useEffect(() => clearUserScrollSettle, [clearUserScrollSettle]);
+
   const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -1609,23 +1622,30 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setViewportHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
   }, []);
 
+  // Thread identity is env-scoped: two environments can hold the same
+  // ThreadId, and keying resets (or the list mount) on the bare id would
+  // carry stale scroll/follow state across an environment switch.
+  const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
+
   useEffect(() => {
     reportHeaderMaterialVisibility(false);
-  }, [props.threadId, reportHeaderMaterialVisibility]);
+  }, [feedThreadKey, reportHeaderMaterialVisibility]);
 
   // A thread switch opens pinned to the end; a send explicitly returns to the
   // live edge (ThreadDetailScreen scrolls the new message into place). Both
   // re-arm follow regardless of where the user had scrolled before.
   useEffect(() => {
+    clearUserScrollSettle();
     userScrollSessionRef.current = false;
-    setEndFollow(true);
-  }, [props.threadId, setEndFollow]);
+    transitionEndFollow({ type: "reset" });
+  }, [clearUserScrollSettle, feedThreadKey, transitionEndFollow]);
   useEffect(() => {
     if (props.anchorMessageId !== null) {
+      clearUserScrollSettle();
       userScrollSessionRef.current = false;
-      setEndFollow(true);
+      transitionEndFollow({ type: "reset" });
     }
-  }, [props.anchorMessageId, setEndFollow]);
+  }, [clearUserScrollSettle, props.anchorMessageId, transitionEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1661,7 +1681,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // initial scroll-to-end computes with a zero end inset and rests one
   // composer-height short of the end. Layout effect: it must land before the
   // list's first positioning tick or the one-shot initial scroll misses it.
-  const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
+  const listMountKey = `${feedThreadKey}:${props.feed.length === 0 ? "empty" : "filled"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
@@ -1965,7 +1985,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 }
               : { scrollIndicatorInsets: { top: topContentInset, bottom: 0 } })}
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            itemLayoutAnimation={feedItemLayoutTransition}
             // Patched LegendList prop (patches/@legendapp__list@3.2.0.patch):
             // lets its scroll math clamp programmatic scrolls to -headerInset
             // instead of 0, so initialScrollAtEnd/maintainScrollAtEnd on short
@@ -2041,6 +2060,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
             onScrollEndDrag={handleScrollEndDrag}
+            onMomentumScrollBegin={handleMomentumScrollBegin}
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
             ListHeaderComponent={

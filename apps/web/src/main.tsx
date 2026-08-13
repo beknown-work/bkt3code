@@ -20,6 +20,7 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
+import { clerkAppearance } from "./components/clerk/clerkAppearance";
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
@@ -57,14 +58,20 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         // window with no explanation. The notice is a sibling, not a child, so it
         // still renders in exactly that case.
         <>
-          <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
+          <ElectronClerkProvider
+            appearance={clerkAppearance}
+            publishableKey={clerkPublishableKey}
+            passkeys={passkeys}
+          >
             {clerkChildren}
           </ElectronClerkProvider>
           <DesktopAuthStallNotice />
         </>
       ) : (
         // T3-CUSTOM(expbkt3): END
-        <ClerkProvider publishableKey={clerkPublishableKey}>{clerkChildren}</ClerkProvider>
+        <ClerkProvider appearance={clerkAppearance} publishableKey={clerkPublishableKey}>
+          {clerkChildren}
+        </ClerkProvider>
       )
     ) : (
       app

@@ -184,6 +184,20 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
+        // The turn can settle while background work runs on (subagent
+        // fleets, workflow runs, Monitor watch loops). Those live inside the
+        // provider process, so stopping the session would kill them silently,
+        // and nothing bumps lastSeenAt between turns.
+        if (thread?.backgroundLiveness != null) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-background-work", {
+            threadId: binding.threadId,
+            backgroundLiveness: thread.backgroundLiveness,
+            idleDurationMs,
+          });
+          continue;
+        }
+
+        // T3-CUSTOM(expbkt3): terminate (not stop) idle sessions so the process tree exits.
         const reaped = yield* providerService.terminateSession({ threadId: binding.threadId }).pipe(
           Effect.tap(() =>
             Effect.logInfo("provider.session.reaped", {

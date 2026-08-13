@@ -11,7 +11,6 @@ export type SettingsPath =
   | "/settings/projects"
   | "/settings/project-access"
   | "/settings/experiments"
-  | "/settings/beta"
   | "/settings/archived";
 
 export interface SettingsSearchItem {
@@ -38,7 +37,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/projects": "Projects",
   "/settings/project-access": "Project Access",
   "/settings/experiments": "Experiments",
-  "/settings/beta": "Beta",
   "/settings/archived": "Archive",
 };
 
@@ -113,6 +111,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "auto-settle-inactive-threads",
+    title: "Auto-settle inactive threads",
+    to: "/settings/general",
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
@@ -120,11 +123,6 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "hide-whitespace-changes",
     title: "Hide whitespace changes",
-    to: "/settings/general",
-  },
-  {
-    id: "assistant-output",
-    title: "Assistant output",
     to: "/settings/general",
   },
   {
@@ -169,6 +167,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "legacy-plan-mode",
+    title: "Plan mode (legacy)",
+    to: "/settings/general",
+  },
+  {
+    id: "legacy-token-streaming",
+    title: "Stream token by token (legacy)",
+    to: "/settings/general",
+  },
+  {
+    id: "legacy-sidebar",
+    title: "Sidebar (legacy)",
+    to: "/settings/general",
+  },
+  {
     id: "keybindings",
     title: "Keybindings",
     to: "/settings/keybindings",
@@ -193,27 +206,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Remote environments",
     to: "/settings/connections",
   },
-  {
-    id: "sidebar-v2",
-    title: "Sidebar v2",
-    to: "/settings/beta",
-  },
-  {
-    id: "auto-settle-inactive-threads",
-    title: "Auto-settle inactive threads",
-    to: "/settings/beta",
-    targetId: "sidebar-v2",
-  },
-  {
-    id: "restore-plan-mode",
-    title: "Restore plan mode (legacy)",
-    to: "/settings/beta",
-  },
   // T3-CUSTOM(expbkt3): native plan review.
   {
     id: "native-plan-review",
     title: "Native plan review",
-    to: "/settings/beta",
+    to: "/settings/experiments",
   },
   {
     id: "archive",

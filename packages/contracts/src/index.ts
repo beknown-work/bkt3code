@@ -25,6 +25,7 @@ export * from "./planReview.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";
+export * from "./pullRequest.ts";
 // T3-CUSTOM(expbkt3): fork source-control identity schemas
 export * from "./sourceControlProfiles.ts";
 // T3-CUSTOM(expbkt3): archived-session worktree reclaim schemas
@@ -41,4 +42,5 @@ export * from "./review.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./resourceTelemetry.ts";
+export * from "./usage.ts";
 export * from "./rpc.ts";
