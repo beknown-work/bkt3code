@@ -2,7 +2,7 @@
  * ClerkSignInGate - team-mode sign-in surface.
  *
  * Rendered by the /pair route (instead of PairingRouteSurface) when the server
- * advertises the "clerk-session" bootstrap method and a Clerk publishable key is
+ * advertises a `clerk` auth descriptor and a Clerk publishable key is
  * configured. Shows Clerk's prebuilt <SignIn/>; once the user is signed into
  * Clerk it exchanges the session token for a server browser-session cookie via
  * `submitClerkSessionToken`, then calls `onAuthenticated`. A valid token for a

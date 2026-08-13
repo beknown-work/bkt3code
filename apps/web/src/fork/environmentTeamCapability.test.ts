@@ -16,10 +16,14 @@ import {
   shouldRenderMemberSurface,
 } from "./environmentTeamCapability";
 
-/** What a team-mode server advertises: a clerk descriptor and clerk-session pairing. */
+/**
+ * What a team-mode server advertises: an ordinary bootstrap method list plus a
+ * `clerk` descriptor. Deliberately no fork-only bootstrap method — that union is
+ * closed in stock clients, and widening it made our config undecodable for them.
+ */
 const teamDescriptor: ServerAuthDescriptor = {
   policy: "remote-reachable",
-  bootstrapMethods: ["one-time-token", "clerk-session"],
+  bootstrapMethods: ["one-time-token"],
   sessionMethods: ["browser-session-cookie", "bearer-access-token", "dpop-access-token"],
   sessionCookieName: "t3code_session",
   clerk: { publishableKey: "pk_test_x", organizationId: "org_1" },
@@ -44,10 +48,13 @@ describe("reading team capability off a server auth descriptor", () => {
     expect(serverAuthDescriptorSupportsTeam(localBackendDescriptor)).toBe(false);
   });
 
-  it("accepts either signal on its own, so one being reshaped upstream is survivable", () => {
+  it("reads the clerk descriptor, not the bootstrap method list", () => {
+    // Dropping the descriptor makes it not-team even though nothing else changed:
+    // team mode must never be inferred from a bootstrap method again.
     const { clerk: _clerk, ...withoutClerk } = teamDescriptor;
-    expect(serverAuthDescriptorSupportsTeam(withoutClerk)).toBe(true);
+    expect(serverAuthDescriptorSupportsTeam(withoutClerk)).toBe(false);
 
+    // Conversely the descriptor alone is enough, whatever the method list says.
     expect(
       serverAuthDescriptorSupportsTeam({
         ...localBackendDescriptor,

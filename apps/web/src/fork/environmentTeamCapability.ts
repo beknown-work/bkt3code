@@ -14,10 +14,9 @@
  * like it worked and could not.
  *
  * The environment's own server config already answers the question. A team-mode
- * server advertises a `clerk` descriptor and offers `clerk-session` as a
- * bootstrap method; a single-user backend advertises neither. So the gate is
- * per-environment and needs no new wire format — `ServerConfig.auth` is already
- * streamed per environment and cached by `state/server`.
+ * server advertises a `clerk` descriptor; a single-user backend does not. So the
+ * gate is per-environment and needs no new wire format — `ServerConfig.auth` is
+ * already streamed per environment and cached by `state/server`.
  *
  * @module fork/environmentTeamCapability
  */
@@ -29,8 +28,11 @@ import { serverEnvironment } from "../state/server";
 /**
  * Whether a server auth descriptor describes a team-mode environment.
  *
- * Either signal is sufficient and both are set together by a team-mode server;
- * accepting either keeps this working if one of them is ever reshaped upstream.
+ * The `clerk` descriptor is the only signal. An earlier version also accepted a
+ * fork-only `clerk-session` entry in `bootstrapMethods`; that entry is gone,
+ * because adding it to a closed literal union stock clients decode made the
+ * whole server config undecodable for them.
+ *
  * Absent config reads as "not team", so the surfaces stay hidden until the
  * environment has actually told us what it is — the safe direction, since the
  * failure this prevents is writing member ids to a server that cannot store
@@ -42,7 +44,7 @@ export function serverAuthDescriptorSupportsTeam(
   if (!auth) {
     return false;
   }
-  return auth.clerk !== undefined || auth.bootstrapMethods.includes("clerk-session");
+  return auth.clerk !== undefined;
 }
 
 /** Whether a cached server config belongs to a team-mode environment. */

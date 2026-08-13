@@ -2,7 +2,13 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import { AuthSessionId, EnvironmentUserId, TrimmedNonEmptyString, UserId } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  EnvironmentUserId,
+  ForwardCompatibleArray,
+  TrimmedNonEmptyString,
+  UserId,
+} from "./baseSchemas.ts";
 
 /**
  * Declares the server's overall authentication posture.
@@ -47,15 +53,8 @@ export type ServerAuthPolicy = typeof ServerAuthPolicy.Type;
  *   shell can pair the renderer without a login screen
  * - `one-time-token`: a short-lived pairing token, suitable for manual pairing
  *   flows such as `/pair?token=...`
- * - `clerk-session`: the environment expects the operator to sign in with Clerk
- *   (team mode); the browser exchanges a Clerk session token for a browser
- *   session cookie via `POST /api/auth/clerk-session`
  */
-export const ServerAuthBootstrapMethod = Schema.Literals([
-  "desktop-bootstrap",
-  "one-time-token",
-  "clerk-session",
-]);
+export const ServerAuthBootstrapMethod = Schema.Literals(["desktop-bootstrap", "one-time-token"]);
 export type ServerAuthBootstrapMethod = typeof ServerAuthBootstrapMethod.Type;
 
 /**
@@ -157,7 +156,13 @@ export type ServerAuthClerkDescriptor = typeof ServerAuthClerkDescriptor.Type;
 
 export const ServerAuthDescriptor = Schema.Struct({
   policy: ServerAuthPolicy,
-  bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
+  // T3-CUSTOM(expbkt3): bootstrap methods grow over time, so drop ones this
+  // build does not know rather than failing the whole descriptor decode — the
+  // same treatment `ServerConfig` already gives `issues` and `availableEditors`.
+  // Without it, a server advertising a method the client has never heard of
+  // makes `server.getConfig` undecodable and the client closes the socket, which
+  // is what a fork-only `clerk-session` value did to stock T3 Code clients.
+  bootstrapMethods: ForwardCompatibleArray(ServerAuthBootstrapMethod),
   sessionMethods: Schema.Array(ServerAuthSessionMethod),
   sessionCookieName: TrimmedNonEmptyString,
   clerk: Schema.optionalKey(ServerAuthClerkDescriptor),
