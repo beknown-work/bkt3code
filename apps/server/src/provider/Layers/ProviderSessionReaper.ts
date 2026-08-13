@@ -22,6 +22,26 @@ import {
 } from "../Services/ProviderSessionReaper.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
+// T3-CUSTOM(expbkt3): BEGIN - OS-level sweep for leaked provider runtimes.
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+import {
+  increment,
+  providerRuntimeOrphanProcessesKilledTotal,
+} from "../../observability/Metrics.ts";
+import {
+  collectAncestorPids,
+  readOwnCgroupProcessIds,
+  snapshotProcesses,
+  supportsProcessTreeInspection,
+  terminateProcessTree,
+} from "../processTree.ts";
+import {
+  listProviderRuntimeProcesses,
+  selectOrphanProviderProcesses,
+  unregisterProviderRuntimeProcess,
+} from "../providerRuntimeProcesses.ts";
+// T3-CUSTOM(expbkt3): END
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 export const PROVIDER_SESSION_INACTIVITY_ENV = "T3CODE_PROVIDER_SESSION_INACTIVITY_MS";
@@ -55,6 +75,16 @@ const DEFAULT_TURN_ABSOLUTE_CAP_MS = 2 * 60 * 60 * 1000;
  * never mistaken for an orphan.
  */
 const ORPHAN_EVIDENCE_GRACE_MS = 5 * 60 * 1000;
+// T3-CUSTOM(expbkt3): BEGIN - OS orphan sweep tuning.
+/** SIGTERM grace before a leaked provider runtime process is SIGKILLed. */
+const ORPHAN_PROCESS_GRACE_MS = 5 * 1000;
+/**
+ * How long a runtime PID we spawned may exist without a matching live session
+ * before it counts as abandoned. Comfortably longer than session startup, so a
+ * runtime whose session has not been published yet is never reaped.
+ */
+const TRACKED_ORPHAN_GRACE_MS = 5 * 60 * 1000;
+// T3-CUSTOM(expbkt3): END
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
@@ -145,8 +175,102 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       }
     }).pipe(Effect.provide(reconcileContext));
 
+    // T3-CUSTOM(expbkt3): BEGIN - reap provider runtime processes the OS still
+    // holds but no session owns.
+    //
+    // Sibling of `sweepOrphanedTurns`, which settles orphaned *turn rows*: this
+    // one settles orphaned *OS processes*. A detached `opencode serve` that
+    // escaped its owning scope is reparented to init and keeps ~500 MB charged
+    // to our cgroup until the whole service restarts; nothing else in the
+    // system ever looks at the process table.
+    //
+    // Guard rails, in order of application (see `selectOrphanProviderProcesses`):
+    // never our own PID or an ancestor of it, never a process outside our own
+    // cgroup, never a command that is not a known provider runtime, never a PID
+    // whose session binding is still live, and — for anything we did not spawn
+    // ourselves — only once the kernel has reparented it to init.
+    const sweepOrphanProcesses = Effect.gen(function* () {
+      const platform = yield* HostProcessPlatform;
+      if (!supportsProcessTreeInspection(platform)) {
+        return;
+      }
+
+      const cgroupPids = readOwnCgroupProcessIds();
+      if (cgroupPids === null) {
+        // Without proven cgroup membership we cannot honour the "only our own
+        // processes" guard rail, so we do nothing at all.
+        yield* Effect.logDebug("provider.session.reaper.orphan-process-scan-skipped", {
+          reason: "cgroup_membership_unavailable",
+        });
+        return;
+      }
+
+      const entries = snapshotProcesses();
+      const selfPid = process.pid;
+
+      // Housekeeping: a runtime that exited on its own without its scope ever
+      // closing leaves a record behind. Absent from /proc means provably gone,
+      // so the registry cannot grow without bound over a long server run.
+      const livePids = new Set(entries.map((entry) => entry.pid));
+      const trackedRecords = listProviderRuntimeProcesses();
+      for (const stale of trackedRecords.filter((entry) => !livePids.has(entry.pid))) {
+        unregisterProviderRuntimeProcess(stale.pid);
+      }
+
+      const candidates = selectOrphanProviderProcesses({
+        entries,
+        cgroupPids,
+        selfPid,
+        ancestorPids: new Set(collectAncestorPids(selfPid, entries)),
+        liveThreadIds: new Set(
+          (yield* providerService.listSessions()).map((session) => String(session.threadId)),
+        ),
+        trackedRecords,
+        nowMillis: yield* Clock.currentTimeMillis,
+        trackedGraceMillis: TRACKED_ORPHAN_GRACE_MS,
+      });
+
+      for (const candidate of candidates) {
+        const outcome = yield* terminateProcessTree({
+          rootPid: candidate.pid,
+          gracePeriodMillis: ORPHAN_PROCESS_GRACE_MS,
+        });
+        if (outcome.exited) {
+          unregisterProviderRuntimeProcess(candidate.pid);
+        }
+        yield* increment(providerRuntimeOrphanProcessesKilledTotal, {
+          provider: candidate.provider,
+          reason: candidate.reason,
+          outcome: outcome.exited ? (outcome.forced ? "forced" : "graceful") : "survived",
+        });
+        yield* Effect.logWarning("provider.session.reaper.orphan-process-killed", {
+          pid: candidate.pid,
+          provider: candidate.provider,
+          command: candidate.command,
+          rssKb: candidate.rssKb,
+          reason: candidate.reason,
+          exited: outcome.exited,
+          forced: outcome.forced,
+          survivingPids: outcome.survivingPids,
+        });
+      }
+    }).pipe(
+      // Fail-soft: a racing or unreadable /proc entry must never take the
+      // periodic sweep down with it.
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider.session.reaper.orphan-process-scan-failed", { cause }),
+      ),
+      Effect.catchDefect((defect: unknown) =>
+        Effect.logWarning("provider.session.reaper.orphan-process-scan-defect", { defect }),
+      ),
+    );
+    // T3-CUSTOM(expbkt3): END
+
     const sweep = Effect.gen(function* () {
       yield* sweepOrphanedTurns;
+      // T3-CUSTOM(expbkt3): OS orphan pass runs after the turn pass, so a
+      // session settled above is already absent from the live bindings.
+      yield* sweepOrphanProcesses;
 
       const bindings = yield* directory.listBindings();
       const now = yield* Clock.currentTimeMillis;

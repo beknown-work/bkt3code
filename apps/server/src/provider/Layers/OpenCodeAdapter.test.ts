@@ -77,6 +77,9 @@ const runtimeMock = {
     sessionUpdateCalls: [] as Array<{ sessionID: string; permission: unknown }>,
     forkCalls: [] as Array<{ sessionID: string; directory?: string }>,
     connectEnvironments: [] as NodeJS.ProcessEnv[],
+    // Suspends `session.create` forever so a startSession can be interrupted
+    // mid-acquisition, after the runtime scope owns the spawned server.
+    sessionCreateNeverResolves: false,
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -98,6 +101,7 @@ const runtimeMock = {
     this.state.sessionUpdateCalls.length = 0;
     this.state.forkCalls.length = 0;
     this.state.connectEnvironments.length = 0;
+    this.state.sessionCreateNeverResolves = false;
   },
 };
 
@@ -144,6 +148,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
     ({
       session: {
         create: async (input: Record<string, unknown>) => {
+          if (runtimeMock.state.sessionCreateNeverResolves) {
+            await new Promise(() => {});
+          }
           runtimeMock.state.sessionCreateUrls.push(baseUrl);
           runtimeMock.state.sessionCreateInputs.push(input);
           runtimeMock.state.authHeaders.push(
@@ -366,6 +373,35 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(runtimeMock.state.authHeaders, [
         `Basic ${btoa("opencode:secret-password")}`,
       ]);
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): regression test for the orphaned provider runtime.
+  // Before the fix, an interrupt arriving while the acquisition was in flight
+  // unwound the fiber before `Scope.close`, so the scope that owned the
+  // spawned OpenCode server was abandoned and its finalizer never ran — the
+  // process then outlived the session with nothing left to kill it.
+  it.effect("closes the runtime scope when startSession is interrupted mid-acquisition", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-interrupted-start");
+      runtimeMock.state.sessionCreateNeverResolves = true;
+
+      const fiber = yield* Effect.forkScoped(
+        adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+      // Let the forked fiber run until it suspends on `session.create`.
+      yield* advanceTestClock(1);
+      yield* Effect.yieldNow;
+
+      yield* Fiber.interrupt(fiber);
+
+      NodeAssert.deepEqual(runtimeMock.state.closeCalls, ["http://127.0.0.1:9999"]);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
     }),
   );
 
