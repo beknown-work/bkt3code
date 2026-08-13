@@ -396,6 +396,15 @@ export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.T
 export const AuthCreatePairingCredentialInput = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   scopes: Schema.optionalKey(AuthEnvironmentScopes),
+  // T3-CUSTOM(expbkt3): BEGIN - mint a credential that can only be redeemed with a
+  // DPoP proof, and that lives for 2 hours instead of 5 minutes. Off by default, so
+  // every existing caller keeps producing exactly the credential it produces today.
+  //
+  // Safe to accept from a client, unlike a subject: it only *restricts* who can
+  // redeem the credential and binds the issued token to the redeemer's key. There is
+  // still deliberately no `subject` field — see apps/server/src/auth/OperatorIdentity.ts.
+  requireProofOfPossession: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): END
 });
 export type AuthCreatePairingCredentialInput = typeof AuthCreatePairingCredentialInput.Type;
 

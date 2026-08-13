@@ -15,6 +15,8 @@ import {
   EnvironmentInternalError,
   type EnvironmentInternalErrorReason,
   EnvironmentOperationForbiddenError,
+  // T3-CUSTOM(expbkt3): self-service pairing refusals widen this union.
+  type EnvironmentOperationForbiddenReason,
   EnvironmentRequestInvalidError,
   type EnvironmentRequestInvalidReason,
   EnvironmentResourceNotFoundError,
@@ -24,6 +26,8 @@ import {
   EnvironmentAuthenticatedPrincipal,
 } from "@t3tools/contracts";
 import type { AuthEnvironmentScope } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): decode the operator a pairing grant's subject names.
+import { EnvironmentUserId, userIdFromSubject } from "@t3tools/contracts";
 import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
@@ -39,8 +43,22 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { resolveClerkBrowserIdentity } from "./ClerkBrowserIdentity.ts";
 // T3-CUSTOM(expbkt3): direct-vs-relay identity policy for the token exchange.
 import { resolveExchangeIdentity } from "./ExchangeIdentity.ts";
-// T3-CUSTOM(expbkt3): pairing credentials carry the operator that created them.
-import { issuePairingCredentialForPrincipal } from "./OperatorIdentity.ts";
+// T3-CUSTOM(expbkt3): the pairing grant can name the operator when no token does.
+import * as PairingGrantStore from "./PairingGrantStore.ts";
+// T3-CUSTOM(expbkt3): BEGIN - pairing credentials carry the operator that created
+// them, and members may mint one for their own devices without `access:write`.
+import {
+  issuePairingCredentialForPrincipal,
+  operatorUserIdForPrincipal,
+} from "./OperatorIdentity.ts";
+import {
+  canIssueSelfServicePairing,
+  isSelfServiceScopeAllowed,
+  ownClientSessions,
+  ownPairingLinks,
+  selfServicePairingScopes,
+} from "./SelfServicePairing.ts";
+// T3-CUSTOM(expbkt3): END
 import { ClerkDirectory } from "./ClerkDirectory.ts";
 import * as ClerkIdentityVerifier from "./ClerkIdentityVerifier.ts";
 import * as EnvironmentUserService from "./EnvironmentUserService.ts";
@@ -135,7 +153,29 @@ export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope
   );
 }
 
-function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_allowed") {
+// T3-CUSTOM(expbkt3): BEGIN - the self-service pairing path admits a session that
+// carries a Clerk identity instead of `access:write`, and narrows what it may see and
+// do to that member's own devices. Returns the principal plus which of the two routes
+// admitted it, so each handler can keep the administrative behaviour untouched.
+export const requireEnvironmentScopeOrOwnIdentity = Effect.fn(
+  "environment.auth.requireScopeOrOwnIdentity",
+)(function* (scope: AuthEnvironmentScope) {
+  const session = yield* EnvironmentAuthenticatedPrincipal;
+  if (session.scopes.has(scope)) {
+    return { session, administrative: true as const };
+  }
+  if (operatorUserIdForPrincipal(session) === null) {
+    // No identity and no scope: unchanged 403, same as upstream.
+    return yield* failEnvironmentScopeRequired(scope);
+  }
+  return { session, administrative: false as const };
+});
+// T3-CUSTOM(expbkt3): END
+
+function failEnvironmentOperationForbidden(
+  // T3-CUSTOM(expbkt3): self-service pairing refusals reuse this 403.
+  reason: EnvironmentOperationForbiddenReason,
+) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
@@ -212,6 +252,8 @@ export const authHttpApiLayer = HttpApiBuilder.group(
   "auth",
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    // T3-CUSTOM(expbkt3): read a grant's subject without consuming it; see below.
+    const pairingGrants = yield* PairingGrantStore.PairingGrantStore;
     const sessions = yield* SessionStore.SessionStore;
     const clerkDirectory = yield* ClerkDirectory;
     const clerkIdentity = yield* ClerkIdentityVerifier.ClerkIdentityVerifier;
@@ -297,12 +339,55 @@ export const authHttpApiLayer = HttpApiBuilder.group(
     // A verified non-member fails as `invalid_identity` rather than the 403 that
     // `clerkSession` returns: this endpoint's declared error union has no forbidden
     // member, and widening it would ripple through every remote client's error type.
-    const resolveTokenExchangeIdentity = (token: string | undefined) =>
+    //
+    // A client that presents no `identity_token` — the Clerk-free BK desktop — can
+    // still be identified by the credential it is redeeming, because a member-minted
+    // credential carries `clerk:<userId>` as a subject the *server* derived. Reading
+    // it here, without consuming the grant, is what lets such a client satisfy
+    // `environmentUserIdentityMode: "required"`. An anonymous grant still resolves to
+    // nothing and is refused exactly as before.
+    const resolveGrantIdentity = (credential: string) =>
+      Effect.gen(function* () {
+        const subject = yield* pairingGrants
+          .peekSubject(credential)
+          .pipe(
+            Effect.catchIf(PairingGrantStore.isBootstrapCredentialInternalError, (error) =>
+              failEnvironmentInternal("identity_management_failed", error),
+            ),
+          );
+        const userId = subject === null ? null : userIdFromSubject(subject);
+        if (userId === null) {
+          return null;
+        }
+        // A member who has since been blocked must not be able to pair, even with a
+        // credential minted while they were allowed.
+        yield* users.assertAllowed(EnvironmentUserId.make(userId)).pipe(
+          Effect.catchTag("EnvironmentUserManagementError", (error) =>
+            Effect.gen(function* () {
+              return error.reason === "identity-blocked"
+                ? yield* failEnvironmentAuthInvalid("blocked_identity")
+                : yield* failEnvironmentInternal("identity_management_failed", error);
+            }),
+          ),
+        );
+        return {
+          userId: EnvironmentUserId.make(userId),
+          displayName: null,
+          primaryEmail: null,
+          avatarUrl: null,
+        } satisfies ClerkIdentityVerifier.VerifiedClerkIdentity;
+      });
+
+    const resolveTokenExchangeIdentity = (input: {
+      readonly token: string | undefined;
+      readonly credential: string;
+    }) =>
       resolveExchangeIdentity({
-        token,
+        token: input.token,
         verifyDirect: resolveDirectClerkIdentity,
         verifyRelayAudience: resolveIdentity,
         onNotOrgMember: () => failEnvironmentAuthInvalid("invalid_identity"),
+        resolveGrantIdentity: () => resolveGrantIdentity(input.credential),
       });
     // T3-CUSTOM(expbkt3): END
 
@@ -513,9 +598,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
               : undefined;
             // T3-CUSTOM(expbkt3): accept a direct Clerk browser token here too, so a
             // remote client can pair against `environmentUserIdentityMode: "required"`.
-            const { identity, administrativeGrant } = yield* resolveTokenExchangeIdentity(
-              args.payload.identity_token,
-            );
+            const { identity, administrativeGrant, identitySource } =
+              yield* resolveTokenExchangeIdentity({
+                token: args.payload.identity_token,
+                // T3-CUSTOM(expbkt3): the grant is the fallback source of identity.
+                credential: args.payload.subject_token,
+              });
             yield* appendCredentialResponseHeaders;
             const result = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
@@ -542,7 +630,11 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 : undefined,
             );
             yield* persistIdentity(
-              identity,
+              // T3-CUSTOM(expbkt3): a grant-derived identity carries no Clerk profile,
+              // so it is bound to the session but never fed to directory admission —
+              // admitting it would overwrite a real record with blanks. The operator was
+              // already admitted when they signed in to mint the credential.
+              identitySource === "pairing-grant" ? null : identity,
               // T3-CUSTOM(expbkt3): a Clerk org admin is admitted as an environment
               // admin, matching `bindIdentity`.
               administrativeGrant || result.scope.split(" ").includes(AuthAccessWriteScope),
@@ -587,8 +679,16 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.pairingCredential")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            const session = yield* requireEnvironmentScope(AuthAccessWriteScope);
-            const delegatedScopes = args.payload.scopes ?? AuthStandardClientScopes;
+            // T3-CUSTOM(expbkt3): a member with a Clerk identity may mint for themselves;
+            // `access:write` still gates every environment-wide credential.
+            const { session, administrative } =
+              yield* requireEnvironmentScopeOrOwnIdentity(AuthAccessWriteScope);
+            const delegatedScopes =
+              args.payload.scopes ??
+              // T3-CUSTOM(expbkt3): a member's default is their own standard scopes.
+              (administrative
+                ? AuthStandardClientScopes
+                : selfServicePairingScopes(session.scopes));
             if (
               delegatedScopes.length === 0 ||
               new Set<AuthEnvironmentScope>(delegatedScopes).size !== delegatedScopes.length
@@ -600,6 +700,28 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 return yield* failEnvironmentScopeRequired(delegatedScope);
               }
             }
+            // T3-CUSTOM(expbkt3): BEGIN - self-service guards. Scopes are narrowed to the
+            // standard client set so a self-issued credential can never carry `access:*`
+            // or `relay:write`, and the member's concurrent pairings are capped.
+            if (!administrative) {
+              if (!isSelfServiceScopeAllowed(delegatedScopes, session.scopes)) {
+                return yield* failEnvironmentScopeRequired(AuthAccessWriteScope);
+              }
+              const selfUserId = operatorUserIdForPrincipal(session);
+              if (selfUserId === null) {
+                return yield* failEnvironmentScopeRequired(AuthAccessWriteScope);
+              }
+              const [pairingLinks, clientSessions] = yield* Effect.all([
+                serverAuth.listPairingLinks(),
+                serverAuth.listClientSessions(session.sessionId),
+              ]);
+              if (
+                !canIssueSelfServicePairing({ userId: selfUserId, pairingLinks, clientSessions })
+              ) {
+                return yield* failEnvironmentOperationForbidden("self_pairing_limit_reached");
+              }
+            }
+            // T3-CUSTOM(expbkt3): END
             // T3-CUSTOM(expbkt3): stamp the authenticated operator on the credential
             // so a client paired with it acts as them. The subject comes from the
             // session, never from the payload — `AuthCreatePairingCredentialInput`
@@ -609,6 +731,13 @@ export const authHttpApiLayer = HttpApiBuilder.group(
               principal: session,
               scopes: delegatedScopes,
               ...(args.payload.label ? { label: args.payload.label } : {}),
+              // T3-CUSTOM(expbkt3): opt-in, default off — a device-bound credential for
+              // a managed BK desktop. Only ever restricts redemption, so unlike a
+              // subject it is safe to take from the payload.
+              ...(args.payload.requireProofOfPossession ? { requireProofOfPossession: true } : {}),
+              // T3-CUSTOM(expbkt3): marks the link as a member's own, which caps it and
+              // shortens the session it produces. Administrative links are unaffected.
+              ...(administrative ? {} : { selfIssued: true }),
             });
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
@@ -621,8 +750,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.pairingLinks")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            yield* requireEnvironmentScope(AuthAccessReadScope);
-            return yield* serverAuth.listPairingLinks();
+            // T3-CUSTOM(expbkt3): a member sees only their own links; `access:read`
+            // still sees every link in the environment.
+            const { session, administrative } =
+              yield* requireEnvironmentScopeOrOwnIdentity(AuthAccessReadScope);
+            const pairingLinks = yield* serverAuth.listPairingLinks();
+            return administrative ? pairingLinks : ownPairingLinks(pairingLinks, session);
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("pairing_links_load_failed", error),
@@ -634,7 +767,16 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.revokePairingLink")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            yield* requireEnvironmentScope(AuthAccessWriteScope);
+            // T3-CUSTOM(expbkt3): a member may revoke their own link; anything else
+            // still needs `access:write`.
+            const { session, administrative } =
+              yield* requireEnvironmentScopeOrOwnIdentity(AuthAccessWriteScope);
+            if (!administrative) {
+              const own = ownPairingLinks(yield* serverAuth.listPairingLinks(), session);
+              if (!own.some((pairingLink) => pairingLink.id === args.payload.id)) {
+                return yield* failEnvironmentOperationForbidden("self_pairing_not_own_resource");
+              }
+            }
             const revoked = yield* serverAuth.revokePairingLink(args.payload.id);
             return { revoked };
           },
@@ -648,8 +790,11 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.clients")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            const session = yield* requireEnvironmentScope(AuthAccessReadScope);
-            return yield* serverAuth.listClientSessions(session.sessionId);
+            // T3-CUSTOM(expbkt3): a member sees only their own sessions.
+            const { session, administrative } =
+              yield* requireEnvironmentScopeOrOwnIdentity(AuthAccessReadScope);
+            const clientSessions = yield* serverAuth.listClientSessions(session.sessionId);
+            return administrative ? clientSessions : ownClientSessions(clientSessions, session);
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_sessions_load_failed", error),
@@ -661,7 +806,20 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.revokeClient")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
-            const session = yield* requireEnvironmentScope(AuthAccessWriteScope);
+            // T3-CUSTOM(expbkt3): a member may revoke their own device sessions.
+            const { session, administrative } =
+              yield* requireEnvironmentScopeOrOwnIdentity(AuthAccessWriteScope);
+            if (!administrative) {
+              const own = ownClientSessions(
+                yield* serverAuth.listClientSessions(session.sessionId),
+                session,
+              );
+              if (
+                !own.some((clientSession) => clientSession.sessionId === args.payload.sessionId)
+              ) {
+                return yield* failEnvironmentOperationForbidden("self_pairing_not_own_resource");
+              }
+            }
             const revoked = yield* serverAuth.revokeClientSession(
               session.sessionId,
               args.payload.sessionId,

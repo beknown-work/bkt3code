@@ -56,6 +56,8 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+// T3-CUSTOM(expbkt3): member self-service device pairing.
+import { MemberDevicesSection } from "../../fork/MemberDevicesSection";
 import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -989,13 +991,24 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     ...AuthStandardClientScopes,
   ]);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
+  // T3-CUSTOM(expbkt3): device-bound pairing for the managed BK desktop.
+  const [requireProofOfPossession, setRequireProofOfPossession] = useState(false);
 
   const handleCreatePairingLink = useCallback(async () => {
     setIsCreatingPairingLink(true);
     try {
-      await createServerPairingCredential({ label: pairingLabel, scopes: pairingScopes });
+      // T3-CUSTOM(expbkt3): BEGIN - `requireProofOfPossession` is opt-in and false by
+      // default, so an unchecked dialog sends exactly the payload it always sent.
+      await createServerPairingCredential({
+        label: pairingLabel,
+        scopes: pairingScopes,
+        requireProofOfPossession,
+      });
+      // T3-CUSTOM(expbkt3): END
       setPairingLabel("");
       setPairingScopes([...AuthStandardClientScopes]);
+      // T3-CUSTOM(expbkt3): reset the device-bound choice with the dialog.
+      setRequireProofOfPossession(false);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
@@ -1009,7 +1022,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [pairingLabel, pairingScopes]);
+    // T3-CUSTOM(expbkt3): `requireProofOfPossession` participates in this callback.
+  }, [pairingLabel, pairingScopes, requireProofOfPossession]);
 
   const togglePairingScope = useCallback((scope: AuthEnvironmentScope, checked: boolean) => {
     setPairingScopes((current) =>
@@ -1036,6 +1050,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           if (!open) {
             setPairingLabel("");
             setPairingScopes([...AuthStandardClientScopes]);
+            // T3-CUSTOM(expbkt3): reset the device-bound choice with the dialog.
+            setRequireProofOfPossession(false);
           }
         }}
       >
@@ -1124,6 +1140,30 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                 </p>
               ) : null}
             </section>
+            {/* T3-CUSTOM(expbkt3): BEGIN - device-bound pairing for the managed BK
+                desktop. Off by default, so an ordinary link is byte-for-byte the link
+                this dialog has always produced: five minutes, redeemable by anything
+                that can reach the server. */}
+            <section className="space-y-3">
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-input bg-muted/25 px-3 py-2.5 transition-colors hover:bg-muted/40">
+                <Checkbox
+                  className="mt-0.5"
+                  checked={requireProofOfPossession}
+                  disabled={isCreatingPairingLink}
+                  onCheckedChange={(checked) => setRequireProofOfPossession(checked === true)}
+                />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium text-foreground">
+                    Pair a BK desktop app (device-bound)
+                  </span>
+                  <span className="block text-xs leading-snug text-muted-foreground">
+                    Valid for 2 hours instead of 5 minutes, and only the app that redeems it can use
+                    the session it creates. Other clients cannot redeem this link.
+                  </span>
+                </span>
+              </label>
+            </section>
+            {/* T3-CUSTOM(expbkt3): END */}
           </DialogPanel>
           <DialogFooter variant="bare">
             <Button
@@ -1897,6 +1937,8 @@ export function ConnectionsSettings() {
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
+  // T3-CUSTOM(expbkt3): the operator a self-service member view belongs to, if any.
+  const memberDevicesUserId = primarySessionState.data?.userId ?? null;
   const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   const authAccessChanges = useEnvironmentQuery(
     canManageLocalBackend && primaryEnvironmentId !== null
@@ -3070,6 +3112,12 @@ export function ConnectionsSettings() {
           </div>
         </SettingsSection>
       ) : null}
+      {/* T3-CUSTOM(expbkt3): END */}
+      {/* T3-CUSTOM(expbkt3): BEGIN - members without `access:write` get a self-service
+          "Your devices" panel instead of the administrative one. Renders only for a
+          session that carries a Clerk identity, so upstream single-user and bootstrap
+          clients see exactly what they see today. */}
+      {!canManageLocalBackend && memberDevicesUserId !== null ? <MemberDevicesSection /> : null}
       {/* T3-CUSTOM(expbkt3): END */}
       {canManageLocalBackend ? (
         <>

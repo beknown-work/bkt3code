@@ -17,6 +17,12 @@ import { useEffect, useState } from "react";
 
 import { Button } from "../ui/button";
 import { submitClerkSessionToken } from "../../environments/primary";
+// T3-CUSTOM(expbkt3): send browser sign-in back to this environment. Without
+// these props Clerk falls back to the instance's dashboard-configured
+// after_sign_in_url, which for the Beknown instance is be-dash.beknown.live, so
+// the operator never returns to /pair and no session exchange ever happens.
+import { isElectron } from "../../env";
+import { resolveClerkSignInProps } from "../clerk/authRedirect";
 
 type GateStatus = "idle" | "exchanging" | "rejected" | "error";
 
@@ -73,7 +79,9 @@ export function ClerkSignInGate({ onAuthenticated }: { readonly onAuthenticated:
         {!isLoaded ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : !isSignedIn ? (
-          <SignIn />
+          // T3-CUSTOM(expbkt3): resolveClerkSignInProps returns {} on Electron,
+          // where Clerk's native allowlist authorizes only the bare renderer root.
+          <SignIn {...resolveClerkSignInProps(window.location.href, isElectron)} />
         ) : status === "rejected" ? (
           <div className="flex flex-col items-center gap-4 text-center">
             <h1 className="text-lg font-semibold">Access denied</h1>

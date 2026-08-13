@@ -12,6 +12,11 @@ import { useCallback, useState } from "react";
 
 import { useProject } from "../../state/entities";
 import { useCurrentUserId } from "../../state/identity";
+// T3-CUSTOM(expbkt3): project access is scoped to the project's own environment.
+import {
+  shouldRenderMemberSurface,
+  useEnvironmentSupportsTeam,
+} from "../../fork/environmentTeamCapability";
 import { useIsTeamAdmin, useOrgMembers } from "../../state/orgMembers";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -37,6 +42,8 @@ export function ProjectMembersDialog({
   readonly onOpenChange: (open: boolean) => void;
 }) {
   const currentUserId = useCurrentUserId();
+  // T3-CUSTOM(expbkt3): whether *this project's* environment can store members.
+  const supportsTeam = useEnvironmentSupportsTeam(environmentId);
   const project = useProject(scopeProjectRef(environmentId, projectId));
   const { users, resolveUser } = useOrgMembers();
   const isAdmin = useIsTeamAdmin();
@@ -89,7 +96,9 @@ export function ProjectMembersDialog({
     [environmentId, project?.ownerUserId, projectId, resolveUser, transferOwnership],
   );
 
-  if (currentUserId === null) {
+  // T3-CUSTOM(expbkt3): the environment gate joins the identity gate; see
+  // fork/environmentTeamCapability.ts.
+  if (!shouldRenderMemberSurface({ currentUserId, environmentSupportsTeam: supportsTeam })) {
     return null;
   }
 
