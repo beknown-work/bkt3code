@@ -17,6 +17,11 @@ import { useCallback, useMemo, useState } from "react";
 
 import { useThreadShell } from "../../state/entities";
 import { useCurrentUserId } from "../../state/identity";
+// T3-CUSTOM(expbkt3): tagging is scoped to the thread's own environment.
+import {
+  shouldRenderMemberSurface,
+  useEnvironmentSupportsTeam,
+} from "../../fork/environmentTeamCapability";
 import { useIsTeamAdmin, useOrgMembers } from "../../state/orgMembers";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -33,6 +38,8 @@ export function ThreadMembersControl({
   readonly threadId: ThreadId;
 }) {
   const currentUserId = useCurrentUserId();
+  // T3-CUSTOM(expbkt3): whether *this thread's* environment can store members.
+  const supportsTeam = useEnvironmentSupportsTeam(environmentId);
   const threadRef = scopeThreadRef(environmentId, threadId);
   const thread = useThreadShell(threadRef);
   const { users, resolveUser } = useOrgMembers();
@@ -106,7 +113,14 @@ export function ThreadMembersControl({
   );
 
   // Team mode only.
-  if (currentUserId === null || thread === null) {
+  // T3-CUSTOM(expbkt3): ...and only where *this* environment is the team one. A
+  // managed desktop can be signed into a central server while a single-user local
+  // backend is also connected; without this the picker rendered on the local
+  // backend's threads and wrote user ids it has never heard of.
+  if (!shouldRenderMemberSurface({ currentUserId, environmentSupportsTeam: supportsTeam })) {
+    return null;
+  }
+  if (thread === null) {
     return null;
   }
 
