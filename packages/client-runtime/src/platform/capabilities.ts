@@ -61,10 +61,34 @@ export class EnvironmentIdentity extends Context.Service<
 >()("@t3tools/client-runtime/platform/capabilities/EnvironmentIdentity") {}
 
 // T3-CUSTOM(expbkt3): END
+// T3-CUSTOM(expbkt3): BEGIN - a managed BK build's primary environment is a central
+// server paired with a proof-of-possession credential, so its token is DPoP-bound: it
+// is presented as `DPoP <token>` with a proof signed per request rather than as a
+// static bearer header. `createProof` is supplied by the client that owns the device
+// key; the runtime never sees the key itself.
+export interface PrimaryDpopAuthorization {
+  readonly accessToken: string;
+  /**
+   * Issues the websocket ticket and returns the socket URL. Supplied by the
+   * client rather than resolved here, so the connection resolver keeps its
+   * existing service requirements and never has to hold the device key.
+   */
+  readonly resolveSocketUrl: (input: {
+    readonly wsBaseUrl: string;
+  }) => Effect.Effect<string, ConnectionAttemptError>;
+}
+// T3-CUSTOM(expbkt3): END
+
 export class PrimaryEnvironmentAuth extends Context.Service<
   PrimaryEnvironmentAuth,
   {
     readonly bearerToken: Effect.Effect<Option.Option<string>, ConnectionAttemptError>;
+    // T3-CUSTOM(expbkt3): `Option.none()` in every build except a managed BK one, which
+    // keeps the bearer path below byte-identical everywhere else.
+    readonly dpopAuthorization: Effect.Effect<
+      Option.Option<PrimaryDpopAuthorization>,
+      ConnectionAttemptError
+    >;
   }
 >()("@t3tools/client-runtime/platform/capabilities/PrimaryEnvironmentAuth") {}
 

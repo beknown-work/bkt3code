@@ -28,6 +28,7 @@ import type {
   EnvironmentSessionPrincipalShape,
 } from "@t3tools/contracts";
 import { UserId, clerkSubjectForUser, userIdFromSubject } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import type * as EnvironmentAuth from "./EnvironmentAuth.ts";
@@ -82,6 +83,17 @@ export function pairingSubjectForPrincipal(principal: OperatorPrincipal): string
 }
 
 /**
+ * How long a proof-of-possession pairing credential lives.
+ *
+ * Ordinary pairing codes keep `DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES` (5 minutes) in
+ * `PairingGrantStore`. A credential redeemable only with a DPoP proof gets a longer
+ * window because installing and pairing a desktop app is not a 5-minute task, and
+ * the token it produces is bound to the redeeming device's key rather than being a
+ * bearer secret. The two go together: never widen this TTL without the binding.
+ */
+export const PROOF_OF_POSSESSION_PAIRING_TTL = Duration.hours(2);
+
+/**
  * Issue a pairing credential on behalf of the authenticated operator.
  *
  * Deliberately takes the *principal* rather than a subject: the caller cannot
@@ -96,11 +108,27 @@ export const issuePairingCredentialForPrincipal = Effect.fn(
   readonly principal: OperatorPrincipal;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly label?: string;
+  /**
+   * Mint a device-bound credential: redeemable only with a DPoP proof, and valid
+   * for {@link PROOF_OF_POSSESSION_PAIRING_TTL}. Set by the operator when pairing a
+   * managed BK desktop; every other caller leaves it off and is unaffected.
+   */
+  readonly requireProofOfPossession?: boolean;
+  /**
+   * Minted by a member for one of their own devices rather than by an
+   * environment administrator: caps the member's concurrent pairings and
+   * shortens the session it produces. See `SelfServicePairing.ts`.
+   */
+  readonly selfIssued?: boolean;
 }) {
   const issued = yield* input.serverAuth.createPairingLink({
     scopes: input.scopes,
     subject: pairingSubjectForPrincipal(input.principal),
     ...(input.label ? { label: input.label } : {}),
+    ...(input.requireProofOfPossession
+      ? { requiresProofOfPossession: true, ttl: PROOF_OF_POSSESSION_PAIRING_TTL }
+      : {}),
+    ...(input.selfIssued ? { selfIssued: true } : {}),
   });
   return {
     id: issued.id,

@@ -10,7 +10,7 @@ export function readDesktopPrimaryBearerToken(): Promise<string | null> {
   // central server, where the local backend's bearer token means nothing. Present the
   // token the operator's pairing produced; null until they pair, which shows the gate.
   if (isBkManagedPrimary()) {
-    return Promise.resolve(readManagedPrimaryAccessToken());
+    return readManagedPrimaryAccessToken();
   }
   // T3-CUSTOM(expbkt3): END
   if (typeof window === "undefined") {
