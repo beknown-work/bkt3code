@@ -26,6 +26,8 @@ import {
   EnvironmentAuthenticatedPrincipal,
 } from "@t3tools/contracts";
 import type { AuthEnvironmentScope } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): decode the operator a pairing grant's subject names.
+import { EnvironmentUserId, userIdFromSubject } from "@t3tools/contracts";
 import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
@@ -41,6 +43,8 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { resolveClerkBrowserIdentity } from "./ClerkBrowserIdentity.ts";
 // T3-CUSTOM(expbkt3): direct-vs-relay identity policy for the token exchange.
 import { resolveExchangeIdentity } from "./ExchangeIdentity.ts";
+// T3-CUSTOM(expbkt3): the pairing grant can name the operator when no token does.
+import * as PairingGrantStore from "./PairingGrantStore.ts";
 // T3-CUSTOM(expbkt3): BEGIN - pairing credentials carry the operator that created
 // them, and members may mint one for their own devices without `access:write`.
 import {
@@ -248,6 +252,8 @@ export const authHttpApiLayer = HttpApiBuilder.group(
   "auth",
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    // T3-CUSTOM(expbkt3): read a grant's subject without consuming it; see below.
+    const pairingGrants = yield* PairingGrantStore.PairingGrantStore;
     const sessions = yield* SessionStore.SessionStore;
     const clerkDirectory = yield* ClerkDirectory;
     const clerkIdentity = yield* ClerkIdentityVerifier.ClerkIdentityVerifier;
@@ -333,12 +339,55 @@ export const authHttpApiLayer = HttpApiBuilder.group(
     // A verified non-member fails as `invalid_identity` rather than the 403 that
     // `clerkSession` returns: this endpoint's declared error union has no forbidden
     // member, and widening it would ripple through every remote client's error type.
-    const resolveTokenExchangeIdentity = (token: string | undefined) =>
+    //
+    // A client that presents no `identity_token` — the Clerk-free BK desktop — can
+    // still be identified by the credential it is redeeming, because a member-minted
+    // credential carries `clerk:<userId>` as a subject the *server* derived. Reading
+    // it here, without consuming the grant, is what lets such a client satisfy
+    // `environmentUserIdentityMode: "required"`. An anonymous grant still resolves to
+    // nothing and is refused exactly as before.
+    const resolveGrantIdentity = (credential: string) =>
+      Effect.gen(function* () {
+        const subject = yield* pairingGrants
+          .peekSubject(credential)
+          .pipe(
+            Effect.catchIf(PairingGrantStore.isBootstrapCredentialInternalError, (error) =>
+              failEnvironmentInternal("identity_management_failed", error),
+            ),
+          );
+        const userId = subject === null ? null : userIdFromSubject(subject);
+        if (userId === null) {
+          return null;
+        }
+        // A member who has since been blocked must not be able to pair, even with a
+        // credential minted while they were allowed.
+        yield* users.assertAllowed(EnvironmentUserId.make(userId)).pipe(
+          Effect.catchTag("EnvironmentUserManagementError", (error) =>
+            Effect.gen(function* () {
+              return error.reason === "identity-blocked"
+                ? yield* failEnvironmentAuthInvalid("blocked_identity")
+                : yield* failEnvironmentInternal("identity_management_failed", error);
+            }),
+          ),
+        );
+        return {
+          userId: EnvironmentUserId.make(userId),
+          displayName: null,
+          primaryEmail: null,
+          avatarUrl: null,
+        } satisfies ClerkIdentityVerifier.VerifiedClerkIdentity;
+      });
+
+    const resolveTokenExchangeIdentity = (input: {
+      readonly token: string | undefined;
+      readonly credential: string;
+    }) =>
       resolveExchangeIdentity({
-        token,
+        token: input.token,
         verifyDirect: resolveDirectClerkIdentity,
         verifyRelayAudience: resolveIdentity,
         onNotOrgMember: () => failEnvironmentAuthInvalid("invalid_identity"),
+        resolveGrantIdentity: () => resolveGrantIdentity(input.credential),
       });
     // T3-CUSTOM(expbkt3): END
 
@@ -549,9 +598,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
               : undefined;
             // T3-CUSTOM(expbkt3): accept a direct Clerk browser token here too, so a
             // remote client can pair against `environmentUserIdentityMode: "required"`.
-            const { identity, administrativeGrant } = yield* resolveTokenExchangeIdentity(
-              args.payload.identity_token,
-            );
+            const { identity, administrativeGrant, identitySource } =
+              yield* resolveTokenExchangeIdentity({
+                token: args.payload.identity_token,
+                // T3-CUSTOM(expbkt3): the grant is the fallback source of identity.
+                credential: args.payload.subject_token,
+              });
             yield* appendCredentialResponseHeaders;
             const result = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
               args.payload.subject_token,
@@ -578,7 +630,11 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 : undefined,
             );
             yield* persistIdentity(
-              identity,
+              // T3-CUSTOM(expbkt3): a grant-derived identity carries no Clerk profile,
+              // so it is bound to the session but never fed to directory admission —
+              // admitting it would overwrite a real record with blanks. The operator was
+              // already admitted when they signed in to mint the credential.
+              identitySource === "pairing-grant" ? null : identity,
               // T3-CUSTOM(expbkt3): a Clerk org admin is admitted as an environment
               // admin, matching `bindIdentity`.
               administrativeGrant || result.scope.split(" ").includes(AuthAccessWriteScope),

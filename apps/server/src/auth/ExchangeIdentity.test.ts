@@ -64,6 +64,45 @@ const neverCalledDirect = (): never => {
 
 const rejectNotOrgMember = () => Effect.fail(authInvalid("invalid_identity"));
 
+/**
+ * An environment with `environmentUserIdentityMode: "required"`: the relay verifier
+ * refuses an absent token outright, which is exactly the live expbkt3 configuration
+ * that used to defeat the Clerk-free desktop.
+ */
+const relayVerifierRequiringIdentity = () => {
+  const calls: Array<string | undefined> = [];
+  return {
+    calls,
+    verify: (token: string | undefined) => {
+      calls.push(token);
+      return token === undefined
+        ? Effect.fail(authInvalid("missing_identity"))
+        : Effect.succeed(relayIdentity);
+    },
+  };
+};
+
+/** The operator a member-minted `clerk:<userId>` grant names. */
+const grantIdentity: VerifiedClerkIdentity = {
+  userId: EnvironmentUserId.make("user_grant"),
+  displayName: null,
+  primaryEmail: null,
+  avatarUrl: null,
+};
+
+const grantResolving = (identity: VerifiedClerkIdentity | null) => {
+  let calls = 0;
+  return {
+    resolve: () => {
+      calls += 1;
+      return Effect.succeed(identity);
+    },
+    get calls() {
+      return calls;
+    },
+  };
+};
+
 describe("token exchange identity policy", () => {
   it.effect("binds a direct Clerk browser token without consulting the relay verifier", () =>
     Effect.gen(function* () {
@@ -72,6 +111,7 @@ describe("token exchange identity policy", () => {
         token: "clerk-browser-token",
         verifyDirect: verifyDirectSucceeds(false),
         verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       });
 
@@ -88,6 +128,7 @@ describe("token exchange identity policy", () => {
         token: "clerk-browser-token",
         verifyDirect: verifyDirectSucceeds(true),
         verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       });
 
@@ -104,6 +145,7 @@ describe("token exchange identity policy", () => {
         token: "relay-audience-token",
         verifyDirect: verifyDirectFails("invalid_token"),
         verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       });
 
@@ -120,6 +162,7 @@ describe("token exchange identity policy", () => {
         token: "relay-audience-token",
         verifyDirect: verifyDirectFails("disabled"),
         verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       });
 
@@ -136,6 +179,7 @@ describe("token exchange identity policy", () => {
         token: "outsider-token",
         verifyDirect: verifyDirectFails("not_org_member"),
         verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       }).pipe(Effect.flip);
 
@@ -153,10 +197,15 @@ describe("token exchange identity policy", () => {
         token: undefined,
         verifyDirect: neverCalledDirect,
         verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       });
 
-      expect(result).toEqual({ identity: null, administrativeGrant: false });
+      expect(result).toEqual({
+        identity: null,
+        administrativeGrant: false,
+        identitySource: "token",
+      });
       expect(relay.calls).toEqual([undefined]);
     }),
   );
@@ -167,10 +216,149 @@ describe("token exchange identity policy", () => {
         token: undefined,
         verifyDirect: neverCalledDirect,
         verifyRelayAudience: () => Effect.fail(authInvalid("missing_identity")),
+        resolveGrantIdentity: () => Effect.succeed(null),
         onNotOrgMember: rejectNotOrgMember,
       }).pipe(Effect.flip);
 
       expect(error.reason).toBe("missing_identity");
+    }),
+  );
+});
+
+/**
+ * The live bug: the Clerk-free BK desktop redeems a member-minted, identity-bearing
+ * credential against an environment that requires an identity. It has no
+ * `identity_token` to send and never will, so the grant's own subject has to answer
+ * for it. Everything else at this seam must be untouched.
+ */
+describe("an identity-bearing grant on an environment that requires identity", () => {
+  it.effect("is admitted when no identity_token is presented", () =>
+    Effect.gen(function* () {
+      const relay = relayVerifierRequiringIdentity();
+      const grant = grantResolving(grantIdentity);
+
+      const result = yield* resolveExchangeIdentity({
+        token: undefined,
+        verifyDirect: neverCalledDirect,
+        verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: grant.resolve,
+        onNotOrgMember: rejectNotOrgMember,
+      });
+
+      expect(result.identity).toEqual(grantIdentity);
+      expect(result.identitySource).toBe("pairing-grant");
+      expect(result.administrativeGrant).toBe(false);
+      // The environment rule still ran first; the grant only answered its refusal.
+      expect(relay.calls).toEqual([undefined]);
+      expect(grant.calls).toBe(1);
+    }),
+  );
+
+  it.effect("still refuses an anonymous grant with the original missing_identity", () =>
+    Effect.gen(function* () {
+      const relay = relayVerifierRequiringIdentity();
+      const grant = grantResolving(null);
+
+      const error = yield* Effect.flip(
+        resolveExchangeIdentity({
+          token: undefined,
+          verifyDirect: neverCalledDirect,
+          verifyRelayAudience: relay.verify,
+          resolveGrantIdentity: grant.resolve,
+          onNotOrgMember: rejectNotOrgMember,
+        }),
+      );
+
+      expect(error._tag).toBe("EnvironmentAuthInvalidError");
+      if (error._tag === "EnvironmentAuthInvalidError") {
+        expect(error.reason).toBe("missing_identity");
+      }
+      expect(grant.calls).toBe(1);
+    }),
+  );
+
+  it.effect("never consults the grant when an identity_token is presented", () =>
+    Effect.gen(function* () {
+      const relay = relayVerifierRequiringIdentity();
+      const grant = grantResolving(grantIdentity);
+
+      const result = yield* resolveExchangeIdentity({
+        token: "relay-token",
+        verifyDirect: verifyDirectFails("invalid_token"),
+        verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: grant.resolve,
+        onNotOrgMember: rejectNotOrgMember,
+      });
+
+      expect(result.identity).toEqual(relayIdentity);
+      expect(result.identitySource).toBe("token");
+      expect(grant.calls).toBe(0);
+    }),
+  );
+
+  it.effect("does not reconsider a refusal that is not about a missing identity", () =>
+    Effect.gen(function* () {
+      const grant = grantResolving(grantIdentity);
+
+      const error = yield* Effect.flip(
+        resolveExchangeIdentity({
+          token: undefined,
+          verifyDirect: neverCalledDirect,
+          verifyRelayAudience: () => Effect.fail(authInvalid("invalid_identity")),
+          resolveGrantIdentity: grant.resolve,
+          onNotOrgMember: rejectNotOrgMember,
+        }),
+      );
+
+      expect(error._tag).toBe("EnvironmentAuthInvalidError");
+      if (error._tag === "EnvironmentAuthInvalidError") {
+        expect(error.reason).toBe("invalid_identity");
+      }
+      expect(grant.calls).toBe(0);
+    }),
+  );
+});
+
+describe("an environment where identity is optional is untouched", () => {
+  it.effect("resolves an absent token to no identity without consulting the grant", () =>
+    Effect.gen(function* () {
+      const relay = relayVerifierReturning(null);
+      const grant = grantResolving(grantIdentity);
+
+      const result = yield* resolveExchangeIdentity({
+        token: undefined,
+        verifyDirect: neverCalledDirect,
+        verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: grant.resolve,
+        onNotOrgMember: rejectNotOrgMember,
+      });
+
+      // Byte-identical to the pre-fix behaviour: no identity bound, and the grant
+      // was never read, so an optional environment gains no new binding.
+      expect(result).toEqual({
+        identity: null,
+        administrativeGrant: false,
+        identitySource: "token",
+      });
+      expect(grant.calls).toBe(0);
+    }),
+  );
+
+  it.effect("still binds an identity_token when one is presented", () =>
+    Effect.gen(function* () {
+      const relay = relayVerifierReturning(relayIdentity);
+      const grant = grantResolving(grantIdentity);
+
+      const result = yield* resolveExchangeIdentity({
+        token: "relay-token",
+        verifyDirect: verifyDirectFails("invalid_token"),
+        verifyRelayAudience: relay.verify,
+        resolveGrantIdentity: grant.resolve,
+        onNotOrgMember: rejectNotOrgMember,
+      });
+
+      expect(result.identity).toEqual(relayIdentity);
+      expect(grant.calls).toBe(0);
     }),
   );
 });

@@ -14,6 +14,16 @@
  * keeps every pre-existing client working unchanged, while a verified non-member
  * must not fall through to a second chance.
  *
+ * A third kind of client presents no `identity_token` at all: the BK desktop, which
+ * pairs with a credential and never mounts Clerk. On an environment configured with
+ * `environmentUserIdentityMode: "required"` that used to be rejected as
+ * `missing_identity` before the pairing grant was ever consulted — which defeated
+ * identity-bearing credentials at exactly the gate they exist to pass, because a
+ * member-minted credential already carries `clerk:<userId>` as its server-derived
+ * subject. So the missing-identity decision is deferred: the environment's own rule
+ * runs first, and only if it objects do we ask whether the grant itself names an
+ * operator.
+ *
  * The policy lives here, apart from the HTTP wiring, because it is the whole of the
  * fork's behavior at this seam and needs to stay covered across upstream merges.
  *
@@ -34,7 +44,21 @@ export interface ExchangeIdentityResolution {
   readonly identity: VerifiedClerkIdentity | null;
   /** True when Clerk reports the operator as an organization admin. */
   readonly administrativeGrant: boolean;
+  /**
+   * Where the identity came from.
+   *
+   * `"pairing-grant"` means it was read off the credential's server-minted subject
+   * rather than verified from a token this request carried. It is good enough to
+   * bind to the session — a client cannot choose a subject — but it carries no
+   * Clerk profile, so the caller must not feed it to the directory admission path
+   * and blank out a real record.
+   */
+  readonly identitySource: "token" | "pairing-grant";
 }
+
+/** Whether an error is the environment's "you must present an identity" rule. */
+export const isMissingIdentityError = (error: ExchangeIdentityError): boolean =>
+  error._tag === "EnvironmentAuthInvalidError" && error.reason === "missing_identity";
 
 /**
  * Resolve the identity for a token exchange.
@@ -52,17 +76,47 @@ export const resolveExchangeIdentity = (input: {
     token: string | undefined,
   ) => Effect.Effect<VerifiedClerkIdentity | null, ExchangeIdentityError>;
   readonly onNotOrgMember: () => Effect.Effect<never, ExchangeIdentityError>;
+  /**
+   * The operator named by the pairing grant being redeemed, if any. Consulted only
+   * when no `identity_token` was presented *and* the environment rejected that, so
+   * an environment with identity optional keeps resolving exactly as before.
+   */
+  readonly resolveGrantIdentity: () => Effect.Effect<
+    VerifiedClerkIdentity | null,
+    ExchangeIdentityError
+  >;
 }): Effect.Effect<ExchangeIdentityResolution, ExchangeIdentityError> => {
   const viaRelayAudience = (
     token: string | undefined,
   ): Effect.Effect<ExchangeIdentityResolution, ExchangeIdentityError> =>
-    input
-      .verifyRelayAudience(token)
-      .pipe(Effect.map((identity) => ({ identity, administrativeGrant: false })));
+    input.verifyRelayAudience(token).pipe(
+      Effect.map((identity) => ({
+        identity,
+        administrativeGrant: false,
+        identitySource: "token" as const,
+      })),
+    );
 
   const token = input.token;
   if (token === undefined) {
-    return viaRelayAudience(token);
+    // The environment rule runs first and unchanged. Only a `missing_identity`
+    // refusal is reconsidered, and only in favour of an operator the *server* put
+    // on the credential — so this can admit nobody a client could name.
+    return viaRelayAudience(token).pipe(
+      Effect.catchIf(isMissingIdentityError, (missingIdentity) =>
+        input.resolveGrantIdentity().pipe(
+          Effect.flatMap((identity) =>
+            identity === null
+              ? Effect.fail(missingIdentity)
+              : Effect.succeed({
+                  identity,
+                  administrativeGrant: false,
+                  identitySource: "pairing-grant" as const,
+                } satisfies ExchangeIdentityResolution),
+          ),
+        ),
+      ),
+    );
   }
 
   return input.verifyDirect(token).pipe(
@@ -70,6 +124,7 @@ export const resolveExchangeIdentity = (input: {
       (verified): ExchangeIdentityResolution => ({
         identity: verified.identity,
         administrativeGrant: verified.administrativeGrant,
+        identitySource: "token",
       }),
     ),
     Effect.catchTag("ClerkAuthError", (error) =>
