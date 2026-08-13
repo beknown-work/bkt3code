@@ -250,6 +250,14 @@ export class PairingGrantStore extends Context.Service<
         readonly proofKeyThumbprint?: string;
       },
     ) => Effect.Effect<BootstrapGrant, BootstrapCredentialError>;
+    // T3-CUSTOM(expbkt3): BEGIN - read a redeemable grant's subject without consuming
+    // it, so `/oauth/token` can decide whether an absent `identity_token` is actually
+    // missing before it burns the credential. Returns `null` for anything that is not
+    // currently redeemable, which the caller treats exactly as "no identity".
+    readonly peekSubject: (
+      credential: string,
+    ) => Effect.Effect<string | null, BootstrapCredentialInternalError>;
+    // T3-CUSTOM(expbkt3): END
   }
 >()("t3/auth/PairingGrantStore") {}
 
@@ -615,6 +623,31 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN - see the service declaration. Deliberately mirrors the
+  // availability rules `consume` applies (unrevoked, unconsumed, unexpired) rather than
+  // reporting a subject for a grant that could not be redeemed anyway.
+  const peekSubject: PairingGrantStore["Service"]["peekSubject"] = Effect.fn(
+    "PairingGrantStore.peekSubject",
+  )(function* (credential) {
+    const now = yield* DateTime.now;
+    const seeded = (yield* Ref.get(seededGrantsRef)).get(credential);
+    if (seeded) {
+      return DateTime.isGreaterThanOrEqualTo(now, seeded.expiresAt) ? null : seeded.subject;
+    }
+    const matching = yield* pairingLinks
+      .getByCredential({ credential })
+      .pipe(Effect.mapError((cause) => new BootstrapCredentialLookupError({ cause })));
+    if (Option.isNone(matching)) {
+      return null;
+    }
+    const link = matching.value;
+    if (link.revokedAt !== null || link.consumedAt !== null) {
+      return null;
+    }
+    return DateTime.isGreaterThanOrEqualTo(now, link.expiresAt) ? null : link.subject;
+  });
+  // T3-CUSTOM(expbkt3): END
+
   return PairingGrantStore.of({
     issueOneTimeToken,
     listActive,
@@ -623,6 +656,8 @@ export const make = Effect.gen(function* () {
     },
     revoke,
     consume,
+    // T3-CUSTOM(expbkt3): non-consuming subject read for the token exchange.
+    peekSubject,
   });
 });
 
