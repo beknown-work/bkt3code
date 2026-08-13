@@ -31,6 +31,15 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
+// T3-CUSTOM(expbkt3): BEGIN - track spawned runtime PIDs for OS-level reaping.
+import * as Clock from "effect/Clock";
+
+import {
+  registerProviderRuntimeProcess,
+  unregisterProviderRuntimeProcess,
+  type ProviderRuntimeProcessOwner,
+} from "./providerRuntimeProcesses.ts";
+// T3-CUSTOM(expbkt3): END
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -121,6 +130,9 @@ export interface OpenCodeRuntimeShape {
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
+    // T3-CUSTOM(expbkt3): identifies the session that owns the spawned runtime,
+    // so a leaked process can be matched back to a (dead) session binding.
+    readonly owner?: ProviderRuntimeProcessOwner;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   /**
    * Returns a handle to either an externally-managed OpenCode server (when
@@ -134,6 +146,9 @@ export interface OpenCodeRuntimeShape {
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
+    // T3-CUSTOM(expbkt3): forwarded to `startOpenCodeServerProcess`; external
+    // servers are not ours to reap, so the owner is ignored for those.
+    readonly owner?: ProviderRuntimeProcessOwner;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
@@ -478,6 +493,27 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ),
         );
 
+      // T3-CUSTOM(expbkt3): BEGIN - record the spawned PID in the server-level
+      // runtime registry. The scope finalizer below is the primary kill path,
+      // but it only runs when the owning scope closes; the registry is what
+      // lets `terminateSession` verify the kill against the OS and lets the
+      // session reaper find a runtime whose scope was abandoned entirely.
+      const spawnedPid = Number(child.pid);
+      const trackedPid = Number.isInteger(spawnedPid) && spawnedPid > 0 ? spawnedPid : null;
+      if (trackedPid !== null && input.owner !== undefined) {
+        registerProviderRuntimeProcess({
+          pid: trackedPid,
+          provider: input.owner.provider,
+          threadId: input.owner.threadId,
+          command: `${spawnCommand.command} ${spawnCommand.args.join(" ")}`.trim(),
+          registeredAtMillis: yield* Clock.currentTimeMillis,
+        });
+      }
+      const forgetTrackedProcess = Effect.sync(() => {
+        if (trackedPid !== null) unregisterProviderRuntimeProcess(trackedPid);
+      });
+      // T3-CUSTOM(expbkt3): END
+
       const killOpenCodeProcessGroup = (signal: NodeJS.Signals) =>
         hostPlatform === "win32"
           ? child.kill({ killSignal: signal, forceKillAfter: "1 second" }).pipe(Effect.asVoid)
@@ -494,6 +530,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         Effect.andThen(Effect.sleep("1 second")),
         Effect.andThen(killOpenCodeProcessGroup("SIGKILL")),
         Effect.ignore,
+        // T3-CUSTOM(expbkt3): drop the registry entry only after the kill, so a
+        // process that survives its finalizer stays visible to the reaper.
+        Effect.ensuring(forgetTrackedProcess),
       );
       yield* Scope.addFinalizer(runtimeScope, terminateChild);
 
@@ -605,6 +644,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      // T3-CUSTOM(expbkt3): forward runtime ownership for process tracking.
+      ...(input.owner !== undefined ? { owner: input.owner } : {}),
     }).pipe(
       Effect.map((server) => ({
         url: server.url,

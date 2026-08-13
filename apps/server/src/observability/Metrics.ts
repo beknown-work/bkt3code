@@ -80,6 +80,15 @@ export const threadExecutionInvariantRepairsTotal = Metric.counter(
   { description: "Execution/provider/projection mismatches repaired by the periodic audit." },
 );
 
+// T3-CUSTOM(expbkt3): leaked provider runtime processes reaped at the OS level.
+export const providerRuntimeOrphanProcessesKilledTotal = Metric.counter(
+  "t3_provider_runtime_orphan_processes_killed_total",
+  {
+    description:
+      "Provider runtime OS processes killed by the session reaper because no live session owned them.",
+  },
+);
+
 // T3-CUSTOM(expbkt3): durable execution control-plane health.
 export const durableExecutionAcceptedTotal = Metric.counter("t3_durable_execution_accepted_total", {
   description: "Durable execution work items committed with accepted turn commands.",
