@@ -9,12 +9,19 @@
  * @module components/settings/ProjectAccessSettingsPanel
  */
 import type { EnvironmentId, OrchestrationUser, ProjectId, UserId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useMemo, useState } from "react";
 
 import { useProjects } from "../../state/entities";
 // T3-CUSTOM(expbkt3): identify which machine each project lives on.
 import { hasMultipleEnvironments, useEnvironmentAppearances } from "../../state/environments";
 import { useIsTeamAdmin, useOrgMembers } from "../../state/orgMembers";
+// T3-CUSTOM(expbkt3): BEGIN - only list projects whose own environment can store
+// members; the dialog refuses to render for the others, so offering "Manage" for
+// them would be a dead button.
+import { filterTeamCapableEnvironments } from "../../fork/environmentTeamCapability";
+import { environmentServerConfigsAtom } from "../../state/server";
+// T3-CUSTOM(expbkt3): END
 import { EnvironmentBadgeView } from "../environment/EnvironmentBadge";
 import { ProjectMembersDialog } from "../members/ProjectMembersDialog";
 import { AvatarStack } from "../ui/avatar";
@@ -36,13 +43,21 @@ export function ProjectAccessSettingsPanel() {
   // render as identical rows (same title, same path). Sort by environment first so
   // the pairs sit together, and badge them so they are told apart.
   const appearances = useEnvironmentAppearances();
-  const showEnvironment = hasMultipleEnvironments(projects);
+  // T3-CUSTOM(expbkt3): BEGIN - see the import above.
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const teamProjects = useMemo(
+    () =>
+      filterTeamCapableEnvironments(projects, serverConfigs, (project) => project.environmentId),
+    [projects, serverConfigs],
+  );
+  // T3-CUSTOM(expbkt3): END
+  const showEnvironment = hasMultipleEnvironments(teamProjects);
   const sortedProjects = useMemo(
     () =>
-      [...projects].sort(
+      [...teamProjects].sort(
         (a, b) => a.title.localeCompare(b.title) || a.environmentId.localeCompare(b.environmentId),
       ),
-    [projects],
+    [teamProjects],
   );
   // T3-CUSTOM(expbkt3): END
 
