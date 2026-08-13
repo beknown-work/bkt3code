@@ -26,19 +26,24 @@ export const make = Effect.gen(function* () {
         ? "remote-reachable"
         : "loopback-browser";
 
-  const baseBootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
+  const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
     policy === "desktop-managed-local"
       ? ["desktop-bootstrap"]
       : config.mode === "desktop" && policy === "remote-reachable"
         ? ["desktop-bootstrap", "one-time-token"]
         : ["one-time-token"];
 
-  // Team mode: advertise the Clerk sign-in bootstrap method and (when a
-  // publishable key is configured) a runtime descriptor so the SPA can detect
-  // team mode and render its Clerk sign-in surface without build-time coupling.
+  // T3-CUSTOM(expbkt3): BEGIN — team mode advertises itself with the `clerk`
+  // descriptor alone, so the SPA can detect it and render Clerk sign-in without
+  // build-time coupling.
+  //
+  // Deliberately NOT a new `bootstrapMethods` entry. That field is a closed
+  // literal union in stock T3 Code, and a fork-only `clerk-session` value made
+  // the whole `server.getConfig` reply undecodable for App Store clients: they
+  // paired, opened the socket, read the config, and hung up. Keeping the fork's
+  // signal in an additive optional field means unknown-key-tolerant clients
+  // ignore it instead of disconnecting.
   const clerkConfig = config.clerkAuth;
-  const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
-    clerkConfig !== undefined ? [...baseBootstrapMethods, "clerk-session"] : baseBootstrapMethods;
   const clerk: ServerAuthDescriptor["clerk"] =
     clerkConfig?.publishableKey !== undefined
       ? {
@@ -46,6 +51,7 @@ export const make = Effect.gen(function* () {
           organizationId: clerkConfig.organizationId ?? null,
         }
       : undefined;
+  // T3-CUSTOM(expbkt3): END
 
   const descriptor: ServerAuthDescriptor = {
     policy,
