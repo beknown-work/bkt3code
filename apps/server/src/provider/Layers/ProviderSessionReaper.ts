@@ -207,6 +207,16 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
       const entries = snapshotProcesses();
       const selfPid = process.pid;
+
+      // Housekeeping: a runtime that exited on its own without its scope ever
+      // closing leaves a record behind. Absent from /proc means provably gone,
+      // so the registry cannot grow without bound over a long server run.
+      const livePids = new Set(entries.map((entry) => entry.pid));
+      const trackedRecords = listProviderRuntimeProcesses();
+      for (const stale of trackedRecords.filter((entry) => !livePids.has(entry.pid))) {
+        unregisterProviderRuntimeProcess(stale.pid);
+      }
+
       const candidates = selectOrphanProviderProcesses({
         entries,
         cgroupPids,
@@ -215,7 +225,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         liveThreadIds: new Set(
           (yield* providerService.listSessions()).map((session) => String(session.threadId)),
         ),
-        trackedRecords: listProviderRuntimeProcesses(),
+        trackedRecords,
         nowMillis: yield* Clock.currentTimeMillis,
         trackedGraceMillis: TRACKED_ORPHAN_GRACE_MS,
       });
