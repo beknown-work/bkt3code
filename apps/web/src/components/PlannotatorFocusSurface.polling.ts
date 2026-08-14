@@ -3,6 +3,8 @@
  * React-independent so cadence, terminal handling, and request serialization
  * remain deterministic under fake time.
  */
+import type { PlannotatorReviewUrl } from "@t3tools/shared/plannotator";
+
 export type PlannotatorDecision = "approved" | "feedback" | "denied";
 export type PlannotatorTerminalStatus = "exited" | "error";
 
@@ -14,7 +16,7 @@ export const PLANNOTATOR_REOPEN_GRACE_MS = 750;
 type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 interface PlannotatorPollingControllerOptions {
-  readonly url: `/plannotator/${string}/`;
+  readonly url: PlannotatorReviewUrl;
   readonly clientId: string;
   readonly visible: boolean;
   readonly fetch?: Fetch;
@@ -28,7 +30,7 @@ export interface PlannotatorPollingController {
   readonly stop: () => void;
 }
 
-export function plannotatorStatusUrl(url: `/plannotator/${string}/`): string {
+export function plannotatorStatusUrl(url: PlannotatorReviewUrl): string {
   return `${url}__t3/status`;
 }
 
@@ -165,7 +167,7 @@ export function releasePlannotatorClientLease({
   clientId,
   fetch: release = globalThis.fetch.bind(globalThis),
 }: {
-  readonly url: `/plannotator/${string}/`;
+  readonly url: PlannotatorReviewUrl;
   readonly clientId: string;
   readonly fetch?: Fetch;
 }): void {

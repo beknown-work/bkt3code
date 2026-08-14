@@ -30,3 +30,30 @@ export function plannotatorProxyPathFromPlan(
     null
   );
 }
+
+/**
+ * A review URL the client can actually fetch: the proxy path resolved against
+ * the environment that owns the review.
+ *
+ * The root-relative proxy path only reaches the right server when the client
+ * is served by that same server. The desktop renderer never is — it is served
+ * from `t3code://app` and its protocol handler forwards every root-relative
+ * request to the *bundled local backend*, while threads (and their reviews)
+ * live on whichever environment the thread belongs to. A managed build's
+ * primary environment is a central server, so every review resolved relatively
+ * hits a backend that has never heard of the token and answers
+ * "Plannotator review not found."
+ */
+export type PlannotatorReviewUrl = string;
+
+export function resolvePlannotatorReviewUrl(
+  proxyPath: `/plannotator/${string}/`,
+  httpBaseUrl: string | null | undefined,
+): PlannotatorReviewUrl | null {
+  if (!httpBaseUrl) return null;
+  try {
+    return new URL(proxyPath, httpBaseUrl).toString();
+  } catch {
+    return null;
+  }
+}

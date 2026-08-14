@@ -47,6 +47,25 @@ describe("PlannotatorFocusSurface", () => {
     expect(markup).toContain('src="/plannotator/review_token/?t3-reopen=1"');
   });
 
+  it("loads the review from the environment that owns it", () => {
+    // The desktop renderer is served from `t3code://app` and proxies every
+    // root-relative request to its bundled local backend, so a review on any
+    // other environment has to be addressed absolutely or it 404s.
+    const markup = renderToStaticMarkup(
+      <PlannotatorFocusSurface
+        url="https://t3.beknown.work/plannotator/review_token/"
+        onClose={vi.fn()}
+        onDecision={vi.fn()}
+        onTerminal={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('src="https://t3.beknown.work/plannotator/review_token/?t3-reopen=1"');
+    expect(plannotatorStatusUrl("https://t3.beknown.work/plannotator/review_token/")).toBe(
+      "https://t3.beknown.work/plannotator/review_token/__t3/status",
+    );
+  });
+
   it("parses only terminal review decisions from the token-scoped status response", () => {
     expect(plannotatorStatusUrl("/plannotator/review_token/")).toBe(
       "/plannotator/review_token/__t3/status",

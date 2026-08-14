@@ -3818,6 +3818,51 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — the review plane is fetched cross-origin by
+  // clients this server does not serve (notably the desktop renderer, whose
+  // `t3code://app` origin proxies root-relative paths to its own bundled
+  // backend). The API preflight profile allows neither the status plane's
+  // client-id header nor its DELETE lease release.
+  for (const [label, config] of [
+    ["packaged", undefined],
+    ["development", { devUrl: new URL(crossOriginClientOrigin) }],
+  ] as const) {
+    it.effect(`allows cross-origin Plannotator review preflights in ${label} builds`, () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest(config ? { config } : undefined);
+
+        const statusUrl = yield* getHttpServerUrl("/plannotator/review_token/__t3/status");
+        const response = yield* fetchEffect(statusUrl, {
+          method: "OPTIONS",
+          headers: {
+            origin: "t3code://app",
+            "access-control-request-method": "DELETE",
+            "access-control-request-headers": "x-t3-plannotator-client-id",
+          },
+        });
+
+        assert.equal(response.status, 204);
+        // The URL token is the only credential, so the review plane stays
+        // origin-agnostic and never echoes credentials.
+        assert.equal(response.headers["access-control-allow-origin"], "*");
+        assert.equal(response.headers["access-control-allow-credentials"], undefined);
+        assert.deepEqual(splitHeaderTokens(response.headers["access-control-allow-methods"]), [
+          "DELETE",
+          "GET",
+          "OPTIONS",
+          "PATCH",
+          "POST",
+          "PUT",
+        ]);
+        assert.deepEqual(splitHeaderTokens(response.headers["access-control-allow-headers"]), [
+          "content-type",
+          "x-t3-plannotator-client-id",
+        ]);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+  }
+  // T3-CUSTOM(expbkt3): END
+
   it.effect("allows credentialed cloud link proof preflights from the configured dev UI", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({

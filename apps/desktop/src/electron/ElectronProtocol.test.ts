@@ -217,6 +217,14 @@ describe("ElectronProtocol", () => {
       "https://challenges.cloudflare.com",
     ]);
     assert.deepEqual(directives["connect-src"], ["'self'", "http:", "https:", "ws:", "wss:"]);
+    // A Plannotator review is framed from the environment that owns the thread,
+    // which is never this renderer's origin.
+    assert.deepEqual(directives["frame-src"], [
+      "'self'",
+      "http:",
+      "https:",
+      "https://challenges.cloudflare.com",
+    ]);
     assert.deepEqual(directives["img-src"], [
       "'self'",
       "t3code:",
