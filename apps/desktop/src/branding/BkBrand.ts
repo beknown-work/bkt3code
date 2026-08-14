@@ -7,31 +7,77 @@
  * user's machine — the same reason the Clerk publishable key is baked in via
  * `__T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__` (see `../app/DesktopClerk.ts`).
  *
+ * Which of the two fork apps this is — staging (from `expbkmain`) or production
+ * (from `bkmain`) — is baked in the same way, as
+ * `__T3CODE_BUILD_BRAND_VARIANT__`.
+ *
  * The values here must stay in sync with `scripts/lib/bk-desktop-brand.ts`,
  * which is what the packager writes into the app bundle. `BkBrand.test.ts`
  * asserts that.
  */
 
 declare const __T3CODE_BUILD_BRAND__: string | undefined;
+declare const __T3CODE_BUILD_BRAND_VARIANT__: string | undefined;
 
-/** Identity applied when the fork brand is active. */
-export const BK_RUNTIME_BRAND = {
-  baseName: "BK T3 Code",
-  displayName: "BK T3 Code",
-  userDataDirName: "bkt3code",
+export type BkRuntimeVariant = "staging" | "production";
+
+export interface BkRuntimeBrand {
+  readonly variant: BkRuntimeVariant;
+  readonly baseName: string;
+  readonly displayName: string;
+  readonly userDataDirName: string;
   /**
-   * Must stay fork-specific. `resolveUserDataPath` in `../app/DesktopAppIdentity.ts`
-   * prefers the legacy directory whenever it exists, so inheriting upstream's
-   * "T3 Code (Alpha)" would make a fork build adopt an installed upstream app's
-   * settings, saved environments and sessions. This is the productName-derived
-   * directory Electron would default to, which is the fork's own equivalent of
-   * the upstream migration.
+   * Must stay fork-specific, and distinct per variant. `resolveUserDataPath` in
+   * `../app/DesktopAppIdentity.ts` prefers the legacy directory whenever it
+   * exists, so inheriting upstream's "T3 Code (Alpha)" would make a fork build
+   * adopt an installed upstream app's settings, saved environments and sessions
+   * — and sharing one legacy name across the two fork apps would make staging
+   * adopt production's. This is the productName-derived directory Electron would
+   * default to, which is each app's own equivalent of the upstream migration.
    */
-  legacyUserDataDirName: "BK T3 Code",
-  appUserModelId: "work.beknown.bkt3code",
-  linuxDesktopEntryName: "bkt3code.desktop",
-  linuxWmClass: "bkt3code",
-} as const;
+  readonly legacyUserDataDirName: string;
+  readonly appUserModelId: string;
+  readonly linuxDesktopEntryName: string;
+  readonly linuxWmClass: string;
+  /**
+   * electron-updater channel this app follows. Handed to `setChannel` in
+   * `../updates/DesktopUpdates.ts`; see `scripts/lib/bk-desktop-brand.ts` for
+   * why it is what separates the two apps' updates.
+   */
+  readonly updateChannel: string;
+}
+
+/** Identity applied when the fork brand is active, one per app. */
+export const BK_RUNTIME_BRANDS: Readonly<Record<BkRuntimeVariant, BkRuntimeBrand>> = {
+  production: {
+    variant: "production",
+    baseName: "BK T3 Code",
+    displayName: "BK T3 Code",
+    userDataDirName: "bkt3code",
+    legacyUserDataDirName: "BK T3 Code",
+    appUserModelId: "work.beknown.bkt3code",
+    linuxDesktopEntryName: "bkt3code.desktop",
+    linuxWmClass: "bkt3code",
+    updateChannel: "production-nightly",
+  },
+  staging: {
+    variant: "staging",
+    baseName: "BK T3 Code (Staging)",
+    displayName: "BK T3 Code (Staging)",
+    userDataDirName: "bkt3code-staging",
+    legacyUserDataDirName: "BK T3 Code (Staging)",
+    appUserModelId: "work.beknown.bkt3code.staging",
+    linuxDesktopEntryName: "bkt3code-staging.desktop",
+    linuxWmClass: "bkt3code-staging",
+    updateChannel: "staging-nightly",
+  },
+};
+
+/** Variant used when the define is absent or unrecognised. */
+const DEFAULT_RUNTIME_VARIANT: BkRuntimeVariant = "production";
+
+/** The production identity, which is what an unqualified fork build produces. */
+export const BK_RUNTIME_BRAND = BK_RUNTIME_BRANDS[DEFAULT_RUNTIME_VARIANT];
 
 /**
  * True when this bundle was packaged with the fork brand.
@@ -43,7 +89,12 @@ export function isBkBrandBuild(): boolean {
   return typeof __T3CODE_BUILD_BRAND__ !== "undefined" && __T3CODE_BUILD_BRAND__ === "bk";
 }
 
+function resolveBuildVariant(): BkRuntimeVariant {
+  if (typeof __T3CODE_BUILD_BRAND_VARIANT__ === "undefined") return DEFAULT_RUNTIME_VARIANT;
+  return __T3CODE_BUILD_BRAND_VARIANT__ === "staging" ? "staging" : DEFAULT_RUNTIME_VARIANT;
+}
+
 /** The fork brand when active, otherwise `undefined` for upstream behaviour. */
-export function resolveRuntimeBrand(): typeof BK_RUNTIME_BRAND | undefined {
-  return isBkBrandBuild() ? BK_RUNTIME_BRAND : undefined;
+export function resolveRuntimeBrand(): BkRuntimeBrand | undefined {
+  return isBkBrandBuild() ? BK_RUNTIME_BRANDS[resolveBuildVariant()] : undefined;
 }

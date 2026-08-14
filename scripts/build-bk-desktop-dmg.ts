@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * Builds the Beknown-branded macOS DMG from the current checkout.
+ * Builds a Beknown-branded macOS DMG from the current checkout.
+ *
+ * There are two fork apps and `--channel` picks which one this is — it selects
+ * the bundle id, product name, user-data directory, updater channel and the
+ * central server the build orchestrates, all at once:
+ *
+ *   node scripts/build-bk-desktop-dmg.ts --channel staging     # BK T3 Code (Staging), expbkt3
+ *   node scripts/build-bk-desktop-dmg.ts --channel production  # BK T3 Code, bkt3
+ *   node scripts/build-bk-desktop-dmg.ts --channel staging \
+ *     --build-version 0.0.32-staging-nightly.20260810.1
  *
  * Must run on macOS: electron-builder cannot cross-compile a mac DMG, so this
- * fails fast anywhere else rather than producing something unusable.
- *
- *   node scripts/build-bk-desktop-dmg.ts                  # arm64 DMG, auto version
- *   node scripts/build-bk-desktop-dmg.ts --build-version 0.0.32-nightly.20260810.1
- *   node scripts/build-bk-desktop-dmg.ts --channel staging   # orchestrate expbkt3
- *   node scripts/build-bk-desktop-dmg.ts --channel production # orchestrate bkt3
+ * fails fast anywhere else rather than producing something unusable. Set
+ * `T3CODE_BK_SIGNING_IDENTITY` to sign; unsigned builds run locally but cannot
+ * be published, because Squirrel.Mac cannot install them as updates.
  *
  * See docs/operations/bk-desktop-build.md.
  */
@@ -30,9 +36,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   BK_DESKTOP_BRAND_ID,
+  BK_DESKTOP_BRANDS,
   BK_DESKTOP_UPDATE_REPOSITORY,
   DESKTOP_BRAND_ENV_VAR,
 } from "./lib/bk-desktop-brand.ts";
+import { BK_SIGNING_IDENTITY_ENV_VAR, resolveBkSigningIdentity } from "./lib/bk-desktop-signing.ts";
 import {
   BK_MANAGED_CHANNEL_ENV_VAR,
   BK_MANAGED_ENVIRONMENTS,
@@ -45,6 +53,7 @@ import {
   formatBuildDate,
   parseNightlyVersion,
   resolveNextCounter,
+  updateManifestFileName,
 } from "./lib/bk-desktop-release.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { readDesktopBaseVersion } from "./resolve-nightly-release.ts";
@@ -75,13 +84,32 @@ export class InvalidBkBuildVersionError extends Schema.TaggedErrorClass<InvalidB
   "InvalidBkBuildVersionError",
   {
     version: Schema.String,
+    channel: Schema.String,
   },
 ) {
   override get message(): string {
     return (
-      `--build-version must be a nightly version like 0.0.32-nightly.20260810.1, got ` +
+      `--build-version must look like 0.0.32-${this.channel}-nightly.20260810.1, got ` +
       `"${this.version}". Fork builds must use the nightly channel or auto-update cannot ` +
-      `see them; see scripts/lib/bk-desktop-release.ts.`
+      `see them, and the leading "${this.channel}" is what keeps the two fork apps' updates ` +
+      `apart; see scripts/lib/bk-desktop-release.ts.`
+    );
+  }
+}
+
+export class BuildVersionChannelMismatchError extends Schema.TaggedErrorClass<BuildVersionChannelMismatchError>()(
+  "BuildVersionChannelMismatchError",
+  {
+    version: Schema.String,
+    channel: Schema.String,
+    versionChannel: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `--build-version ${this.version} is a ${this.versionChannel} version, but --channel is ` +
+      `${this.channel}. The version's channel decides which app's updater picks the build up, ` +
+      `so this would ship a ${this.channel} build to ${this.versionChannel} users.`
     );
   }
 }
@@ -181,13 +209,31 @@ const listPublishedTags = Effect.fn("listPublishedTags")(function* () {
   return Option.getOrUndefined(result);
 });
 
-const resolveBuildVersion = Effect.fn("resolveBuildVersion")(function* (
+/**
+ * Exported so `resolve-bk-desktop-version.ts` — which CI uses to stamp a build
+ * before calling this script — computes the version the same way rather than
+ * reimplementing the counter rules in shell.
+ */
+export const resolveBuildVersion = Effect.fn("resolveBuildVersion")(function* (
   requested: Option.Option<string>,
+  channel: BkManagedChannel,
 ) {
   if (Option.isSome(requested)) {
     const version = requested.value.trim();
-    if (!parseNightlyVersion(version)) {
-      return yield* new InvalidBkBuildVersionError({ version });
+    const parsed = parseNightlyVersion(version);
+    if (!parsed) {
+      return yield* new InvalidBkBuildVersionError({ version, channel });
+    }
+    // A version carries the channel in its first prerelease identifier, so an
+    // explicit --build-version can disagree with --channel. That would produce a
+    // staging-identity app stamped with a production version, which publishes
+    // straight onto the team's channel.
+    if (parsed.variant !== channel) {
+      return yield* new BuildVersionChannelMismatchError({
+        version,
+        channel,
+        versionChannel: parsed.variant,
+      });
     }
     return version;
   }
@@ -197,14 +243,15 @@ const resolveBuildVersion = Effect.fn("resolveBuildVersion")(function* (
   const publishedTags = yield* listPublishedTags();
   if (!publishedTags) {
     return yield* new BuildNumberUnavailableError({
-      suggestedVersion: composeNightlyVersion(baseVersion, date, 1),
+      suggestedVersion: composeNightlyVersion(baseVersion, channel, date, 1),
     });
   }
 
   return composeNightlyVersion(
     baseVersion,
+    channel,
     date,
-    resolveNextCounter(publishedTags, baseVersion, date),
+    resolveNextCounter(publishedTags, channel, baseVersion, date),
   );
 });
 
@@ -212,7 +259,7 @@ const runBuild = Effect.fn("runBuild")(function* (options: {
   readonly version: string;
   readonly arch: string;
   readonly verbose: boolean;
-  readonly managedChannel: BkManagedChannel | undefined;
+  readonly managedChannel: BkManagedChannel;
 }) {
   const path = yield* Path.Path;
   const repoRoot = yield* RepoRoot;
@@ -236,11 +283,10 @@ const runBuild = Effect.fn("runBuild")(function* (options: {
     ...process.env,
     ...repoEnv,
     [DESKTOP_BRAND_ENV_VAR]: BK_DESKTOP_BRAND_ID,
-    // Bakes the central server this build orchestrates into the renderer bundle.
-    // Absent ⇒ the primary environment stays the bundled local backend.
-    ...(options.managedChannel
-      ? { [BK_MANAGED_CHANNEL_ENV_VAR]: options.managedChannel }
-      : { [BK_MANAGED_CHANNEL_ENV_VAR]: undefined }),
+    // Bakes the central server this build orchestrates into the renderer bundle,
+    // and — via resolveBkDesktopVariant — selects which of the two fork apps
+    // this is: bundle id, product name, user-data directory and updater channel.
+    [BK_MANAGED_CHANNEL_ENV_VAR]: options.managedChannel,
     // Points electron-updater at the fork's releases instead of upstream's.
     T3CODE_DESKTOP_UPDATE_REPOSITORY: BK_DESKTOP_UPDATE_REPOSITORY,
     VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true",
@@ -291,15 +337,20 @@ const command = Command.make(
   "build-bk-desktop-dmg",
   {
     buildVersion: Flag.string("build-version").pipe(
-      Flag.withDescription("Nightly version to stamp, for example 0.0.32-nightly.20260810.1."),
-      Flag.optional,
-    ),
-    channel: Flag.string("channel").pipe(
       Flag.withDescription(
-        "Central server this build orchestrates: staging (expbkt3) or production (bkt3). " +
-          "Omit for a local-only build.",
+        "Version to stamp, for example 0.0.32-staging-nightly.20260810.1. Must match --channel.",
       ),
       Flag.optional,
+    ),
+    // Required, because it now selects the app's identity as well as its
+    // backend: staging builds are "BK T3 Code (Staging)" with their own bundle
+    // id, user-data directory and updater channel. Leaving it implicit is how
+    // you accidentally publish a local build onto the team's channel.
+    channel: Flag.string("channel").pipe(
+      Flag.withDescription(
+        "Which fork app to build: staging (expbkt3, from expbkmain) or production " +
+          "(bkt3, from bkmain).",
+      ),
     ),
     arch: Flag.string("arch").pipe(
       Flag.withDescription("Target architecture (arm64 or x64)."),
@@ -314,30 +365,41 @@ const command = Command.make(
     Effect.gen(function* () {
       // Channel first, so a typo is caught anywhere — including from a Linux shell,
       // where the macOS host check below would otherwise mask it.
-      const requestedChannel = Option.map(channel, (value) => value.trim().toLowerCase());
-      if (Option.isSome(requestedChannel) && !isBkManagedChannel(requestedChannel.value)) {
-        return yield* new InvalidBkManagedChannelError({ channel: requestedChannel.value });
+      const requestedChannel = channel.trim().toLowerCase();
+      if (!isBkManagedChannel(requestedChannel)) {
+        return yield* new InvalidBkManagedChannelError({ channel: requestedChannel });
       }
-      const managedChannel = Option.isSome(requestedChannel)
-        ? (requestedChannel.value as BkManagedChannel)
-        : undefined;
+      const managedChannel: BkManagedChannel = requestedChannel;
+      const brand = BK_DESKTOP_BRANDS[managedChannel];
 
       const hostPlatform = yield* HostProcessPlatform;
       if (hostPlatform !== "darwin") {
         return yield* new UnsupportedBuildHostError({ hostPlatform });
       }
 
-      const version = yield* resolveBuildVersion(buildVersion);
+      const signingIdentity = resolveBkSigningIdentity();
+      const version = yield* resolveBuildVersion(buildVersion, managedChannel);
       yield* Console.log(
-        `Building BK T3 Code ${version} (mac/${arch}, unsigned)` +
-          (managedChannel
-            ? `, orchestrating ${BK_MANAGED_ENVIRONMENTS[managedChannel].httpBaseUrl}...`
-            : ", local backend only..."),
+        `Building ${brand.productName} ${version} (mac/${arch}, ` +
+          `${signingIdentity ? `signed as "${signingIdentity}"` : "unsigned"}), ` +
+          `orchestrating ${BK_MANAGED_ENVIRONMENTS[managedChannel].httpBaseUrl}...`,
       );
+      if (!signingIdentity) {
+        // Not fatal — an unsigned build is fine to run locally — but it cannot be
+        // published, and finding that out only at the publish step wastes a
+        // 10-minute build.
+        yield* Console.warn(
+          `WARNING: ${BK_SIGNING_IDENTITY_ENV_VAR} is not set, so this build is unsigned and ` +
+            `cannot be published: Squirrel.Mac cannot install an unsigned update over a signed ` +
+            `app. See docs/operations/bk-desktop-build.md.`,
+        );
+      }
       yield* runBuild({ version, arch, verbose, managedChannel });
       yield* Console.log(
-        `Done. Artifacts are in release/. Publish them with:\n` +
-          `  node scripts/publish-bk-desktop-dmg.ts --build-version ${version}`,
+        `Done. Artifacts are in release/ (installer, update payload, blockmaps and ` +
+          `${updateManifestFileName(managedChannel)}). Publish them with:\n` +
+          `  node scripts/publish-bk-desktop-dmg.ts --channel ${managedChannel} ` +
+          `--build-version ${version}`,
       );
     }),
 ).pipe(Command.withDescription("Build the Beknown-branded macOS desktop DMG."));

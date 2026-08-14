@@ -23,10 +23,17 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+// T3-CUSTOM(expbkt3): BEGIN - native update-ready notification.
+import * as ElectronNotification from "../electron/ElectronNotification.ts";
+// T3-CUSTOM(expbkt3): END
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+// T3-CUSTOM(expbkt3): BEGIN - fork brand drives the updater channel and the
+// notification's wording.
+import { resolveRuntimeBrand } from "../branding/BkBrand.ts";
+// T3-CUSTOM(expbkt3): END
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
@@ -249,6 +256,9 @@ export const make = Effect.gen(function* () {
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const desktopState = yield* DesktopState.DesktopState;
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
+  // T3-CUSTOM(expbkt3): BEGIN
+  const electronNotification = yield* ElectronNotification.ElectronNotification;
+  // T3-CUSTOM(expbkt3): END
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -260,6 +270,11 @@ export const make = Effect.gen(function* () {
   const updateInstallInFlightRef = yield* Ref.make(false);
   const updaterConfiguredRef = yield* Ref.make(false);
   const lastLoggedDownloadMilestoneRef = yield* Ref.make(-1);
+  // T3-CUSTOM(expbkt3): BEGIN - version the update-ready notification was last
+  // shown for. electron-updater re-emits update-downloaded on every subsequent
+  // check while an update sits downloaded, and a notification per poll is spam.
+  const notifiedDownloadedVersionRef = yield* Ref.make<string | null>(null);
+  // T3-CUSTOM(expbkt3): END
   const updateStateRef = yield* Ref.make<DesktopUpdateState>(
     createInitialDesktopUpdateState(
       environment.appVersion,
@@ -332,12 +347,25 @@ export const make = Effect.gen(function* () {
   ) {
     yield* Effect.annotateCurrentSpan({ channel });
     const allowsPrerelease = channel === "nightly";
-    yield* electronUpdater.setChannel(channel);
+    // T3-CUSTOM(expbkt3): BEGIN - the fork ships two apps from one release
+    // repository, so the string handed to electron-updater is the brand's
+    // ("staging-nightly" / "production-nightly"), not the contract-level
+    // channel. GitHubProvider matches it against each release tag's first
+    // prerelease identifier, which is what keeps a staging build invisible to a
+    // production app. The contract channel is unchanged, so the settings UI and
+    // the persisted setting keep their existing "latest" | "nightly" values.
+    const brandChannel = resolveRuntimeBrand()?.updateChannel;
+    const updaterChannel = allowsPrerelease ? (brandChannel ?? channel) : channel;
+    yield* electronUpdater.setChannel(updaterChannel);
+    // T3-CUSTOM(expbkt3): END
     yield* electronUpdater.setAllowPrerelease(allowsPrerelease);
     yield* electronUpdater.setAllowDowngrade(allowsPrerelease);
     yield* electronUpdater.setFullChangelog(allowsPrerelease);
     yield* logUpdaterInfo("using update channel", {
       channel,
+      // T3-CUSTOM(expbkt3): the string actually given to electron-updater, which
+      // differs from `channel` on a fork build and is worth seeing in the log.
+      updaterChannel,
       allowPrerelease: allowsPrerelease,
       allowDowngrade: allowsPrerelease,
       fullChangelog: allowsPrerelease,
@@ -679,8 +707,38 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // T3-CUSTOM(expbkt3): BEGIN - tell the user an update is ready, and let one
+  // click take it. `installDownloadedUpdate` already stops the backend pool,
+  // destroys the windows and calls quitAndInstall with isForceRunAfter, so
+  // "click the notification" and "the app relaunches on the new version" are the
+  // same action. The sidebar button stays as the fallback for a dismissed or
+  // suppressed notification.
+  const notifyUpdateReady = Effect.fn("desktop.updates.notifyUpdateReady")(function* (
+    version: string,
+    runEffect: (effect: Effect.Effect<void>) => void,
+  ) {
+    const brand = resolveRuntimeBrand();
+    if (!brand) return;
+    if ((yield* Ref.get(notifiedDownloadedVersionRef)) === version) return;
+    yield* Ref.set(notifiedDownloadedVersionRef, version);
+
+    const shown = yield* electronNotification.show({
+      title: `${brand.displayName} ${version} is ready`,
+      body: "Click to restart and update now.",
+      onClick: () => {
+        runEffect(installDownloadedUpdate.pipe(Effect.asVoid));
+      },
+    });
+    yield* logUpdaterInfo("update ready notification", { version, shown });
+  });
+  // T3-CUSTOM(expbkt3): END
+
   const handleUpdateDownloaded = Effect.fn("desktop.updates.handleUpdateDownloaded")(function* (
     raw: unknown,
+    // T3-CUSTOM(expbkt3): BEGIN - runner for the notification's click handler,
+    // which has to escape the Effect world into an Electron callback.
+    runEffect: (effect: Effect.Effect<void>) => void,
+    // T3-CUSTOM(expbkt3): END
   ) {
     yield* decodeUpdateInfo(raw).pipe(
       Effect.flatMap(
@@ -688,6 +746,9 @@ export const make = Effect.gen(function* () {
           const state = yield* Ref.get(updateStateRef);
           yield* setState(reduceDesktopUpdateStateOnDownloadComplete(state, info.version));
           yield* logUpdaterInfo("update downloaded", { version: info.version });
+          // T3-CUSTOM(expbkt3): BEGIN
+          yield* notifyUpdateReady(info.version, runEffect);
+          // T3-CUSTOM(expbkt3): END
         }),
       ),
       Effect.catchCause((cause) => {
@@ -731,7 +792,11 @@ export const make = Effect.gen(function* () {
       }
       yield* Ref.set(updaterConfiguredRef, true);
 
-      yield* electronUpdater.setAutoDownload(false);
+      // T3-CUSTOM(expbkt3): BEGIN - fork builds download in the background, so
+      // that by the time the user is told an update is ready, one click can
+      // restart into it. Upstream keeps its explicit two-step flow.
+      yield* electronUpdater.setAutoDownload(resolveRuntimeBrand() !== undefined);
+      // T3-CUSTOM(expbkt3): END
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
       yield* applyAutoUpdaterChannel(settings.updateChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
@@ -764,7 +829,9 @@ export const make = Effect.gen(function* () {
         runEffect(handleDownloadProgress(progress));
       });
       yield* electronUpdater.on("update-downloaded", (info: unknown) => {
-        runEffect(handleUpdateDownloaded(info));
+        // T3-CUSTOM(expbkt3): runEffect is threaded through so the update-ready
+        // notification's click handler can run the install Effect.
+        runEffect(handleUpdateDownloaded(info, runEffect));
       });
 
       yield* startUpdatePollers;

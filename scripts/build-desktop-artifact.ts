@@ -18,6 +18,7 @@ import {
 } from "./lib/brand-assets.ts";
 // T3-CUSTOM(expbkt3): BEGIN - fork desktop brand (bundle id, name, icon, artifact).
 import { resolveBkDesktopBrand } from "./lib/bk-desktop-brand.ts";
+import { resolveBkSigningIdentity } from "./lib/bk-desktop-signing.ts";
 // T3-CUSTOM(expbkt3): END
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -1480,12 +1481,22 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   const [owner, repo, ...rest] = rawRepo.split("/");
   if (!owner || !repo || rest.length > 0) return undefined;
 
+  // T3-CUSTOM(expbkt3): BEGIN - the fork ships two apps out of this one
+  // repository, so the channel is the brand's, not the literal "nightly".
+  // That name becomes the manifest asset (`<channel>-mac.yml`) and must equal
+  // the first prerelease identifier of the version, which is what
+  // electron-updater's GitHubProvider matches on. See
+  // scripts/lib/bk-desktop-brand.ts.
+  const brandChannel = resolveDesktopBrandOverride()?.updateChannel;
+  // T3-CUSTOM(expbkt3): END
+
   return {
     provider: "github",
     owner,
     repo,
     releaseType: updateChannel === "nightly" ? "prerelease" : "release",
-    ...(updateChannel === "nightly" ? { channel: "nightly" as const } : {}),
+    // T3-CUSTOM(expbkt3): brandChannel when a fork brand is active, else upstream's.
+    ...(updateChannel === "nightly" ? { channel: brandChannel ?? ("nightly" as const) } : {}),
   };
 });
 
@@ -1621,6 +1632,23 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
         : {}),
+      // T3-CUSTOM(expbkt3): BEGIN - fork self-signed identity. Squirrel.Mac
+      // validates an update bundle against the installed app's designated
+      // requirement, so an unsigned build can never auto-update. Apple's
+      // certificates are bound to upstream's App ID, so the fork signs with a
+      // self-signed cert from the build machine's keychain instead: the
+      // requirement is then identifier + leaf hash, which is stable across
+      // builds as long as the same certificate signs every one of them.
+      // Deliberately not notarised — Gatekeeper still quarantines the download,
+      // which the documented `xattr -dr` step already clears.
+      // The hardened runtime is switched off with it: it exists to satisfy
+      // notarisation, which a self-signed build cannot do anyway, and leaving it
+      // on only adds entitlement-shaped launch failures (JIT, library
+      // validation for the unsigned .node addons) to debug on teammates' Macs.
+      ...(resolveBkSigningIdentity()
+        ? { identity: resolveBkSigningIdentity(), hardenedRuntime: false }
+        : {}),
+      // T3-CUSTOM(expbkt3): END
     };
   }
 
@@ -2036,10 +2064,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       delete buildEnv[key];
     }
   }
+  // T3-CUSTOM(expbkt3): BEGIN - a fork build is not `signed` in upstream's sense
+  // (no Apple Team ID, no provisioning profile) but still signs with a
+  // self-signed keychain identity, so it must keep identity auto-discovery on.
+  // The Apple notarisation credentials are still scrubbed either way.
+  const bkSigningIdentity = resolveBkSigningIdentity();
+  // T3-CUSTOM(expbkt3): END
   if (!options.signed) {
-    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
-    delete buildEnv.CSC_LINK;
-    delete buildEnv.CSC_KEY_PASSWORD;
+    // T3-CUSTOM(expbkt3): BEGIN
+    if (!bkSigningIdentity) {
+      buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+      delete buildEnv.CSC_LINK;
+      delete buildEnv.CSC_KEY_PASSWORD;
+    }
+    // T3-CUSTOM(expbkt3): END
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;

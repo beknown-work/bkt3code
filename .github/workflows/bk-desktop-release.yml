@@ -1,0 +1,128 @@
+# Fork-owned. Builds and publishes the two Beknown desktop apps.
+#
+# Runs on a self-hosted macOS runner, because electron-builder cannot
+# cross-compile a mac DMG and the signing certificate lives in that machine's
+# login keychain. See docs/operations/bk-desktop-build.md for runner setup.
+#
+# Self-hosted runners on a public repository are only safe when untrusted code
+# cannot reach them. The triggers here are the guard: `push` to two protected
+# branches and `workflow_dispatch` both require write access, and neither can be
+# fired from a fork. Do not add `pull_request` — that would run fork-authored
+# code on a personal machine with a signing key on it.
+name: BK desktop release
+
+on:
+  push:
+    branches: [expbkmain, bkmain]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Which app to build (defaults to the branch's own)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - staging
+          - production
+
+# One build per branch. A merge train should ship the newest commit, not queue a
+# DMG per commit on a laptop.
+concurrency:
+  group: bk-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    env:
+      # Names the self-signed certificate in the runner's login keychain. Without
+      # it the build is unsigned and the publish step refuses it, because
+      # Squirrel.Mac cannot install an unsigned update over an installed app.
+      T3CODE_BK_SIGNING_IDENTITY: ${{ secrets.BK_MACOS_SIGNING_IDENTITY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve channel
+        id: channel
+        run: |
+          channel="${{ inputs.channel }}"
+          if [[ -z "$channel" ]]; then
+            case "${{ github.ref_name }}" in
+              expbkmain) channel=staging ;;
+              bkmain)    channel=production ;;
+              *)
+                echo "::error::No channel mapping for branch ${{ github.ref_name }}." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Building the $channel app from ${{ github.ref_name }}."
+
+      - name: Verify signing identity is present
+        run: |
+          if [[ -z "$T3CODE_BK_SIGNING_IDENTITY" ]]; then
+            echo "::error::BK_MACOS_SIGNING_IDENTITY is not set. Add the repository secret" \
+                 "naming the self-signed certificate; see docs/operations/bk-desktop-build.md." >&2
+            exit 1
+          fi
+          # Fail here rather than 15 minutes into a build that cannot be published.
+          # A locked keychain is the classic headless-signing failure: the identity
+          # exists but is unusable, and electron-builder only says so at the end.
+          if ! security find-identity -v -p codesigning | grep -qF "$T3CODE_BK_SIGNING_IDENTITY"; then
+            echo "::error::No usable code-signing identity named" \
+                 "'$T3CODE_BK_SIGNING_IDENTITY'. Is the login keychain unlocked?" >&2
+            exit 1
+          fi
+
+      - name: Write .env.local
+        # scripts/build-bk-desktop-dmg.ts reads the Clerk key through loadRepoEnv(),
+        # which reads .env/.env.local — a bare environment variable is NOT picked up,
+        # and the build then silently ships with team mode off.
+        run: |
+          if [[ -z "${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}" ]]; then
+            echo "::error::VITE_CLERK_PUBLISHABLE_KEY secret is missing. The build would" \
+                 "ship with no sign-in gate and no member tagging." >&2
+            exit 1
+          fi
+          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\n' \
+            '${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}' > .env.local
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve build version
+        id: version
+        # Delegates to the same resolver the scripts use, so the per-channel,
+        # per-day counter rules are not reimplemented in shell.
+        run: |
+          version=$(node scripts/resolve-bk-desktop-version.ts \
+            --channel "${{ steps.channel.outputs.channel }}")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Stamping $version."
+
+      - name: Build DMG
+        run: |
+          node scripts/build-bk-desktop-dmg.ts \
+            --channel "${{ steps.channel.outputs.channel }}" \
+            --build-version "${{ steps.version.outputs.version }}"
+
+      - name: Publish prerelease
+        run: |
+          node scripts/publish-bk-desktop-dmg.ts \
+            --channel "${{ steps.channel.outputs.channel }}" \
+            --build-version "${{ steps.version.outputs.version }}"
+
+      - name: Clean up secrets from the workspace
+        # The runner is a personal machine and the workspace persists between jobs.
+        if: always()
+        run: rm -f .env.local

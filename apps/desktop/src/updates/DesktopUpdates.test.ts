@@ -16,6 +16,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+// T3-CUSTOM(expbkt3): BEGIN
+import * as ElectronNotification from "../electron/ElectronNotification.ts";
+// T3-CUSTOM(expbkt3): END
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -96,6 +99,18 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       ).pipe(Effect.asVoid),
   } satisfies ElectronUpdater.ElectronUpdater["Service"]);
 
+  // T3-CUSTOM(expbkt3): BEGIN - update-ready notifications. Records what was
+  // shown and exposes the click handler so tests can drive the one-click path.
+  const notifications: ElectronNotification.ElectronNotificationRequest[] = [];
+  const notificationLayer = Layer.succeed(ElectronNotification.ElectronNotification, {
+    show: (request) =>
+      Effect.sync(() => {
+        notifications.push(request);
+        return true;
+      }),
+  } satisfies ElectronNotification.ElectronNotification["Service"]);
+  // T3-CUSTOM(expbkt3): END
+
   const windowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Effect.die("unexpected BrowserWindow creation"),
     main: Effect.succeed(Option.none()),
@@ -172,6 +187,9 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),
+    // T3-CUSTOM(expbkt3): BEGIN
+    Layer.provideMerge(notificationLayer),
+    // T3-CUSTOM(expbkt3): END
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
     Layer.provideMerge(DesktopState.layer),
@@ -191,6 +209,9 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   return {
     layer,
     checkCount: () => checkCount,
+    // T3-CUSTOM(expbkt3): BEGIN
+    notifications: () => notifications,
+    // T3-CUSTOM(expbkt3): END
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
