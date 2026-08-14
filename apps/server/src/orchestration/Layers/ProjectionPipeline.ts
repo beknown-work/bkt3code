@@ -563,6 +563,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               runtimeMode: null,
               interactionMode: null,
             },
+            defaultThreadEnvMode: null,
+            faviconPath: event.payload.faviconPath ?? null,
             scripts: event.payload.scripts,
             ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
@@ -635,6 +637,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.threadCreationDefaults !== undefined
               ? { threadCreationDefaults: event.payload.threadCreationDefaults }
+              : {}),
+            ...(event.payload.defaultThreadEnvMode !== undefined
+              ? { defaultThreadEnvMode: event.payload.defaultThreadEnvMode }
+              : {}),
+            ...(event.payload.faviconPath !== undefined
+              ? { faviconPath: event.payload.faviconPath }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             updatedAt: event.payload.updatedAt,
@@ -757,6 +765,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // T3-CUSTOM(expbkt3): a thread is created with a placeholder or a
             // seeded title, never a chosen one.
             titleManuallySet: 0,
+            pinOrderKey: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -945,6 +954,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             pinnedAt: event.payload.pinnedAt,
+            ...(event.payload.pinOrderKey !== undefined
+              ? { pinOrderKey: event.payload.pinOrderKey }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -960,6 +972,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             pinnedAt: null,
+            pinOrderKey: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.pin-reordered": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinOrderKey: event.payload.orderKey,
             updatedAt: event.payload.updatedAt,
           });
           return;

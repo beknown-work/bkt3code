@@ -58,6 +58,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_at,
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set,
+          pin_order_key,
           title_regeneration_request_id,
           title_regeneration_started_at,
           latest_user_message_at,
@@ -95,6 +96,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pinnedAt},
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           ${row.titleManuallySet ?? 0},
+          ${row.pinOrderKey ?? null},
           ${row.titleRegenerationRequestId ?? null},
           ${row.titleRegenerationStartedAt ?? null},
           ${row.latestUserMessageAt},
@@ -132,6 +134,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_at = excluded.pinned_at,
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set = excluded.title_manually_set,
+          pin_order_key = excluded.pin_order_key,
           title_regeneration_request_id = excluded.title_regeneration_request_id,
           title_regeneration_started_at = excluded.title_regeneration_started_at,
           latest_user_message_at = excluded.latest_user_message_at,
@@ -176,6 +179,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -222,6 +226,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",

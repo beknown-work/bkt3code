@@ -33,9 +33,9 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
-  resolveSendWorkspaceContext,
+  resolveSendWorkspaceContext, // T3-CUSTOM(expbkt3)
   scheduleEnvironmentReconnectWarning,
-  shouldPrepareWorktreeForFirstTurn,
+  shouldPrepareWorktreeForFirstTurn, // T3-CUSTOM(expbkt3)
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,

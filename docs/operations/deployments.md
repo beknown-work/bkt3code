@@ -171,6 +171,13 @@ experiment starts from production.
 Update the upstream mirror and `t3.dev`: see
 [`deploy/t3/README.md`](../../deploy/t3/README.md#branch-maintenance).
 
+Merging a fresh upstream nightly into the fork — mirror sync, measuring the
+conflict surface before staffing the work, resolution rules, and the post-merge
+CI failures that recur every time — is the
+[`merge-upstream`](../../.agents/skills/merge-upstream/SKILL.md) skill. Note that
+`t3main` being current does **not** mean the `main` mirror is: the two steps are
+routinely half-done, and fork branches merge from `origin/main`, never `t3main`.
+
 ## Fork customization boundaries
 
 Fork-specific code is marked with `T3-CUSTOM(expbkt3)` comments so upstream

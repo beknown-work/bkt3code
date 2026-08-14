@@ -391,6 +391,8 @@ function mapProjectShellRow(
     repositoryIdentity,
     defaultModelSelection: row.defaultModelSelection,
     threadCreationDefaults: row.threadCreationDefaults,
+    defaultThreadEnvMode: row.defaultThreadEnvMode,
+    faviconPath: row.faviconPath ?? null,
     scripts: row.scripts,
     ownerUserId: row.ownerUserId,
     memberUserIds,
@@ -544,6 +546,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           thread_creation_defaults_json AS "threadCreationDefaults",
+          default_thread_env_mode AS "defaultThreadEnvMode",
+          favicon_path AS "faviconPath",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -587,6 +591,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -672,6 +677,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -720,6 +726,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -1069,6 +1076,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           thread_creation_defaults_json AS "threadCreationDefaults",
+          default_thread_env_mode AS "defaultThreadEnvMode",
+          favicon_path AS "faviconPath",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -1093,6 +1102,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           thread_creation_defaults_json AS "threadCreationDefaults",
+          default_thread_env_mode AS "defaultThreadEnvMode",
+          favicon_path AS "faviconPath",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -1173,6 +1184,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -1242,6 +1254,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_at AS "pinnedAt",
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
+          pin_order_key AS "pinOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -2039,6 +2052,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
                 defaultModelSelection: row.defaultModelSelection,
                 threadCreationDefaults: row.threadCreationDefaults,
+                defaultThreadEnvMode: row.defaultThreadEnvMode,
+                faviconPath: row.faviconPath ?? null,
                 scripts: row.scripts,
                 ownerUserId: row.ownerUserId,
                 memberUserIds: memberUserIdsByProject.get(row.projectId) ?? [],
@@ -2077,6 +2092,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 pinnedAt: row.pinnedAt,
                 // T3-CUSTOM(expbkt3): manual-title ownership.
                 titleManuallySet: row.titleManuallySet === 1,
+                pinOrderKey: row.pinOrderKey ?? null,
                 titleRegeneration: mapTitleRegeneration(row),
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
@@ -2276,6 +2292,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   workspaceRoot: row.workspaceRoot,
                   defaultModelSelection: row.defaultModelSelection,
                   threadCreationDefaults: row.threadCreationDefaults,
+                  defaultThreadEnvMode: row.defaultThreadEnvMode,
+                  faviconPath: row.faviconPath ?? null,
                   scripts: row.scripts,
                   ownerUserId: row.ownerUserId,
                   memberUserIds: memberUserIdsByProject.get(row.projectId) ?? [],
@@ -2390,6 +2408,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   pinnedAt: row.pinnedAt,
                   // T3-CUSTOM(expbkt3): manual-title ownership.
                   titleManuallySet: row.titleManuallySet === 1,
+                  pinOrderKey: row.pinOrderKey ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
                   deletedAt: row.deletedAt,
                   messages: [],
@@ -2570,6 +2589,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         pinnedAt: row.pinnedAt,
                         // T3-CUSTOM(expbkt3): manual-title ownership.
                         titleManuallySet: row.titleManuallySet === 1,
+                        pinOrderKey: row.pinOrderKey ?? null,
                         titleRegeneration: mapTitleRegeneration(row),
                         session: sessionByThread.get(row.threadId) ?? null,
                         latestUserMessageAt: row.latestUserMessageAt,
@@ -2756,6 +2776,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     pinnedAt: row.pinnedAt,
                     // T3-CUSTOM(expbkt3): manual-title ownership.
                     titleManuallySet: row.titleManuallySet === 1,
+                    pinOrderKey: row.pinOrderKey ?? null,
                     titleRegeneration: mapTitleRegeneration(row),
                     session: sessionByThread.get(row.threadId) ?? null,
                     latestUserMessageAt: row.latestUserMessageAt,
@@ -2878,6 +2899,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     repositoryIdentity,
                     defaultModelSelection: option.value.defaultModelSelection,
                     threadCreationDefaults: option.value.threadCreationDefaults,
+                    defaultThreadEnvMode: option.value.defaultThreadEnvMode,
+                    faviconPath: option.value.faviconPath ?? null,
                     scripts: option.value.scripts,
                     ownerUserId: option.value.ownerUserId,
                     memberUserIds: memberRows.map((row) => row.userId),
@@ -3082,6 +3105,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         pinnedAt: threadRow.value.pinnedAt,
         // T3-CUSTOM(expbkt3): manual-title ownership.
         titleManuallySet: threadRow.value.titleManuallySet === 1,
+        pinOrderKey: threadRow.value.pinOrderKey ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
@@ -3292,6 +3316,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         pinnedAt: threadRow.value.pinnedAt,
         // T3-CUSTOM(expbkt3): manual-title ownership.
         titleManuallySet: threadRow.value.titleManuallySet === 1,
+        pinOrderKey: threadRow.value.pinOrderKey ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         deletedAt: null,
         messages: messageRows.map((row) => {

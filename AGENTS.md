@@ -53,7 +53,8 @@ Rules that apply regardless of approach:
 - **Never reformat, reorder, or opportunistically refactor upstream code.** A moved import or re-wrapped line produces a conflict with zero product value. Keep diffs minimal and local — this is the single cheapest discipline available.
 - **Cover fork behavior with tests in fork-owned test files.** After a merge, those tests are the only thing that proves a customization survived conflict resolution.
 - **Upstream anything generally useful.** A fix accepted upstream is a fix we stop re-merging forever; it converts a permanent tax into a one-time contribution. Bug fixes and small primitives are usually welcome upstream — check before building the fork-only version.
-- **Merge upstream often, in small batches.** Conflict pain grows faster than linearly with the size of the delta: two 15-commit merges are far cheaper than one 30-commit merge, because each conflict is reasoned about with less surrounding drift. Treat a monthly cadence as the ceiling, not the target.
+- **Merge upstream often, in small batches.** Conflict pain grows faster than linearly with the size of the delta: two 15-commit merges are far cheaper than one 30-commit merge, because each conflict is reasoned about with less surrounding drift. Treat a monthly cadence as the ceiling, not the target. The end-to-end procedure — mirror sync, measuring the conflict surface, resolution rules, and the post-merge CI failures that recur every time — is the [`merge-upstream`](./.agents/skills/merge-upstream/SKILL.md) skill. Follow it rather than re-deriving the steps.
+- **A fork edit that _relocates_ upstream code is the most dangerous kind.** When the fork moves a block into its own module, a later upstream fix to that block arrives as a conflict-free change to a region the fork no longer has — git keeps the "deletion" and the fix silently never lands. Nothing catches this: it typechecks, and upstream's regression test for it usually lives in the file the fork stopped using. A 2026-08 merge lost upstream's "no origin remote" bootstrap fallback exactly this way. Prefer wrapping over relocating, and when reviewing a merge, diff the upstream side of any relocated block by hand.
 - **Never rebase the fork branches onto upstream.** `bkmain` and `expbkmain` are long-lived and shared; merging preserves the record of how each conflict was resolved, and rebasing re-inflicts every conflict and rewrites published history.
 - **`git rerere` is enabled in this repo** (`rerere.enabled=true`), so a conflict resolved once is replayed automatically the next time the same hunk collides. Never resolve a conflict by discarding one side wholesale just to make it go away — a bad resolution gets replayed too. Verify what rerere auto-resolved before committing a merge.
 - **Test upstream merges on `expbkmain` first**, never directly on `bkmain`. Reset `expbkmain` from `bkmain` so its conflicts are exactly the ones `bkmain` will see, verify at expbkt3.dev, then promote.
@@ -133,8 +134,8 @@ The most common defect in this repo is a change that works on the path you teste
 - `vp i` installs. Worktrees get this from the t3.json setup script; if module resolution looks broken, it probably did not run.
 - `vp run dev` starts server and web. In a worktree, state defaults to that worktree's gitignored `.t3`, which deliberately outranks an ambient `T3CODE_HOME` so you cannot land on shared state by accident. An explicit `--home-dir` still wins.
 - Ports derive from the worktree path and are stable across restarts, but read the real ones from the `[dev-runner]` line since occupied ports shift.
-- `--share` publishes over the tailnet. Do not open the URL when you use this, just send it to the user with the pairing code included in url
-- The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to.
+- Sharing over the tailnet is three steps: run `vp run dev --share` in the background, wait for the `pairingUrl:` line in its output, paste that full URL (token included) in your reply. Do not wire up `tailscale serve` by hand for this, and do not open the URL yourself.
+- The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to. If the token got consumed, mint a fresh one with `node apps/server/src/bin.ts pair` — note it carries standard scopes, while the startup URL carries admin scopes (needed for Settings → Connections management).
 - Stop what you started, by the PID you tracked. See rule 1.
 
 ## Test data
@@ -171,7 +172,6 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 - Never make a PR unless the developer explicitly asks you to do so.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
 - Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.
-- **Rebase onto latest main before opening.** Stale branches conflict and burn a review round.
 - UI changes need before/after images. Motion or timing needs a short video.
 - One concern per PR. If the description says "also", split it.
 - When babysitting: poll checks and comments newer than the last push, verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.

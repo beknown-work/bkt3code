@@ -28,6 +28,7 @@ export const RIGHT_PANEL_KINDS = [
   "file",
   "preview",
   "terminal",
+  "pull-request",
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
@@ -53,6 +54,7 @@ export type RightPanelSurface =
       revealRequestId: number;
     }
   | {
+      // T3-CUSTOM(expbkt3): Plannotator review surface.
       id: `plannotator:${string}`;
       kind: "plannotator";
       url: `/plannotator/${string}/`;
@@ -63,13 +65,39 @@ export type RightPanelSurface =
       kind: "planReview";
       documentId: string;
     }
+  | {
+      /**
+       * A change request opened beside a thread or in the pull-request list's shared panel.
+       * The reference lives in the id so several pull requests can remain open as peer tabs.
+       */
+      id: `pull-request:${string}`;
+      kind: "pull-request";
+      /**
+       * Which server the change request was read from. The list spans every connected one, so
+       * two of them can hold the same project id; a panel beside a thread leaves this out and
+       * takes the environment from its own ref.
+       */
+      environmentId?: string;
+      projectId: string;
+      repository: string;
+      number: number;
+    }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
 // T3-CUSTOM(expbkt3): v9 also drops legacy persisted Plannotator surfaces.
-// T3-CUSTOM(expbkt3): v10 validates persisted native plan-review surfaces.
-const RIGHT_PANEL_STORAGE_VERSION = 10;
+// T3-CUSTOM(expbkt3): fork v10 validates persisted native plan-review surfaces
+// (the validation is shape-based, so upstream's different v10 meaning is safe).
+// v10 keys pull-request surfaces by reference instead of a singleton tab.
+// v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
+const RIGHT_PANEL_STORAGE_VERSION = 11;
+
+/**
+ * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
+ * state: reopening the app should show the list, not last session's tabs and detail fetches.
+ */
+const isPullRequestsPanelKey = (threadKey: string) => threadKey.endsWith(":pull-requests-panel");
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -81,13 +109,21 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator" | "planReview">,
+    // T3-CUSTOM(expbkt3): plannotator/planReview are excluded alongside upstream's kinds.
+    kind: Exclude<
+      RightPanelKind,
+      "file" | "terminal" | "plannotator" | "planReview" | "pull-request"
+    >,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openPlannotator: (ref: ScopedThreadRef, url: `/plannotator/${string}/`) => void;
   // T3-CUSTOM(expbkt3): native plan review.
   openPlanReview: (ref: ScopedThreadRef, documentId: string) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  openPullRequest: (
+    ref: ScopedThreadRef,
+    target: { environmentId?: string; projectId: string; repository: string; number: number },
+  ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -109,7 +145,11 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "plannotator" | "planReview">,
+    // T3-CUSTOM(expbkt3): plannotator/planReview are excluded alongside upstream's kinds.
+    kind: Exclude<
+      RightPanelKind,
+      "file" | "terminal" | "plannotator" | "planReview" | "pull-request"
+    >,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -122,7 +162,10 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 
 const singletonSurface = (
   // T3-CUSTOM(expbkt3): planReview carries a document id, so it is never a singleton.
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "plannotator" | "planReview">,
+  kind: Exclude<
+    RightPanelKind,
+    "file" | "preview" | "terminal" | "plannotator" | "planReview" | "pull-request"
+  >,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -174,6 +217,54 @@ const terminalSurface = (terminalId: string): RightPanelSurface => ({
   activeTerminalId: terminalId,
 });
 
+export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-request" }>;
+
+export function pullRequestSurfaceId(target: {
+  environmentId?: string;
+  projectId: string;
+  repository: string;
+  number: number;
+}): PullRequestSurface["id"] {
+  // The environment leads the id where there is one, so the same change request read from two
+  // servers is two tabs rather than one tab that changes its mind about which server it is on.
+  const scope =
+    target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
+  return `pull-request:${scope}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+}
+
+export function pullRequestSurface(target: {
+  environmentId?: string;
+  projectId: string;
+  repository: string;
+  number: number;
+}): PullRequestSurface {
+  return {
+    id: pullRequestSurfaceId(target),
+    kind: "pull-request",
+    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
+    projectId: target.projectId,
+    repository: target.repository,
+    number: target.number,
+  };
+}
+
+/**
+ * A pull-request tab's status map with one entry set. Keyed by the surface the panel is showing
+ * rather than by a key rebuilt from the status, so the tab is found again whether or not that
+ * surface was opened with an environment on it. Returns the same map when the tab's own fields
+ * have not changed, so a caller can skip a re-render.
+ */
+export function updatePullRequestTabStatus<Status extends { state: unknown; isDraft: boolean }>(
+  statuses: Readonly<Record<string, Status>>,
+  surfaceId: string,
+  status: Status,
+): Readonly<Record<string, Status>> {
+  return statuses[surfaceId]?.state === status.state &&
+    statuses[surfaceId]?.isDraft === status.isDraft
+    ? statuses
+    : { ...statuses, [surfaceId]: status };
+}
+
 const upsertSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,
@@ -218,8 +309,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
     persistedState.byThreadKey &&
     typeof persistedState.byThreadKey === "object"
       ? Object.fromEntries(
-          Object.entries(persistedState.byThreadKey as Record<string, ThreadRightPanelState>).map(
-            ([threadKey, threadState]) => {
+          Object.entries(persistedState.byThreadKey as Record<string, ThreadRightPanelState>)
+            .filter(([threadKey]) => !isPullRequestsPanelKey(threadKey))
+            .map(([threadKey, threadState]) => {
               const validThreadState =
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
@@ -242,7 +334,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       return [{ ...surface, revealLine, revealRequestId }];
                     }
                     // T3-CUSTOM(expbkt3): a plan-review surface is only valid
-                    // when its id still matches its document (v10).
+                    // when its id still matches its document (fork v10).
                     if ((surface as { kind?: string }).kind === "planReview") {
                       const documentId = (surface as { documentId?: unknown }).documentId;
                       if (
@@ -254,6 +346,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       }
                       return [surface];
                     }
+                    // T3-CUSTOM(expbkt3): validate persisted Plannotator surfaces.
                     if (surface.kind === "plannotator") {
                       if (
                         typeof surface.url !== "string" ||
@@ -263,6 +356,25 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         return [];
                       }
                       return [surface];
+                    }
+                    if (surface.kind === "pull-request") {
+                      if (
+                        typeof surface.projectId !== "string" ||
+                        typeof surface.repository !== "string" ||
+                        typeof surface.number !== "number" ||
+                        !Number.isSafeInteger(surface.number) ||
+                        surface.number < 1
+                      ) {
+                        return [];
+                      }
+                      const { environmentId, ...rest } = surface;
+                      // Anything else stored under that name is not an environment.
+                      return [
+                        pullRequestSurface({
+                          ...rest,
+                          ...(typeof environmentId === "string" ? { environmentId } : {}),
+                        }),
+                      ];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -298,11 +410,14 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     ];
                   })
                 : [];
+              const rawActiveSurfaceId = validThreadState?.activeSurfaceId;
               const persistedActiveSurfaceId = surfaces.some(
-                (surface) => surface.id === validThreadState?.activeSurfaceId,
+                (surface) => surface.id === rawActiveSurfaceId,
               )
-                ? (validThreadState?.activeSurfaceId ?? null)
-                : null;
+                ? (rawActiveSurfaceId ?? null)
+                : rawActiveSurfaceId === "pull-request"
+                  ? (surfaces.find((surface) => surface.kind === "pull-request")?.id ?? null)
+                  : null;
               // A migration that dropped every surface (e.g. plan-only panels
               // in v9) must not reopen an empty panel.
               const isOpen =
@@ -316,8 +431,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const activeSurfaceId =
                 persistedActiveSurfaceId ?? (isOpen ? (surfaces[0]?.id ?? null) : null);
               return [threadKey, { isOpen, surfaces, activeSurfaceId }];
-            },
-          ),
+            }),
         )
       : {};
   // T3-CUSTOM(expbkt3): A saved descriptor alone must never recreate process ownership.
@@ -362,6 +476,12 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           ),
         })),
       // T3-CUSTOM(expbkt3): END
+      openPullRequest: (ref, target) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            return upsertSurface(current, pullRequestSurface(target));
+          }),
+        })),
       openFile: (ref, relativePath, line) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
@@ -632,7 +752,13 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       ),
       // T3-CUSTOM(expbkt3): Runtime-hidden reviews stay mounted; only the saved copy is filtered.
       partialize: (state) => ({
-        byThreadKey: withoutPersistedPlannotatorSurfaces(state.byThreadKey),
+        byThreadKey: withoutPersistedPlannotatorSurfaces(
+          Object.fromEntries(
+            Object.entries(state.byThreadKey).filter(
+              ([threadKey]) => !isPullRequestsPanelKey(threadKey),
+            ),
+          ),
+        ),
       }),
       migrate: migratePersistedRightPanelState,
     },
@@ -662,5 +788,14 @@ export function selectActiveRightPanelSurface(
 ): RightPanelSurface | null {
   const state = selectThreadRightPanelState(byThreadKey, ref);
   if (!state.isOpen) return null;
+  return selectSelectedRightPanelSurface(byThreadKey, ref);
+}
+
+/** The selected surface even while the panel is hidden, so a layout control can restore it. */
+export function selectSelectedRightPanelSurface(
+  byThreadKey: Record<string, ThreadRightPanelState>,
+  ref: ScopedThreadRef | null | undefined,
+): RightPanelSurface | null {
+  const state = selectThreadRightPanelState(byThreadKey, ref);
   return state.surfaces.find((surface) => surface.id === state.activeSurfaceId) ?? null;
 }
