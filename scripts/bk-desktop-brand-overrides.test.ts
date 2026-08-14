@@ -1,5 +1,6 @@
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect } from "vite-plus/test";
 
 import {
   resolveDesktopBuildIconAssets,
@@ -54,9 +55,12 @@ describe("desktop brand overrides in build-desktop-artifact", () => {
   });
 
   it("names the staging app distinctly, so it installs beside production", () => {
+    // "Stage BK T3 Code" is the name already installed on the team's Macs.
+    // productName derives the .app bundle name and Electron's default data
+    // directory, so renaming it later strands a duplicate app and its state.
     withBkBrand("staging");
     expect(resolveDesktopProductName("0.0.17-staging-nightly.20260413.42")).toBe(
-      "BK T3 Code (Staging)",
+      "Stage BK T3 Code",
     );
   });
 
@@ -85,42 +89,46 @@ describe("desktop brand overrides in build-desktop-artifact", () => {
 
 describe("updater channel in the publish config", () => {
   const publishConfig = (version: string) =>
-    Effect.runSync(
-      resolveGitHubPublishConfig(/-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest"),
-    );
+    resolveGitHubPublishConfig(/-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest");
 
-  it("leaves upstream on the plain nightly channel", () => {
-    expect(publishConfig("0.0.17-nightly.20260413.42")).toMatchObject({
-      releaseType: "prerelease",
-      channel: "nightly",
-    });
-  });
+  it.effect("leaves upstream on the plain nightly channel", () =>
+    Effect.gen(function* () {
+      expect(yield* publishConfig("0.0.17-nightly.20260413.42")).toMatchObject({
+        releaseType: "prerelease",
+        channel: "nightly",
+      });
+    }),
+  );
 
-  it("gives each fork app its own channel, which is what separates their updates", () => {
-    // Both apps publish into one repository. electron-updater picks a release by
-    // matching semver.prerelease(tag)[0] against the running app's channel, so
-    // these strings are the entire isolation mechanism — and they must equal the
-    // version's first prerelease identifier.
-    withBkBrand("staging");
-    expect(publishConfig("0.0.17-staging-nightly.20260413.42")).toMatchObject({
-      owner: "beknown-work",
-      repo: "bkt3code",
-      releaseType: "prerelease",
-      channel: "staging-nightly",
-    });
+  it.effect("gives each fork app its own channel, which separates their updates", () =>
+    Effect.gen(function* () {
+      // Both apps publish into one repository. electron-updater picks a release
+      // by matching semver.prerelease(tag)[0] against the running app's channel,
+      // so these strings are the entire isolation mechanism — and they must
+      // equal the version's first prerelease identifier.
+      withBkBrand("staging");
+      expect(yield* publishConfig("0.0.17-staging-nightly.20260413.42")).toMatchObject({
+        owner: "beknown-work",
+        repo: "bkt3code",
+        releaseType: "prerelease",
+        channel: "staging-nightly",
+      });
 
-    withBkBrand("production");
-    expect(publishConfig("0.0.17-production-nightly.20260413.42")).toMatchObject({
-      releaseType: "prerelease",
-      channel: "production-nightly",
-    });
-  });
+      withBkBrand("production");
+      expect(yield* publishConfig("0.0.17-production-nightly.20260413.42")).toMatchObject({
+        releaseType: "prerelease",
+        channel: "production-nightly",
+      });
+    }),
+  );
 
-  it("keeps the stable channel free of a fork channel name", () => {
-    // A non-nightly version is a real release; it must not carry a channel key at
-    // all, or electron-builder writes a manifest nothing reads.
-    withBkBrand("staging");
-    expect(publishConfig("0.0.17")).toMatchObject({ releaseType: "release" });
-    expect(publishConfig("0.0.17")).not.toHaveProperty("channel");
-  });
+  it.effect("keeps the stable channel free of a fork channel name", () =>
+    Effect.gen(function* () {
+      // A non-nightly version is a real release; it must not carry a channel key
+      // at all, or electron-builder writes a manifest nothing reads.
+      withBkBrand("staging");
+      expect(yield* publishConfig("0.0.17")).toMatchObject({ releaseType: "release" });
+      expect(yield* publishConfig("0.0.17")).not.toHaveProperty("channel");
+    }),
+  );
 });

@@ -24,6 +24,8 @@
  * - `<channel>-mac.yml` must be present, or auto-update silently does nothing.
  */
 
+import * as NodeCrypto from "node:crypto";
+
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -37,7 +39,11 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { BK_DESKTOP_BRANDS } from "./lib/bk-desktop-brand.ts";
-import { isBkManagedChannel, type BkManagedChannel } from "./lib/bk-managed-environment.ts";
+import {
+  BK_MANAGED_ENVIRONMENTS,
+  isBkManagedChannel,
+  type BkManagedChannel,
+} from "./lib/bk-managed-environment.ts";
 import {
   BK_DESKTOP_RELEASE_REPOSITORY,
   compareNightlyVersions,
@@ -56,10 +62,26 @@ const RepoRoot = Effect.service(Path.Path).pipe(
 const GhReleaseList = Schema.Array(Schema.Struct({ tagName: Schema.String }));
 const decodeGhReleaseList = Schema.decodeUnknownEffect(Schema.fromJsonString(GhReleaseList));
 
+const GhAssetList = Schema.Struct({
+  assets: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      size: Schema.Number,
+      state: Schema.String,
+    }),
+  ),
+});
+const decodeGhAssetList = Schema.decodeUnknownEffect(Schema.fromJsonString(GhAssetList));
+
 export class GhCommandFailedError extends Schema.TaggedErrorClass<GhCommandFailedError>()(
   "GhCommandFailedError",
   {
-    operation: Schema.Literals(["list-releases", "create-release"]),
+    operation: Schema.Literals([
+      "list-releases",
+      "create-release",
+      "view-release",
+      "publish-release",
+    ]),
     exitCode: Schema.Number,
     stderrTail: Schema.String,
   },
@@ -148,6 +170,83 @@ export class MissingUpdateManifestError extends Schema.TaggedErrorClass<MissingU
       `${this.manifest} is missing from ${this.releaseDir}. Without it auto-update ` +
       `silently does nothing. Rebuild with scripts/build-bk-desktop-dmg.ts, which configures ` +
       `the channel.`
+    );
+  }
+}
+
+export class InvalidSourceShaError extends Schema.TaggedErrorClass<InvalidSourceShaError>()(
+  "InvalidSourceShaError",
+  {
+    sourceSha: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `--source-sha must be a full 40-character commit SHA, got "${this.sourceSha}". It is the ` +
+      `release's tag target; without an exact commit the tag would point at the default branch ` +
+      `while the assets contain another branch's code.`
+    );
+  }
+}
+
+export class MalformedUpdateManifestError extends Schema.TaggedErrorClass<MalformedUpdateManifestError>()(
+  "MalformedUpdateManifestError",
+  {
+    manifest: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `${this.manifest} has no readable url/sha512 pair; electron-updater could not use it.`;
+  }
+}
+
+export class ManifestPayloadMissingError extends Schema.TaggedErrorClass<ManifestPayloadMissingError>()(
+  "ManifestPayloadMissingError",
+  {
+    manifest: Schema.String,
+    payload: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `${this.manifest} points at ${this.payload}, which is not in the release directory. ` +
+      `Clients would download a 404 instead of an update.`
+    );
+  }
+}
+
+export class ManifestPayloadMismatchError extends Schema.TaggedErrorClass<ManifestPayloadMismatchError>()(
+  "ManifestPayloadMismatchError",
+  {
+    manifest: Schema.String,
+    payload: Schema.String,
+    expectedSha: Schema.String,
+    actualSha: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `${this.manifest} records a different sha512 than ${this.payload} actually has ` +
+      `(expected ${this.expectedSha.slice(0, 16)}…, got ${this.actualSha.slice(0, 16)}…). ` +
+      `electron-updater verifies this and discards the payload, so every client would download ` +
+      `the update and silently refuse it. Usually a stale manifest from an earlier build — ` +
+      `clear release/ and rebuild.`
+    );
+  }
+}
+
+export class IncompleteReleaseUploadError extends Schema.TaggedErrorClass<IncompleteReleaseUploadError>()(
+  "IncompleteReleaseUploadError",
+  {
+    tag: Schema.String,
+    asset: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `Draft ${this.tag} is missing or truncated: ${this.asset} (${this.detail}). The draft has ` +
+      `been left unpublished, so no client can see it. Delete it and re-run.`
     );
   }
 }
@@ -345,6 +444,133 @@ const assertSignedBuild = Effect.fn("assertSignedBuild")(function* (releaseDir: 
   return appPath;
 });
 
+/**
+ * Reads the signing authority and the designated requirement, for the notes.
+ *
+ * The *requirement* is the load-bearing value, not the CDHash: Squirrel.Mac
+ * validates an update by checking it satisfies the installed app's designated
+ * requirement, and for a self-signed certificate that requirement pins the leaf
+ * certificate hash. So when an update refuses to install, "do these two strings
+ * match?" is the first question, and the answer belongs in the release rather
+ * than only on somebody's laptop.
+ *
+ * Deliberately not `CDHash`, which `codesign -dv` also prints: that is a hash of
+ * the code directory and changes with every build, so recording it as though it
+ * identified the certificate would mislead exactly when it matters.
+ */
+const describeSignature = Effect.fn("describeSignature")(function* (appPath: string) {
+  // codesign writes its description to stderr, including on success.
+  const described = yield* runCommand("codesign", ["-dv", "--verbose=4", appPath]);
+  const authority =
+    /^Authority=(.+)$/m.exec(`${described.stderr}\n${described.stdout}`)?.[1]?.trim() ?? "unknown";
+
+  const requirement = yield* runCommand("codesign", ["-dr", "-", appPath]);
+  const designated =
+    /designated\s*=>\s*(.+)/s
+      .exec(`${requirement.stdout}\n${requirement.stderr}`)?.[1]
+      ?.trim()
+      .replace(/\s+/g, " ") ?? "unknown";
+
+  return { authority, designatedRequirement: designated };
+});
+
+/**
+ * Confirms the channel manifest describes the ZIP sitting next to it.
+ *
+ * electron-updater verifies the downloaded payload's sha512 against the
+ * manifest and discards it on mismatch — silently, from the user's point of
+ * view. That happens when a stale manifest from an earlier build survives in
+ * `release/`, which is exactly the state a rebuilt-but-not-cleaned directory is
+ * in.
+ */
+const assertManifestMatchesPayload = Effect.fn("assertManifestMatchesPayload")(function* (
+  releaseDir: string,
+  manifest: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const manifestText = yield* fs.readFileString(path.join(releaseDir, manifest));
+  const referencedZip = /url:\s*(\S+\.zip)\s*$/m.exec(manifestText)?.[1];
+  const expectedSha = /sha512:\s*(\S+)\s*$/m.exec(manifestText)?.[1];
+  if (!referencedZip || !expectedSha) {
+    return yield* new MalformedUpdateManifestError({ manifest });
+  }
+
+  const zipPath = path.join(releaseDir, decodeURIComponent(referencedZip));
+  if (!(yield* fs.exists(zipPath))) {
+    return yield* new ManifestPayloadMissingError({ manifest, payload: referencedZip });
+  }
+
+  const zipBytes = yield* fs.readFile(zipPath);
+  const actualSha = NodeCrypto.createHash("sha512").update(zipBytes).digest("base64");
+  if (actualSha !== expectedSha) {
+    return yield* new ManifestPayloadMismatchError({
+      manifest,
+      payload: referencedZip,
+      expectedSha,
+      actualSha,
+    });
+  }
+});
+
+/**
+ * Confirms the draft holds every asset, at the size it has on disk.
+ *
+ * A truncated upload still produces an asset entry, so presence alone is not
+ * enough — size is what distinguishes "uploaded" from "partly uploaded".
+ */
+const assertDraftAssetsComplete = Effect.fn("assertDraftAssetsComplete")(function* (
+  tag: string,
+  assets: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const result = yield* runGh([
+    "release",
+    "view",
+    tag,
+    "--repo",
+    BK_DESKTOP_RELEASE_REPOSITORY,
+    "--json",
+    "assets",
+  ]);
+  if (result.exitCode !== 0) {
+    return yield* new GhCommandFailedError({
+      operation: "view-release",
+      exitCode: result.exitCode,
+      stderrTail: result.stderr.trim(),
+    });
+  }
+
+  const uploaded = yield* decodeGhAssetList(result.stdout);
+  const byName = new Map(uploaded.assets.map((asset) => [asset.name, asset]));
+  for (const asset of assets) {
+    const name = path.basename(asset);
+    const remote = byName.get(name);
+    if (!remote) {
+      return yield* new IncompleteReleaseUploadError({ tag, asset: name, detail: "missing" });
+    }
+    const stat = yield* fs.stat(asset);
+    const localSize = Number(stat.size);
+    if (remote.size !== localSize) {
+      return yield* new IncompleteReleaseUploadError({
+        tag,
+        asset: name,
+        detail: `uploaded ${remote.size} bytes, expected ${localSize}`,
+      });
+    }
+    if (remote.state !== "uploaded") {
+      return yield* new IncompleteReleaseUploadError({
+        tag,
+        asset: name,
+        detail: `state is "${remote.state}"`,
+      });
+    }
+  }
+});
+
 const command = Command.make(
   "publish-bk-desktop-dmg",
   {
@@ -358,6 +584,14 @@ const command = Command.make(
         "Which fork app is being published: staging or production. Must match the version.",
       ),
     ),
+    // Required. Without --target, `gh release create` tags the repository's
+    // DEFAULT branch, so the tag would point at `main` while the assets contain
+    // expbkmain code — a release that lies about what is inside it.
+    sourceSha: Flag.string("source-sha").pipe(
+      Flag.withDescription(
+        "Full commit SHA the artifacts were built from. In Actions, ${{ github.sha }}.",
+      ),
+    ),
     releaseDir: Flag.string("release-dir").pipe(
       Flag.withDescription("Directory holding the built artifacts."),
       Flag.withDefault("release"),
@@ -367,12 +601,17 @@ const command = Command.make(
       Flag.withDefault(false),
     ),
   },
-  ({ buildVersion, channel, releaseDir, dryRun }) =>
+  ({ buildVersion, channel, sourceSha, releaseDir, dryRun }) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const repoRoot = yield* RepoRoot;
       const version = buildVersion.trim();
       const tag = tagFromVersion(version);
+
+      const targetSha = sourceSha.trim().toLowerCase();
+      if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+        return yield* new InvalidSourceShaError({ sourceSha });
+      }
 
       const requestedChannel = channel.trim().toLowerCase();
       if (!isBkManagedChannel(requestedChannel)) {
@@ -438,61 +677,105 @@ const command = Command.make(
         });
       }
 
+      // Guard 6: the manifest must describe the ZIP we are about to upload. A
+      // mismatched sha512 means every client downloads the payload and then
+      // rejects it, which looks exactly like "auto-update is broken".
+      yield* assertManifestMatchesPayload(resolvedReleaseDir, manifest);
+
+      const signature = yield* describeSignature(signedAppPath);
       const sourceBranch = variant === "staging" ? "expbkmain" : "bkmain";
       const notes = [
-        `Beknown fork desktop build of \`${sourceBranch}\` — **${brand.productName}**.`,
+        `Beknown fork desktop build — **${brand.productName}**.`,
         ``,
-        `Self-signed, Apple Silicon only. On first install macOS will quarantine it:`,
+        `| | |`,
+        `|---|---|`,
+        `| Source branch | \`${sourceBranch}\` |`,
+        `| Commit | \`${targetSha}\` |`,
+        `| Managed server | ${BK_MANAGED_ENVIRONMENTS[variant].httpBaseUrl} |`,
+        `| Bundle id | \`${brand.appId}\` |`,
+        `| Updater channel | \`${brand.updateChannel}\` |`,
+        `| Architecture | arm64 (Apple Silicon) |`,
+        `| Signing identity | ${signature.authority} |`,
+        `| Designated requirement | \`${signature.designatedRequirement}\` |`,
+        ``,
+        `Keyless build: identity comes from the device-bound pairing credential, not Clerk.`,
+        ``,
+        `Self-signed and not notarised, so macOS quarantines it on first install:`,
         ``,
         "```sh",
         `xattr -dr com.apple.quarantine "/Applications/${brand.productName}.app"`,
         "```",
         ``,
-        `Later builds arrive through the in-app updater: the app notifies you when one is ` +
-          `ready, and clicking the notification restarts into it.`,
+        `Later builds arrive through the in-app updater, which notifies you when one is ready.`,
       ].join("\n");
 
-      const ghArgs = [
-        "release",
-        "create",
-        tag,
-        "--repo",
-        BK_DESKTOP_RELEASE_REPOSITORY,
-        "--prerelease",
-        "--title",
-        `${brand.productName} ${version}`,
-        "--notes",
-        notes,
-        ...assets,
-      ];
-
-      yield* Console.log(`Signature verified: ${path.basename(signedAppPath)}`);
-
+      yield* Console.log(`Signature verified: ${signature.authority}`);
+      yield* Console.log(`Designated requirement: ${signature.designatedRequirement}`);
       yield* Console.log(`Assets (${assets.length}):`);
       for (const asset of assets) {
         yield* Console.log(`  ${path.basename(asset)}`);
       }
 
       if (dryRun) {
-        yield* Console.log(`\nDry run — would publish prerelease ${tag}:`);
-        yield* Console.log(
-          `  gh ${ghArgs.map((arg) => (arg === notes ? "<notes>" : arg)).join(" ")}`,
-        );
+        yield* Console.log(`\nDry run — would publish prerelease ${tag} targeting ${targetSha}.`);
         return;
       }
 
-      const result = yield* runGh(ghArgs);
-      if (result.exitCode !== 0) {
+      // Published in three steps so a partial upload is never visible.
+      //
+      // `gh release create --prerelease <assets>` uploads assets *after* the
+      // release exists, so a client polling the feed can see the release before
+      // its manifest or ZIP is there and get a 404 mid-update. A draft is not
+      // in the feed at all, so the window closes.
+      yield* Console.log(`Creating draft ${tag} at ${targetSha}...`);
+      const created = yield* runGh([
+        "release",
+        "create",
+        tag,
+        "--repo",
+        BK_DESKTOP_RELEASE_REPOSITORY,
+        "--draft",
+        // Without this the tag is cut from the default branch, not the commit
+        // these artifacts were built from.
+        "--target",
+        targetSha,
+        "--title",
+        `${brand.productName} ${version}`,
+        "--notes",
+        notes,
+        ...assets,
+      ]);
+      if (created.exitCode !== 0) {
         return yield* new GhCommandFailedError({
           operation: "create-release",
-          exitCode: result.exitCode,
-          stderrTail: result.stderr.trim() || result.stdout.trim(),
+          exitCode: created.exitCode,
+          stderrTail: created.stderr.trim() || created.stdout.trim(),
         });
       }
 
-      yield* Console.log(result.stdout.trim());
+      yield* assertDraftAssetsComplete(tag, assets);
+
+      yield* Console.log(`Draft verified. Publishing ${tag}...`);
+      const published = yield* runGh([
+        "release",
+        "edit",
+        tag,
+        "--repo",
+        BK_DESKTOP_RELEASE_REPOSITORY,
+        "--draft=false",
+        "--prerelease",
+      ]);
+      if (published.exitCode !== 0) {
+        return yield* new GhCommandFailedError({
+          operation: "publish-release",
+          exitCode: published.exitCode,
+          stderrTail: published.stderr.trim() || published.stdout.trim(),
+        });
+      }
+
+      yield* Console.log(published.stdout.trim());
       yield* Console.log(
-        `\nPublished prerelease ${tag}. Confirm release.yml did not run:\n` +
+        `\nPublished prerelease ${tag} at ${targetSha}. Confirm release.yml did not run:\n` +
           `  gh run list --repo ${BK_DESKTOP_RELEASE_REPOSITORY} --workflow release.yml -L 3`,
       );
     }),

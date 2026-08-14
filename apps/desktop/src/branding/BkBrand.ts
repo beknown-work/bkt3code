@@ -45,6 +45,12 @@ export interface BkRuntimeBrand {
    * why it is what separates the two apps' updates.
    */
   readonly updateChannel: string;
+  /**
+   * OS-level URL scheme this app registers, or `null` for none. Staging
+   * registers none so `t3code://` stays unambiguously production's; see
+   * `scripts/lib/bk-desktop-brand.ts`.
+   */
+  readonly deepLinkScheme: string | null;
 }
 
 /** Identity applied when the fork brand is active, one per app. */
@@ -59,17 +65,19 @@ export const BK_RUNTIME_BRANDS: Readonly<Record<BkRuntimeVariant, BkRuntimeBrand
     linuxDesktopEntryName: "bkt3code.desktop",
     linuxWmClass: "bkt3code",
     updateChannel: "production-nightly",
+    deepLinkScheme: "t3code",
   },
   staging: {
     variant: "staging",
-    baseName: "BK T3 Code (Staging)",
-    displayName: "BK T3 Code (Staging)",
+    baseName: "Stage BK T3 Code",
+    displayName: "Stage BK T3 Code",
     userDataDirName: "bkt3code-staging",
-    legacyUserDataDirName: "BK T3 Code (Staging)",
+    legacyUserDataDirName: "Stage BK T3 Code",
     appUserModelId: "work.beknown.bkt3code.staging",
     linuxDesktopEntryName: "bkt3code-staging.desktop",
     linuxWmClass: "bkt3code-staging",
     updateChannel: "staging-nightly",
+    deepLinkScheme: null,
   },
 };
 

@@ -4,11 +4,20 @@
 # cross-compile a mac DMG and the signing certificate lives in that machine's
 # login keychain. See docs/operations/bk-desktop-build.md for runner setup.
 #
-# Self-hosted runners on a public repository are only safe when untrusted code
-# cannot reach them. The triggers here are the guard: `push` to two protected
-# branches and `workflow_dispatch` both require write access, and neither can be
-# fired from a fork. Do not add `pull_request` — that would run fork-authored
-# code on a personal machine with a signing key on it.
+# SECURITY. The runner is a real Mac with a code-signing key on it, attached to a
+# PUBLIC repository. Two things keep that safe, and both are load-bearing:
+#
+#   1. The triggers. `push` to two branches and `workflow_dispatch` each require
+#      write access, and neither can be fired from a fork. DO NOT add
+#      `pull_request`, `pull_request_target` or `issue_comment` here — any of
+#      them would execute fork-authored code, with lifecycle scripts, on that
+#      machine.
+#   2. The token. The build job runs with `contents: read`; only the publish job
+#      gets `contents: write`, and checkout never persists credentials into the
+#      workspace for build scripts to find.
+#
+# Actions are pinned to commit SHAs: a moving tag on a self-hosted runner is a
+# supply-chain hole, not a convenience.
 name: BK desktop release
 
 on:
@@ -25,31 +34,40 @@ on:
           - staging
           - production
 
-# One build per branch. A merge train should ship the newest commit, not queue a
-# DMG per commit on a laptop.
+# Per channel, and NOT cancel-in-progress: cancelling mid-publish can leave a
+# half-uploaded release or a dangling tag behind. Releases queue instead.
 concurrency:
-  group: bk-desktop-${{ github.ref }}
-  cancel-in-progress: true
+  group: bk-desktop-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: Build and publish
+    name: Build
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      version: ${{ steps.version.outputs.version }}
+      already-published: ${{ steps.existing.outputs.found }}
     env:
       # Names the self-signed certificate in the runner's login keychain. Without
       # it the build is unsigned and the publish step refuses it, because
       # Squirrel.Mac cannot install an unsigned update over an installed app.
       T3CODE_BK_SIGNING_IDENTITY: ${{ secrets.BK_MACOS_SIGNING_IDENTITY }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+          # The workspace persists on a self-hosted runner; do not leave a token
+          # in .git/config for the next thing that runs here.
+          persist-credentials: false
 
       - name: Resolve channel
         id: channel
@@ -66,9 +84,41 @@ jobs:
             esac
           fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
-          echo "Building the $channel app from ${{ github.ref_name }}."
+          echo "Building the $channel app from ${{ github.ref_name }} (${{ github.sha }})."
+
+      - name: Skip if this commit is already released
+        id: existing
+        # Makes a re-run idempotent. Without this, re-running a green workflow
+        # allocates a second version for identical code and asks every client to
+        # download it.
+        run: |
+          found=$(gh release list --repo "${{ github.repository }}" --limit 100 \
+                    --json tagName,targetCommitish \
+                    --jq '[.[] | select(.targetCommitish == "${{ github.sha }}")
+                          | select(.tagName | contains("-${{ steps.channel.outputs.channel }}-nightly."))]
+                          | first // empty | .tagName')
+          if [[ -n "$found" ]]; then
+            echo "::notice::${{ github.sha }} is already published as $found. Nothing to do."
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check runner headroom
+        if: steps.existing.outputs.found != 'true'
+        # A packaged app is ~450 MB staged plus a ~158 MB DMG and ~152 MB ZIP, and
+        # this workspace persists. Failing here beats failing at the codesign step
+        # with a confusing ENOSPC.
+        run: |
+          free_gb=$(df -g . | awk 'NR==2 {print $4}')
+          echo "Free space: ${free_gb}G"
+          if (( free_gb < 15 )); then
+            echo "::error::Only ${free_gb}G free; need ~15G to build and stage a DMG." >&2
+            exit 1
+          fi
 
       - name: Verify signing identity is present
+        if: steps.existing.outputs.found != 'true'
         run: |
           if [[ -z "$T3CODE_BK_SIGNING_IDENTITY" ]]; then
             echo "::error::BK_MACOS_SIGNING_IDENTITY is not set. Add the repository secret" \
@@ -84,24 +134,34 @@ jobs:
             exit 1
           fi
 
-      - name: Write .env.local
-        # scripts/build-bk-desktop-dmg.ts reads the Clerk key through loadRepoEnv(),
-        # which reads .env/.env.local — a bare environment variable is NOT picked up,
-        # and the build then silently ships with team mode off.
+      - name: Assert the build stays keyless
+        if: steps.existing.outputs.found != 'true'
+        # Managed builds MUST NOT carry a Clerk publishable key. Identity and team
+        # capability come from the device-bound pairing credential. A key makes
+        # apps/web/src/main.tsx mount ElectronClerkProvider, which renders nothing
+        # until Clerk's Native API answers — the black-screen/auth failure this
+        # fork already hit once. build-bk-desktop-dmg.ts refuses it too; this is
+        # the earlier, louder copy of that check.
         run: |
-          if [[ -z "${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}" ]]; then
-            echo "::error::VITE_CLERK_PUBLISHABLE_KEY secret is missing. The build would" \
-                 "ship with no sign-in gate and no member tagging." >&2
+          for file in .env .env.local; do
+            if [[ -f "$file" ]] && grep -qE '^\s*[A-Z0-9_]*CLERK' "$file"; then
+              echo "::error::$file sets a Clerk variable. Managed builds must be keyless." >&2
+              exit 1
+            fi
+          done
+          if env | grep -qE '^[A-Z0-9_]*CLERK[A-Z0-9_]*='; then
+            echo "::error::A CLERK environment variable is set. Managed builds must be keyless." >&2
             exit 1
           fi
-          printf 'VITE_CLERK_PUBLISHABLE_KEY=%s\n' \
-            '${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}' > .env.local
+          echo "Keyless build confirmed."
 
       - name: Install dependencies
+        if: steps.existing.outputs.found != 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Resolve build version
         id: version
+        if: steps.existing.outputs.found != 'true'
         # Delegates to the same resolver the scripts use, so the per-channel,
         # per-day counter rules are not reimplemented in shell.
         run: |
@@ -111,18 +171,48 @@ jobs:
           echo "Stamping $version."
 
       - name: Build DMG
+        if: steps.existing.outputs.found != 'true'
         run: |
           node scripts/build-bk-desktop-dmg.ts \
             --channel "${{ steps.channel.outputs.channel }}" \
             --build-version "${{ steps.version.outputs.version }}"
 
+  publish:
+    name: Publish
+    needs: build
+    if: needs.build.outputs.already-published != 'true'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 30
+    permissions:
+      # The only job that can write releases, and it runs no build scripts.
+      contents: write
+    # Gate production behind a protected environment so a merge to bkmain cannot
+    # publish to the team without whatever reviewers that environment requires.
+    environment: ${{ needs.build.outputs.channel == 'production' && 'bk-desktop-production' || '' }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
       - name: Publish prerelease
+        # The artifacts are already in release/ from the build job, because both
+        # jobs land on the same runner and share its workspace.
+        #
+        # That assumes ONE runner carries these labels. With a second one the
+        # publish job could land on a machine with no artifacts — it then fails
+        # loudly (NoPublishableArtifactsError / BuiltAppNotFoundError) rather
+        # than publishing something wrong, but it does fail. If a second runner
+        # is ever added, pass the ~310 MB of artifacts between the jobs via
+        # actions/upload-artifact instead of relying on the shared workspace.
+        #
+        # The publisher re-verifies the signature, the manifest and the payload
+        # hash before it makes anything visible.
         run: |
           node scripts/publish-bk-desktop-dmg.ts \
-            --channel "${{ steps.channel.outputs.channel }}" \
-            --build-version "${{ steps.version.outputs.version }}"
+            --channel "${{ needs.build.outputs.channel }}" \
+            --build-version "${{ needs.build.outputs.version }}" \
+            --source-sha "${{ github.sha }}"
 
-      - name: Clean up secrets from the workspace
-        # The runner is a personal machine and the workspace persists between jobs.
+      - name: Clean the build directory
+        # Only this workflow's own output. Never touch installed applications or
+        # anyone's app state on a shared machine.
         if: always()
-        run: rm -f .env.local
+        run: rm -rf release

@@ -707,12 +707,15 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  // T3-CUSTOM(expbkt3): BEGIN - tell the user an update is ready, and let one
-  // click take it. `installDownloadedUpdate` already stops the backend pool,
-  // destroys the windows and calls quitAndInstall with isForceRunAfter, so
-  // "click the notification" and "the app relaunches on the new version" are the
-  // same action. The sidebar button stays as the fallback for a dismissed or
-  // suppressed notification.
+  // T3-CUSTOM(expbkt3): BEGIN - tell the user an update is ready.
+  //
+  // Clicking the notification deliberately does NOT install. A notification
+  // click is an easy mis-click, and installing quits the app: it stops every
+  // backend in the pool and calls quitAndInstall. Doing that under someone's
+  // hands would kill an in-flight agent turn, a terminal session and any
+  // unsaved editor state, with no confirmation and no undo. So the click
+  // focuses the window and reveals the update UI, and the labelled in-app
+  // button — one further click — performs the restart.
   const notifyUpdateReady = Effect.fn("desktop.updates.notifyUpdateReady")(function* (
     version: string,
     runEffect: (effect: Effect.Effect<void>) => void,
@@ -724,13 +727,28 @@ export const make = Effect.gen(function* () {
 
     const shown = yield* electronNotification.show({
       title: `${brand.displayName} ${version} is ready`,
-      body: "Click to restart and update now.",
+      body: "Open to restart and finish updating.",
       onClick: () => {
-        runEffect(installDownloadedUpdate.pipe(Effect.asVoid));
+        runEffect(revealUpdateReady);
       },
     });
     yield* logUpdaterInfo("update ready notification", { version, shown });
   });
+
+  /** Brings the app forward and asks the renderer to surface the update UI. */
+  const revealUpdateReady = electronWindow.currentMainOrFirst.pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.void,
+        onSome: (window) =>
+          electronWindow
+            .reveal(window)
+            .pipe(Effect.andThen(electronWindow.sendAll(IpcChannels.UPDATE_REVEAL_CHANNEL, null))),
+      }),
+    ),
+    Effect.catchCause(() => Effect.void),
+    Effect.withSpan("desktop.updates.revealUpdateReady"),
+  );
   // T3-CUSTOM(expbkt3): END
 
   const handleUpdateDownloaded = Effect.fn("desktop.updates.handleUpdateDownloaded")(function* (

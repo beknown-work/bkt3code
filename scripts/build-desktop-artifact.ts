@@ -1620,12 +1620,21 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
-        },
-      ],
+      // T3-CUSTOM(expbkt3): BEGIN - a fork app registers exactly its own scheme.
+      // Two installed apps both claiming "t3code" is not a tie macOS breaks
+      // predictably, so staging takes "t3code-staging" and production keeps
+      // "t3code". See scripts/lib/bk-desktop-brand.ts.
+      ...(brand && brand.deepLinkScheme === null
+        ? {}
+        : {
+            protocols: [
+              {
+                name: brand?.productName ?? "T3 Code",
+                schemes: brand?.deepLinkScheme ? [brand.deepLinkScheme] : ["t3code", "t3code-dev"],
+              },
+            ],
+          }),
+      // T3-CUSTOM(expbkt3): END
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -1663,12 +1672,18 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
       // t3code:// OAuth callbacks to the app.
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
-        },
-      ],
+      // T3-CUSTOM(expbkt3): BEGIN - same one-scheme-per-app rule as macOS.
+      ...(brand && brand.deepLinkScheme === null
+        ? {}
+        : {
+            protocols: [
+              {
+                name: brand?.productName ?? "T3 Code",
+                schemes: brand?.deepLinkScheme ? [brand.deepLinkScheme] : ["t3code", "t3code-dev"],
+              },
+            ],
+          }),
+      // T3-CUSTOM(expbkt3): END
       desktop: {
         entry: {
           StartupWMClass: "t3code",

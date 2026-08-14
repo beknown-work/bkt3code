@@ -4,18 +4,49 @@ Fork-owned. How the two Beknown-branded macOS desktop apps are built, published 
 
 The fork does not need a new app: `apps/desktop` is upstream's Electron app, and the browser client is the same `apps/web` SPA that `deploy-bkt3.yml` already deploys. What this adds is _two distinct identities_ so each fork build installs alongside upstream T3 Code and alongside each other, and a publish path with working auto-update.
 
-| Branch      | App                    | Bundle id                       | User data                                        | Orchestrates             |
-| ----------- | ---------------------- | ------------------------------- | ------------------------------------------------ | ------------------------ |
-| `expbkmain` | `BK T3 Code (Staging)` | `work.beknown.bkt3code.staging` | `~/Library/Application Support/bkt3code-staging` | expbkt3.dev.beknown.live |
-| `bkmain`    | `BK T3 Code`           | `work.beknown.bkt3code`         | `~/Library/Application Support/bkt3code`         | bkt3.dev.beknown.live    |
+| Branch      | App                | Bundle id                       | User data                                        | Orchestrates             | URL scheme  |
+| ----------- | ------------------ | ------------------------------- | ------------------------------------------------ | ------------------------ | ----------- |
+| `expbkmain` | `Stage BK T3 Code` | `work.beknown.bkt3code.staging` | `~/Library/Application Support/bkt3code-staging` | expbkt3.dev.beknown.live | none        |
+| `bkmain`    | `BK T3 Code`       | `work.beknown.bkt3code`         | `~/Library/Application Support/bkt3code`         | bkt3.dev.beknown.live    | `t3code://` |
 
-Both are Apple Silicon (`arm64`) only, self-signed, and published as prereleases on [`beknown-work/bkt3code`](https://github.com/beknown-work/bkt3code/releases).
+Both are Apple Silicon (`arm64`) only, self-signed, **keyless**, and published as prereleases on [`beknown-work/bkt3code`](https://github.com/beknown-work/bkt3code/releases).
 
 ## How it runs
 
-Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a self-hosted macOS runner — a team Mac — which builds that branch's app and publishes it. Running apps poll every 4 minutes, download in the background, and raise a native notification when a build is ready. Clicking it restarts into the new version.
+Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a self-hosted macOS runner — a team Mac — which builds that branch's app and publishes it. Running apps poll every 4 minutes and download in the background, then raise a native notification when a build is ready. Clicking that notification **surfaces the update in the app; it does not restart** — see [Update behaviour](#update-behaviour).
 
 You can also cut a build by hand from `workflow_dispatch`, or locally (see [Manual builds](#manual-builds)).
+
+## Managed builds are keyless
+
+**Never set a Clerk publishable key for a managed build.** Identity and team capability arrive through the device-bound pairing credential (`apps/web/src/fork/managedPrimaryPairing.ts`), not Clerk.
+
+A key is not a harmless extra. `apps/web/src/main.tsx` mounts `ElectronClerkProvider` whenever one is present; that provider renders nothing until Clerk's Native API answers, so a key reproduces the black-screen/auth failure this fork already hit once.
+
+Enforced in two places, both failing rather than warning:
+
+- `scripts/build-bk-desktop-dmg.ts` refuses to build if any `*CLERK*` variable is set in `.env`, `.env.local` or the environment, and scrubs the Clerk aliases from the build environment so an inherited one cannot leak in.
+- The workflow asserts the same before installing dependencies, so CI fails in seconds rather than at the end of a 15-minute build.
+
+Pairing happens once per install: open the pairing screen and paste the credential.
+
+## Update behaviour
+
+Fork builds download updates in the background, so the payload is already on disk when you are told about it. Then:
+
+1. A native notification says the version is ready.
+2. Clicking it **focuses the app and surfaces the update** — it does not install.
+3. The labelled update button in the sidebar performs the restart, after a confirmation dialog.
+
+The click deliberately does not install. Installing quits the app: it stops every backend in the pool and calls `quitAndInstall`. Doing that on a stray notification click would kill an in-flight agent turn, a terminal session and any unsaved editor state, with no undo. One extra click is a cheap price for that.
+
+## URL schemes
+
+`Stage BK T3 Code` registers **no** OS-level URL scheme, so `t3code://` belongs unambiguously to `BK T3 Code` (or upstream).
+
+Two installed apps both claiming `t3code://` is not a tie macOS breaks predictably — it routes to whichever became the handler most recently, so a staging pairing link could open production. State stays isolated either way, but to a user that is indistinguishable from channel leakage.
+
+Staging therefore pairs by pasting the credential into the pairing screen, which already accepts one (`PairingRouteSurface`). If staging ever needs working deep links, give it its own scheme in `deepLinkScheme` and have expbkt3 generate matching links — but note that `getDesktopScheme` in `apps/desktop/src/electron/ElectronProtocol.ts` is also the origin the renderer is _served_ from, and `apps/server/src/http.ts` allowlists `t3code://app` for CORS. Registering a different OS handler is a one-line manifest change; changing the serving origin is not.
 
 ## What keeps the two apps apart
 
@@ -42,11 +73,26 @@ Keeping `-nightly.YYYYMMDD.N` as the **suffix** is load-bearing, not decoration:
 
 Apple's certificates are bound to upstream's `com.t3tools.t3code` App ID, so the fork signs with a **self-signed** certificate from the build Mac's login keychain instead. The designated requirement is then `identifier + leaf certificate hash`, which is stable across builds as long as the same certificate signs every one of them.
 
+> **Unproven until demonstrated.** Self-signed Squirrel.Mac updating is sound in theory and is _not_ to be described as working until a real signed A → B update has installed on a real Mac. Until then, treat every published build as manual-install. The gate is in [Verification gates](#verification-gates).
+
 Consequences, all accepted:
 
 - **The certificate is load-bearing.** Rotating or losing it breaks auto-update for every installed app and forces everyone to reinstall by hand. Back it up.
-- **Not notarised.** Gatekeeper still quarantines the download, cleared once per install with the `xattr` step below.
+- **Not notarised.** Gatekeeper still quarantines the download, cleared once per install with the `xattr` step below. Expect first-install friction.
 - **Upstream's `--signed` flag is not used.** It routes mac builds through `resolveMacPasskeySigningConfiguration`, which requires an Apple Team ID and a provisioning profile the fork does not have. `T3CODE_BK_SIGNING_IDENTITY` is the fork's own switch; it also turns the hardened runtime off, which exists to satisfy notarisation and otherwise only adds entitlement-shaped launch failures.
+
+The signing seam takes any keychain identity by common name, so **switching to a Developer ID certificate is a secret change, not a code change**. That remains the better long-term answer: it notarises, it removes the trust-store ask below, and it survives a teammate reimaging their Mac.
+
+### Security of a self-signed certificate
+
+Asking every teammate to mark a certificate **Always Trust** is an organisation-level decision, not a build detail: anyone holding that private key can sign _other_ software those Macs will then trust. Before doing it:
+
+- Keep the private key on the runner Mac only, in a dedicated account — not on a personal login shared with browsing.
+- Back it up somewhere access-controlled. Losing it means every installed app stops updating.
+- Never expose it to workflow logs or to any job a pull request can reach. The workflow only ever reads the certificate's _name_ from a secret; the key itself never leaves the keychain.
+- Record its designated requirement in each release's notes (the publisher does this automatically) so a mismatch is diagnosable. That string — not the CDHash, which changes every build — is what Squirrel.Mac actually checks an update against.
+- Plan rotation. Rotating requires a coordinated manual reinstall by everyone.
+- Prefer Developer ID if you can justify the $99/yr — it avoids the trust-store change entirely.
 
 ### Creating the certificate (once)
 
@@ -81,18 +127,38 @@ Prerequisites on that Mac:
 - `gh`, authenticated, for local publishing. CI uses `GITHUB_TOKEN`.
 - The signing certificate above, in an **unlocked** login keychain. A locked keychain is the classic headless-signing failure: the identity exists but is unusable, and electron-builder only says so at the end of a 15-minute build. The workflow checks for it up front.
 
-Repository secrets:
+Repository secrets — one, and it is only a name:
 
-| Secret                       | Purpose                                                                                                                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BK_MACOS_SIGNING_IDENTITY`  | Common name of the self-signed certificate                                                                                                                             |
-| `VITE_CLERK_PUBLISHABLE_KEY` | `pk_live_...`, the same key the bkt3 deployment uses. Without it the app builds but ships with team mode off — no sign-in gate, no member tagging, no "Assigned to me" |
+| Secret                      | Purpose                                    |
+| --------------------------- | ------------------------------------------ |
+| `BK_MACOS_SIGNING_IDENTITY` | Common name of the self-signed certificate |
 
-### Why a self-hosted runner on a public repository is acceptable here
+There is deliberately **no Clerk secret**. See [Managed builds are keyless](#managed-builds-are-keyless).
 
-GitHub warns against this because a fork's pull request could run attacker-controlled code on your machine. The workflow's triggers are the guard: `push` to `expbkmain`/`bkmain` and `workflow_dispatch` both require write access, and **neither can be fired from a fork**. Do not add a `pull_request` trigger to this workflow.
+Also create a protected GitHub **Environment** named `bk-desktop-production` with whatever reviewers you want; the publish job requests it for production, so a merge to `bkmain` cannot reach the team unreviewed.
+
+### Runner security
+
+This runs repository code, package lifecycle scripts and build scripts on a real Mac that holds a code-signing key. Treat it as production infrastructure:
+
+- **Use a dedicated Mac, or at least a dedicated standard macOS user.** Not a personal login carrying AWS credentials, production SSH keys, or a signed-in browser profile — a build script runs with all of it.
+- Register the runner **repository-scoped**, with its own labels. Do not attach it to an organisation runner group other repositories can target.
+- Protect `expbkmain` and `bkmain` with branch protection, and require CODEOWNERS review for `.github/workflows/**`, `scripts/**` and the lockfile — those are the files that decide what executes on that machine.
+
+The workflow's own guards, all load-bearing:
+
+- **Triggers.** `push` to the two branches and `workflow_dispatch` each require write access, and **neither can be fired from a fork**. Do not add `pull_request`, `pull_request_target` or `issue_comment`.
+- **Split jobs.** The build job runs with `contents: read`; only the publish job — which runs no build scripts — gets `contents: write`.
+- **`persist-credentials: false`.** The workspace persists between jobs on a self-hosted runner; a token left in `.git/config` is a token for the next thing that runs there.
+- **Actions pinned to commit SHAs**, because a moving tag on a self-hosted runner is a supply-chain hole.
 
 Pair that with **Settings → Actions → Fork pull request workflows from outside collaborators → Require approval for all external contributors**.
+
+### Disk hygiene
+
+A packaged app is roughly 450 MB staged, plus a ~158 MB DMG and a ~152 MB ZIP, and the workspace persists. The workflow checks for 15 GB free before building and removes its own `release/` directory afterwards. It never touches installed applications or anyone's app state — do not "clean up" a shared Mac by deleting `~/Library/Application Support` entries.
+
+Periodically prune the runner's `_work` directory, Rust `target/`, the pnpm store and Electron's download cache.
 
 ## Manual builds
 
@@ -108,37 +174,52 @@ pnpm dist:desktop:bk --channel production
 Artifacts land in `release/`: the DMG a teammate downloads, the ZIP that auto-update actually installs, a `.blockmap` for each, and the channel manifest.
 
 ```sh
-pnpm publish:desktop:bk --channel production --build-version <the version just built>
+pnpm publish:desktop:bk --channel production \
+  --build-version <the version just built> \
+  --source-sha "$(git rev-parse HEAD)"
 ```
 
-Add `--dry-run` to run every check and print the `gh` command without publishing. Do not insert a `--` separator before the flags: with pnpm 11.10.0 the separator reaches the script itself and the Effect CLI reports `Missing required flag`.
+`--source-sha` is required and becomes the release's tag target. Without it `gh release create` cuts the tag from the repository's **default branch**, so the tag would point at `main` while the assets contain `expbkmain` code — a release that lies about what is inside it.
+
+Add `--dry-run` to run every check without publishing. Do not insert a `--` separator before the flags: with pnpm 11.10.0 the separator reaches the script itself and the Effect CLI reports `Missing required flag`.
 
 To pick a version yourself: `pnpm version:desktop:bk --channel production` prints the next one.
 
-Five guards run before anything is published, each blocking:
+**Never run `gh release create` by hand, and never create a release tag manually.** Every guard below lives in the publisher; a hand-rolled release has none of them.
+
+Six guards run before anything is published, each blocking:
 
 1. **The tag must be nightly-form**, so `release.yml` cannot fire.
 2. **The version's channel must be the channel being published**, or the other app's users get offered the build.
 3. **The version must be strictly newer** than the newest published one _on that channel_, or electron-updater will never offer it.
 4. **The build must be code signed**, or Squirrel.Mac cannot install it as an update.
 5. **The channel manifest must be present**, or auto-update silently does nothing.
+6. **The manifest's `sha512` must match the ZIP** beside it. electron-updater verifies this and discards a mismatched payload, so a stale manifest makes every client download the update and silently refuse it.
 
-After publishing, confirm the upstream pipeline did not fire:
+### Publication is atomic
+
+Assets are uploaded to a **draft**, verified by name, byte size and upload state, and only then flipped to a prerelease. A draft is not in the releases feed, so no client can observe a half-uploaded release and 404 mid-update. A failed upload leaves a draft behind — delete it and re-run rather than publishing over it.
+
+Once a version is published, **never replace its ZIP or manifest.** Clients cache by version; a mutated asset is undetectable and unfixable from their side. Publish a higher version instead.
+
+After publishing, confirm the upstream pipeline did not fire and that npm is untouched:
 
 ```sh
 gh run list --repo beknown-work/bkt3code --workflow release.yml -L 3
+npm view t3 dist-tags
 ```
 
 ## Installing (send this to teammates)
 
 1. Install the `BK Code Signing` certificate and set it to **Always Trust** (one-time).
-2. Download the `.dmg` from the [latest prerelease](https://github.com/beknown-work/bkt3code/releases) — `BK T3 Code` for day-to-day work, `BK T3 Code (Staging)` to try `expbkmain`.
+2. Download the `.dmg` from the [latest prerelease](https://github.com/beknown-work/bkt3code/releases) — `BK T3 Code` for day-to-day work, `Stage BK T3 Code` to try `expbkmain`.
 3. Drag it to Applications.
 4. Builds are not notarised, so macOS quarantines them. Clear that once per app:
    ```sh
    xattr -dr com.apple.quarantine "/Applications/BK T3 Code.app"
    ```
-5. Later builds arrive on their own: the app notifies you when one is ready, and clicking the notification restarts into it. The sidebar update button still works if you dismiss the notification.
+5. Pair once: open the pairing screen and paste the credential.
+6. Later builds arrive on their own. The app downloads in the background and notifies you; clicking the notification brings the app forward and surfaces the update. Press the update button when you are at a good stopping point — it confirms, then restarts.
 
 Each app keeps its own settings, saved environments and sessions, and both install beside upstream T3 Code.
 
@@ -146,8 +227,43 @@ Each app keeps its own settings, saved environments and sessions, and both insta
 
 ## What is not changed, and why
 
-- **The `t3code://` URL scheme.** `@clerk/electron`'s OAuth transport supplies the `t3code://app/` redirect (see `apps/web/src/components/clerk/authRedirect.ts`), so renaming it risks breaking sign-in in the packaged app. Consequence: with several of upstream, staging and production installed, macOS picks one for `t3code://` deep links. Sign-in still completes — possibly in the sibling app.
+- **`getDesktopScheme`, the renderer's serving origin.** Both apps still serve their UI from `t3code://app`, which `apps/server/src/http.ts` allowlists for CORS. Only the _OS-level handler_ registration differs — see [URL schemes](#url-schemes).
 - **`DesktopAppStageLabel`** in `packages/contracts` stays `"Nightly"` for these builds. Only the displayed name changes, so no upstream contract union needs a new member.
+
+## Verification gates
+
+Before advertising automatic updates on a channel, prove all of these. Nothing here is theoretical; each corresponds to a way this can fail silently.
+
+1. **Keyless.** No `.env.local`, no `*CLERK*` variable in the build environment.
+2. **Bundle identity.** `appId`, product name and version are the expected ones for the channel.
+3. **Endpoint scan.** A staging bundle contains only `expbkt3` URLs; production only `bkt3`.
+4. **Channel manifest.** The release carries exactly `<channel>-nightly-mac.yml`, and it references the ZIP that is actually attached.
+5. **Tag target.** The release tag resolves to the workflow's `github.sha`, not the default branch.
+6. **Cross-channel isolation.** A higher staging release is never offered to a production app.
+7. **State isolation.** Launching staging leaves production's and upstream's Application Support, Preferences, Caches, Logs, Saved Application State and updater caches untouched.
+8. **Signed update A → B.** Install signed version A by hand, publish signed version B, let A discover, download and install it through Squirrel, and confirm the relaunch is on B. Verify the **ZIP**, since that — not the DMG — is what auto-update consumes. Capture for both bundles:
+   ```sh
+   codesign -dv --verbose=4 "/Applications/BK T3 Code.app"
+   codesign -dr - "/Applications/BK T3 Code.app"
+   codesign --verify --deep --strict --verbose=4 "/Applications/BK T3 Code.app"
+   ```
+   The **designated requirement** (`codesign -dr -`) must be identical between the installed app and the update — that is the string Squirrel.Mac validates against. `CDHash` will differ; it is a hash of the code and changes every build, so it proves nothing here. The bundle id must also be stable within the channel.
+9. **Failure capture.** On a failed update, keep the app log and the ShipIt log (`~/Library/Caches/<bundle-id>.ShipIt/ShipIt_stderr.log`).
+10. **Release safety.** `release.yml` did not run, and `npm view t3 dist-tags` is unchanged.
+11. **No asset mutation.** No published ZIP or manifest was ever replaced in place.
+
+## Rollout order
+
+1. Land identities, channels, keyless enforcement and safe publishing. ← _this PR_
+2. Build both apps **without publishing**; verify identity and state isolation.
+3. Configure signing on the runner.
+4. Install the first signed staging build by hand.
+5. Publish two consecutive staging versions and prove A → B through Squirrel.
+6. Run the cross-channel negative tests.
+7. Use staging with the team for several days.
+8. Promote to `bkmain`.
+9. Publish the first signed production build for manual installation.
+10. Only advertise automatic production updates after production A → B succeeds.
 
 ## Troubleshooting
 
@@ -157,7 +273,7 @@ Check, in order:
 
 1. The release exists and is a **prerelease** with the right manifest asset for that channel.
 2. The version is strictly newer than the installed one _within the same channel_.
-3. The installed app and the update are signed with the **same** certificate: `codesign -dv --verbose=4 "/Applications/BK T3 Code.app"` and compare the leaf hash against the built app.
+3. The installed app and the update are signed with the **same** certificate. Compare `codesign -dr - "/Applications/BK T3 Code.app"` against the built app and against the release notes; the designated requirements must be identical.
 
 ### Blank window, and sign-in fails with `native_api_disabled`
 
@@ -167,17 +283,11 @@ Symptom: the app launches, the Dock icon and About panel are correct, but the wi
 { "code": "native_api_disabled", "message": "Native API disabled" }
 ```
 
-Cause: a **prerequisite on the Clerk instance, not a build problem**. In a packaged desktop build `apps/web/src/main.tsx` mounts `ElectronClerkProvider` from `@clerk/electron/react`, which talks to Clerk's Native API. When that API is disabled the provider never finishes loading, so nothing beneath it renders — one root cause producing both symptoms.
+**Cause: a Clerk publishable key reached a managed build.** `apps/web/src/main.tsx` mounts `ElectronClerkProvider` whenever a key is present; that provider renders nothing until Clerk's Native API answers, so nothing beneath it renders — one root cause producing both symptoms.
 
-The fork hit this on its first desktop build because the hosted web client uses the plain browser `ClerkProvider`, which needs no Native API. Upstream documents the requirement in [T3 Connect: Desktop OAuth Redirect Allowlist](../internals/t3-connect.md#desktop-oauth-redirect-allowlist).
+The fix is to remove the key, not to configure Clerk. Managed builds get their identity from the pairing credential; see [Managed builds are keyless](#managed-builds-are-keyless). Both the build script and the workflow now refuse a key outright, so this should be unreachable — if you hit it, something bypassed `scripts/build-bk-desktop-dmg.ts`.
 
-Fix, on the Beknown production Clerk instance (`clerk.beknown.live`):
-
-1. **Clerk Dashboard → Native applications → enable the Native API.** This alone resolves the blank window.
-2. Add `t3code://app/` to the mobile SSO redirect allowlist (and `t3code-dev://app/` if you want local desktop development to sign in too).
-3. Confirm `t3code://app` is in the instance's Backend API `allowed_origins`. There is no dashboard UI for this; see the `PATCH /v1/instance` call in the T3 Connect doc. A `native_api_disabled` response that already echoes `Origin: t3code://app` indicates this part is configured.
-
-To confirm the diagnosis, or to ship a usable build before the dashboard change, build with no Clerk key: `resolveAppClerkMode()` returns `"disabled"` when the key is absent, `main.tsx` then mounts no provider, and the app renders normally with team mode off. There is no separate switch; key presence _is_ the switch.
+Historical note: the fork originally hit this and treated it as a missing Clerk-instance prerequisite (enable the Native API, allowlist `t3code://app/`). That is the right fix for a build that _should_ use Clerk — upstream documents it in [T3 Connect: Desktop OAuth Redirect Allowlist](../internals/t3-connect.md#desktop-oauth-redirect-allowlist) — but it is the wrong fix here. A managed BK build should have no provider mounted at all.
 
 ## Icons
 

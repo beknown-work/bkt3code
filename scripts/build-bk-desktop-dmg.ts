@@ -27,6 +27,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -144,6 +145,25 @@ export class InvalidBkManagedChannelError extends Schema.TaggedErrorClass<Invali
   }
 }
 
+export class ManagedBuildClerkKeyError extends Schema.TaggedErrorClass<ManagedBuildClerkKeyError>()(
+  "ManagedBuildClerkKeyError",
+  {
+    channel: Schema.String,
+    source: Schema.String,
+    variable: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `${this.variable} is set (from ${this.source}), but a managed ${this.channel} build must ` +
+      `be keyless. Identity and team capability come from the device-bound pairing credential, ` +
+      `not Clerk. A publishable key makes apps/web/src/main.tsx mount ElectronClerkProvider, ` +
+      `which renders nothing until Clerk's Native API answers — the black-screen/auth failure ` +
+      `this fork already hit. Remove it and rebuild; see docs/operations/bk-desktop-build.md.`
+    );
+  }
+}
+
 export class BkDesktopBuildFailedError extends Schema.TaggedErrorClass<BkDesktopBuildFailedError>()(
   "BkDesktopBuildFailedError",
   {
@@ -255,6 +275,36 @@ export const resolveBuildVersion = Effect.fn("resolveBuildVersion")(function* (
   );
 });
 
+/**
+ * Finds a Clerk publishable key that would be baked into a managed build.
+ *
+ * Checks both places one can arrive from: a repo dotenv file (which is what
+ * `loadRepoEnv` folds in, and what CI must never write) and the ambient
+ * environment. Any variable mentioning CLERK counts — the point is to catch the
+ * accident, not to enumerate the aliases.
+ */
+const resolveConflictingClerkKey = Effect.fn("resolveConflictingClerkKey")(function* (
+  repoEnv: Readonly<Record<string, string | undefined>>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const repoRoot = yield* RepoRoot;
+
+  for (const file of [".env.local", ".env"]) {
+    const contents = yield* fs
+      .readFileString(path.join(repoRoot, file))
+      .pipe(Effect.orElseSucceed(() => ""));
+    const match = /^\s*([A-Z0-9_]*CLERK[A-Z0-9_]*)\s*=\s*\S/m.exec(contents);
+    if (match?.[1]) return { source: file, variable: match[1] };
+  }
+
+  for (const [key, value] of Object.entries({ ...process.env, ...repoEnv })) {
+    if (key.includes("CLERK") && value?.trim()) return { source: "environment", variable: key };
+  }
+
+  return undefined;
+});
+
 const runBuild = Effect.fn("runBuild")(function* (options: {
   readonly version: string;
   readonly arch: string;
@@ -268,16 +318,26 @@ const runBuild = Effect.fn("runBuild")(function* (options: {
   // loadRepoEnv folds .env/.env.local in and normalises the Clerk aliases, the
   // same way apps/web and apps/desktop resolve them at build time.
   const repoEnv = loadRepoEnv();
-  const clerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim();
-  if (!clerkPublishableKey) {
-    // Not fatal — the app still builds — but team mode silently disappears, which
-    // is the exact trap called out in .github/workflows/deploy-bkt3.yml.
-    yield* Console.warn(
-      "WARNING: no Clerk publishable key resolved. This build will ship with team mode off: " +
-        'no sign-in gate, no member tagging, no "Assigned to me". ' +
-        "Set VITE_CLERK_PUBLISHABLE_KEY in .env.local to match the bkt3 deployment.",
-    );
+
+  // A managed build must be KEYLESS. Identity and team capability arrive through
+  // the device-bound pairing credential (see apps/web/src/fork/
+  // managedPrimaryPairing.ts), not through Clerk. A publishable key is not a
+  // harmless extra: apps/web/src/main.tsx mounts ElectronClerkProvider whenever
+  // one is present, that provider renders nothing until Clerk's Native API
+  // answers, and the result is the black-screen/auth failure this fork already
+  // hit once. So the key is refused rather than warned about.
+  const clerkKey = yield* resolveConflictingClerkKey(repoEnv);
+  if (clerkKey) {
+    return yield* new ManagedBuildClerkKeyError({
+      channel: options.managedChannel,
+      source: clerkKey.source,
+      variable: clerkKey.variable,
+    });
   }
+  yield* Console.log(
+    `Keyless build: identity comes from the pairing credential, not Clerk. ` +
+      `This is expected for a managed ${options.managedChannel} build.`,
+  );
 
   const buildEnv: Record<string, string | undefined> = {
     ...process.env,
@@ -290,12 +350,12 @@ const runBuild = Effect.fn("runBuild")(function* (options: {
     // Points electron-updater at the fork's releases instead of upstream's.
     T3CODE_DESKTOP_UPDATE_REPOSITORY: BK_DESKTOP_UPDATE_REPOSITORY,
     VITE_T3_EXPERIMENTAL_CONTROL_CENTER: "true",
-    ...(clerkPublishableKey
-      ? {
-          VITE_CLERK_PUBLISHABLE_KEY: clerkPublishableKey,
-          T3CODE_CLERK_PUBLISHABLE_KEY: clerkPublishableKey,
-        }
-      : {}),
+    // Scrubbed, not merely omitted: `...process.env` above would otherwise carry
+    // an inherited key straight into the bundle, which is exactly the accident
+    // the guard above is meant to make impossible.
+    VITE_CLERK_PUBLISHABLE_KEY: undefined,
+    T3CODE_CLERK_PUBLISHABLE_KEY: undefined,
+    CLERK_PUBLISHABLE_KEY: undefined,
   };
 
   const args = [

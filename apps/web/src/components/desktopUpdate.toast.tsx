@@ -54,11 +54,12 @@ export function showDesktopUpdateDownloadedToast(
     title: "Update downloaded",
     description: (
       <>
-        {/* T3-CUSTOM(expbkt3): fork builds also raise a native notification whose
-            click installs, so point at that first and keep the button as the
-            fallback for a dismissed one. */}
+        {/* T3-CUSTOM(expbkt3): fork builds download in the background and raise a
+            native notification, but installing quits the app, so the restart
+            stays an explicit choice here rather than one stray notification
+            click. */}
         {isBkManagedPrimary()
-          ? "Click the notification, or the update button, to restart into it."
+          ? "Restart from the update button when you are at a good stopping point."
           : "Restart the app from the update button to install it."}
         {releaseUrl ? <ReleaseNotesLink releaseUrl={releaseUrl} shell={shell} /> : null}
       </>

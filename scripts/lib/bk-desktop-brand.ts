@@ -95,6 +95,27 @@ export interface DesktopBrand {
    * versa. See `scripts/lib/bk-desktop-release.ts` for the version format.
    */
   readonly updateChannel: string;
+  /**
+   * OS-level URL scheme this app registers as a handler for, or `null` to
+   * register none.
+   *
+   * Two installed apps both claiming `t3code://` is not a tie macOS breaks
+   * predictably — it routes to whichever became the handler most recently — so a
+   * staging pairing link could open production. State stays isolated either way,
+   * but to a user it is indistinguishable from channel leakage.
+   *
+   * Staging therefore registers nothing, which leaves `t3code://` unambiguously
+   * with production (or upstream). It pairs by pasting the credential into the
+   * pairing screen, which already accepts one: see `PairingRouteSurface` and
+   * `fork/managedPrimaryPairing.ts`.
+   *
+   * Deliberately *not* "give staging its own scheme": `getDesktopScheme` in
+   * `apps/desktop/src/electron/ElectronProtocol.ts` is also the origin the
+   * renderer is served from, and `apps/server/src/http.ts` allowlists
+   * `t3code://app` for CORS. Registering a different OS handler is a one-line
+   * manifest change; changing the serving origin is not.
+   */
+  readonly deepLinkScheme: string | null;
 }
 
 /**
@@ -126,14 +147,19 @@ export const BK_DESKTOP_BRANDS: Readonly<Record<BkDesktopVariant, DesktopBrand>>
     linuxIconPng: BK_BRAND_ASSET_PATHS.universalIconPng,
     windowsIconIco: BK_BRAND_ASSET_PATHS.windowsIconIco,
     updateChannel: "production-nightly",
+    deepLinkScheme: "t3code",
   },
   staging: {
     id: "bk",
     variant: "staging",
     appId: "work.beknown.bkt3code.staging",
-    productName: "BK T3 Code (Staging)",
-    displayName: "BK T3 Code (Staging)",
-    artifactName: "BK-T3-Code-Staging-${version}-${arch}.${ext}",
+    // "Stage BK T3 Code", not "BK T3 Code (Staging)": this is the name already
+    // installed on the team's Macs. productName derives the .app bundle name and
+    // Electron's default data directory, so renaming it after rollout leaves a
+    // duplicate application and an orphaned state directory behind.
+    productName: "Stage BK T3 Code",
+    displayName: "Stage BK T3 Code",
+    artifactName: "Stage-BK-T3-Code-${version}-${arch}.${ext}",
     userDataDirName: "bkt3code-staging",
     appUserModelId: "work.beknown.bkt3code.staging",
     linuxExecutableName: "bkt3code-staging",
@@ -143,6 +169,7 @@ export const BK_DESKTOP_BRANDS: Readonly<Record<BkDesktopVariant, DesktopBrand>>
     linuxIconPng: BK_BRAND_ASSET_PATHS.universalIconPng,
     windowsIconIco: BK_BRAND_ASSET_PATHS.windowsIconIco,
     updateChannel: "staging-nightly",
+    deepLinkScheme: null,
   },
 };
 

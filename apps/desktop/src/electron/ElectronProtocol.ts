@@ -98,6 +98,8 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
+    // T3-CUSTOM(expbkt3): the fork's preview surface embeds managed-environment
+    // frames, so frame-src is composed rather than fixed.
     `frame-src ${frameSources.join(" ")}`,
     "form-action 'self'",
   ].join("; ");

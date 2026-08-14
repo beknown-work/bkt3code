@@ -43,6 +43,27 @@ describe("BkBrand", () => {
     expect(BK_RUNTIME_BRAND.displayName).toBe(BK_DESKTOP_BRAND.productName);
   });
 
+  it("separates every identity macOS derives a storage location from", () => {
+    // These are not cosmetic. macOS derives Application Support, Preferences,
+    // Caches, Logs and Saved Application State from the bundle id and product
+    // name, and electron-updater derives its download cache from them too — so a
+    // single collision means staging and production share state or clobber each
+    // other's half-downloaded update.
+    const { staging, production } = BK_RUNTIME_BRANDS;
+    expect(staging.appUserModelId).not.toBe(production.appUserModelId);
+    expect(staging.userDataDirName).not.toBe(production.userDataDirName);
+    expect(staging.displayName).not.toBe(production.displayName);
+    expect(staging.baseName).not.toBe(production.baseName);
+    expect(staging.updateChannel).not.toBe(production.updateChannel);
+  });
+
+  it("leaves the t3code:// scheme unambiguously with production", () => {
+    // Two apps registering the same scheme is not a tie macOS breaks
+    // predictably, so staging registers none and pairs by pasting instead.
+    expect(BK_RUNTIME_BRANDS.production.deepLinkScheme).toBe("t3code");
+    expect(BK_RUNTIME_BRANDS.staging.deepLinkScheme).toBeNull();
+  });
+
   it("keeps a fork-specific legacy directory per app", () => {
     // resolveUserDataPath in ../app/DesktopAppIdentity.ts prefers the legacy
     // directory whenever it exists. If this ever became upstream's
@@ -50,7 +71,7 @@ describe("BkBrand", () => {
     // saved environments and sessions — and if the two fork apps shared one,
     // staging would adopt production's.
     expect(BK_RUNTIME_BRANDS.production.legacyUserDataDirName).toBe("BK T3 Code");
-    expect(BK_RUNTIME_BRANDS.staging.legacyUserDataDirName).toBe("BK T3 Code (Staging)");
+    expect(BK_RUNTIME_BRANDS.staging.legacyUserDataDirName).toBe("Stage BK T3 Code");
     for (const brand of Object.values(BK_RUNTIME_BRANDS)) {
       expect(brand.legacyUserDataDirName).not.toBe("T3 Code (Alpha)");
       expect(brand.legacyUserDataDirName).not.toBe(brand.userDataDirName);
