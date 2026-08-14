@@ -93,12 +93,15 @@ jobs:
         # Makes a re-run idempotent. Without this, re-running a green workflow
         # allocates a second version for identical code and asks every client to
         # download it.
+        # Uses the REST API rather than `gh release list`, whose --json has no
+        # targetCommitish field — only `gh release view` does, and that needs a
+        # tag we do not have yet. The API returns target_commitish on every
+        # release in one call.
         run: |
-          found=$(gh release list --repo "${{ github.repository }}" --limit 100 \
-                    --json tagName,targetCommitish \
-                    --jq '[.[] | select(.targetCommitish == "${{ github.sha }}")
-                          | select(.tagName | contains("-${{ steps.channel.outputs.channel }}-nightly."))]
-                          | first // empty | .tagName')
+          found=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
+                    --jq '[.[] | select(.target_commitish == "${{ github.sha }}")
+                          | select(.tag_name | contains("-${{ steps.channel.outputs.channel }}-nightly."))]
+                          | first // empty | .tag_name')
           if [[ -n "$found" ]]; then
             echo "::notice::${{ github.sha }} is already published as $found. Nothing to do."
             echo "found=true" >> "$GITHUB_OUTPUT"
