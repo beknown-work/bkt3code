@@ -145,6 +145,13 @@ Also create a protected GitHub **Environment** named `bk-desktop-production` wit
 This runs repository code, package lifecycle scripts and build scripts on a real Mac that holds a code-signing key. Treat it as production infrastructure:
 
 - **Use a dedicated Mac, or at least a dedicated standard macOS user.** Not a personal login carrying AWS credentials, production SSH keys, or a signed-in browser profile — a build script runs with all of it.
+
+  "Dedicated" means **credential-free**: the account holds the signing key and nothing else. A job runs repository code as that user — build scripts, and the `postinstall` of every dependency in the lockfile — so it inherits whatever that user can read. `~/.aws/credentials`, `~/.ssh/id_*`, a signed-in browser profile and any token in a shell profile are all in scope. This does not require anyone to be malicious; one compromised transitive dependency is enough. The blast radius runs both ways: the signing key lives there, so the fewer processes that can reach it, the better.
+
+  Setting one up: System Settings → Users & Groups → Add Account → **Standard** (not Administrator). Log into it once so its home directory and login keychain exist. Do not sign into iCloud or a browser, and do not copy dotfiles across. Create the certificate and install the runner in that account.
+
+  **Leave that account logged in** (fast user switching is fine). `codesign` needs an unlocked login keychain; a background-only account produces the classic headless signing failure, where the identity exists but is unusable and electron-builder only says so at the end of a ~15-minute build.
+
 - Register the runner **repository-scoped**, with its own labels. Do not attach it to an organisation runner group other repositories can target.
 - Protect `expbkmain` and `bkmain` with branch protection, and require CODEOWNERS review for `.github/workflows/**`, `scripts/**` and the lockfile — those are the files that decide what executes on that machine.
 
