@@ -304,8 +304,9 @@ export class BuiltAppNotFoundError extends Schema.TaggedErrorClass<BuiltAppNotFo
 ) {
   override get message(): string {
     return (
-      `Could not find a built .app under ${this.releaseDir} to verify its signature. ` +
-      `Expected electron-builder's mac-<arch>/ output next to the artifacts.`
+      `Could not extract a signed .app from the update ZIP in ${this.releaseDir}. ` +
+      `That ZIP is the Squirrel.Mac payload, so without it there is nothing to verify ` +
+      `and nothing worth publishing — rebuild with scripts/build-bk-desktop-dmg.ts.`
     );
   }
 }
@@ -398,46 +399,60 @@ const collectAssets = Effect.fn("collectAssets")(function* (
 });
 
 /**
- * Locates the packaged `.app` electron-builder left beside the artifacts.
+ * Refuses to publish an unsigned build, checking the ZIP rather than the
+ * packaged directory beside it.
  *
- * electron-builder stages it under `mac-<arch>/` (or plain `mac/` for x64), so
- * scan for the first directory entry ending in `.app` one level down.
+ * This is the guard that keeps auto-update working: an unsigned app has no
+ * designated requirement, so Squirrel.Mac cannot validate an update against it —
+ * the download succeeds, the install silently does not, and the only symptom is
+ * teammates quietly staying on an old version.
+ *
+ * The **ZIP** is the right thing to check, for two independent reasons. It is
+ * what Squirrel.Mac actually consumes (the DMG is only for first install), so it
+ * is the artifact whose signature has to be good. And it is the only one that
+ * survives CI: `actions/upload-artifact` re-zips its payload, which does not
+ * preserve a `.app` bundle's symlinks and executable bits, so a packaged
+ * directory handed between jobs would fail verification for reasons that have
+ * nothing to do with signing.
+ *
+ * Extraction uses `ditto`, not `unzip`, because only `ditto` restores the
+ * bundle's macOS metadata faithfully enough for `codesign` to agree with it.
  */
-const findBuiltApp = Effect.fn("findBuiltApp")(function* (releaseDir: string) {
+const assertSignedBuild = Effect.fn("assertSignedBuild")(function* (
+  releaseDir: string,
+  version: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
   const entries = yield* fs.readDirectory(releaseDir).pipe(Effect.orElseSucceed(() => []));
-  for (const entry of entries) {
-    if (!entry.startsWith("mac")) continue;
-    const nested = yield* fs
-      .readDirectory(path.join(releaseDir, entry))
-      .pipe(Effect.orElseSucceed(() => []));
-    for (const candidate of nested) {
-      if (candidate.endsWith(".app")) return path.join(releaseDir, entry, candidate);
-    }
-  }
-  return undefined;
-});
-
-/**
- * Refuses to publish an unsigned build.
- *
- * This is the guard that keeps auto-update working. An unsigned app has no
- * designated requirement, so Squirrel.Mac cannot validate an update against it
- * — the download succeeds, the install silently does not, and the only symptom
- * is teammates quietly staying on an old version.
- */
-const assertSignedBuild = Effect.fn("assertSignedBuild")(function* (releaseDir: string) {
-  const appPath = yield* findBuiltApp(releaseDir);
-  if (!appPath) {
+  const zipName = entries.find((entry) => entry.endsWith(".zip") && entry.includes(version));
+  if (!zipName) {
     return yield* new BuiltAppNotFoundError({ releaseDir });
   }
 
-  const result = yield* runCommand("codesign", ["--verify", "--strict", appPath]);
+  const extractedDir = yield* fs.makeTempDirectoryScoped();
+  const extracted = yield* runCommand("ditto", [
+    "-x",
+    "-k",
+    path.join(releaseDir, zipName),
+    extractedDir,
+  ]);
+  if (extracted.exitCode !== 0) {
+    return yield* new BuiltAppNotFoundError({ releaseDir });
+  }
+
+  const unpacked = yield* fs.readDirectory(extractedDir).pipe(Effect.orElseSucceed(() => []));
+  const appName = unpacked.find((entry) => entry.endsWith(".app"));
+  if (!appName) {
+    return yield* new BuiltAppNotFoundError({ releaseDir });
+  }
+  const appPath = path.join(extractedDir, appName);
+
+  const result = yield* runCommand("codesign", ["--verify", "--deep", "--strict", appPath]);
   if (result.exitCode !== 0) {
     return yield* new UnsignedBuildError({
-      appPath,
+      appPath: zipName,
       detail: result.stderr.trim().split("\n").at(-1) ?? `codesign exited ${result.exitCode}`,
     });
   }
@@ -659,7 +674,7 @@ const command = Command.make(
       const resolvedReleaseDir = path.resolve(repoRoot, releaseDir);
 
       // Guard 4: an unsigned build cannot be installed as an update.
-      const signedAppPath = yield* assertSignedBuild(resolvedReleaseDir);
+      const signedAppPath = yield* assertSignedBuild(resolvedReleaseDir, version);
 
       const assets = yield* collectAssets(resolvedReleaseDir, version, variant);
       if (assets.length === 0) {

@@ -16,7 +16,7 @@ Both are Apple Silicon (`arm64`) only, self-signed, **keyless**, and published a
 
 ## How it runs
 
-Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a self-hosted macOS runner — a team Mac — which builds that branch's app and publishes it. Running apps poll every 4 minutes and download in the background, then raise a native notification when a build is ready. Clicking that notification **surfaces the update in the app; it does not restart** — see [Update behaviour](#update-behaviour).
+Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a GitHub-hosted `macos-26` runner, which builds that branch's app and publishes it. Standard GitHub-hosted runners are free on public repositories, so this costs nothing and needs no machine of ours. Running apps poll every 4 minutes and download in the background, then raise a native notification when a build is ready. Clicking that notification **surfaces the update in the app; it does not restart** — see [Update behaviour](#update-behaviour).
 
 You can also cut a build by hand from `workflow_dispatch`, or locally (see [Manual builds](#manual-builds)).
 
@@ -90,85 +90,75 @@ The signing seam takes any keychain identity by common name, so **switching to a
 
 Asking every teammate to mark a certificate **Always Trust** is an organisation-level decision, not a build detail: anyone holding that private key can sign _other_ software those Macs will then trust. Before doing it:
 
-- Keep the private key on the runner Mac only, in a dedicated account — not on a personal login shared with browsing.
+- Treat the `.p12` as a credential wherever it lives — the Mac it was created on, GitHub Secrets, and your backup. Delete the working copy from disk once it is in Secrets.
 - Back it up somewhere access-controlled. Losing it means every installed app stops updating.
-- Never expose it to workflow logs or to any job a pull request can reach. The workflow only ever reads the certificate's _name_ from a secret; the key itself never leaves the keychain.
+- Never expose it to workflow logs or to any job a pull request can reach. CI imports it into a keychain created per job in `RUNNER_TEMP`, with a random password, on a VM that is destroyed afterwards; it is never written to the workspace and never printed.
 - Record its designated requirement in each release's notes (the publisher does this automatically) so a mismatch is diagnosable. That string — not the CDHash, which changes every build — is what Squirrel.Mac actually checks an update against.
 - Plan rotation. Rotating requires a coordinated manual reinstall by everyone.
 - Prefer Developer ID if you can justify the $99/yr — it avoids the trust-store change entirely.
 
 ### Creating the certificate (once)
 
-On the runner Mac:
+On any Mac — CI imports it from a secret, so this does not have to be a dedicated machine:
 
 1. **Keychain Access → Certificate Assistant → Create a Certificate.**
-2. Name it something stable, e.g. `BK Code Signing`. Identity Type **Self Signed Root**, Certificate Type **Code Signing**.
+2. Name it something stable, e.g. `BK Code Signing`. Identity Type **Self Signed Root**, Certificate Type **Code Signing**. The name must not change: it signs every future build, and rotating breaks auto-update for every existing install.
 3. Confirm it is usable: `security find-identity -v -p codesigning`.
-4. Export it (`.cer`, public certificate only) and send it to each teammate, who installs it in **login** and sets it to **Always Trust** for code signing.
-5. Add the common name as the repository secret `BK_MACOS_SIGNING_IDENTITY`.
+4. Export the certificate **and its private key** as a `.p12` with a password, and turn it into the two secrets described in [Secrets](#secrets).
+5. Separately export the public certificate (`.cer`) and send that to each teammate, who installs it in **login** and sets it to **Always Trust** for code signing. Never send the `.p12`.
 
-## Runner setup (once)
+## CI setup (once)
 
-`beknown-work/bkt3code` → Settings → Actions → Runners → **New self-hosted runner**, macOS/arm64. Install it as a service so it survives reboot:
+Builds run on **GitHub-hosted `macos-26`** — the standard Apple Silicon runner. Standard GitHub-hosted runners are free and unmetered on public repositories, and this repository is public, so there is nothing to install and no machine to maintain. It also means builds run when nobody's laptop is awake.
+
+There is no runner to register. What is needed is three secrets and one environment.
+
+### Secrets
+
+| Secret                      | Contents                                                        |
+| --------------------------- | --------------------------------------------------------------- |
+| `BK_MACOS_SIGNING_IDENTITY` | Certificate common name, e.g. `BK Code Signing`                 |
+| `BK_MACOS_CERT_P12`         | Base64 of the exported `.p12` (certificate **and** private key) |
+| `BK_MACOS_CERT_PASSWORD`    | Password set when exporting that `.p12`                         |
+
+To produce them, on any Mac that holds the certificate:
 
 ```sh
-./svc.sh install
-./svc.sh start
+# Keychain Access → select the certificate AND its private key → Export…
+# Save as Certificates.p12 and set an export password.
+base64 -i Certificates.p12 | pbcopy   # paste into BK_MACOS_CERT_P12
 ```
 
-Prerequisites on that Mac:
-
-- Node `^24.13.1` and pnpm `11.10.0` (see `engines` / `packageManager` in the root `package.json`).
-- Rust with the `aarch64-apple-darwin` target, for the bundled `native/resource-monitor` crate:
-  ```sh
-  rustup target add aarch64-apple-darwin
-  ```
-- Xcode Command Line Tools, for `sips` and `iconutil` (PNG → `.icns`):
-  ```sh
-  xcode-select --install
-  ```
-- `gh`, authenticated, for local publishing. CI uses `GITHUB_TOKEN`.
-- The signing certificate above, in an **unlocked** login keychain. A locked keychain is the classic headless-signing failure: the identity exists but is unusable, and electron-builder only says so at the end of a 15-minute build. The workflow checks for it up front.
-
-Repository secrets — one, and it is only a name:
-
-| Secret                      | Purpose                                    |
-| --------------------------- | ------------------------------------------ |
-| `BK_MACOS_SIGNING_IDENTITY` | Common name of the self-signed certificate |
+Export the **private key**, not just the certificate — a certificate alone cannot sign. Then delete the `.p12` from disk; the copy in Secrets is the one CI uses.
 
 There is deliberately **no Clerk secret**. See [Managed builds are keyless](#managed-builds-are-keyless).
 
-Also create a protected GitHub **Environment** named `bk-desktop-production` with whatever reviewers you want; the publish job requests it for production, so a merge to `bkmain` cannot reach the team unreviewed.
+### Environment
 
-### Runner security
+Create a protected GitHub **Environment** named exactly `bk-desktop-production` with whatever reviewers you want. The publish job requests it for production only, so a merge to `bkmain` cannot reach the team unreviewed. An environment named `production` is **not** the same thing and will not be used.
 
-This runs repository code, package lifecycle scripts and build scripts on a real Mac that holds a code-signing key. Treat it as production infrastructure:
+### Security model
 
-- **Use a dedicated Mac, or at least a dedicated standard macOS user.** Not a personal login carrying AWS credentials, production SSH keys, or a signed-in browser profile — a build script runs with all of it.
+The build job is the one that holds the signing key — electron-builder signs during packaging — and it is also the job that runs every dependency's install scripts. That is unavoidable, so the design contains it:
 
-  "Dedicated" means **credential-free**: the account holds the signing key and nothing else. A job runs repository code as that user — build scripts, and the `postinstall` of every dependency in the lockfile — so it inherits whatever that user can read. `~/.aws/credentials`, `~/.ssh/id_*`, a signed-in browser profile and any token in a shell profile are all in scope. This does not require anyone to be malicious; one compromised transitive dependency is enough. The blast radius runs both ways: the signing key lives there, so the fewer processes that can reach it, the better.
+- **Ephemeral, isolated machines.** Each job gets a fresh VM that is destroyed afterwards. The certificate is imported into a keychain created in `RUNNER_TEMP` with a random password, and dies with the VM. Nothing is left behind for the next job, which was the main hazard of the self-hosted layout.
+- **Split permissions.** The build job runs with `contents: read`. Only the publish job — which runs no build scripts and holds no signing key — gets `contents: write`. A malicious postinstall in the build job therefore cannot push a commit or cut a release.
+- **Triggers.** `push` to the two branches and `workflow_dispatch` each require write access, and **neither can be fired from a fork**. Do not add `pull_request`, `pull_request_target` or `issue_comment` — that would run fork-authored code in the same job as the signing key.
+- **`persist-credentials: false`**, so no token is left in `.git/config` for build scripts to find.
+- **Actions pinned to commit SHAs.** A moving tag is a way for someone else's release to end up in the job that holds your private key.
 
-  Setting one up: System Settings → Users & Groups → Add Account → **Standard** (not Administrator). Log into it once so its home directory and login keychain exist. Do not sign into iCloud or a browser, and do not copy dotfiles across. Create the certificate and install the runner in that account.
+Pair that with branch protection on `expbkmain` and `bkmain`, CODEOWNERS review for `.github/workflows/**`, `scripts/**` and the lockfile, and **Settings → Actions → Fork pull request workflows from outside collaborators → Require approval for all external contributors**.
 
-  **Leave that account logged in** (fast user switching is fine). `codesign` needs an unlocked login keychain; a background-only account produces the classic headless signing failure, where the identity exists but is unusable and electron-builder only says so at the end of a ~15-minute build.
+The trade-off, stated plainly: the private key lives in GitHub Secrets rather than only in a Mac's keychain. For a public repository, secrets are not exposed to fork pull requests, and the triggers above are not fork-reachable. This is the standard pattern for signing any desktop app in CI, and it removes an always-on personal machine from the critical path.
 
-- Register the runner **repository-scoped**, with its own labels. Do not attach it to an organisation runner group other repositories can target.
-- Protect `expbkmain` and `bkmain` with branch protection, and require CODEOWNERS review for `.github/workflows/**`, `scripts/**` and the lockfile — those are the files that decide what executes on that machine.
+### If this ever needs to move back to a self-hosted runner
 
-The workflow's own guards, all load-bearing:
+Change `runs-on: macos-26` to your labels, drop the "Import signing certificate" step, and supply the identity from an unlocked login keychain instead. Then the earlier constraints return, and all of them matter:
 
-- **Triggers.** `push` to the two branches and `workflow_dispatch` each require write access, and **neither can be fired from a fork**. Do not add `pull_request`, `pull_request_target` or `issue_comment`.
-- **Split jobs.** The build job runs with `contents: read`; only the publish job — which runs no build scripts — gets `contents: write`.
-- **`persist-credentials: false`.** The workspace persists between jobs on a self-hosted runner; a token left in `.git/config` is a token for the next thing that runs there.
-- **Actions pinned to commit SHAs**, because a moving tag on a self-hosted runner is a supply-chain hole.
-
-Pair that with **Settings → Actions → Fork pull request workflows from outside collaborators → Require approval for all external contributors**.
-
-### Disk hygiene
-
-A packaged app is roughly 450 MB staged, plus a ~158 MB DMG and a ~152 MB ZIP, and the workspace persists. The workflow checks for 15 GB free before building and removes its own `release/` directory afterwards. It never touches installed applications or anyone's app state — do not "clean up" a shared Mac by deleting `~/Library/Application Support` entries.
-
-Periodically prune the runner's `_work` directory, Rust `target/`, the pnpm store and Electron's download cache.
+- A **dedicated, credential-free** macOS account — one holding the signing key and nothing else. A job runs repository code as that user and inherits whatever it can read: `~/.aws/credentials`, `~/.ssh/id_*`, a signed-in browser profile, any token in a shell profile. One compromised transitive dependency is enough; nobody has to be malicious.
+- That account must stay **logged in**. `codesign` needs an unlocked login keychain, and a background-only account produces the classic headless signing failure — the identity exists but is unusable, and electron-builder only says so at the end of a ~15-minute build.
+- Disk hygiene, because the workspace persists: a packaged app is ~450 MB staged plus a ~158 MB DMG and ~152 MB ZIP. Prune `_work`, Rust `target/`, the pnpm store and Electron's download cache. Never "clean up" by deleting anyone's `~/Library/Application Support` entries.
+- The two jobs could then share a workspace again, making the artifact hand-off below unnecessary.
 
 ## Manual builds
 
@@ -266,7 +256,7 @@ Before advertising automatic updates on a channel, prove all of these. Nothing h
 
 1. Land identities, channels, keyless enforcement and safe publishing. ← _this PR_
 2. Build both apps **without publishing**; verify identity and state isolation.
-3. Configure signing on the runner.
+3. Create the certificate, add the three secrets and the protected environment.
 4. Install the first signed staging build by hand.
 5. Publish two consecutive staging versions and prove A → B through Squirrel.
 6. Run the cross-channel negative tests.
@@ -327,7 +317,7 @@ Per [AGENTS.md](../../AGENTS.md), changes ship to `expbkmain` and are verified a
 | `scripts/publish-bk-desktop-dmg.ts`                 | Publish wrapper (`pnpm publish:desktop:bk`)                                  |
 | `scripts/resolve-bk-desktop-version.ts`             | Next version for a channel (`pnpm version:desktop:bk`)                       |
 | `scripts/generate-bk-brand-icons.ts`                | Icon generator (`pnpm icons:bk`)                                             |
-| `.github/workflows/bk-desktop-release.yml`          | Self-hosted macOS build and publish                                          |
+| `.github/workflows/bk-desktop-release.yml`          | GitHub-hosted macOS build and publish                                        |
 | `apps/desktop/src/branding/BkBrand.ts`              | Runtime brand, baked in at build time                                        |
 | `apps/desktop/src/electron/ElectronNotification.ts` | Native notifications                                                         |
 | `apps/desktop/src/updates/DesktopUpdates.ts`        | Channel selection, auto-download, update-ready notification                  |
