@@ -12,7 +12,7 @@ The fork does not need a new app: `apps/desktop` is upstream's Electron app, and
 
 The **updater cache is a third isolation axis**, and an easy one to miss. It lives outside `userData`, so a distinct bundle id and user-data directory are not sufficient. electron-builder derives `updaterCacheDirName` in `app-update.yml` from the staged package name, which was hard-coded `"t3code"` — meaning all three apps shared `~/Library/Caches/t3code-updater` and could overwrite each other's part-downloaded update. `resolveDesktopStagePackageName` in `scripts/build-desktop-artifact.ts` now derives it from `userDataDirName`, so the two axes cannot drift apart.
 
-Both are Apple Silicon (`arm64`) only, self-signed, **keyless**, and published as prereleases on [`beknown-work/bkt3code`](https://github.com/beknown-work/bkt3code/releases).
+Both are Apple Silicon (`arm64`) only, code signed, **keyless**, and published as prereleases on [`beknown-work/bkt3code`](https://github.com/beknown-work/bkt3code/releases). The identity in use during the current trial is an Apple Development certificate, not the self-signed root this document otherwise describes — see [Current identity is a test certificate](#current-identity-is-a-test-certificate).
 
 ## How it runs
 
@@ -133,7 +133,7 @@ On any Mac — CI imports it from a secret, so this does not have to be a dedica
 
 Builds run on **GitHub-hosted `macos-26`** — the standard Apple Silicon runner. Standard GitHub-hosted runners are free and unmetered on public repositories, and this repository is public, so there is nothing to install and no machine to maintain. It also means builds run when nobody's laptop is awake.
 
-There is no runner to register. What is needed is three secrets and one environment.
+There is no runner to register. What is needed is four secrets — one of them optional — and two environments.
 
 ### Secrets
 
@@ -156,9 +156,18 @@ Export the **private key**, not just the certificate — a certificate alone can
 
 There is deliberately **no Clerk secret**. See [Managed builds are keyless](#managed-builds-are-keyless).
 
-### Environment
+### Environments
 
-Create a protected GitHub **Environment** named exactly `bk-desktop-production` with whatever reviewers you want. The publish job requests it for production only, so a merge to `bkmain` cannot reach the team unreviewed. An environment named `production` is **not** the same thing and will not be used.
+Two are needed, and the publish job always requests exactly one of them:
+
+| Environment             | Protection                                          | Requested by         |
+| ----------------------- | --------------------------------------------------- | -------------------- |
+| `bk-desktop-production` | Required reviewers; deployments limited to `bkmain` | production publishes |
+| `bk-desktop-staging`    | **None** — create it and leave it unprotected       | staging publishes    |
+
+An environment named `production` is **not** `bk-desktop-production` and will not be used.
+
+`bk-desktop-staging` exists only so the workflow never has to resolve `environment:` to an empty string. Using an empty string to mean "no environment" is a common trick that GitHub does not document, and the first publish is not the place to discover whether it holds. It also gives each channel its own deployment history. If it is missing, staging publishes fail with an environment error — create it unprotected and re-run.
 
 ### Security model
 
@@ -279,7 +288,7 @@ Before advertising automatic updates on a channel, prove all of these. Nothing h
 
 1. Land identities, channels, keyless enforcement and safe publishing. ← _this PR_
 2. Build both apps **without publishing**; verify identity and state isolation.
-3. Create the certificate, add the three secrets and the protected environment.
+3. Create the certificate, add the signing secrets and the protected environment.
 4. Install the first signed staging build by hand.
 5. Publish two consecutive staging versions and prove A → B through Squirrel.
 6. Run the cross-channel negative tests.
