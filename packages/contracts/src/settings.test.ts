@@ -153,6 +153,27 @@ describe("ClientSettings sidebar", () => {
   });
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — the fork keeps plan mode as a first-class feature.
+// Upstream retired it behind an off-by-default flag; these lock the fork default
+// so a later upstream merge cannot silently switch plan mode off again.
+describe("ClientSettings plan mode", () => {
+  it("defaults plan mode on", () => {
+    expect(decodeClientSettings({}).planModeAvailable).toBe(true);
+  });
+
+  it("drops upstream's retired planModeEnabled key, resetting everyone to on", () => {
+    const decoded = decodeClientSettings({ planModeEnabled: false });
+    expect(decoded.planModeAvailable).toBe(true);
+    expect(decoded).not.toHaveProperty("planModeEnabled");
+  });
+
+  it("preserves an explicit opt-out", () => {
+    expect(decodeClientSettings({ planModeAvailable: false }).planModeAvailable).toBe(false);
+    expect(decodeClientSettingsPatch({ planModeAvailable: false }).planModeAvailable).toBe(false);
+  });
+});
+// T3-CUSTOM(expbkt3): END
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults text generation to Luna at low reasoning effort", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
