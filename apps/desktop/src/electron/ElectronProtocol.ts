@@ -82,6 +82,14 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
   // connections by the network schemes the client supports instead of by host.
   const connectSources = ["'self'", "http:", "https:", "ws:", "wss:"];
 
+  // T3-CUSTOM(expbkt3): a Plannotator review is served by the environment that
+  // owns the thread, not by this renderer's origin, so the review iframe is
+  // cross-origin. Those environment origins are unknown here for the same
+  // reason as connect-src, so allow the network schemes rather than hosts. The
+  // frame itself stays sandboxed without `allow-same-origin`, so it runs in an
+  // opaque origin and cannot reach renderer state.
+  const frameSources = ["'self'", "http:", "https:", "https://challenges.cloudflare.com"];
+
   return [
     "default-src 'self'",
     `script-src ${scriptSources.join(" ")}`,
@@ -90,7 +98,7 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self' https://challenges.cloudflare.com",
+    `frame-src ${frameSources.join(" ")}`,
     "form-action 'self'",
   ].join("; ");
 }

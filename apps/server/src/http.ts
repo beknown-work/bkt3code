@@ -39,6 +39,12 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+// T3-CUSTOM(expbkt3): the token-scoped review plane needs its own CORS profile.
+import {
+  isPlannotatorRequestPath,
+  PLANNOTATOR_CORS_ALLOWED_HEADERS,
+  PLANNOTATOR_CORS_ALLOWED_METHODS,
+} from "./plannotator/http.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -70,7 +76,7 @@ export const browserApiCorsLayer = Layer.unwrap(
     // origin — a tailnet name, a LAN IP, a phone. Browser dev normally proxies
     // through Vite and is same-origin (no preflight at all), so this is a
     // safety net for the desktop renderer and any direct-to-backend caller.
-    return HttpRouter.cors({
+    const apiCors = HttpMiddleware.cors({
       ...(devOrigin
         ? {
             allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
@@ -81,6 +87,26 @@ export const browserApiCorsLayer = Layer.unwrap(
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
     });
+    // T3-CUSTOM(expbkt3): BEGIN — the Plannotator review plane is reached by
+    // clients this server does not serve (the desktop renderer's `t3code://app`
+    // origin, and any client whose thread lives on another environment). This
+    // middleware is global and answers every preflight itself, so without a
+    // per-path profile the review status plane's custom client-id header and
+    // `DELETE` lease release would be refused before the route ever runs.
+    // Credentials stay off: the URL token is the only credential.
+    const plannotatorCors = HttpMiddleware.cors({
+      allowedMethods: PLANNOTATOR_CORS_ALLOWED_METHODS,
+      allowedHeaders: PLANNOTATOR_CORS_ALLOWED_HEADERS,
+      maxAge: 600,
+    });
+    return HttpRouter.middleware(
+      <E, R>(httpEffect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
+        Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          isPlannotatorRequestPath(request.url) ? plannotatorCors(httpEffect) : apiCors(httpEffect),
+        ),
+      { global: true },
+    );
+    // T3-CUSTOM(expbkt3): END
   }),
 );
 

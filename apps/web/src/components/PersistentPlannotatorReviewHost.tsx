@@ -1,5 +1,7 @@
 import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { resolvePlannotatorReviewUrl } from "@t3tools/shared/plannotator";
+import * as Option from "effect/Option";
 import { memo, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -11,6 +13,7 @@ import { PlannotatorFocusSurface } from "./PlannotatorFocusSurface";
 import { SidebarInset } from "./ui/sidebar";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { type RightPanelSurface, useRightPanelStore } from "../rightPanelStore";
+import { usePreparedConnection } from "../state/session";
 
 type PlannotatorSurface = Extract<RightPanelSurface, { kind: "plannotator" }>;
 
@@ -51,10 +54,38 @@ const PersistentPlannotatorFocusSurface = memo(function PersistentPlannotatorFoc
     },
     [remove, threadRef],
   );
+  // T3-CUSTOM(expbkt3): The review lives on the thread's own environment, so
+  // the persisted root-relative path has to be resolved against that
+  // environment's HTTP base URL before it is fetched. Resolving it here (rather
+  // than storing an absolute URL) keeps the persisted surface portable across
+  // reconnects that change an environment's address.
+  const preparedConnection = usePreparedConnection(threadRef.environmentId);
+  const reviewUrl = resolvePlannotatorReviewUrl(
+    surface.url,
+    Option.getOrNull(preparedConnection)?.httpBaseUrl,
+  );
+
+  // A disconnected environment cannot serve the review; mounting the iframe
+  // against a guessed origin would load someone else's server, so wait instead.
+  if (reviewUrl === null) {
+    return (
+      <div
+        className={
+          visible
+            ? "flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background"
+            : "hidden"
+        }
+        data-plannotator-focus-surface-pending
+        aria-hidden={visible ? undefined : true}
+      >
+        <p className="text-sm text-muted-foreground">Connecting to this session's environment…</p>
+      </div>
+    );
+  }
 
   return (
     <PlannotatorFocusSurface
-      url={surface.url}
+      url={reviewUrl}
       visible={visible}
       onClose={hide}
       onDecision={handleDecision}
