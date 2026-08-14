@@ -5,9 +5,14 @@ import { afterEach, describe, expect } from "vite-plus/test";
 import {
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
+  resolveDesktopStagePackageName,
   resolveGitHubPublishConfig,
 } from "./build-desktop-artifact.ts";
-import { BK_BRAND_ASSET_PATHS, DESKTOP_BRAND_ENV_VAR } from "./lib/bk-desktop-brand.ts";
+import {
+  BK_BRAND_ASSET_PATHS,
+  BK_DESKTOP_BRANDS,
+  DESKTOP_BRAND_ENV_VAR,
+} from "./lib/bk-desktop-brand.ts";
 import { BK_MANAGED_CHANNEL_ENV_VAR } from "./lib/bk-managed-environment.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
@@ -84,6 +89,33 @@ describe("desktop brand overrides in build-desktop-artifact", () => {
       linuxIconPng: BK_BRAND_ASSET_PATHS.universalIconPng,
       windowsIconIco: BK_BRAND_ASSET_PATHS.windowsIconIco,
     });
+  });
+});
+
+describe("updater cache isolation", () => {
+  it("gives each app its own global updater cache", () => {
+    // electron-builder derives updaterCacheDirName from the staged package name,
+    // and electron-updater then downloads into ~/Library/Caches/<name>-updater.
+    // That path is OUTSIDE userData, so isolating the bundle id and the
+    // user-data directory is not enough — verified on a Mac, where all three
+    // apps shared ~/Library/Caches/t3code-updater and could clobber each
+    // other's part-downloaded update.
+    expect(resolveDesktopStagePackageName()).toBe("t3code");
+
+    withBkBrand("staging");
+    expect(resolveDesktopStagePackageName()).toBe("bkt3code-staging");
+
+    withBkBrand("production");
+    expect(resolveDesktopStagePackageName()).toBe("bkt3code");
+  });
+
+  it("keeps the cache name tied to the user-data directory", () => {
+    // Derived from userDataDirName rather than duplicated, so the two isolation
+    // axes cannot drift apart in a later edit.
+    for (const variant of ["staging", "production"] as const) {
+      withBkBrand(variant);
+      expect(resolveDesktopStagePackageName()).toBe(BK_DESKTOP_BRANDS[variant].userDataDirName);
+    }
   });
 });
 

@@ -51,6 +51,24 @@ function resolveDesktopBrandOverride(
   return resolveBkDesktopBrand(env);
 }
 
+/**
+ * Name written into the staged package.json, and therefore the app's global
+ * updater cache directory.
+ *
+ * electron-builder derives `updaterCacheDirName` in `app-update.yml` from this
+ * name, and electron-updater then keeps downloads in
+ * `~/Library/Caches/<name>-updater`. That path is *outside* `userData`, so
+ * isolating bundle id and user-data directory is not enough: with the upstream
+ * literal every fork app and upstream itself would share
+ * `~/Library/Caches/t3code-updater` and could overwrite each other's
+ * part-downloaded update.
+ *
+ * Reuses `userDataDirName` so the two isolation axes cannot drift apart.
+ */
+export function resolveDesktopStagePackageName(): string {
+  return resolveDesktopBrandOverride()?.userDataDirName ?? "t3code";
+}
+
 // T3-CUSTOM(expbkt3): END
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
@@ -1998,7 +2016,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     stageDependencies,
   );
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    // T3-CUSTOM(expbkt3): fork builds use a channel-specific package name so
+    // electron-builder emits an isolated updaterCacheDirName in app-update.yml.
+    name: resolveDesktopStagePackageName(),
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,

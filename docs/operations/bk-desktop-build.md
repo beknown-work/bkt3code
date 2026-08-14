@@ -4,10 +4,13 @@ Fork-owned. How the two Beknown-branded macOS desktop apps are built, published 
 
 The fork does not need a new app: `apps/desktop` is upstream's Electron app, and the browser client is the same `apps/web` SPA that `deploy-bkt3.yml` already deploys. What this adds is _two distinct identities_ so each fork build installs alongside upstream T3 Code and alongside each other, and a publish path with working auto-update.
 
-| Branch      | App                | Bundle id                       | User data                                        | Orchestrates             | URL scheme  |
-| ----------- | ------------------ | ------------------------------- | ------------------------------------------------ | ------------------------ | ----------- |
-| `expbkmain` | `Stage BK T3 Code` | `work.beknown.bkt3code.staging` | `~/Library/Application Support/bkt3code-staging` | expbkt3.dev.beknown.live | none        |
-| `bkmain`    | `BK T3 Code`       | `work.beknown.bkt3code`         | `~/Library/Application Support/bkt3code`         | bkt3.dev.beknown.live    | `t3code://` |
+| Branch      | App                | Bundle id                       | User data                                        | Updater cache                               | Orchestrates             | URL scheme  |
+| ----------- | ------------------ | ------------------------------- | ------------------------------------------------ | ------------------------------------------- | ------------------------ | ----------- |
+| `expbkmain` | `Stage BK T3 Code` | `work.beknown.bkt3code.staging` | `~/Library/Application Support/bkt3code-staging` | `~/Library/Caches/bkt3code-staging-updater` | expbkt3.dev.beknown.live | none        |
+| `bkmain`    | `BK T3 Code`       | `work.beknown.bkt3code`         | `~/Library/Application Support/bkt3code`         | `~/Library/Caches/bkt3code-updater`         | bkt3.dev.beknown.live    | `t3code://` |
+| _upstream_  | `T3 Code (Alpha)`  | `com.t3tools.t3code`            | `~/Library/Application Support/t3code`           | `~/Library/Caches/t3code-updater`           | —                        | `t3code://` |
+
+The **updater cache is a third isolation axis**, and an easy one to miss. It lives outside `userData`, so a distinct bundle id and user-data directory are not sufficient. electron-builder derives `updaterCacheDirName` in `app-update.yml` from the staged package name, which was hard-coded `"t3code"` — meaning all three apps shared `~/Library/Caches/t3code-updater` and could overwrite each other's part-downloaded update. `resolveDesktopStagePackageName` in `scripts/build-desktop-artifact.ts` now derives it from `userDataDirName`, so the two axes cannot drift apart.
 
 Both are Apple Silicon (`arm64`) only, self-signed, **keyless**, and published as prereleases on [`beknown-work/bkt3code`](https://github.com/beknown-work/bkt3code/releases).
 
@@ -240,7 +243,7 @@ Before advertising automatic updates on a channel, prove all of these. Nothing h
 4. **Channel manifest.** The release carries exactly `<channel>-nightly-mac.yml`, and it references the ZIP that is actually attached.
 5. **Tag target.** The release tag resolves to the workflow's `github.sha`, not the default branch.
 6. **Cross-channel isolation.** A higher staging release is never offered to a production app.
-7. **State isolation.** Launching staging leaves production's and upstream's Application Support, Preferences, Caches, Logs, Saved Application State and updater caches untouched.
+7. **State isolation.** Launching staging leaves production's and upstream's Application Support, Preferences, Caches, Logs, Saved Application State and ShipIt directories untouched. Check `updaterCacheDirName` in each bundle's `app-update.yml` explicitly — it is the axis that was wrong first time, and nothing in the app's own behaviour reveals a shared cache until two updates collide.
 8. **Signed update A → B.** Install signed version A by hand, publish signed version B, let A discover, download and install it through Squirrel, and confirm the relaunch is on B. Verify the **ZIP**, since that — not the DMG — is what auto-update consumes. Capture for both bundles:
    ```sh
    codesign -dv --verbose=4 "/Applications/BK T3 Code.app"
