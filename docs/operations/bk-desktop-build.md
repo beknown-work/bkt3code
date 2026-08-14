@@ -18,7 +18,7 @@ Both are Apple Silicon (`arm64`) only, self-signed, **keyless**, and published a
 
 Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a GitHub-hosted `macos-26` runner, which builds that branch's app and publishes it. Standard GitHub-hosted runners are free on public repositories, so this costs nothing and needs no machine of ours. Running apps poll every 4 minutes and download in the background, then raise a native notification when a build is ready. Clicking that notification **surfaces the update in the app; it does not restart** — see [Update behaviour](#update-behaviour).
 
-You can also cut a build by hand from `workflow_dispatch`, or locally (see [Manual builds](#manual-builds)).
+**A push is currently the only way to trigger a build.** The workflow declares `workflow_dispatch`, but GitHub only offers that trigger for workflows present on the repository's **default branch** — and this fork's default branch is `main`, the pure upstream mirror, which by design never carries fork-owned workflows. So the "Run workflow" button will not appear. Push to `expbkmain` or `bkmain` instead, or build locally (see [Manual builds](#manual-builds)).
 
 ## Managed builds are keyless
 
@@ -86,6 +86,28 @@ Consequences, all accepted:
 
 The signing seam takes any keychain identity by common name, so **switching to a Developer ID certificate is a secret change, not a code change**. That remains the better long-term answer: it notarises, it removes the trust-store ask below, and it survives a teammate reimaging their Mac.
 
+### Current identity is a test certificate
+
+As of 2026-08-14 the configured identity is a personal **Apple Development**
+certificate, not the self-signed `BK Code Signing` root this document describes.
+That is a deliberate choice for a two-person trial, and it works — but it is not
+the end state, and the differences bite later rather than now:
+
+- **It expires 2027-05-01.** After that no new build can be signed. Worse, the
+  replacement certificate will have a _different_ designated requirement, so
+  every installed app stops accepting updates and everyone reinstalls by hand.
+  Plan the swap well before the date.
+- **It is tied to a personal Apple ID.** If that account changes, leaves, or has
+  its certificates revoked, signing stops.
+- **It is a development certificate**, not intended for distribution. Nothing in
+  this pipeline notarises, so Gatekeeper behaviour is the same either way — the
+  `xattr` step still applies — but do not read Apple issuance as distribution
+  approval.
+
+Before this is used by anyone beyond the trial, move to either the self-signed
+root below or a Developer ID certificate. The signing seam takes any keychain
+identity by name, so that is a secret change, not a code change.
+
 ### Security of a self-signed certificate
 
 Asking every teammate to mark a certificate **Always Trust** is an organisation-level decision, not a build detail: anyone holding that private key can sign _other_ software those Macs will then trust. Before doing it:
@@ -115,18 +137,19 @@ There is no runner to register. What is needed is three secrets and one environm
 
 ### Secrets
 
-| Secret                      | Contents                                                        |
-| --------------------------- | --------------------------------------------------------------- |
-| `BK_MACOS_SIGNING_IDENTITY` | Certificate common name, e.g. `BK Code Signing`                 |
-| `BK_MACOS_CERT_P12`         | Base64 of the exported `.p12` (certificate **and** private key) |
-| `BK_MACOS_CERT_PASSWORD`    | Password set when exporting that `.p12`                         |
+| Secret                          | Contents                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------- |
+| `BK_MACOS_SIGNING_IDENTITY`     | Identity name, exactly as `security find-identity -v -p codesigning` prints it   |
+| `BK_MACOS_CERTIFICATE_BASE64`   | Base64 of the exported `.p12` (certificate **and** private key)                  |
+| `BK_MACOS_CERTIFICATE_PASSWORD` | Password set when exporting that `.p12`                                          |
+| `BK_MACOS_KEYCHAIN_PASSWORD`    | Optional. Password for the throwaway job keychain; a random one is used if unset |
 
 To produce them, on any Mac that holds the certificate:
 
 ```sh
 # Keychain Access → select the certificate AND its private key → Export…
 # Save as Certificates.p12 and set an export password.
-base64 -i Certificates.p12 | pbcopy   # paste into BK_MACOS_CERT_P12
+base64 -i Certificates.p12 | pbcopy   # paste into BK_MACOS_CERTIFICATE_BASE64
 ```
 
 Export the **private key**, not just the certificate — a certificate alone cannot sign. Then delete the `.p12` from disk; the copy in Secrets is the one CI uses.

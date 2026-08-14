@@ -24,6 +24,11 @@ name: BK desktop release
 on:
   push:
     branches: [expbkmain, bkmain]
+  # NOTE: this will not appear in the Actions UI. GitHub only offers
+  # workflow_dispatch for workflows present on the DEFAULT branch, and this
+  # fork's default branch is `main` — the pure upstream mirror, which by design
+  # never carries fork-owned workflows. It is declared anyway so the trigger
+  # works if that ever changes; until then, push to expbkmain/bkmain to build.
   workflow_dispatch:
     inputs:
       channel:
@@ -125,21 +130,23 @@ jobs:
       - name: Import signing certificate
         if: steps.existing.outputs.found != 'true'
         env:
-          CERT_P12_BASE64: ${{ secrets.BK_MACOS_CERT_P12 }}
-          CERT_PASSWORD: ${{ secrets.BK_MACOS_CERT_PASSWORD }}
+          CERT_P12_BASE64: ${{ secrets.BK_MACOS_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.BK_MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.BK_MACOS_KEYCHAIN_PASSWORD }}
         # Squirrel.Mac validates an update against the installed app's designated
         # requirement, so an unsigned build cannot auto-update — the publisher
         # refuses one outright. The keychain is created per job in RUNNER_TEMP and
-        # dies with the VM; its password is random and never leaves this step.
+        # dies with the VM, so its password protects nothing beyond this job; a
+        # random one is used when the secret is absent.
         run: |
           if [[ -z "$CERT_P12_BASE64" || -z "$CERT_PASSWORD" || -z "$T3CODE_BK_SIGNING_IDENTITY" ]]; then
-            echo "::error::Missing BK_MACOS_CERT_P12, BK_MACOS_CERT_PASSWORD or" \
+            echo "::error::Missing BK_MACOS_CERTIFICATE_BASE64, BK_MACOS_CERTIFICATE_PASSWORD or" \
                  "BK_MACOS_SIGNING_IDENTITY. See docs/operations/bk-desktop-build.md." >&2
             exit 1
           fi
 
           keychain="$RUNNER_TEMP/bk-signing.keychain-db"
-          keychain_password="$(openssl rand -base64 32)"
+          keychain_password="${KEYCHAIN_PASSWORD:-$(openssl rand -base64 32)}"
           certificate="$RUNNER_TEMP/bk-signing.p12"
 
           printf '%s' "$CERT_P12_BASE64" | base64 --decode > "$certificate"
