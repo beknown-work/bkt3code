@@ -1235,7 +1235,21 @@ export function makeOpenCodeAdapter(
           if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
         }
 
-        const started = yield* Effect.gen(function* () {
+        // T3-CUSTOM(expbkt3): BEGIN - the acquire→register handoff runs
+        // uninterruptible.
+        //
+        // `sessionScope` owns the spawned OpenCode process, and until it is
+        // stored in `sessions` nothing else can reach it. Upstream ran this
+        // region interruptibly: an interrupt arriving after the spawn (during
+        // `session.create`, the MCP registration round-trips, or between the
+        // successful exit and `sessions.set`) unwound the fiber before
+        // `Scope.close`, leaving a detached `opencode serve` alive with no
+        // owner and no finalizer that could ever run. Only the inner
+        // acquisition — the part that actually blocks on the provider — stays
+        // interruptible; its failure exit is then handled in a region that
+        // cannot be skipped. Mirrors the guard `OpenCodeTextGeneration` already
+        // applies to the shared server.
+        const registration = yield* Effect.gen(function* () {
           const sessionScope = yield* Scope.make();
           const startedExit = yield* Effect.exit(
             Effect.gen(function* () {
@@ -1246,6 +1260,10 @@ export function makeOpenCodeAdapter(
                 binaryPath,
                 serverUrl,
                 ...(sessionEnvironment ? { environment: sessionEnvironment } : {}),
+                // T3-CUSTOM(expbkt3): bind the spawned runtime PID to this
+                // thread so termination can be verified against the OS and an
+                // abandoned runtime can be reaped by PID later.
+                owner: { provider: PROVIDER, threadId: input.threadId },
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
@@ -1367,74 +1385,91 @@ export function makeOpenCodeAdapter(
                 openCodeSession: resolved.openCodeSession,
                 created: resolved.created,
               };
-            }).pipe(Effect.provideService(Scope.Scope, sessionScope)),
+            }).pipe(Effect.provideService(Scope.Scope, sessionScope), Effect.interruptible),
           );
           if (Exit.isFailure(startedExit)) {
             yield* Scope.close(sessionScope, Exit.void).pipe(Effect.ignore);
             return yield* toProcessError(input.threadId, Cause.squash(startedExit.cause));
           }
-          return startedExit.value;
-        });
+          const started = startedExit.value;
 
-        // Guard against a concurrent startSession call that may have raced
-        // and already inserted a session while we were awaiting async work.
-        const raceWinner = sessions.get(input.threadId);
-        if (raceWinner) {
-          // Another call won the race — clean up. Only abort the remote
-          // session if we created it here; a resumed one is shared upstream
-          // state the winner is now using.
-          if (started.created) {
-            yield* runOpenCodeSdk("session.abort", () =>
-              started.client.session.abort({
-                sessionID: started.openCodeSession.id,
-              }),
-            ).pipe(Effect.ignore);
+          // Guard against a concurrent startSession call that may have raced
+          // and already inserted a session while we were awaiting async work.
+          const raceWinner = sessions.get(input.threadId);
+          if (raceWinner) {
+            // Another call won the race — clean up. Only abort the remote
+            // session if we created it here; a resumed one is shared upstream
+            // state the winner is now using.
+            if (started.created) {
+              yield* runOpenCodeSdk("session.abort", () =>
+                started.client.session.abort({
+                  sessionID: started.openCodeSession.id,
+                }),
+              ).pipe(Effect.ignore);
+            }
+            yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
+            return {
+              session: raceWinner.session,
+              openCodeSessionId: raceWinner.openCodeSessionId,
+              adopted: true,
+            } as const;
           }
-          yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
-          return raceWinner.session;
+
+          const createdAt = yield* nowIso;
+          const session: ProviderSession = {
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            cwd: directory,
+            ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
+            threadId: input.threadId,
+            // ProviderService persists this cursor and feeds it back into
+            // `startSession` after the in-memory session is lost (reaper /
+            // restart), so follow-ups continue the same conversation (#3604).
+            resumeCursor: {
+              schemaVersion: OPENCODE_RESUME_VERSION,
+              sessionId: started.openCodeSession.id,
+            },
+            createdAt,
+            updatedAt: createdAt,
+          };
+
+          const context: OpenCodeSessionContext = {
+            session,
+            client: started.client,
+            server: started.server,
+            directory,
+            openCodeSessionId: started.openCodeSession.id,
+            pendingPermissions: new Map(),
+            pendingQuestions: new Map(),
+            partById: new Map(),
+            emittedTextByPartId: new Map(),
+            messageRoleById: new Map(),
+            completedAssistantPartIds: new Set(),
+            turns: [],
+            activeTurnId: undefined,
+            activeAgent: undefined,
+            activeVariant: undefined,
+            stopped: yield* Ref.make(false),
+            sessionScope: started.sessionScope,
+          };
+          sessions.set(input.threadId, context);
+          // From here the map owns `sessionScope`, so an interrupt can no
+          // longer strand the process: `stopSession`, the session reaper and
+          // the adapter's layer finalizer can all reach it.
+          yield* Effect.interruptible(startEventPump(context));
+          return {
+            session,
+            openCodeSessionId: started.openCodeSession.id,
+            adopted: false,
+          } as const;
+        }).pipe(Effect.uninterruptible);
+
+        if (registration.adopted) {
+          return registration.session;
         }
-
-        const createdAt = yield* nowIso;
-        const session: ProviderSession = {
-          provider: PROVIDER,
-          providerInstanceId: boundInstanceId,
-          status: "ready",
-          runtimeMode: input.runtimeMode,
-          cwd: directory,
-          ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
-          threadId: input.threadId,
-          // ProviderService persists this cursor and feeds it back into
-          // `startSession` after the in-memory session is lost (reaper /
-          // restart), so follow-ups continue the same conversation (#3604).
-          resumeCursor: {
-            schemaVersion: OPENCODE_RESUME_VERSION,
-            sessionId: started.openCodeSession.id,
-          },
-          createdAt,
-          updatedAt: createdAt,
-        };
-
-        const context: OpenCodeSessionContext = {
-          session,
-          client: started.client,
-          server: started.server,
-          directory,
-          openCodeSessionId: started.openCodeSession.id,
-          pendingPermissions: new Map(),
-          pendingQuestions: new Map(),
-          partById: new Map(),
-          emittedTextByPartId: new Map(),
-          messageRoleById: new Map(),
-          completedAssistantPartIds: new Set(),
-          turns: [],
-          activeTurnId: undefined,
-          activeAgent: undefined,
-          activeVariant: undefined,
-          stopped: yield* Ref.make(false),
-          sessionScope: started.sessionScope,
-        };
-        sessions.set(input.threadId, context);
-        yield* startEventPump(context);
+        // T3-CUSTOM(expbkt3): END
 
         yield* emit({
           ...(yield* buildEventBase({ threadId: input.threadId })),
@@ -1447,11 +1482,13 @@ export function makeOpenCodeAdapter(
           ...(yield* buildEventBase({ threadId: input.threadId })),
           type: "thread.started",
           payload: {
-            providerThreadId: started.openCodeSession.id,
+            // T3-CUSTOM(expbkt3): sourced from the registration result.
+            providerThreadId: registration.openCodeSessionId,
           },
         });
 
-        return session;
+        // T3-CUSTOM(expbkt3): the session now comes from the registration result.
+        return registration.session;
       },
     );
 

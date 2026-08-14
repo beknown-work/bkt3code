@@ -63,7 +63,8 @@ export interface ThreadDetailView {
   readonly isDeleted: boolean;
 }
 
-function useDebouncedValue<A>(value: A, delayMs: number): A {
+/** Shared with the pull requests page, which debounces its search the same way. */
+export function useDebouncedValue<A>(value: A, delayMs: number): A {
   const [debounced, setDebounced] = useState(value);
 
   useEffect(() => {
@@ -254,6 +255,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
 
 type ProjectPathSearchTarget = ComposerPathSearchTarget & {
   readonly kind?: ProjectEntryKind | undefined;
+  readonly imageOnly?: boolean | undefined;
 };
 
 export function areProjectPathSearchTargetsEqual(
@@ -264,7 +266,8 @@ export function areProjectPathSearchTargetsEqual(
     left.environmentId === right.environmentId &&
     left.cwd === right.cwd &&
     left.query === right.query &&
-    left.kind === right.kind
+    left.kind === right.kind &&
+    left.imageOnly === right.imageOnly
   );
 }
 
@@ -280,8 +283,9 @@ export function useProjectPathSearch(
       cwd: target.cwd,
       query: target.query == null ? null : target.query.trim(),
       kind: target.kind,
+      imageOnly: target.imageOnly,
     }),
-    [target.cwd, target.environmentId, target.kind, target.query],
+    [target.cwd, target.environmentId, target.imageOnly, target.kind, target.query],
   );
   const debouncedTarget = useDebouncedValue(normalizedTarget, PROJECT_PATH_SEARCH_DEBOUNCE_MS);
   const result = useEnvironmentQuery(
@@ -296,6 +300,7 @@ export function useProjectPathSearch(
             query: debouncedTarget.query,
             limit,
             ...(debouncedTarget.kind ? { kind: debouncedTarget.kind } : {}),
+            ...(debouncedTarget.imageOnly ? { imageOnly: true } : {}),
           },
         })
       : null,

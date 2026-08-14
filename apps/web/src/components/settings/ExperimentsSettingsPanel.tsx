@@ -17,6 +17,8 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
+// T3-CUSTOM(expbkt3): native plan review (moved here from the removed Beta panel).
+import { searchableSetting } from "./settingsSearch";
 
 export function ExperimentsSettingsPanel() {
   const phaseGroupedSidebarEnabled = useClientSettings(
@@ -27,10 +29,27 @@ export function ExperimentsSettingsPanel() {
     (settings) => settings.providerRateLimitsEnabled,
   );
   const updateSettings = useUpdateClientSettings();
+  // T3-CUSTOM(expbkt3): native plan review (moved here from the removed Beta panel).
+  const nativePlanReviewEnabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
 
   return (
     <SettingsPageContainer>
       <SettingsSection title="Experimental features">
+        {/* T3-CUSTOM(expbkt3): BEGIN — native plan review. */}
+        <SettingsRow
+          {...searchableSetting("native-plan-review")}
+          description="Review proposed plans in a side panel: comment on exact lines, edit the plan with tracked changes, and step through every version with its author. Approving sends a short acknowledgement instead of repeating the whole plan. While off, plan review goes through Plannotator only."
+          control={
+            <Switch
+              checked={nativePlanReviewEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ nativePlanReviewEnabled: Boolean(checked) })
+              }
+              aria-label="Native plan review"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
         <SettingsRow
           title="Phase-grouped sidebar"
           description="Group threads by lifecycle phase instead of repository. Repository, branch, and provider stay visible as row labels, and the original sidebar remains available when this is off."

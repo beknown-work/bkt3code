@@ -63,6 +63,7 @@ export const ProjectionThread = Schema.Struct({
   // like the other boolean columns here; optional so rows read before
   // migration 1013 still decode.
   titleManuallySet: Schema.optional(NonNegativeInt),
+  pinOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),

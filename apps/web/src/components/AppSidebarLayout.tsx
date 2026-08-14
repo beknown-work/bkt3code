@@ -10,21 +10,29 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { isElectron } from "../env";
-import { getLocalStorageItem } from "../hooks/useLocalStorage";
+import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalStorage";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
+// T3-CUSTOM(expbkt3): BEGIN — phase-grouped sidebar variant.
 import {
   useClientSettings,
   useClientSettingsHydrated,
   useEnvironmentIdentificationMode,
-  useSidebarV2Enabled,
+  useLegacySidebarEnabled,
 } from "../hooks/useSettings";
-import ThreadSidebar from "./Sidebar";
 import PhaseGroupedSidebar from "./PhaseGroupedSidebar";
 import { shouldUsePhaseGroupedSidebar } from "./sidebar/sidebarVariant";
-import ThreadSidebarV2 from "./SidebarV2";
-import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
+// T3-CUSTOM(expbkt3): END
+import LegacyThreadSidebar from "./LegacySidebar";
+import ThreadSidebar from "./Sidebar";
+import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import {
+  resolveSidebarStageFocusRingOffsetClass,
+  useSidebarStageBackdropVariant,
+} from "./SidebarStageBackdrop";
+import { useProjects } from "../state/entities";
 import {
   resolveInitialThreadSidebarWidth,
   resolveThreadSidebarMaximumWidth,
@@ -109,7 +117,10 @@ function SidebarControl() {
                 "pointer-events-auto",
                 isSidebarVisible &&
                   stageBackdropVariant &&
-                  "[:hover,[data-pressed]]:bg-white/15 focus-visible:ring-white/90 focus-visible:ring-offset-blue-700 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white!",
+                  "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
+                isSidebarVisible &&
+                  stageBackdropVariant &&
+                  resolveSidebarStageFocusRingOffsetClass(stageBackdropVariant),
               )}
               aria-label="Toggle main sidebar"
             />
@@ -123,9 +134,22 @@ function SidebarControl() {
   );
 }
 
+// Settings swaps the thread sidebar out of the tree. Keep the lightweight
+// project projection subscribed so returning to a draft never renders the
+// zero-project state while the environment snapshot reconnects.
+function ProjectProjectionRetention() {
+  useProjects();
+  return null;
+}
+
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const legacySidebarEnabled = useLegacySidebarEnabled();
+  // Settings routes show the settings nav in place of whichever thread
+  // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
+  const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+  // T3-CUSTOM(expbkt3): BEGIN — phase-grouped sidebar variant.
   const clientSettingsHydrated = useClientSettingsHydrated();
   const phaseGroupedSidebarEnabled = useClientSettings(
     (settings) => settings.phaseGroupedSidebarEnabled,
@@ -135,12 +159,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     phaseGroupedSidebarEnabled,
     pathname,
   });
-  const sidebarV2Enabled = useSidebarV2Enabled();
-  // Settings routes render the settings nav, which lives in the v1 component
-  // and is identical for both sidebars — so v1 stays mounted there.
-  const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
-  const useSidebarV2 = sidebarV2Enabled && !isOnSettings && !usePhaseGroupedSidebar;
-  const useSidebarV2Theme = useSidebarV2 || usePhaseGroupedSidebar || isOnSettings;
+  // T3-CUSTOM(expbkt3): END
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
@@ -148,6 +167,14 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // that would otherwise refresh a render-time snapshot.
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
   const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
+  const resetSidebarWidth = () => {
+    try {
+      removeLocalStorageItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY);
+    } catch (error) {
+      console.error("Could not clear persisted thread sidebar width.", error);
+    }
+    setSidebarWidth(resolveInitialThreadSidebarWidth(null, viewportWidth));
+  };
   const [isWindowFullscreen, setIsWindowFullscreen] = useState(() => {
     const getWindowFullscreenState = window.desktopBridge?.getWindowFullscreenState;
     return isMacosDesktop && typeof getWindowFullscreenState === "function"
@@ -200,11 +227,11 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
   return (
     <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={sidebarProviderStyle}>
+      <ProjectProjectionRetention />
       <Sidebar
         side="left"
         collapsible="offcanvas"
         data-app-sidebar=""
-        data-sidebar-version={useSidebarV2Theme ? "v2" : "v1"}
         className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
         resizable={{
           maxWidth: sidebarMaximumWidth,
@@ -216,14 +243,20 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           onResize: setSidebarWidth,
         }}
       >
-        {usePhaseGroupedSidebar ? (
+        {isOnSettings ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} />
+            <SettingsSidebarNav pathname={pathname} />
+          </>
+        ) : /* T3-CUSTOM(expbkt3): phase-grouped sidebar variant wins over both thread sidebars. */
+        usePhaseGroupedSidebar ? (
           <PhaseGroupedSidebar />
-        ) : useSidebarV2 ? (
-          <ThreadSidebarV2 />
+        ) : legacySidebarEnabled ? (
+          <LegacyThreadSidebar />
         ) : (
           <ThreadSidebar />
         )}
-        <SidebarRail />
+        <SidebarRail onDoubleClick={resetSidebarWidth} />
       </Sidebar>
       {children}
       <SidebarControl />

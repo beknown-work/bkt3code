@@ -1916,7 +1916,15 @@ const make = Effect.gen(function* () {
           );
         }
         let baseBranch = prepare?.baseBranch ?? null;
-        let startFromOrigin = prepare?.startFromOrigin === true;
+        // "Start from origin" is a stored default; repos without an origin
+        // remote fall back to the local base branch instead of failing the
+        // whole bootstrap on `git fetch origin`. Upstream applies this in
+        // ws.ts; the fork relocated this block here, so it carries the guard.
+        let startFromOrigin =
+          prepare?.startFromOrigin === true &&
+          (yield* gitWorkflow
+            .remoteExists({ cwd: projectCwd, remoteName: "origin" })
+            .pipe(Effect.orElseSucceed(() => false)));
         if (resolvedPrepare !== undefined) {
           startFromOrigin = resolvedPrepare.baseRef.source === "origin";
           if (startFromOrigin) {

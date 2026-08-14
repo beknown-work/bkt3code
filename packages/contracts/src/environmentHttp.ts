@@ -49,6 +49,12 @@ import {
 } from "./orchestration.ts";
 import { ServerProviders } from "./server.ts";
 import {
+  PullRequestDiffInput,
+  PullRequestDiffResult,
+  PullRequestOperationError,
+  PullRequestUnavailableError,
+} from "./pullRequest.ts";
+import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
   RelayEnvironmentConfigRequest,
@@ -125,6 +131,10 @@ export class EnvironmentRequestInvalidError extends Schema.TaggedErrorClass<Envi
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentRequestInvalidError)(this, { status: 400 });
   }
+
+  override get message(): string {
+    return `The environment rejected the request (${this.reason}).`;
+  }
 }
 
 export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<EnvironmentAuthInvalidError>()(
@@ -138,6 +148,10 @@ export class EnvironmentAuthInvalidError extends Schema.TaggedErrorClass<Environ
 ) {
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentAuthInvalidError)(this, { status: 401 });
+  }
+
+  override get message(): string {
+    return `The environment rejected this client's credentials (${this.reason}).`;
   }
 }
 
@@ -153,6 +167,10 @@ export class EnvironmentScopeRequiredError extends Schema.TaggedErrorClass<Envir
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentScopeRequiredError)(this, { status: 403 });
   }
+
+  override get message(): string {
+    return `This request needs the ${this.requiredScope} scope, which this client does not have.`;
+  }
 }
 
 export class EnvironmentOperationForbiddenError extends Schema.TaggedErrorClass<EnvironmentOperationForbiddenError>()(
@@ -167,6 +185,10 @@ export class EnvironmentOperationForbiddenError extends Schema.TaggedErrorClass<
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentOperationForbiddenError)(this, { status: 403 });
   }
+
+  override get message(): string {
+    return `The environment refused this operation (${this.reason}).`;
+  }
 }
 
 export class EnvironmentInternalError extends Schema.TaggedErrorClass<EnvironmentInternalError>()(
@@ -180,6 +202,10 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
 ) {
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentInternalError)(this, { status: 500 });
+  }
+
+  override get message(): string {
+    return `The environment failed to answer this request (${this.reason}).`;
   }
 }
 
@@ -197,6 +223,10 @@ export class EnvironmentResourceNotFoundError extends Schema.TaggedErrorClass<En
 ) {
   [HttpServerRespondable.symbol]() {
     return HttpServerResponse.schemaJson(EnvironmentResourceNotFoundError)(this, { status: 404 });
+  }
+
+  override get message(): string {
+    return `The environment could not find what this request named (${this.reason}).`;
   }
 }
 
@@ -630,6 +660,22 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+/** Large, compressible pull-request payloads travel over HTTP rather than the RPC socket. */
+export class EnvironmentPullRequestsHttpApi extends HttpApiGroup.make("pullRequests").add(
+  HttpApiEndpoint.post("diff", "/api/pull-requests/diff", {
+    headers: OptionalBearerHeaders,
+    payload: PullRequestDiffInput,
+    success: PullRequestDiffResult,
+    error: [
+      PullRequestUnavailableError,
+      PullRequestOperationError,
+      EnvironmentAuthInvalidError,
+      EnvironmentScopeRequiredError,
+      EnvironmentInternalError,
+    ],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
@@ -695,4 +741,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

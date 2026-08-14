@@ -5,6 +5,31 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
 
+const descriptor = {
+  environmentId: "environment-1",
+  label: "Local",
+  platform: { os: "darwin", arch: "arm64" },
+  serverVersion: "0.0.32",
+  capabilities: { repositoryIdentity: true },
+} as const;
+
+describe("ExecutionEnvironmentDescriptor", () => {
+  it("treats a missing pull-request capability as unsupported under version skew", () => {
+    expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
+  });
+
+  it("preserves an advertised pull-request capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, pullRequests: true },
+      }).capabilities.pullRequests,
+    ).toBe(true);
+  });
+});
+
+// T3-CUSTOM(expbkt3): fork capability flags (providerRateLimits,
+// durableExecutionRecovery) — proves the fork schema fields survive merges.
 describe("ExecutionEnvironmentDescriptor optional capabilities", () => {
   it("keeps older servers compatible when the capability is absent", () => {
     const descriptor = decodeDescriptor({
