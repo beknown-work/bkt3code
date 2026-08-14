@@ -35,6 +35,7 @@
     "dist:desktop:artifact": "node scripts/build-desktop-artifact.ts",
     "dist:desktop:bk": "node scripts/build-bk-desktop-dmg.ts",
     "publish:desktop:bk": "node scripts/publish-bk-desktop-dmg.ts",
+    "version:desktop:bk": "node scripts/resolve-bk-desktop-version.ts",
     "icons:bk": "node scripts/generate-bk-brand-icons.ts",
     "icons:bk:check": "node scripts/generate-bk-brand-icons.ts --check",
     "dist:desktop:dmg": "node scripts/build-desktop-artifact.ts --platform mac --target dmg",

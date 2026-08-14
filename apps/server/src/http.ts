@@ -76,6 +76,8 @@ export const browserApiCorsLayer = Layer.unwrap(
     // origin — a tailnet name, a LAN IP, a phone. Browser dev normally proxies
     // through Vite and is same-origin (no preflight at all), so this is a
     // safety net for the desktop renderer and any direct-to-backend caller.
+    // T3-CUSTOM(expbkt3): bound to a name rather than returned directly, so the
+    // Plannotator profile below can be composed alongside it.
     const apiCors = HttpMiddleware.cors({
       ...(devOrigin
         ? {

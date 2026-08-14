@@ -1057,6 +1057,12 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  // T3-CUSTOM(expbkt3): BEGIN - fired when the user clicks the native
+  // update-ready notification. The click deliberately does not install; it asks
+  // the renderer to surface the update UI so the restart stays an explicit,
+  // labelled choice. Optional so a web build and an older preload both compile.
+  onUpdateReveal?: (listener: () => void) => () => void;
+  // T3-CUSTOM(expbkt3): END
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.

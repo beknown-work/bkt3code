@@ -16,6 +16,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+// T3-CUSTOM(expbkt3): BEGIN
+import * as ElectronNotification from "../electron/ElectronNotification.ts";
+// T3-CUSTOM(expbkt3): END
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -39,6 +42,11 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
+  // T3-CUSTOM(expbkt3): BEGIN
+  let allowPrerelease = false;
+  let autoDownload = false;
+  const channels: string[] = [];
+  // T3-CUSTOM(expbkt3): END
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -65,10 +73,23 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         feedUrls.push(options);
       }),
-    setAutoDownload: () => Effect.void,
+    // T3-CUSTOM(expbkt3): BEGIN - captured so tests can assert the provider
+    // channel and the prerelease flags independently; the fork sets them from
+    // different sources and conflating them silently disables updates.
+    setAutoDownload: (value) =>
+      Effect.sync(() => {
+        autoDownload = value;
+      }),
     setAutoInstallOnAppQuit: () => Effect.void,
-    setChannel: () => Effect.void,
-    setAllowPrerelease: () => Effect.void,
+    setChannel: (value) =>
+      Effect.sync(() => {
+        channels.push(value);
+      }),
+    setAllowPrerelease: (value) =>
+      Effect.sync(() => {
+        allowPrerelease = value;
+      }),
+    // T3-CUSTOM(expbkt3): END
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
       Effect.sync(() => {
@@ -95,6 +116,18 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
           }),
       ).pipe(Effect.asVoid),
   } satisfies ElectronUpdater.ElectronUpdater["Service"]);
+
+  // T3-CUSTOM(expbkt3): BEGIN - update-ready notifications. Records what was
+  // shown and exposes the click handler so tests can drive the one-click path.
+  const notifications: ElectronNotification.ElectronNotificationRequest[] = [];
+  const notificationLayer = Layer.succeed(ElectronNotification.ElectronNotification, {
+    show: (request) =>
+      Effect.sync(() => {
+        notifications.push(request);
+        return true;
+      }),
+  } satisfies ElectronNotification.ElectronNotification["Service"]);
+  // T3-CUSTOM(expbkt3): END
 
   const windowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Effect.die("unexpected BrowserWindow creation"),
@@ -172,6 +205,9 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),
+    // T3-CUSTOM(expbkt3): BEGIN
+    Layer.provideMerge(notificationLayer),
+    // T3-CUSTOM(expbkt3): END
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
     Layer.provideMerge(DesktopState.layer),
@@ -191,6 +227,13 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   return {
     layer,
     checkCount: () => checkCount,
+    // T3-CUSTOM(expbkt3): BEGIN
+    notifications: () => notifications,
+    channels: () => channels,
+    allowPrerelease: () => allowPrerelease,
+    allowDowngrade: () => allowDowngrade,
+    autoDownload: () => autoDownload,
+    // T3-CUSTOM(expbkt3): END
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
@@ -293,6 +336,37 @@ describe("DesktopUpdates", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN
+  it.effect("keeps prerelease handling tied to the contract channel, not the provider one", () => {
+    // The trap this guards: `allowsPrerelease` is computed from the contract
+    // channel ("latest" | "nightly"). If it were ever computed from the string
+    // handed to the provider, a fork build's "staging-nightly" would make
+    // `=== "nightly"` false, allowPrerelease would go off, and every prerelease
+    // — which is all the fork publishes — would become invisible. Silently.
+    const harness = makeHarness();
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+
+        yield* updates.setChannel("nightly");
+        assert.equal(harness.allowPrerelease(), true);
+        assert.equal(harness.fullChangelog(), true);
+        assert.equal(harness.allowDowngrade(), true);
+
+        yield* updates.setChannel("latest");
+        assert.equal(harness.allowPrerelease(), false);
+
+        // Under test there is no packaged brand, so the provider channel is the
+        // contract channel. The fork substitution is asserted in
+        // scripts/bk-desktop-brand-overrides.test.ts, where the brand can be set.
+        assert.deepEqual(harness.channels().slice(-2), ["nightly", "latest"]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it.effect("enables nightly full changelog release notes and broadcasts summaries", () => {
     const harness = makeHarness();
