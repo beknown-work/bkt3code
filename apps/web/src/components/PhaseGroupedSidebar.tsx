@@ -38,10 +38,8 @@ import {
   CornerDownRightIcon,
   FilterIcon,
   FolderGit2Icon,
-  FolderPlusIcon,
   // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
   GitPullRequestIcon,
-  Link2Icon,
   LaptopIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -189,6 +187,7 @@ import {
 } from "./sidebar/PhaseSidebarTree.logic";
 import { usePhaseSidebarTreeStore } from "../phaseSidebarTreeStore";
 import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
+import { NewThreadProjectPicker } from "./sidebar/NewThreadProjectPicker";
 // T3-CUSTOM(expbkt3): "Create new thread" from a row, as a side-by-side session.
 import {
   buildNewThreadFromRowBootstrapInput,
@@ -217,14 +216,6 @@ import { Avatar, userDisplayName } from "./ui/avatar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
-import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Kbd } from "./ui/kbd";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -1828,73 +1819,6 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   );
 });
 
-function NewThreadProjectPicker({
-  open,
-  projects,
-  activeProject,
-  onOpenChange,
-  onSelect,
-  onAddProject,
-  onAttachExternalSession,
-}: {
-  readonly open: boolean;
-  readonly projects: ReadonlyArray<Project>;
-  readonly activeProject: Project | null;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly onSelect: (project: Project) => void;
-  readonly onAddProject: () => void;
-  // T3-CUSTOM(expbkt3): attach-to-external-session.
-  readonly onAttachExternalSession: () => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>Choose a project</DialogTitle>
-          <DialogDescription>
-            Start the new thread in one of your available projects.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="space-y-1">
-          {projects.map((project) => (
-            <button
-              type="button"
-              key={scopedProjectKey(scopeProjectRef(project.environmentId, project.id))}
-              autoFocus={activeProject === project}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent",
-                activeProject === project && "bg-accent/70",
-              )}
-              onClick={() => onSelect(project)}
-            >
-              <ProjectFavicon environmentId={project.environmentId} cwd={project.workspaceRoot} />
-              <span className="min-w-0 flex-1 truncate">{project.title}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            className="mt-2 flex w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            onClick={onAddProject}
-          >
-            <FolderPlusIcon className="size-4" />
-            Add project
-          </button>
-          {/* T3-CUSTOM(expbkt3): continue a Claude/Codex session started in a
-              terminal, instead of only ever starting fresh ones. */}
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-            onClick={onAttachExternalSession}
-          >
-            <Link2Icon className="size-4" />
-            Attach existing session
-          </button>
-        </DialogPanel>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
 export function PhaseGroupedSidebar() {
   const projects = useProjects();
   const threads = useThreadShells();
@@ -2961,6 +2885,25 @@ export function PhaseGroupedSidebar() {
     },
     [handleNewThread],
   );
+  // T3-CUSTOM(expbkt3): BEGIN — the project picker names the machine a project
+  // lives on, so two same-named projects are told apart by where they run.
+  // Stable identities: the picker memoizes its option list on these.
+  const environmentLabelById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => [environment.environmentId, environment.label] as const),
+      ),
+    [environments],
+  );
+  const resolveNewThreadEnvironmentLabel = useCallback(
+    (environmentId: EnvironmentId) => environmentLabelById.get(environmentId) ?? null,
+    [environmentLabelById],
+  );
+  const resolveNewThreadEnvironmentAppearance = useCallback(
+    (environmentId: EnvironmentId) => environmentAppearances.get(environmentId) ?? null,
+    [environmentAppearances],
+  );
+  // T3-CUSTOM(expbkt3): END
 
   // T3-CUSTOM(expbkt3): One row shape for the lifecycle groups and both
   // parked shelves — only `section` differs.
@@ -3274,6 +3217,9 @@ export function PhaseGroupedSidebar() {
         open={projectPickerOpen}
         projects={projects}
         activeProject={activeProject}
+        primaryEnvironmentId={primaryEnvironmentId}
+        resolveEnvironmentLabel={resolveNewThreadEnvironmentLabel}
+        appearanceFor={resolveNewThreadEnvironmentAppearance}
         onOpenChange={setProjectPickerOpen}
         onSelect={selectNewThreadProject}
         onAddProject={() => {
