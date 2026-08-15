@@ -19,6 +19,7 @@ import {
 // T3-CUSTOM(expbkt3): BEGIN - fork desktop brand (bundle id, name, icon, artifact).
 import { resolveBkDesktopBrand } from "./lib/bk-desktop-brand.ts";
 import { resolveBkSigningIdentity } from "./lib/bk-desktop-signing.ts";
+import { resolveBkManagedEnvironment } from "./lib/bk-managed-environment.ts";
 // T3-CUSTOM(expbkt3): END
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -67,6 +68,13 @@ function resolveDesktopBrandOverride(
  */
 export function resolveDesktopStagePackageName(): string {
   return resolveDesktopBrandOverride()?.userDataDirName ?? "t3code";
+}
+
+/** Managed BK artifacts are Electron clients and must not contain a server. */
+export function isBkClientOnlyDesktopBuild(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return resolveBkDesktopBrand(env) !== undefined && resolveBkManagedEnvironment(env) !== undefined;
 }
 
 // T3-CUSTOM(expbkt3): END
@@ -1602,6 +1610,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 ) {
   // T3-CUSTOM(expbkt3): BEGIN - fork brand identity; undefined for upstream builds.
   const brand = resolveDesktopBrandOverride();
+  const clientOnly = isBkClientOnlyDesktopBuild();
   // T3-CUSTOM(expbkt3): END
   const buildConfig: Record<string, unknown> = {
     // T3-CUSTOM(expbkt3): BEGIN - fork bundle id, name and artifact name.
@@ -1617,8 +1626,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // Only the Windows WSL backend needs files outside the asar (see
     // WINDOWS_ASAR_UNPACK); macOS and Linux stay packed — smart unpack
     // extracts native libraries, which fff-node finds in app.asar.unpacked.
-    ...(platform === "win" ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
-    extraResources: DESKTOP_EXTRA_RESOURCES,
+    ...(platform === "win" && !clientOnly ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
+    extraResources: clientOnly ? [] : DESKTOP_EXTRA_RESOURCES,
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
@@ -1841,9 +1850,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const electronVersion = desktopPackageJson.dependencies.electron;
+  // T3-CUSTOM(expbkt3): managed fork artifacts ship the client only.
+  const clientOnly = isBkClientOnlyDesktopBuild();
 
   const serverDependencies = serverPackageJson.dependencies;
-  if (!serverDependencies || Object.keys(serverDependencies).length === 0) {
+  if (!clientOnly && (!serverDependencies || Object.keys(serverDependencies).length === 0)) {
     return yield* new MissingServerProductionDependenciesError({
       manifestPath: "apps/server/package.json",
     });
@@ -1859,15 +1870,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }),
   });
 
-  const resolvedServerDependencies = yield* Effect.try({
-    try: () => resolveCatalogDependencies(serverDependencies, workspaceCatalog, "apps/server"),
-    catch: (cause) =>
-      new DesktopBuildDependencyResolutionError({
-        kind: "server-production",
-        manifestPath: "apps/server/package.json",
-        cause,
-      }),
-  });
+  const resolvedServerDependencies = clientOnly
+    ? {}
+    : yield* Effect.try({
+        try: () => resolveCatalogDependencies(serverDependencies!, workspaceCatalog, "apps/server"),
+        catch: (cause) =>
+          new DesktopBuildDependencyResolutionError({
+            kind: "server-production",
+            manifestPath: "apps/server/package.json",
+            cause,
+          }),
+      });
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
     try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
     catch: (cause) =>
@@ -1910,7 +1923,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const requiredBuildInputs = [
     { artifact: "desktop-dist", artifactPath: distDirs.desktopDist },
     { artifact: "desktop-resources", artifactPath: distDirs.desktopResources },
-    { artifact: "server-dist", artifactPath: distDirs.serverDist },
+    ...(!clientOnly
+      ? ([{ artifact: "server-dist", artifactPath: distDirs.serverDist }] as const)
+      : []),
   ] as const;
   for (const input of requiredBuildInputs) {
     if (!(yield* fs.exists(input.artifactPath))) {
@@ -1935,19 +1950,26 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
-  yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
+  yield* fs.makeDirectory(path.join(stageAppDir, clientOnly ? "apps/web" : "apps/server"), {
+    recursive: true,
+  });
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
-  yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
-  yield* stageResourceMonitor({
-    repoRoot,
-    stageResourcesDir,
-    platform: options.platform,
-    arch: options.arch,
-    verbose: options.verbose,
-  });
+  if (clientOnly) {
+    yield* fs.copy(path.dirname(bundledClientEntry), path.join(stageAppDir, "apps/web/dist"));
+    yield* Effect.log("[desktop-artifact] Staged managed client without a backend server.");
+  } else {
+    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+    yield* stageResourceMonitor({
+      repoRoot,
+      stageResourcesDir,
+      platform: options.platform,
+      arch: options.arch,
+      verbose: options.verbose,
+    });
+  }
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -1994,16 +2016,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageDependencies = {
     ...resolvedServerDependencies,
     ...resolvedDesktopRuntimeDependencies,
-    ...resolveFffNativeDependencies(
-      options.platform,
-      options.arch,
-      serverPackageJson.dependencies["@ff-labs/fff-node"],
-    ),
+    ...(!clientOnly
+      ? resolveFffNativeDependencies(
+          options.platform,
+          options.arch,
+          serverPackageJson.dependencies["@ff-labs/fff-node"],
+        )
+      : {}),
     // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
     // fff native binary through ffi-rs. The platform fff binary above is the
     // host's (win32), so promote the matching Linux fff binaries too; without
     // them file-finding in WSL fails to load its Linux native package.
-    ...(options.platform === "win"
+    ...(options.platform === "win" && !clientOnly
       ? resolveFffNativeDependencies(
           "linux",
           options.arch,
@@ -2079,7 +2103,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   // WSL is Windows-only, so only the Windows artifact carries the Linux backend
   // binary; other platforms ignore the prebuild input.
-  if (options.platform === "win") {
+  if (options.platform === "win" && !clientOnly) {
     yield* stageWslNodePtyPrebuild({
       stageAppDir,
       arch: options.arch,

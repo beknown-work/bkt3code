@@ -16,6 +16,16 @@ Both are Apple Silicon (`arm64`) only, code signed, **keyless**, and published a
 
 ## How it runs
 
+Both BK desktop distributions are client-only. Electron serves the packaged web
+assets directly and connects their primary environment to the managed HTTPS
+server selected by the release branch. The app does not start or package a T3
+backend, reserve port 3773, expose a local server, or offer WSL backend controls.
+
+To run agents on a teammate's Mac, install and launch `t3` separately on that
+Mac, expose it through an appropriate HTTPS/Tailscale or SSH route, and add it
+from **Settings → Connections → Add environment**. It remains a secondary
+environment; `bkt3.dev` or `expbkt3.dev` stays primary.
+
 Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a GitHub-hosted `macos-26` runner, which builds that branch's app and publishes it. Standard GitHub-hosted runners are free on public repositories, so this costs nothing and needs no machine of ours. Running apps poll every 4 minutes and download in the background, then raise a native notification when a build is ready. Clicking that notification **surfaces the update in the app; it does not restart** — see [Update behaviour](#update-behaviour).
 
 **A push is currently the only way to trigger a build.** The workflow declares `workflow_dispatch`, but GitHub only offers that trigger for workflows present on the repository's **default branch** — and this fork's default branch is `main`, the pure upstream mirror, which by design never carries fork-owned workflows. So the "Run workflow" button will not appear. Push to `expbkmain` or `bkmain` instead, or build locally (see [Manual builds](#manual-builds)).

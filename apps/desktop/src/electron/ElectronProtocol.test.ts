@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import { beforeEach, vi } from "vite-plus/test";
+import * as NodeFs from "node:fs/promises";
+import * as NodeOs from "node:os";
+import * as NodePath from "node:path";
+import { afterEach, beforeEach, vi } from "vite-plus/test";
 
 const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
   handleMock: vi.fn(),
@@ -17,10 +20,20 @@ vi.mock("electron", () => ({
 import * as ElectronProtocol from "./ElectronProtocol.ts";
 
 describe("ElectronProtocol", () => {
+  const temporaryDirectories: string[] = [];
+
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();
     unhandleMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((directory) => NodeFs.rm(directory, { recursive: true, force: true })),
+    );
   });
 
   it.effect("proxies the stable renderer origin to the current app server", () =>
@@ -112,6 +125,55 @@ describe("ElectronProtocol", () => {
       assert.equal(netFetchMock.mock.calls.length, 0);
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
+
+  it.effect("serves a packaged client and falls back to its SPA entry", () =>
+    Effect.gen(function* () {
+      const clientAssetsDirectory = yield* Effect.promise(async () => {
+        const directory = await NodeFs.mkdtemp(NodePath.join(NodeOs.tmpdir(), "t3-client-assets-"));
+        temporaryDirectories.push(directory);
+        await NodeFs.mkdir(NodePath.join(directory, "assets"));
+        await NodeFs.writeFile(NodePath.join(directory, "index.html"), "<main>client</main>");
+        await NodeFs.writeFile(NodePath.join(directory, "assets", "app.js"), "export {};");
+        return directory;
+      });
+      let handler: ((request: Request) => Promise<Response>) | undefined;
+      handleMock.mockImplementation((_scheme, nextHandler) => {
+        handler = nextHandler;
+      });
+
+      const responses = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const protocol = yield* ElectronProtocol.ElectronProtocol;
+          yield* protocol.registerDesktopProtocol({
+            scheme: "t3code",
+            targetOrigin: new URL("https://expbkt3.dev.beknown.live"),
+            backendOrigin: new URL("https://expbkt3.dev.beknown.live"),
+            clerkFrontendApiHostname: undefined,
+            clientAssetsDirectory,
+          });
+          return yield* Effect.all([
+            Effect.promise(() => handler!(new Request("t3code://app/assets/app.js"))),
+            Effect.promise(() => handler!(new Request("t3code://app/settings/connections"))),
+          ]);
+        }),
+      );
+
+      assert.equal(yield* Effect.promise(() => responses[0].text()), "export {};");
+      assert.equal(yield* Effect.promise(() => responses[1].text()), "<main>client</main>");
+      assert.equal(responses[0].headers.get("content-type"), "text/javascript; charset=utf-8");
+      assert.include(responses[1].headers.get("content-security-policy") ?? "", "default-src");
+      assert.equal(netFetchMock.mock.calls.length, 0);
+    }).pipe(Effect.provide(ElectronProtocol.layer)),
+  );
+
+  it("keeps packaged client paths inside the asset directory", () => {
+    assert.equal(
+      ElectronProtocol.resolveClientAssetPath("/app/client", "/assets/app.js"),
+      NodePath.resolve("/app/client/assets/app.js"),
+    );
+    assert.isNull(ElectronProtocol.resolveClientAssetPath("/app/client", "/../secret"));
+    assert.isNull(ElectronProtocol.resolveClientAssetPath("/app/client", "/%2e%2e/secret"));
+  });
 
   it.effect("retries transient renderer target failures", () =>
     Effect.gen(function* () {

@@ -1,6 +1,8 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as NodeFs from "node:fs/promises";
+import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -53,6 +55,9 @@ export interface DesktopProtocolRegistrationInput {
   readonly targetOrigin: URL;
   readonly backendOrigin: URL;
   readonly clerkFrontendApiHostname: string | undefined;
+  // T3-CUSTOM(expbkt3): managed BK builds contain only the web client. When
+  // present, serve those packaged files instead of proxying a spawned server.
+  readonly clientAssetsDirectory?: string;
 }
 
 export class ElectronProtocol extends Context.Service<
@@ -192,6 +197,86 @@ async function proxyRequest(
   return withContentSecurityPolicy(response, contentSecurityPolicy);
 }
 
+// T3-CUSTOM(expbkt3): BEGIN - serve a packaged client without a local backend.
+const CLIENT_ASSET_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
+  ".webp": "image/webp",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+export function resolveClientAssetPath(
+  clientAssetsDirectory: string,
+  encodedPathname: string,
+): string | null {
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(encodedPathname);
+  } catch {
+    return null;
+  }
+
+  const root = NodePath.resolve(clientAssetsDirectory);
+  const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const candidate = NodePath.resolve(root, relativePath);
+  if (candidate !== root && !candidate.startsWith(`${root}${NodePath.sep}`)) return null;
+  return candidate;
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await NodeFs.stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function clientAssetResponse(
+  request: Request,
+  clientAssetsDirectory: string,
+  contentSecurityPolicy: string,
+): Promise<Response> {
+  const requestUrl = new URL(request.url);
+  if (requestUrl.host !== DESKTOP_HOST) return new Response(null, { status: 404 });
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response(null, { status: 405 });
+  }
+
+  const requestedPath = resolveClientAssetPath(clientAssetsDirectory, requestUrl.pathname);
+  if (requestedPath === null) return new Response(null, { status: 404 });
+
+  const assetPath = (await isFile(requestedPath))
+    ? requestedPath
+    : NodePath.extname(requestedPath).length === 0
+      ? NodePath.join(NodePath.resolve(clientAssetsDirectory), "index.html")
+      : null;
+  if (assetPath === null || !(await isFile(assetPath))) {
+    return new Response(null, { status: 404 });
+  }
+
+  const headers = new Headers({
+    "content-type":
+      CLIENT_ASSET_CONTENT_TYPES[NodePath.extname(assetPath).toLowerCase()] ??
+      "application/octet-stream",
+  });
+  const response = new Response(
+    request.method === "HEAD" ? null : new Uint8Array(await NodeFs.readFile(assetPath)),
+    { status: 200, headers },
+  );
+  return withContentSecurityPolicy(response, contentSecurityPolicy);
+}
+// T3-CUSTOM(expbkt3): END
+
 const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
 
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
@@ -225,7 +310,11 @@ export const make = Effect.gen(function* () {
         Effect.try({
           try: () => {
             Electron.protocol.handle(input.scheme, (request) =>
-              proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
+              // T3-CUSTOM(expbkt3): managed builds serve their packaged client
+              // directly and never need a server process just to render a window.
+              input.clientAssetsDirectory
+                ? clientAssetResponse(request, input.clientAssetsDirectory, contentSecurityPolicy)
+                : proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
             );
           },
           catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),

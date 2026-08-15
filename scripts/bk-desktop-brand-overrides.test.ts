@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import { afterEach, describe, expect } from "vite-plus/test";
 
 import {
+  isBkClientOnlyDesktopBuild,
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
   resolveDesktopStagePackageName,
@@ -46,6 +47,17 @@ afterEach(() => {
 });
 
 describe("desktop brand overrides in build-desktop-artifact", () => {
+  it("selects client-only packaging only when brand and managed channel are both present", () => {
+    expect(isBkClientOnlyDesktopBuild({})).toBe(false);
+    expect(isBkClientOnlyDesktopBuild({ [DESKTOP_BRAND_ENV_VAR]: "bk" })).toBe(false);
+    expect(
+      isBkClientOnlyDesktopBuild({
+        [DESKTOP_BRAND_ENV_VAR]: "bk",
+        [BK_MANAGED_CHANNEL_ENV_VAR]: "staging",
+      }),
+    ).toBe(true);
+  });
+
   it("leaves upstream product names untouched", () => {
     expect(resolveDesktopProductName("0.0.17")).toBe("T3 Code (Alpha)");
     expect(resolveDesktopProductName("0.0.17-nightly.20260413.42")).toBe("T3 Code (Nightly)");

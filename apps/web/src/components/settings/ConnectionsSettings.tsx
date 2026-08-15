@@ -58,6 +58,7 @@ import {
 import { searchableSetting } from "./settingsSearch";
 // T3-CUSTOM(expbkt3): member self-service device pairing.
 import { MemberDevicesSection } from "../../fork/MemberDevicesSection";
+import { isBkManagedPrimary } from "../../fork/managedEnvironment";
 import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -1803,6 +1804,9 @@ function CloudRemoteEnvironmentRows({
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
+  // T3-CUSTOM(expbkt3): managed BK Electron builds have a desktop shell but
+  // intentionally no desktop-local backend.
+  const hasDesktopLocalBackend = desktopBridge !== undefined && !isBkManagedPrimary();
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
   const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
@@ -1813,12 +1817,14 @@ export function ConnectionsSettings() {
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
-  const currentSessionScopes = desktopBridge
+  const currentSessionScopes = hasDesktopLocalBackend
     ? AuthAdministrativeScopes
     : primarySessionState.data?.authenticated
       ? (primarySessionState.data.scopes ?? null)
       : null;
-  const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
+  const currentAuthPolicy = hasDesktopLocalBackend
+    ? null
+    : (primarySessionState.data?.auth.policy ?? null);
   const savedEnvironments = useMemo(
     () =>
       environments
@@ -1949,7 +1955,7 @@ export function ConnectionsSettings() {
       : null,
   );
   const desktopNetworkAccess = useEnvironmentQuery(
-    canManageLocalBackend && desktopBridge ? desktopNetworkAccessStateAtom : null,
+    canManageLocalBackend && hasDesktopLocalBackend ? desktopNetworkAccessStateAtom : null,
   );
   const desktopSshHosts = useEnvironmentQuery(
     desktopBridge && addBackendDialogOpen && savedBackendMode === "ssh"
@@ -1957,7 +1963,7 @@ export function ConnectionsSettings() {
       : null,
   );
   const desktopWsl = useEnvironmentQuery(
-    canManageLocalBackend && desktopBridge ? desktopWslStateAtom : null,
+    canManageLocalBackend && hasDesktopLocalBackend ? desktopWslStateAtom : null,
   );
   const desktopWslState = desktopWsl.data;
   const desktopWslError = desktopWslMutationError ?? desktopWsl.error;
@@ -2005,7 +2011,7 @@ export function ConnectionsSettings() {
       ),
     );
   }, [authAccessChanges.data]);
-  const isLocalBackendNetworkAccessible = desktopBridge
+  const isLocalBackendNetworkAccessible = hasDesktopLocalBackend
     ? desktopServerExposureState?.mode === "network-accessible"
     : currentAuthPolicy === "remote-reachable";
   const trimmedTailscaleServePortInput = tailscaleServePortInput.trim();
@@ -3165,7 +3171,7 @@ export function ConnectionsSettings() {
                 }
               />
             ) : null}
-            {desktopBridge ? (
+            {hasDesktopLocalBackend ? (
               <>
                 {renderNetworkAccessRow()}
                 {renderEndpointRows("endpoint-rail")}
