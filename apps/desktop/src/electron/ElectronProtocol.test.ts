@@ -1,10 +1,11 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-import { afterEach, beforeEach, vi } from "vite-plus/test";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { beforeEach, vi } from "vite-plus/test";
 
 const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
   handleMock: vi.fn(),
@@ -19,21 +20,13 @@ vi.mock("electron", () => ({
 
 import * as ElectronProtocol from "./ElectronProtocol.ts";
 
-describe("ElectronProtocol", () => {
-  const temporaryDirectories: string[] = [];
+const electronProtocolLayer = ElectronProtocol.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
+describe("ElectronProtocol", () => {
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();
     unhandleMock.mockReset();
-  });
-
-  afterEach(async () => {
-    await Promise.all(
-      temporaryDirectories
-        .splice(0)
-        .map((directory) => NodeFSP.rm(directory, { recursive: true, force: true })),
-    );
   });
 
   it.effect("proxies the stable renderer origin to the current app server", () =>
@@ -98,7 +91,7 @@ describe("ElectronProtocol", () => {
       assert.isNull(forwardedHeaders.get("referer"));
       assert.isNull(forwardedHeaders.get("sec-fetch-site"));
       assert.deepEqual(unhandleMock.mock.calls, [["t3code-dev"]]);
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+    }).pipe(Effect.provide(electronProtocolLayer)),
   );
 
   it.effect("rejects custom protocol requests for another host", () =>
@@ -123,59 +116,68 @@ describe("ElectronProtocol", () => {
 
       assert.equal(response.status, 404);
       assert.equal(netFetchMock.mock.calls.length, 0);
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+    }).pipe(Effect.provide(electronProtocolLayer)),
   );
 
   it.effect("serves a packaged client and falls back to its SPA entry", () =>
-    Effect.gen(function* () {
-      const clientAssetsDirectory = yield* Effect.promise(async () => {
-        const directory = await NodeFSP.mkdtemp(
-          NodePath.join(NodeOS.tmpdir(), "t3-client-assets-"),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const clientAssetsDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-client-assets-",
+        });
+        yield* fileSystem.makeDirectory(path.join(clientAssetsDirectory, "assets"));
+        yield* fileSystem.writeFileString(
+          path.join(clientAssetsDirectory, "index.html"),
+          "<main>client</main>",
         );
-        temporaryDirectories.push(directory);
-        await NodeFSP.mkdir(NodePath.join(directory, "assets"));
-        await NodeFSP.writeFile(NodePath.join(directory, "index.html"), "<main>client</main>");
-        await NodeFSP.writeFile(NodePath.join(directory, "assets", "app.js"), "export {};");
-        return directory;
-      });
-      let handler: ((request: Request) => Promise<Response>) | undefined;
-      handleMock.mockImplementation((_scheme, nextHandler) => {
-        handler = nextHandler;
-      });
+        yield* fileSystem.writeFileString(
+          path.join(clientAssetsDirectory, "assets", "app.js"),
+          "export {};",
+        );
+        let handler: ((request: Request) => Promise<Response>) | undefined;
+        handleMock.mockImplementation((_scheme, nextHandler) => {
+          handler = nextHandler;
+        });
 
-      const responses = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const protocol = yield* ElectronProtocol.ElectronProtocol;
-          yield* protocol.registerDesktopProtocol({
-            scheme: "t3code",
-            targetOrigin: new URL("https://expbkt3.dev.beknown.live"),
-            backendOrigin: new URL("https://expbkt3.dev.beknown.live"),
-            clerkFrontendApiHostname: undefined,
-            clientAssetsDirectory,
-          });
-          return yield* Effect.all([
-            Effect.promise(() => handler!(new Request("t3code://app/assets/app.js"))),
-            Effect.promise(() => handler!(new Request("t3code://app/settings/connections"))),
-          ]);
-        }),
-      );
+        const responses = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const protocol = yield* ElectronProtocol.ElectronProtocol;
+            yield* protocol.registerDesktopProtocol({
+              scheme: "t3code",
+              targetOrigin: new URL("https://expbkt3.dev.beknown.live"),
+              backendOrigin: new URL("https://expbkt3.dev.beknown.live"),
+              clerkFrontendApiHostname: undefined,
+              clientAssetsDirectory,
+            });
+            return yield* Effect.all([
+              Effect.promise(() => handler!(new Request("t3code://app/assets/app.js"))),
+              Effect.promise(() => handler!(new Request("t3code://app/settings/connections"))),
+            ]);
+          }),
+        );
 
-      assert.equal(yield* Effect.promise(() => responses[0].text()), "export {};");
-      assert.equal(yield* Effect.promise(() => responses[1].text()), "<main>client</main>");
-      assert.equal(responses[0].headers.get("content-type"), "text/javascript; charset=utf-8");
-      assert.include(responses[1].headers.get("content-security-policy") ?? "", "default-src");
-      assert.equal(netFetchMock.mock.calls.length, 0);
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+        assert.equal(yield* Effect.promise(() => responses[0].text()), "export {};");
+        assert.equal(yield* Effect.promise(() => responses[1].text()), "<main>client</main>");
+        assert.equal(responses[0].headers.get("content-type"), "text/javascript; charset=utf-8");
+        assert.include(responses[1].headers.get("content-security-policy") ?? "", "default-src");
+        assert.equal(netFetchMock.mock.calls.length, 0);
+      }),
+    ).pipe(Effect.provide(electronProtocolLayer)),
   );
 
-  it("keeps packaged client paths inside the asset directory", () => {
-    assert.equal(
-      ElectronProtocol.resolveClientAssetPath("/app/client", "/assets/app.js"),
-      NodePath.resolve("/app/client/assets/app.js"),
-    );
-    assert.isNull(ElectronProtocol.resolveClientAssetPath("/app/client", "/../secret"));
-    assert.isNull(ElectronProtocol.resolveClientAssetPath("/app/client", "/%2e%2e/secret"));
-  });
+  it.effect("keeps packaged client paths inside the asset directory", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      assert.equal(
+        ElectronProtocol.resolveClientAssetPath(path, "/app/client", "/assets/app.js"),
+        path.resolve("/app/client/assets/app.js"),
+      );
+      assert.isNull(ElectronProtocol.resolveClientAssetPath(path, "/app/client", "/../secret"));
+      assert.isNull(ElectronProtocol.resolveClientAssetPath(path, "/app/client", "/%2e%2e/secret"));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("retries transient renderer target failures", () =>
     Effect.gen(function* () {
@@ -202,7 +204,7 @@ describe("ElectronProtocol", () => {
 
       assert.equal(yield* Effect.promise(() => response.text()), "ready");
       assert.equal(netFetchMock.mock.calls.length, 2);
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+    }).pipe(Effect.provide(electronProtocolLayer)),
   );
 
   it.effect("preserves protocol registration failures", () =>
@@ -226,7 +228,7 @@ describe("ElectronProtocol", () => {
       assert.equal(error.scheme, "t3code-dev");
       assert.strictEqual(error.cause, cause);
       assert.equal(error.message, 'Failed to register Electron protocol scheme "t3code-dev".');
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+    }).pipe(Effect.provide(electronProtocolLayer)),
   );
 
   it.effect("preserves protocol unregistration failures", () =>
@@ -256,7 +258,7 @@ describe("ElectronProtocol", () => {
         assert.strictEqual(error.cause, cause);
         assert.equal(error.message, 'Failed to unregister Electron protocol scheme "t3code".');
       }
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+    }).pipe(Effect.provide(electronProtocolLayer)),
   );
 
   it("keeps executable sources host-restricted while allowing runtime network resources", () => {

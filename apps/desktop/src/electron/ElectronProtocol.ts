@@ -1,9 +1,9 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as NodeFSP from "node:fs/promises";
-import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -216,6 +216,7 @@ const CLIENT_ASSET_CONTENT_TYPES: Readonly<Record<string, string>> = {
 };
 
 export function resolveClientAssetPath(
+  path: Path.Path,
   clientAssetsDirectory: string,
   encodedPathname: string,
 ): string | null {
@@ -226,55 +227,55 @@ export function resolveClientAssetPath(
     return null;
   }
 
-  const root = NodePath.resolve(clientAssetsDirectory);
+  const root = path.resolve(clientAssetsDirectory);
   const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const candidate = NodePath.resolve(root, relativePath);
-  if (candidate !== root && !candidate.startsWith(`${root}${NodePath.sep}`)) return null;
+  const candidate = path.resolve(root, relativePath);
+  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) return null;
   return candidate;
 }
 
-async function isFile(path: string): Promise<boolean> {
-  try {
-    return (await NodeFSP.stat(path)).isFile();
-  } catch {
-    return false;
-  }
-}
+const isFile = Effect.fn("desktop.electron.protocol.isFile")(function* (path: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const info = yield* fileSystem.stat(path).pipe(Effect.orElseSucceed(() => null));
+  return info?.type === "File";
+});
 
-async function clientAssetResponse(
+const clientAssetResponse = Effect.fn("desktop.electron.protocol.clientAssetResponse")(function* (
   request: Request,
   clientAssetsDirectory: string,
   contentSecurityPolicy: string,
-): Promise<Response> {
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const requestUrl = new URL(request.url);
   if (requestUrl.host !== DESKTOP_HOST) return new Response(null, { status: 404 });
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response(null, { status: 405 });
   }
 
-  const requestedPath = resolveClientAssetPath(clientAssetsDirectory, requestUrl.pathname);
+  const requestedPath = resolveClientAssetPath(path, clientAssetsDirectory, requestUrl.pathname);
   if (requestedPath === null) return new Response(null, { status: 404 });
 
-  const assetPath = (await isFile(requestedPath))
+  const assetPath = (yield* isFile(requestedPath))
     ? requestedPath
-    : NodePath.extname(requestedPath).length === 0
-      ? NodePath.join(NodePath.resolve(clientAssetsDirectory), "index.html")
+    : path.extname(requestedPath).length === 0
+      ? path.join(path.resolve(clientAssetsDirectory), "index.html")
       : null;
-  if (assetPath === null || !(await isFile(assetPath))) {
+  if (assetPath === null || !(yield* isFile(assetPath))) {
     return new Response(null, { status: 404 });
   }
 
   const headers = new Headers({
     "content-type":
-      CLIENT_ASSET_CONTENT_TYPES[NodePath.extname(assetPath).toLowerCase()] ??
+      CLIENT_ASSET_CONTENT_TYPES[path.extname(assetPath).toLowerCase()] ??
       "application/octet-stream",
   });
   const response = new Response(
-    request.method === "HEAD" ? null : new Uint8Array(await NodeFSP.readFile(assetPath)),
+    request.method === "HEAD" ? null : new Uint8Array(yield* fileSystem.readFile(assetPath)),
     { status: 200, headers },
   );
   return withContentSecurityPolicy(response, contentSecurityPolicy);
-}
+});
 // T3-CUSTOM(expbkt3): END
 
 const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
@@ -298,6 +299,7 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
 }
 
 export const make = Effect.gen(function* () {
+  const platformContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const registered = yield* Ref.make(false);
 
   const registerDesktopProtocol = Effect.fn("desktop.electron.protocol.registerDesktopProtocol")(
@@ -313,7 +315,13 @@ export const make = Effect.gen(function* () {
               // T3-CUSTOM(expbkt3): managed builds serve their packaged client
               // directly and never need a server process just to render a window.
               input.clientAssetsDirectory
-                ? clientAssetResponse(request, input.clientAssetsDirectory, contentSecurityPolicy)
+                ? Effect.runPromiseWith(platformContext)(
+                    clientAssetResponse(
+                      request,
+                      input.clientAssetsDirectory,
+                      contentSecurityPolicy,
+                    ),
+                  )
                 : proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
             );
           },
