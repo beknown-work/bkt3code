@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as NodeFs from "node:fs/promises";
-import * as NodeOs from "node:os";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, beforeEach, vi } from "vite-plus/test";
 
@@ -32,7 +32,7 @@ describe("ElectronProtocol", () => {
     await Promise.all(
       temporaryDirectories
         .splice(0)
-        .map((directory) => NodeFs.rm(directory, { recursive: true, force: true })),
+        .map((directory) => NodeFSP.rm(directory, { recursive: true, force: true })),
     );
   });
 
@@ -129,11 +129,13 @@ describe("ElectronProtocol", () => {
   it.effect("serves a packaged client and falls back to its SPA entry", () =>
     Effect.gen(function* () {
       const clientAssetsDirectory = yield* Effect.promise(async () => {
-        const directory = await NodeFs.mkdtemp(NodePath.join(NodeOs.tmpdir(), "t3-client-assets-"));
+        const directory = await NodeFSP.mkdtemp(
+          NodePath.join(NodeOS.tmpdir(), "t3-client-assets-"),
+        );
         temporaryDirectories.push(directory);
-        await NodeFs.mkdir(NodePath.join(directory, "assets"));
-        await NodeFs.writeFile(NodePath.join(directory, "index.html"), "<main>client</main>");
-        await NodeFs.writeFile(NodePath.join(directory, "assets", "app.js"), "export {};");
+        await NodeFSP.mkdir(NodePath.join(directory, "assets"));
+        await NodeFSP.writeFile(NodePath.join(directory, "index.html"), "<main>client</main>");
+        await NodeFSP.writeFile(NodePath.join(directory, "assets", "app.js"), "export {};");
         return directory;
       });
       let handler: ((request: Request) => Promise<Response>) | undefined;

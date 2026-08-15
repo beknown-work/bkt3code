@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as NodeFs from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 import * as Ref from "effect/Ref";
@@ -235,7 +235,7 @@ export function resolveClientAssetPath(
 
 async function isFile(path: string): Promise<boolean> {
   try {
-    return (await NodeFs.stat(path)).isFile();
+    return (await NodeFSP.stat(path)).isFile();
   } catch {
     return false;
   }
@@ -270,7 +270,7 @@ async function clientAssetResponse(
       "application/octet-stream",
   });
   const response = new Response(
-    request.method === "HEAD" ? null : new Uint8Array(await NodeFs.readFile(assetPath)),
+    request.method === "HEAD" ? null : new Uint8Array(await NodeFSP.readFile(assetPath)),
     { status: 200, headers },
   );
   return withContentSecurityPolicy(response, contentSecurityPolicy);
