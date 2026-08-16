@@ -186,10 +186,15 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   providerRateLimitsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   resourceMonitorEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // Legacy plan mode. The composer's Build/Plan toggle was removed from the
-  // default UI; this beta flag restores it (plus the /plan and /default slash
-  // commands) for users who still rely on the old workflow.
-  planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // T3-CUSTOM(expbkt3): plan mode stays a first-class feature in the fork.
+  // Upstream retired the composer's Build/Plan toggle behind an off-by-default
+  // flag; we keep it on, because our workflow requires plan mode and the fork's
+  // own "default interaction mode" settings (global and per-project) are dead
+  // while it is off — the server resolves "plan", then the composer forces
+  // "default" back. Deliberately a fresh key (was `planModeEnabled`): decoding
+  // drops the old key, so browsers that already persisted upstream's `false`
+  // reset to the fork default instead of silently staying in build mode.
+  planModeAvailable: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Legacy sidebar (the original per-project tree). Deliberately a fresh key
   // (was `sidebarV2Enabled` + `sidebarV2ConfiguredByUser`): decoding drops the
   // old keys, so everyone, including prior beta opt-outs, resets to the new
@@ -1082,7 +1087,8 @@ export const ClientSettingsPatch = Schema.Struct({
   phaseGroupedSidebarEnabled: Schema.optionalKey(Schema.Boolean),
   providerRateLimitsEnabled: Schema.optionalKey(Schema.Boolean),
   resourceMonitorEnabled: Schema.optionalKey(Schema.Boolean),
-  planModeEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): plan mode availability (fresh key, on by default).
+  planModeAvailable: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): native plan review.
   nativePlanReviewEnabled: Schema.optionalKey(Schema.Boolean),

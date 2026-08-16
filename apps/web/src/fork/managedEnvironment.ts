@@ -11,13 +11,13 @@
  * Two axes are easy to confuse and are deliberately kept apart here:
  *
  * - **`PRIMARY_LOCAL_ENVIRONMENT_ID`** (`"primary"`) is the *id of the
- *   desktop's bundled local backend*, assigned by the Electron main process. It
- *   is unchanged by this module and must stay that way.
+ *   desktop's local backend* in an unmanaged upstream build. Managed BK builds
+ *   do not register an environment under this id.
  * - **The primary target** is *where the primary environment points*. That is
  *   what a managed build redirects.
  *
- * The bundled local backend keeps running and stays reachable as its own
- * environment; see the seam in `connection/desktopLocal.ts`.
+ * Managed desktop artifacts do not contain or start a local backend. A
+ * dedicated Mac T3 server can be added later as a normal remote environment.
  *
  * The value is baked in at build time by `apps/web/vite.config.ts` from
  * `scripts/lib/bk-managed-environment.ts`. It is `null` in every ordinary
@@ -110,10 +110,9 @@ export function readBkManagedPrimaryEnvironmentTarget(): PrimaryEnvironmentTarge
  * Cache slot the connection platform keeps the *primary* registration under.
  *
  * Unmanaged, the primary registration and the bundled local backend are the
- * same thing, so upstream keys it by `PRIMARY_LOCAL_ENVIRONMENT_ID`. In a
- * managed build they are two different environments that both want that key —
- * the central server as primary, the bundled backend as a secondary registered
- * under its own bootstrap id — so the primary moves to a slot of its own.
+ * same thing, so upstream keys it by `PRIMARY_LOCAL_ENVIRONMENT_ID`. A managed
+ * build has no bundled backend, but keeps its central primary in a distinct
+ * slot so cached state cannot collide during an upgrade from an older build.
  * Returns the upstream key unchanged for every other build.
  */
 export function bkPrimaryRegistrationCacheKey(localEnvironmentId: string): string {

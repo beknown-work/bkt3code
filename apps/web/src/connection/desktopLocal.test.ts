@@ -3,7 +3,13 @@ import {
   PrimaryConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import { EnvironmentId, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
+
+// T3-CUSTOM(expbkt3): managed desktop builds have no local backend topology.
+import {
+  __resetBkManagedEnvironmentForTests,
+  __setBkManagedEnvironmentForTests,
+} from "../fork/managedEnvironment";
 
 import {
   createDesktopSecondaryBootstrapsReader,
@@ -38,6 +44,10 @@ describe("desktop local connection identity", () => {
 });
 
 describe("desktop local topology reads", () => {
+  afterEach(() => {
+    __resetBkManagedEnvironmentForTests();
+  });
+
   it("distinguishes a successful empty topology from a read failure", () => {
     let readBootstraps = () => [];
     const reader = createDesktopSecondaryBootstrapsReader(() => ({
@@ -73,6 +83,28 @@ describe("desktop local topology reads", () => {
     }));
 
     expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [secondary] });
+  });
+
+  // T3-CUSTOM(expbkt3): a separately installed Mac server must be added through
+  // the remote/SSH flow; stale desktop bootstraps are never auto-registered.
+  it("ignores every local bootstrap in a managed client-only build", () => {
+    __setBkManagedEnvironmentForTests({
+      channel: "staging",
+      httpBaseUrl: "https://expbkt3.dev.beknown.live",
+      wsBaseUrl: "wss://expbkt3.dev.beknown.live",
+    });
+    const reader = createDesktopSecondaryBootstrapsReader(() => ({
+      getLocalEnvironmentBootstraps: () => [
+        {
+          id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+          label: "Legacy local backend",
+          httpBaseUrl: "http://127.0.0.1:3773",
+          wsBaseUrl: "ws://127.0.0.1:3773",
+        },
+      ],
+    }));
+
+    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [] });
   });
 
   it("retains the last successful snapshot only until another read succeeds", () => {

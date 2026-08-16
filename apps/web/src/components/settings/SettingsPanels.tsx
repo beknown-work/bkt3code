@@ -1705,19 +1705,21 @@ function LegacyFeaturesSection() {
         </CollapsibleTrigger>
         <CollapsiblePanel>
           <div className="relative space-y-1 overflow-visible pt-3 text-foreground">
+            {/* T3-CUSTOM(expbkt3): BEGIN — plan mode stays on by default here. */}
             <SettingsRow
               {...searchableSetting("legacy-plan-mode")}
-              description="Brings back the Build/Plan toggle in the composer along with the /plan and /default commands and the Shift+Tab shortcut. While off, every thread runs in build mode."
+              description="Build/Plan toggle in the composer, the /plan and /default commands, and the Shift+Tab shortcut. On by default. While off, every thread runs in build mode and the default interaction mode settings are ignored."
               control={
                 <Switch
-                  checked={settings.planModeEnabled}
+                  checked={settings.planModeAvailable}
                   onCheckedChange={(checked) =>
-                    updateSettings({ planModeEnabled: Boolean(checked) })
+                    updateSettings({ planModeAvailable: Boolean(checked) })
                   }
-                  aria-label="Plan mode (legacy)"
+                  aria-label="Plan mode"
                 />
               }
             />
+            {/* T3-CUSTOM(expbkt3): END */}
             <SettingsRow
               {...searchableSetting("legacy-token-streaming")}
               description="Paints assistant output token by token instead of in complete chunks. Not recommended: it is significantly slower, and long responses become harder to follow. Kept only for compatibility with the old behavior."

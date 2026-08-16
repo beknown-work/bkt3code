@@ -1,7 +1,11 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+// T3-CUSTOM(expbkt3): client-only builds read packaged assets from disk.
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as NodeTimersPromises from "node:timers/promises";
+// T3-CUSTOM(expbkt3): used to resolve packaged client asset paths.
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -53,6 +57,9 @@ export interface DesktopProtocolRegistrationInput {
   readonly targetOrigin: URL;
   readonly backendOrigin: URL;
   readonly clerkFrontendApiHostname: string | undefined;
+  // T3-CUSTOM(expbkt3): managed BK builds contain only the web client. When
+  // present, serve those packaged files instead of proxying a spawned server.
+  readonly clientAssetsDirectory?: string;
 }
 
 export class ElectronProtocol extends Context.Service<
@@ -82,6 +89,14 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
   // connections by the network schemes the client supports instead of by host.
   const connectSources = ["'self'", "http:", "https:", "ws:", "wss:"];
 
+  // T3-CUSTOM(expbkt3): a Plannotator review is served by the environment that
+  // owns the thread, not by this renderer's origin, so the review iframe is
+  // cross-origin. Those environment origins are unknown here for the same
+  // reason as connect-src, so allow the network schemes rather than hosts. The
+  // frame itself stays sandboxed without `allow-same-origin`, so it runs in an
+  // opaque origin and cannot reach renderer state.
+  const frameSources = ["'self'", "http:", "https:", "https://challenges.cloudflare.com"];
+
   return [
     "default-src 'self'",
     `script-src ${scriptSources.join(" ")}`,
@@ -90,7 +105,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self' https://challenges.cloudflare.com",
+    // T3-CUSTOM(expbkt3): the fork's preview surface embeds managed-environment
+    // frames, so frame-src is composed rather than fixed.
+    `frame-src ${frameSources.join(" ")}`,
     "form-action 'self'",
   ].join("; ");
 }
@@ -182,6 +199,87 @@ async function proxyRequest(
   return withContentSecurityPolicy(response, contentSecurityPolicy);
 }
 
+// T3-CUSTOM(expbkt3): BEGIN - serve a packaged client without a local backend.
+const CLIENT_ASSET_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
+  ".webp": "image/webp",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+export function resolveClientAssetPath(
+  path: Path.Path,
+  clientAssetsDirectory: string,
+  encodedPathname: string,
+): string | null {
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(encodedPathname);
+  } catch {
+    return null;
+  }
+
+  const root = path.resolve(clientAssetsDirectory);
+  const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const candidate = path.resolve(root, relativePath);
+  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) return null;
+  return candidate;
+}
+
+const isFile = Effect.fn("desktop.electron.protocol.isFile")(function* (path: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const info = yield* fileSystem.stat(path).pipe(Effect.orElseSucceed(() => null));
+  return info?.type === "File";
+});
+
+const clientAssetResponse = Effect.fn("desktop.electron.protocol.clientAssetResponse")(function* (
+  request: Request,
+  clientAssetsDirectory: string,
+  contentSecurityPolicy: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const requestUrl = new URL(request.url);
+  if (requestUrl.host !== DESKTOP_HOST) return new Response(null, { status: 404 });
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response(null, { status: 405 });
+  }
+
+  const requestedPath = resolveClientAssetPath(path, clientAssetsDirectory, requestUrl.pathname);
+  if (requestedPath === null) return new Response(null, { status: 404 });
+
+  const assetPath = (yield* isFile(requestedPath))
+    ? requestedPath
+    : path.extname(requestedPath).length === 0
+      ? path.join(path.resolve(clientAssetsDirectory), "index.html")
+      : null;
+  if (assetPath === null || !(yield* isFile(assetPath))) {
+    return new Response(null, { status: 404 });
+  }
+
+  const headers = new Headers({
+    "content-type":
+      CLIENT_ASSET_CONTENT_TYPES[path.extname(assetPath).toLowerCase()] ??
+      "application/octet-stream",
+  });
+  const response = new Response(
+    request.method === "HEAD" ? null : new Uint8Array(yield* fileSystem.readFile(assetPath)),
+    { status: 200, headers },
+  );
+  return withContentSecurityPolicy(response, contentSecurityPolicy);
+});
+// T3-CUSTOM(expbkt3): END
+
 const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
 
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
@@ -203,6 +301,8 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
 }
 
 export const make = Effect.gen(function* () {
+  // T3-CUSTOM(expbkt3): platform services for reading packaged client assets.
+  const platformContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const registered = yield* Ref.make(false);
 
   const registerDesktopProtocol = Effect.fn("desktop.electron.protocol.registerDesktopProtocol")(
@@ -215,7 +315,17 @@ export const make = Effect.gen(function* () {
         Effect.try({
           try: () => {
             Electron.protocol.handle(input.scheme, (request) =>
-              proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
+              // T3-CUSTOM(expbkt3): managed builds serve their packaged client
+              // directly and never need a server process just to render a window.
+              input.clientAssetsDirectory
+                ? Effect.runPromiseWith(platformContext)(
+                    clientAssetResponse(
+                      request,
+                      input.clientAssetsDirectory,
+                      contentSecurityPolicy,
+                    ),
+                  )
+                : proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
             );
           },
           catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),

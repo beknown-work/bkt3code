@@ -1623,12 +1623,13 @@ function ChatViewContent(props: ChatViewProps) {
     (isLocalDraftThread
       ? (draftProjectDefaults?.runtimeMode ?? settings.defaultThreadRuntimeMode)
       : (activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE));
-  // Plan mode is legacy (Settings → Beta). With the flag off the effective mode
-  // is forced to "default" — even for threads with a stored plan mode — so
-  // nobody is trapped in plan mode while its toggle is hidden. The next send
-  // persists "default" back to the thread.
+  // T3-CUSTOM(expbkt3): plan mode is on by default in the fork, so this normally
+  // resolves the stored/project/global mode. The guard is kept for the rare
+  // opt-out: with plan mode off the effective mode is forced to "default" — even
+  // for threads with a stored plan mode — so nobody is trapped in plan mode
+  // while its toggle is hidden. The next send persists "default" back.
   // T3-CUSTOM(expbkt3): draft threads still inherit their project's default.
-  const interactionMode = settings.planModeEnabled
+  const interactionMode = settings.planModeAvailable
     ? (composerInteractionMode ??
       (isLocalDraftThread
         ? (draftProjectDefaults?.interactionMode ?? settings.defaultThreadInteractionMode)
@@ -5553,10 +5554,11 @@ function ChatViewContent(props: ChatViewProps) {
       });
       return;
     }
-    // Legacy plan mode: /plan and /default only act when the beta flag is on;
-    // otherwise they send as plain text like any other message.
+    // T3-CUSTOM(expbkt3): /plan and /default act whenever plan mode is
+    // available (the fork default); with it turned off they send as plain text
+    // like any other message.
     const standaloneSlashCommand =
-      settings.planModeEnabled &&
+      settings.planModeAvailable &&
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&

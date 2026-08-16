@@ -1,7 +1,11 @@
 import { defineConfig } from "vite-plus";
 
 // T3-CUSTOM(expbkt3): BEGIN - fork desktop brand selection.
-import { resolveDesktopBrandId } from "../../scripts/lib/bk-desktop-brand.ts";
+import {
+  resolveBkDesktopVariant,
+  resolveDesktopBrandId,
+} from "../../scripts/lib/bk-desktop-brand.ts";
+import { resolveBkManagedEnvironment } from "../../scripts/lib/bk-managed-environment.ts";
 // T3-CUSTOM(expbkt3): END
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
@@ -15,6 +19,14 @@ const publicConfigDefine = {
   // T3CODE_BRAND on a user's machine, so it has to be a build-time constant; see
   // src/branding/BkBrand.ts and scripts/lib/bk-desktop-brand.ts.
   __T3CODE_BUILD_BRAND__: JSON.stringify(resolveDesktopBrandId(process.env)),
+  // Which of the two fork apps this is. Baked for the same reason as the brand:
+  // T3CODE_BK_MANAGED_CHANNEL does not exist on a user's machine.
+  __T3CODE_BUILD_BRAND_VARIANT__: JSON.stringify(resolveBkDesktopVariant(process.env)),
+  // Managed BK builds are client-only. Electron needs the same target as the
+  // renderer so it can skip the local server and open the packaged client.
+  __T3CODE_BK_MANAGED_ENVIRONMENT__: JSON.stringify(
+    resolveBkManagedEnvironment(process.env) ?? null,
+  ),
   // T3-CUSTOM(expbkt3): END
 };
 

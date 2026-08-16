@@ -1,5 +1,6 @@
 import { DownloadIcon, RefreshCwIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+// T3-CUSTOM(expbkt3): useEffect subscribes to the update-reveal bridge below.
+import { useCallback, useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
@@ -110,6 +111,20 @@ export function SidebarUpdatePill() {
 function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
+
+  // T3-CUSTOM(expbkt3): BEGIN - clicking the native update-ready notification
+  // surfaces the update here rather than installing. Installing quits the app,
+  // which would discard an in-flight agent turn or terminal session, so the
+  // restart stays behind the labelled button below (which confirms first).
+  useEffect(() => {
+    const bridge = window.desktopBridge;
+    if (!bridge?.onUpdateReveal) return;
+    return bridge.onUpdateReveal(() => {
+      if (!state) return;
+      showDesktopUpdateDownloadedToast(bridge, state);
+    });
+  }, [state]);
+  // T3-CUSTOM(expbkt3): END
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";

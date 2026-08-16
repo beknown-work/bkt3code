@@ -167,8 +167,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    // T3-CUSTOM(expbkt3): plan mode is a supported feature in the fork, not legacy.
     id: "legacy-plan-mode",
-    title: "Plan mode (legacy)",
+    title: "Plan mode",
     to: "/settings/general",
   },
   {

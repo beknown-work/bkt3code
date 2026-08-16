@@ -2,6 +2,7 @@
  * T3-CUSTOM(expbkt3): Sidebar-adjacent, full-workspace Plannotator review
  * surface. ChatView contains only the small activation seam.
  */
+import type { PlannotatorReviewUrl } from "@t3tools/shared/plannotator";
 import { XIcon } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
@@ -22,7 +23,13 @@ export {
 } from "./PlannotatorFocusSurface.polling";
 
 interface PlannotatorFocusSurfaceProps {
-  url: `/plannotator/${string}/`;
+  /**
+   * Absolute review URL on the environment that owns the review — see
+   * `resolvePlannotatorReviewUrl`. A root-relative path only reaches the right
+   * server when this client is served by it, which the desktop renderer never
+   * is.
+   */
+  url: PlannotatorReviewUrl;
   visible?: boolean;
   onClose: () => void;
   onDecision: (decision: PlannotatorDecision) => void;

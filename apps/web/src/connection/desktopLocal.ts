@@ -4,7 +4,7 @@ import {
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
 } from "@t3tools/contracts";
-// T3-CUSTOM(expbkt3): BEGIN - managed builds keep the bundled local backend listed.
+// T3-CUSTOM(expbkt3): BEGIN - managed builds have no bundled local backend.
 import { isBkManagedPrimary } from "../fork/managedEnvironment";
 // T3-CUSTOM(expbkt3): END
 
@@ -74,13 +74,13 @@ export function createDesktopSecondaryBootstrapsReader(
       return { _tag: "Success", bootstraps: snapshot };
     }
     try {
-      // T3-CUSTOM(expbkt3): BEGIN - upstream excludes the bundled local backend here
-      // because it is already registered as the primary environment. A managed BK build
-      // points primary at the central server instead, so the bundled backend has to
-      // register as a secondary or local-only work would have no environment at all.
-      snapshot = bridge
-        .getLocalEnvironmentBootstraps()
-        .filter((entry) => isBkManagedPrimary() || entry.id !== PRIMARY_LOCAL_ENVIRONMENT_ID);
+      // T3-CUSTOM(expbkt3): BEGIN - a managed BK build is client-only, so ignore
+      // every legacy local bootstrap that may still be present during an update.
+      snapshot = isBkManagedPrimary()
+        ? []
+        : bridge
+            .getLocalEnvironmentBootstraps()
+            .filter((entry) => entry.id !== PRIMARY_LOCAL_ENVIRONMENT_ID);
       // T3-CUSTOM(expbkt3): END
       return { _tag: "Success", bootstraps: snapshot };
     } catch (cause) {

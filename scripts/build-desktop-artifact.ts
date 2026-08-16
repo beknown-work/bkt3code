@@ -18,6 +18,8 @@ import {
 } from "./lib/brand-assets.ts";
 // T3-CUSTOM(expbkt3): BEGIN - fork desktop brand (bundle id, name, icon, artifact).
 import { resolveBkDesktopBrand } from "./lib/bk-desktop-brand.ts";
+import { resolveBkSigningIdentity } from "./lib/bk-desktop-signing.ts";
+import { resolveBkManagedEnvironment } from "./lib/bk-managed-environment.ts";
 // T3-CUSTOM(expbkt3): END
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -48,6 +50,31 @@ function resolveDesktopBrandOverride(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ) {
   return resolveBkDesktopBrand(env);
+}
+
+/**
+ * Name written into the staged package.json, and therefore the app's global
+ * updater cache directory.
+ *
+ * electron-builder derives `updaterCacheDirName` in `app-update.yml` from this
+ * name, and electron-updater then keeps downloads in
+ * `~/Library/Caches/<name>-updater`. That path is *outside* `userData`, so
+ * isolating bundle id and user-data directory is not enough: with the upstream
+ * literal every fork app and upstream itself would share
+ * `~/Library/Caches/t3code-updater` and could overwrite each other's
+ * part-downloaded update.
+ *
+ * Reuses `userDataDirName` so the two isolation axes cannot drift apart.
+ */
+export function resolveDesktopStagePackageName(): string {
+  return resolveDesktopBrandOverride()?.userDataDirName ?? "t3code";
+}
+
+/** Managed BK artifacts are Electron clients and must not contain a server. */
+export function isBkClientOnlyDesktopBuild(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return resolveBkDesktopBrand(env) !== undefined && resolveBkManagedEnvironment(env) !== undefined;
 }
 
 // T3-CUSTOM(expbkt3): END
@@ -1480,12 +1507,22 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   const [owner, repo, ...rest] = rawRepo.split("/");
   if (!owner || !repo || rest.length > 0) return undefined;
 
+  // T3-CUSTOM(expbkt3): BEGIN - the fork ships two apps out of this one
+  // repository, so the channel is the brand's, not the literal "nightly".
+  // That name becomes the manifest asset (`<channel>-mac.yml`) and must equal
+  // the first prerelease identifier of the version, which is what
+  // electron-updater's GitHubProvider matches on. See
+  // scripts/lib/bk-desktop-brand.ts.
+  const brandChannel = resolveDesktopBrandOverride()?.updateChannel;
+  // T3-CUSTOM(expbkt3): END
+
   return {
     provider: "github",
     owner,
     repo,
     releaseType: updateChannel === "nightly" ? "prerelease" : "release",
-    ...(updateChannel === "nightly" ? { channel: "nightly" as const } : {}),
+    // T3-CUSTOM(expbkt3): brandChannel when a fork brand is active, else upstream's.
+    ...(updateChannel === "nightly" ? { channel: brandChannel ?? ("nightly" as const) } : {}),
   };
 });
 
@@ -1573,6 +1610,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 ) {
   // T3-CUSTOM(expbkt3): BEGIN - fork brand identity; undefined for upstream builds.
   const brand = resolveDesktopBrandOverride();
+  const clientOnly = isBkClientOnlyDesktopBuild();
   // T3-CUSTOM(expbkt3): END
   const buildConfig: Record<string, unknown> = {
     // T3-CUSTOM(expbkt3): BEGIN - fork bundle id, name and artifact name.
@@ -1588,8 +1626,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // Only the Windows WSL backend needs files outside the asar (see
     // WINDOWS_ASAR_UNPACK); macOS and Linux stay packed — smart unpack
     // extracts native libraries, which fff-node finds in app.asar.unpacked.
-    ...(platform === "win" ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
-    extraResources: DESKTOP_EXTRA_RESOURCES,
+    // T3-CUSTOM(expbkt3): BEGIN - a client-only BK build ships no backend, so it
+    // needs neither the WSL unpack list nor the server's extra resources.
+    ...(platform === "win" && !clientOnly ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
+    extraResources: clientOnly ? [] : DESKTOP_EXTRA_RESOURCES,
+    // T3-CUSTOM(expbkt3): END
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
@@ -1609,18 +1650,44 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
-        },
-      ],
+      // T3-CUSTOM(expbkt3): BEGIN - a fork app registers exactly its own scheme.
+      // Two installed apps both claiming "t3code" is not a tie macOS breaks
+      // predictably, so staging takes "t3code-staging" and production keeps
+      // "t3code". See scripts/lib/bk-desktop-brand.ts.
+      ...(brand && brand.deepLinkScheme === null
+        ? {}
+        : {
+            protocols: [
+              {
+                name: brand?.productName ?? "T3 Code",
+                schemes: brand?.deepLinkScheme ? [brand.deepLinkScheme] : ["t3code", "t3code-dev"],
+              },
+            ],
+          }),
+      // T3-CUSTOM(expbkt3): END
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
         : {}),
+      // T3-CUSTOM(expbkt3): BEGIN - fork self-signed identity. Squirrel.Mac
+      // validates an update bundle against the installed app's designated
+      // requirement, so an unsigned build can never auto-update. Apple's
+      // certificates are bound to upstream's App ID, so the fork signs with a
+      // self-signed cert from the build machine's keychain instead: the
+      // requirement is then identifier + leaf hash, which is stable across
+      // builds as long as the same certificate signs every one of them.
+      // Deliberately not notarised — Gatekeeper still quarantines the download,
+      // which the documented `xattr -dr` step already clears.
+      // The hardened runtime is switched off with it: it exists to satisfy
+      // notarisation, which a self-signed build cannot do anyway, and leaving it
+      // on only adds entitlement-shaped launch failures (JIT, library
+      // validation for the unsigned .node addons) to debug on teammates' Macs.
+      ...(resolveBkSigningIdentity()
+        ? { identity: resolveBkSigningIdentity(), hardenedRuntime: false }
+        : {}),
+      // T3-CUSTOM(expbkt3): END
     };
   }
 
@@ -1635,12 +1702,18 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
       // t3code:// OAuth callbacks to the app.
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
-        },
-      ],
+      // T3-CUSTOM(expbkt3): BEGIN - same one-scheme-per-app rule as macOS.
+      ...(brand && brand.deepLinkScheme === null
+        ? {}
+        : {
+            protocols: [
+              {
+                name: brand?.productName ?? "T3 Code",
+                schemes: brand?.deepLinkScheme ? [brand.deepLinkScheme] : ["t3code", "t3code-dev"],
+              },
+            ],
+          }),
+      // T3-CUSTOM(expbkt3): END
       desktop: {
         entry: {
           StartupWMClass: "t3code",
@@ -1780,9 +1853,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const electronVersion = desktopPackageJson.dependencies.electron;
+  // T3-CUSTOM(expbkt3): managed fork artifacts ship the client only.
+  const clientOnly = isBkClientOnlyDesktopBuild();
 
   const serverDependencies = serverPackageJson.dependencies;
-  if (!serverDependencies || Object.keys(serverDependencies).length === 0) {
+  if (!clientOnly && (!serverDependencies || Object.keys(serverDependencies).length === 0)) {
     return yield* new MissingServerProductionDependenciesError({
       manifestPath: "apps/server/package.json",
     });
@@ -1798,15 +1873,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }),
   });
 
-  const resolvedServerDependencies = yield* Effect.try({
-    try: () => resolveCatalogDependencies(serverDependencies, workspaceCatalog, "apps/server"),
-    catch: (cause) =>
-      new DesktopBuildDependencyResolutionError({
-        kind: "server-production",
-        manifestPath: "apps/server/package.json",
-        cause,
-      }),
-  });
+  // T3-CUSTOM(expbkt3): BEGIN - no server is packaged for a client-only build,
+  // so its production dependencies are not resolved either.
+  const resolvedServerDependencies = clientOnly
+    ? {}
+    : yield* Effect.try({
+        try: () => resolveCatalogDependencies(serverDependencies!, workspaceCatalog, "apps/server"),
+        catch: (cause) =>
+          new DesktopBuildDependencyResolutionError({
+            kind: "server-production",
+            manifestPath: "apps/server/package.json",
+            cause,
+          }),
+      });
+  // T3-CUSTOM(expbkt3): END
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
     try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
     catch: (cause) =>
@@ -1849,7 +1929,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const requiredBuildInputs = [
     { artifact: "desktop-dist", artifactPath: distDirs.desktopDist },
     { artifact: "desktop-resources", artifactPath: distDirs.desktopResources },
-    { artifact: "server-dist", artifactPath: distDirs.serverDist },
+    // T3-CUSTOM(expbkt3): a client-only build has no server dist to require.
+    ...(!clientOnly
+      ? ([{ artifact: "server-dist", artifactPath: distDirs.serverDist }] as const)
+      : []),
   ] as const;
   for (const input of requiredBuildInputs) {
     if (!(yield* fs.exists(input.artifactPath))) {
@@ -1874,19 +1957,29 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
-  yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
+  // T3-CUSTOM(expbkt3): client-only stages the web client where the server would go.
+  yield* fs.makeDirectory(path.join(stageAppDir, clientOnly ? "apps/web" : "apps/server"), {
+    recursive: true,
+  });
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
-  yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
-  yield* stageResourceMonitor({
-    repoRoot,
-    stageResourcesDir,
-    platform: options.platform,
-    arch: options.arch,
-    verbose: options.verbose,
-  });
+  // T3-CUSTOM(expbkt3): BEGIN - stage the packaged client instead of a server.
+  if (clientOnly) {
+    yield* fs.copy(path.dirname(bundledClientEntry), path.join(stageAppDir, "apps/web/dist"));
+    yield* Effect.log("[desktop-artifact] Staged managed client without a backend server.");
+  } else {
+    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+    yield* stageResourceMonitor({
+      repoRoot,
+      stageResourcesDir,
+      platform: options.platform,
+      arch: options.arch,
+      verbose: options.verbose,
+    });
+  }
+  // T3-CUSTOM(expbkt3): END
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -1933,16 +2026,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageDependencies = {
     ...resolvedServerDependencies,
     ...resolvedDesktopRuntimeDependencies,
-    ...resolveFffNativeDependencies(
-      options.platform,
-      options.arch,
-      serverPackageJson.dependencies["@ff-labs/fff-node"],
-    ),
+    // T3-CUSTOM(expbkt3): a client-only build packages no server, so it needs
+    // none of the server's native fff binaries.
+    ...(!clientOnly
+      ? resolveFffNativeDependencies(
+          options.platform,
+          options.arch,
+          serverPackageJson.dependencies["@ff-labs/fff-node"],
+        )
+      : {}),
     // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
     // fff native binary through ffi-rs. The platform fff binary above is the
     // host's (win32), so promote the matching Linux fff binaries too; without
     // them file-finding in WSL fails to load its Linux native package.
-    ...(options.platform === "win"
+    // T3-CUSTOM(expbkt3): ...and therefore no WSL Linux backend either.
+    ...(options.platform === "win" && !clientOnly
       ? resolveFffNativeDependencies(
           "linux",
           options.arch,
@@ -1955,7 +2053,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     stageDependencies,
   );
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    // T3-CUSTOM(expbkt3): fork builds use a channel-specific package name so
+    // electron-builder emits an isolated updaterCacheDirName in app-update.yml.
+    name: resolveDesktopStagePackageName(),
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
@@ -2016,7 +2116,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   // WSL is Windows-only, so only the Windows artifact carries the Linux backend
   // binary; other platforms ignore the prebuild input.
-  if (options.platform === "win") {
+  // T3-CUSTOM(expbkt3): skipped for client-only builds, which ship no backend.
+  if (options.platform === "win" && !clientOnly) {
     yield* stageWslNodePtyPrebuild({
       stageAppDir,
       arch: options.arch,
@@ -2036,10 +2137,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       delete buildEnv[key];
     }
   }
+  // T3-CUSTOM(expbkt3): BEGIN - a fork build is not `signed` in upstream's sense
+  // (no Apple Team ID, no provisioning profile) but still signs with a
+  // self-signed keychain identity, so it must keep identity auto-discovery on.
+  // The Apple notarisation credentials are still scrubbed either way.
+  const bkSigningIdentity = resolveBkSigningIdentity();
+  // T3-CUSTOM(expbkt3): END
   if (!options.signed) {
-    buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
-    delete buildEnv.CSC_LINK;
-    delete buildEnv.CSC_KEY_PASSWORD;
+    // T3-CUSTOM(expbkt3): BEGIN
+    if (!bkSigningIdentity) {
+      buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+      delete buildEnv.CSC_LINK;
+      delete buildEnv.CSC_KEY_PASSWORD;
+    }
+    // T3-CUSTOM(expbkt3): END
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;

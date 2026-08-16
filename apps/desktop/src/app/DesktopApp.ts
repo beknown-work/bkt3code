@@ -16,6 +16,8 @@ import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+// T3-CUSTOM(expbkt3): managed BK distributions are client-only.
+import { bootstrapBkClientOnlyDesktop } from "../branding/BkClientOnlyDesktop.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
@@ -140,6 +142,10 @@ const fatalStartupCause = <E>(stage: string, cause: Cause.Cause<E>) =>
   handleFatalStartupError(stage, Cause.pretty(cause)).pipe(Effect.andThen(Effect.failCause(cause)));
 
 const bootstrap = Effect.gen(function* () {
+  // T3-CUSTOM(expbkt3): a managed BK build serves its packaged renderer and
+  // connects to the central environment without spawning the bundled backend.
+  if (yield* bootstrapBkClientOnlyDesktop) return;
+
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const primaryBackend = yield* pool.primary;
   const state = yield* DesktopState.DesktopState;

@@ -40,10 +40,38 @@ export function plannotatorStatusPayload(status: PlannotatorSessionStatus) {
     decision: status === "approved" || status === "feedback" || status === "denied" ? status : null,
   } as const;
 }
+/**
+ * T3-CUSTOM(expbkt3): The review plane is a capability URL — the token is the
+ * only credential, and no client ever sends cookies or an Authorization header
+ * to it. Clients that are *not* served by this server reach it cross-origin:
+ * the desktop renderer lives on `t3code://app`, and a managed build's threads
+ * live on a central server that is never the renderer's origin. Both the
+ * preflight and the actual response therefore have to allow the status plane's
+ * custom client-id header and its `DELETE` lease release.
+ */
+export const PLANNOTATOR_CORS_ALLOWED_METHODS = [
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "OPTIONS",
+] as const;
+export const PLANNOTATOR_CORS_ALLOWED_HEADERS = [
+  "content-type",
+  PLANNOTATOR_CLIENT_ID_HEADER,
+] as const;
+export const PLANNOTATOR_PATH_PREFIX = "/plannotator/";
+
+export function isPlannotatorRequestPath(url: string): boolean {
+  const [pathname = ""] = url.split("?", 1);
+  return pathname.startsWith(PLANNOTATOR_PATH_PREFIX);
+}
+
 export const PLANNOTATOR_IFRAME_CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "access-control-allow-headers": `content-type, ${PLANNOTATOR_CLIENT_ID_HEADER}`,
+  "access-control-allow-methods": PLANNOTATOR_CORS_ALLOWED_METHODS.join(", "),
+  "access-control-allow-headers": PLANNOTATOR_CORS_ALLOWED_HEADERS.join(", "),
 } as const;
 const REQUEST_HEADERS_NOT_FORWARDED = [
   "authorization",

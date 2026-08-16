@@ -30,7 +30,8 @@ const clientSettings: ClientSettings = {
   fontSmoothing: true,
   glassOpacity: 80,
   phaseGroupedSidebarEnabled: true,
-  planModeEnabled: false,
+  // T3-CUSTOM(expbkt3): plan mode is available by default in the fork.
+  planModeAvailable: true,
   nativePlanReviewEnabled: true,
   providerModelPreferences: {},
   providerRateLimitsEnabled: true,

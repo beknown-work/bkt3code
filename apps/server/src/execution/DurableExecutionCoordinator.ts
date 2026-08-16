@@ -32,6 +32,14 @@ const RETRY_DELAYS_MS = [
 const LEASE_MS = 60_000;
 const LEASE_RENEW_MS = 15_000;
 const MAX_GLOBAL_CONCURRENCY = 2;
+/**
+ * How long the claim loop idles after a failed wait before it looks again. Only
+ * reached when the wait itself errored, so it trades one idle interval for the
+ * guarantee that a transient read failure never costs more than that interval.
+ */
+const WAKE_RETRY_INTERVAL_MS = 5_000;
+/** Backstop pause before relaunching a claim loop that terminated unexpectedly. */
+const LOOP_RESTART_DELAY_MS = 1_000;
 
 export function shouldPublishRecoveryActivity(
   kind: "started" | "recovered" | "paused" | "exhausted",
@@ -514,12 +522,51 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
         Queue.take(wakeQueue),
         Effect.sleep(Duration.millis(millisUntil(at, next.value))).pipe(Effect.as("")),
       );
-    });
+    }).pipe(
+      // `runDue` and `run` were already guarded; this wait was the one step in
+      // the loop that could fail it, and `nextRunnableAt` fails with a
+      // persistence error. An unguarded failure here terminates the only fiber
+      // that ever moves a work item out of `queued` — for the whole process,
+      // for every thread and every user, with no retry and nothing to observe
+      // but silence. Degrade to an idle interval instead of losing the queue.
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logError("durable execution coordinator wait failed", {
+              owner: options.ownerId,
+              cause: Cause.pretty(cause),
+            }).pipe(
+              Effect.andThen(
+                Effect.race(
+                  Queue.take(wakeQueue),
+                  Effect.sleep(Duration.millis(WAKE_RETRY_INTERVAL_MS)).pipe(Effect.as("")),
+                ),
+              ),
+            ),
+      ),
+    );
 
     const loop = Effect.forever(
       runDue.pipe(
         Effect.andThen(waitForWakeOrDue),
         Effect.flatMap((workItemId) => (workItemId.length === 0 ? Effect.void : run(workItemId))),
+      ),
+    );
+
+    // Belt and braces for the same failure mode: whatever still manages to end
+    // the loop — a defect, an unforeseen error channel added later — must cost
+    // an interval and a log line, never the process's ability to start turns.
+    // Interruption is scope teardown and stays terminal.
+    const supervisedLoop = Effect.forever(
+      loop.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logError("durable execution coordinator loop stopped; restarting", {
+                owner: options.ownerId,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.andThen(Effect.sleep(Duration.millis(LOOP_RESTART_DELAY_MS)))),
+        ),
       ),
     );
 
@@ -541,7 +588,7 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
           recoveredLeases,
         );
       }
-      yield* Effect.forkScoped(loop);
+      yield* Effect.forkScoped(supervisedLoop);
       yield* Queue.offer(wakeQueue, "");
     });
 
