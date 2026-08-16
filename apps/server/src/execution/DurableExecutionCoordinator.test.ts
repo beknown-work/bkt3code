@@ -1,9 +1,11 @@
 import { CommandId, CorrelationId, EventId, MessageId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+import { PersistenceSqlError } from "../persistence/Errors.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import {
   DurableExecutionDispatchError,
@@ -359,6 +361,75 @@ layer("DurableExecutionCoordinator", (it) => {
         "command-steer-3",
       ]);
     }),
+  );
+
+  it.effect("keeps claiming work after the wait step fails", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("wait-guard", 40);
+      const workItemId = event.commandId ?? "";
+      const remainingFailures = yield* Ref.make(1);
+      // Receipts, so the test proves the ordering it cares about instead of
+      // waiting on a clock: the wait has to fail before the work exists.
+      const waitFailed = yield* Deferred.make<void>();
+      const transitioned = yield* Deferred.make<string>();
+
+      const flakyRepository: DurableExecutionIntentRepository["Service"] = {
+        ...repository,
+        nextRunnableAt: (input) =>
+          Ref.getAndUpdate(remainingFailures, (remaining) => Math.max(0, remaining - 1)).pipe(
+            Effect.flatMap((remaining) =>
+              remaining > 0
+                ? Deferred.succeed(waitFailed, undefined).pipe(
+                    Effect.andThen(
+                      Effect.fail(
+                        new PersistenceSqlError({
+                          operation: "DurableExecutionIntentRepository.nextRunnableAt",
+                          cause: "transient read failure",
+                        }),
+                      ),
+                    ),
+                  )
+                : repository.nextRunnableAt(input),
+            ),
+          ),
+      };
+
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-wait-guard",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () =>
+          Effect.succeed({
+            providerTurnId: "provider-turn-wait-guard",
+            providerInstanceId: "codex",
+          }),
+        recover: () => Effect.die("recovery must not run"),
+        // Scoped to this work item: the in-memory database is shared across the
+        // tests in this block, so the loop may legitimately claim an older one.
+        onTransition: ({ workItemId: transitionedId }) =>
+          transitionedId === workItemId
+            ? Deferred.succeed(transitioned, transitionedId).pipe(Effect.asVoid)
+            : Effect.void,
+      }).pipe(Effect.provideService(DurableExecutionIntentRepository, flakyRepository));
+
+      yield* coordinator.start();
+      yield* Deferred.await(waitFailed);
+
+      yield* acceptEvent(repository, event);
+      yield* coordinator.wake(workItemId);
+
+      // Only resolves if the loop outlived the failed wait. Before the guard
+      // the fiber died here and the work item stayed `queued` forever.
+      assert.strictEqual(yield* Deferred.await(transitioned), workItemId);
+      const claimed = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(claimed._tag === "Some");
+      if (claimed._tag === "None") return;
+      // Claimed, so it left the queue. Asserting a later phase would race the
+      // acknowledgement; staying `queued` forever is the regression itself.
+      assert.notStrictEqual(claimed.value.phase, "queued");
+      assert.strictEqual(yield* Ref.get(remainingFailures), 0);
+    }).pipe(Effect.scoped),
   );
 });
 
