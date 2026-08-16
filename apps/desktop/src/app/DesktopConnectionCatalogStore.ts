@@ -22,6 +22,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+// T3-CUSTOM(expbkt3): packaged BK clients keep encrypted catalogs per app identity.
+import { resolveDesktopConnectionCatalogPath } from "../branding/BkConnectionCatalog.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopSavedEnvironments from "../settings/DesktopSavedEnvironments.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
@@ -382,7 +384,13 @@ export const make = Effect.gen(function* () {
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const crypto = yield* Crypto.Crypto;
   const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
-  const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
+  // T3-CUSTOM(expbkt3): staging and production use different safe-storage keys,
+  // so they must never attempt to decrypt one shared environment catalog.
+  const catalogPath = resolveDesktopConnectionCatalogPath({
+    stateDir: environment.stateDir,
+    appDataDirectory: environment.appDataDirectory,
+    joinPath: path.join,
+  });
   const encryptionAvailable = safeStorage.isEncryptionAvailable.pipe(
     Effect.mapError(
       (cause) =>

@@ -12,6 +12,8 @@ The fork does not need a new app: `apps/desktop` is upstream's Electron app, and
 
 The **updater cache is a third isolation axis**, and an easy one to miss. It lives outside `userData`, so a distinct bundle id and user-data directory are not sufficient. electron-builder derives `updaterCacheDirName` in `app-update.yml` from the staged package name, which was hard-coded `"t3code"` — meaning all three apps shared `~/Library/Caches/t3code-updater` and could overwrite each other's part-downloaded update. `resolveDesktopStagePackageName` in `scripts/build-desktop-artifact.ts` now derives it from `userDataDirName`, so the two axes cannot drift apart.
 
+The encrypted desktop connection catalog follows the same isolation boundary. BK builds store it inside their own Application Support directory (`bkt3code` or `bkt3code-staging`) instead of the shared T3 home, because Electron safe-storage ciphertext from one app identity cannot be decrypted by the other. The older shared catalog is left untouched.
+
 Both are Apple Silicon (`arm64`) only, code signed, **keyless**, and published as prereleases on [`beknown-work/bkt3code`](https://github.com/beknown-work/bkt3code/releases). The identity in use during the current trial is an Apple Development certificate, not the self-signed root this document otherwise describes — see [Current identity is a test certificate](#current-identity-is-a-test-certificate).
 
 ## How it runs
