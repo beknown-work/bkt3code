@@ -1626,8 +1626,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // Only the Windows WSL backend needs files outside the asar (see
     // WINDOWS_ASAR_UNPACK); macOS and Linux stay packed — smart unpack
     // extracts native libraries, which fff-node finds in app.asar.unpacked.
+    // T3-CUSTOM(expbkt3): BEGIN - a client-only BK build ships no backend, so it
+    // needs neither the WSL unpack list nor the server's extra resources.
     ...(platform === "win" && !clientOnly ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
     extraResources: clientOnly ? [] : DESKTOP_EXTRA_RESOURCES,
+    // T3-CUSTOM(expbkt3): END
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
@@ -1870,6 +1873,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }),
   });
 
+  // T3-CUSTOM(expbkt3): BEGIN - no server is packaged for a client-only build,
+  // so its production dependencies are not resolved either.
   const resolvedServerDependencies = clientOnly
     ? {}
     : yield* Effect.try({
@@ -1881,6 +1886,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             cause,
           }),
       });
+  // T3-CUSTOM(expbkt3): END
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
     try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
     catch: (cause) =>
@@ -1923,6 +1929,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const requiredBuildInputs = [
     { artifact: "desktop-dist", artifactPath: distDirs.desktopDist },
     { artifact: "desktop-resources", artifactPath: distDirs.desktopResources },
+    // T3-CUSTOM(expbkt3): a client-only build has no server dist to require.
     ...(!clientOnly
       ? ([{ artifact: "server-dist", artifactPath: distDirs.serverDist }] as const)
       : []),
@@ -1950,6 +1957,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
+  // T3-CUSTOM(expbkt3): client-only stages the web client where the server would go.
   yield* fs.makeDirectory(path.join(stageAppDir, clientOnly ? "apps/web" : "apps/server"), {
     recursive: true,
   });
@@ -1957,6 +1965,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
+  // T3-CUSTOM(expbkt3): BEGIN - stage the packaged client instead of a server.
   if (clientOnly) {
     yield* fs.copy(path.dirname(bundledClientEntry), path.join(stageAppDir, "apps/web/dist"));
     yield* Effect.log("[desktop-artifact] Staged managed client without a backend server.");
@@ -1970,6 +1979,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       verbose: options.verbose,
     });
   }
+  // T3-CUSTOM(expbkt3): END
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -2016,6 +2026,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageDependencies = {
     ...resolvedServerDependencies,
     ...resolvedDesktopRuntimeDependencies,
+    // T3-CUSTOM(expbkt3): a client-only build packages no server, so it needs
+    // none of the server's native fff binaries.
     ...(!clientOnly
       ? resolveFffNativeDependencies(
           options.platform,
@@ -2027,6 +2039,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     // fff native binary through ffi-rs. The platform fff binary above is the
     // host's (win32), so promote the matching Linux fff binaries too; without
     // them file-finding in WSL fails to load its Linux native package.
+    // T3-CUSTOM(expbkt3): ...and therefore no WSL Linux backend either.
     ...(options.platform === "win" && !clientOnly
       ? resolveFffNativeDependencies(
           "linux",
@@ -2103,6 +2116,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   // WSL is Windows-only, so only the Windows artifact carries the Linux backend
   // binary; other platforms ignore the prebuild input.
+  // T3-CUSTOM(expbkt3): skipped for client-only builds, which ship no backend.
   if (options.platform === "win" && !clientOnly) {
     yield* stageWslNodePtyPrebuild({
       stageAppDir,

@@ -1,8 +1,10 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+// T3-CUSTOM(expbkt3): client-only builds read packaged assets from disk.
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as NodeTimersPromises from "node:timers/promises";
+// T3-CUSTOM(expbkt3): used to resolve packaged client asset paths.
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -299,6 +301,7 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
 }
 
 export const make = Effect.gen(function* () {
+  // T3-CUSTOM(expbkt3): platform services for reading packaged client assets.
   const platformContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const registered = yield* Ref.make(false);
 

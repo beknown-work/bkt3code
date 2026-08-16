@@ -3171,6 +3171,7 @@ export function ConnectionsSettings() {
                 }
               />
             ) : null}
+            {/* T3-CUSTOM(expbkt3): client-only BK builds ship no local backend, so these rows are hidden. */}
             {hasDesktopLocalBackend ? (
               <>
                 {renderNetworkAccessRow()}
