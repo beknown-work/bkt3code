@@ -107,6 +107,8 @@ import { useShortcutModifierState } from "../shortcutModifierState";
 import { ensureLocalApi, readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+// T3-CUSTOM(expbkt3): a phone has no right-click, so a held press stands in for it.
+import { useLongPressContextMenu } from "../mobile/useLongPressContextMenu";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -517,18 +519,14 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
     [navigateToThread, threadRef],
   );
+  // T3-CUSTOM(expbkt3): takes a position rather than the event, so a touch
+  // long-press opens the same menu a right-click does.
   const handleRowContextMenu = useCallback(
-    (event: React.MouseEvent) => {
-      event.preventDefault();
+    (position: { x: number; y: number }) => {
       const hasSelection = useThreadSelectionStore.getState().hasSelection();
       if (hasSelection && isSelected) {
         void (async () => {
-          const result = await settlePromise(() =>
-            handleMultiSelectContextMenu({
-              x: event.clientX,
-              y: event.clientY,
-            }),
-          );
+          const result = await settlePromise(() => handleMultiSelectContextMenu(position));
           if (result._tag === "Failure") {
             const error = squashAtomCommandFailure(result);
             toastManager.add(
@@ -547,12 +545,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         clearSelection();
       }
       void (async () => {
-        const result = await settlePromise(() =>
-          handleThreadContextMenu(threadRef, {
-            x: event.clientX,
-            y: event.clientY,
-          }),
-        );
+        // T3-CUSTOM(expbkt3): the position now arrives as an argument.
+        const result = await settlePromise(() => handleThreadContextMenu(threadRef, position));
         if (result._tag === "Failure") {
           const error = squashAtomCommandFailure(result);
           toastManager.add(
@@ -567,6 +561,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
     [clearSelection, handleMultiSelectContextMenu, handleThreadContextMenu, isSelected, threadRef],
   );
+  // T3-CUSTOM(expbkt3): touch long-press stands in for the missing right button.
+  const longPressContextMenu = useLongPressContextMenu(handleRowContextMenu);
   const handlePrClick = useCallback(
     (event: React.MouseEvent<HTMLAnchorElement>) => {
       if (!prStatus) return;
@@ -688,7 +684,14 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         onClick={handleRowClick}
         onDoubleClick={handleRowDoubleClick}
         onKeyDown={handleRowKeyDown}
-        onContextMenu={handleRowContextMenu}
+        // T3-CUSTOM(expbkt3): BEGIN — the handler takes a position now, and a
+        // held touch reaches the same menu.
+        onContextMenu={(event) => {
+          event.preventDefault();
+          handleRowContextMenu({ x: event.clientX, y: event.clientY });
+        }}
+        {...longPressContextMenu}
+        // T3-CUSTOM(expbkt3): END
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
           {prStatus && (
