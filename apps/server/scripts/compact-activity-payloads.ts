@@ -31,21 +31,24 @@
  * only against an idle instance.
  *
  * Usage:
- *   node scripts/compact-activity-payloads.ts --db <path> [--dry-run]
- *   node scripts/compact-activity-payloads.ts --db <path> --apply [--batch 200]
+ *   node apps/server/scripts/compact-activity-payloads.ts --db <path>
+ *   node apps/server/scripts/compact-activity-payloads.ts --db <path> --apply
  *
- * Runs under bare `node` against a deployed instance, so it uses node builtins
- * and console rather than the Effect APIs.
+ * Lives under the server package rather than the root `scripts/` directory
+ * because it imports the server's cap directly, and root scripts are a separate
+ * TypeScript project that cannot reach into `apps/server/src`.
+ *
+ * Runs under bare `node` against a deployed instance, so it uses node builtins,
+ * console and timers rather than the Effect APIs.
  */
-// @effect-diagnostics nodeBuiltinImport:off - operational script, no Effect runtime.
-// @effect-diagnostics globalConsole:off - plain CLI output.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalTimers:off - Standalone Node maintenance script, not an Effect runtime.
 import * as NodeSqlite from "node:sqlite";
 import * as NodeFS from "node:fs";
 
 import {
   capActivityPayload,
   MAX_ACTIVITY_STRING_CHARS,
-} from "../apps/server/src/orchestration/activityPayloadCap.ts";
+} from "../src/orchestration/activityPayloadCap.ts";
 
 interface Options {
   readonly db: string;
