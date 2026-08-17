@@ -24,12 +24,32 @@ the maximise control in the panel header for a full-width read.
 
 ## Commenting
 
-Select any text in the plan and choose **Comment on selection**. The comment is
-anchored to the exact lines you selected, and those lines are quoted back to the
-agent when you send feedback — the rest of the plan is not repeated.
+Select any text in the plan and choose **Comment**. The selection highlights as
+soon as you start, and a comment box opens beside it — `⌘/Ctrl+Enter` saves,
+`Esc` cancels. The comment is anchored to the exact lines you selected, and those
+lines are quoted back to the agent when you send feedback — the rest of the plan
+is not repeated.
+
+Saved comments keep an amber highlight on the text they point at, so you can see
+what has already been commented on without reading the rail. Hovering or clicking
+a comment in the rail brightens its highlight and scrolls to it; clicking a
+highlight selects its comment in the rail. Highlights survive closing and
+reopening the panel, and a teammate's comments are highlighted too.
+
+For the two things you say most often there is no need to type: the selection
+toolbar also carries a 👍 (**Looks good**) and a **Remove this** button, each of
+which files a comment in one click.
 
 Comments appear in the rail beside the plan. **Resolve** a comment once it no
-longer applies; resolved comments are left out of what gets sent.
+longer applies; resolved comments fade to a hairline in the document and are left
+out of what gets sent.
+
+## Finding your way around a long plan
+
+When the panel is wide enough, a **Contents** rail lists the plan's headings with
+a count of the open comments in each section — so you can see at a glance which
+parts you have been through. Selecting a heading scrolls to it. Narrow the panel
+and the rail gets out of the way, because the plan itself needs the width.
 
 ## Editing
 
@@ -66,8 +86,15 @@ one.
   the lines they point at, plus a diff of any edits you made — not the document.
 - **Discard** closes the review without telling the agent anything.
 
+**Send feedback** only appears once there is something to send — an open comment,
+a note, or an edit — so **Approve** is the single obvious action on a plan you
+agree with.
+
 Add overall notes in the box above the buttons; they are sent with either
 decision.
+
+Whatever you send, each anchored comment reaches the agent as a card quoting the
+lines it points at, followed by your note.
 
 ## Which plans this applies to
 

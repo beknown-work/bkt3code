@@ -16,8 +16,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PlanReviewDiscussions } from "./PlanReviewDiscussions";
 import { PlanReviewEditor, type PlanReviewEditorHandle } from "./PlanReviewEditor";
 import { PlanReviewHtmlView } from "./PlanReviewHtmlView";
+import { PlanReviewOutline } from "./PlanReviewOutline";
 import { PlanReviewVersions } from "./PlanReviewVersions";
-import { nextPlanDiscussionId } from "./planReviewMarkdown";
+import {
+  countPlanOutlineComments,
+  parsePlanOutline,
+  type PlanOutlineHeading,
+} from "./planReviewMarkdown";
+import { locateQuotedLineRange } from "@t3tools/shared/planReview";
 import { Button } from "../ui/button";
 import { planReviewEnvironment } from "../../state/planReview";
 import { toastManager } from "../ui/toast";
@@ -48,6 +54,9 @@ export default function PlanReviewPanel({
   const [hasLocalEdits, setHasLocalEdits] = useState(false);
   const [roundTripWarning, setRoundTripWarning] = useState(false);
   const [comparison, setComparison] = useState<{ from: string; to: string } | null>(null);
+  // One selected discussion, shared by the document highlight and the rail card,
+  // so the two always agree on which comment the reviewer is looking at.
+  const [activeDiscussionId, setActiveDiscussionId] = useState<string | null>(null);
 
   const revisionTokenRef = useRef<string | null>(null);
   const editedMarkdownRef = useRef<string | null>(null);
@@ -198,19 +207,57 @@ export default function PlanReviewPanel({
     [],
   );
 
+  // The editor owns the id so it can highlight the span it still has selected,
+  // rather than waiting for the round trip to learn what to mark.
   const handleAddComment = useCallback(
-    (quotedText: string, body: string) => {
+    (discussionId: string, quotedText: string, body: string) => {
+      setActiveDiscussionId(discussionId);
       void upsertDiscussion({
         environmentId,
-        input: {
-          documentId,
-          discussionId: nextPlanDiscussionId(),
-          quotedText,
-          bodyMarkdown: body,
-        },
+        input: { documentId, discussionId, quotedText, bodyMarkdown: body },
       });
     },
     [documentId, environmentId, upsertDiscussion],
+  );
+
+  /** Selecting from either side scrolls the other into view. */
+  const handleSelectDiscussion = useCallback((discussionId: string) => {
+    setActiveDiscussionId(discussionId);
+    editorHandleRef.current?.scrollToDiscussion(discussionId);
+  }, []);
+
+  const handleSelectHeading = useCallback((heading: PlanOutlineHeading) => {
+    editorHandleRef.current?.scrollToHeading(heading.text);
+  }, []);
+
+  const outlineHeadings = useMemo(() => parsePlanOutline(canonicalMarkdown), [canonicalMarkdown]);
+
+  /**
+   * Comment counts per section, derived from the same locator the server uses to
+   * anchor feedback — so a comment counted here is a comment the agent will be
+   * told the line of, and an unlocatable one is silently uncounted in both.
+   */
+  const outlineCommentCounts = useMemo(() => {
+    const openDiscussions = (snapshot?.discussions ?? []).filter(
+      (discussion) => !discussion.isResolved,
+    );
+    return countPlanOutlineComments(
+      outlineHeadings,
+      openDiscussions.map(
+        (discussion) =>
+          locateQuotedLineRange(canonicalMarkdown, discussion.quotedText)?.startIndex ?? null,
+      ),
+    );
+  }, [canonicalMarkdown, outlineHeadings, snapshot?.discussions]);
+
+  const editorDiscussions = useMemo(
+    () =>
+      (snapshot?.discussions ?? []).map((discussion) => ({
+        discussionId: discussion.discussionId,
+        quotedText: discussion.quotedText,
+        isResolved: discussion.isResolved,
+      })),
+    [snapshot?.discussions],
   );
 
   const handleResolve = useCallback(
@@ -312,6 +359,7 @@ export default function PlanReviewPanel({
   ).length;
 
   const isHtmlPlan = snapshot.document.format === "html";
+  const hasFeedbackToSend = openDiscussionCount > 0 || globalComment.trim().length > 0 || isDirty;
 
   return (
     /*
@@ -321,7 +369,22 @@ export default function PlanReviewPanel({
       reviewer asked for after living with a header and a footer eating ~150px
       of a tall, narrow panel.
     */
-    <div className="flex min-h-0 min-w-0 flex-1 flex-row bg-background">
+    <div className="@container/plan-review flex min-h-0 min-w-0 flex-1 flex-row bg-background">
+      {/*
+        The outline is a luxury of width, not a requirement: at panel widths
+        below ~56rem the document column is already the scarce thing, so the
+        rail is dropped by container query rather than by measuring anything.
+      */}
+      {tab === "review" && !isHtmlPlan && outlineHeadings.length > 0 ? (
+        <div className="hidden min-h-0 @[56rem]/plan-review:flex">
+          <PlanReviewOutline
+            headings={outlineHeadings}
+            commentCounts={outlineCommentCounts}
+            onSelectHeading={handleSelectHeading}
+          />
+        </div>
+      ) : null}
+
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {roundTripWarning && !isHtmlPlan ? (
           <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
@@ -350,6 +413,9 @@ export default function PlanReviewPanel({
             onChanged={handleEditorChanged}
             onAddComment={handleAddComment}
             onRoundTripUnstable={handleRoundTripUnstable}
+            discussions={editorDiscussions}
+            activeDiscussionId={activeDiscussionId}
+            onSelectDiscussion={handleSelectDiscussion}
           />
         )}
       </main>
@@ -412,6 +478,8 @@ export default function PlanReviewPanel({
               comments={snapshot.comments}
               onResolve={handleResolve}
               disabled={isResolved}
+              activeDiscussionId={activeDiscussionId}
+              onSelectDiscussion={handleSelectDiscussion}
             />
           )}
         </div>
@@ -426,20 +494,36 @@ export default function PlanReviewPanel({
               aria-label="Overall review notes"
               onChange={(event) => setGlobalComment(event.target.value)}
             />
+            {/*
+              Two decisions on one row, and feedback only claims the primary slot
+              once there is feedback to send — an outlined button that is usually
+              disabled reads as the thing you are supposed to press.
+            */}
             <div className="flex flex-col gap-1.5">
-              <Button size="sm" onClick={() => handleSubmit("approved")}>
-                <CheckIcon className="size-3.5" aria-hidden /> Approve
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleSubmit("changes-requested")}
-                disabled={
-                  openDiscussionCount === 0 && globalComment.trim().length === 0 && !isDirty
-                }
-              >
-                <SendIcon className="size-3.5" aria-hidden /> Send feedback
-              </Button>
+              <div className="flex items-center gap-1.5">
+                {hasFeedbackToSend ? (
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => handleSubmit("changes-requested")}
+                  >
+                    <SendIcon className="size-3.5" aria-hidden /> Send feedback
+                    {openDiscussionCount > 0 ? (
+                      <span className="ml-1 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">
+                        {openDiscussionCount}
+                      </span>
+                    ) : null}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant={hasFeedbackToSend ? "outline" : "default"}
+                  className="flex-1"
+                  onClick={() => handleSubmit("approved")}
+                >
+                  <CheckIcon className="size-3.5" aria-hidden /> Approve
+                </Button>
+              </div>
               <div className="flex items-center gap-1">
                 <Button
                   size="sm"

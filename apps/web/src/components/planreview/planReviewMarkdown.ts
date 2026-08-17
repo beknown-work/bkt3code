@@ -6,6 +6,7 @@
  * The round trip itself lives in `PlanReviewEditor`, where the typed editor
  * instance is in scope.
  */
+import { planReviewAnchorText } from "@t3tools/shared/planReview";
 
 let planReviewIdSequence = 0;
 
@@ -16,6 +17,75 @@ let planReviewIdSequence = 0;
 export function nextPlanDiscussionId(): string {
   planReviewIdSequence += 1;
   return `plan-discussion:${Date.now()}-${planReviewIdSequence}`;
+}
+
+export interface PlanOutlineHeading {
+  /** 0-based line index in the plan markdown, so comments can be bucketed. */
+  readonly lineIndex: number;
+  readonly depth: number;
+  readonly text: string;
+}
+
+/**
+ * Reads the plan's heading structure for the outline rail.
+ *
+ * ATX headings only, and fenced regions are skipped: a `# comment` inside a shell
+ * block is not a section of the plan. Plate emits ATX for every heading it
+ * serializes, so setext is not worth carrying.
+ */
+export function parsePlanOutline(markdown: string): ReadonlyArray<PlanOutlineHeading> {
+  const headings: PlanOutlineHeading[] = [];
+  let fence: string | null = null;
+
+  markdown
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .forEach((line, lineIndex) => {
+      const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (fenceMatch) {
+        const marker = fenceMatch[1]!;
+        if (fence === null) fence = marker[0]!;
+        else if (marker[0] === fence) fence = null;
+        return;
+      }
+      if (fence !== null) return;
+
+      const match = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      if (!match) return;
+      const text = planReviewAnchorText(match[2]!);
+      if (text.length === 0) return;
+      headings.push({ lineIndex, depth: match[1]!.length, text });
+    });
+
+  return headings;
+}
+
+/**
+ * Assigns each located comment to the heading it falls under.
+ *
+ * Returns counts keyed by heading line index. A comment above the first heading,
+ * or one whose anchor could not be located at all, belongs to no section and is
+ * simply not counted — the rail still lists it.
+ */
+export function countPlanOutlineComments(
+  headings: ReadonlyArray<PlanOutlineHeading>,
+  commentLineIndexes: ReadonlyArray<number | null>,
+): ReadonlyMap<number, number> {
+  const counts = new Map<number, number>();
+
+  for (const lineIndex of commentLineIndexes) {
+    if (lineIndex === null) continue;
+    // The last heading at or above the comment owns it.
+    let owner: PlanOutlineHeading | null = null;
+    for (const heading of headings) {
+      if (heading.lineIndex > lineIndex) break;
+      owner = heading;
+    }
+    if (owner === null) continue;
+    counts.set(owner.lineIndex, (counts.get(owner.lineIndex) ?? 0) + 1);
+  }
+
+  return counts;
 }
 
 /** Collapses whitespace so quoted anchors survive editor reformatting. */

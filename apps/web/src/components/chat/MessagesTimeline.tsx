@@ -129,6 +129,8 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
+// T3-CUSTOM(expbkt3): anchored plan feedback renders as a plan card, not a file card.
+import { isPlanReviewSectionId, planReviewCommentTitle } from "@t3tools/shared/planReview";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -2045,6 +2047,50 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   );
 });
 
+/**
+ * T3-CUSTOM(expbkt3): anchored plan feedback, rendered as a quotation.
+ *
+ * A plan comment shares the `<review_comment>` wire format with file review but
+ * nothing else: its `filePath` is a plan title, and its anchor is prose the
+ * reviewer selected. Routing that through the file card printed the title as a
+ * workspace-relative path and the quote as a monospace code block, because the
+ * fence branch below hands `markdown` to `ChatMarkdown`.
+ */
+function UserMessagePlanReviewCommentCard({ comment }: { comment: ReviewCommentContext }) {
+  const ctx = use(TimelineRowCtx);
+  const quotedText = comment.diff.trim();
+  // "quoted text" is the format's placeholder for an anchor it could not resolve
+  // to a line range; there is nothing to tell the reader in that case.
+  const hasLineRange = comment.startIndex !== null && comment.endIndex !== null;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+      <div className="space-y-1">
+        <div className="text-message-foreground text-xs font-medium">
+          {planReviewCommentTitle(comment.filePath)}
+        </div>
+        <div className="text-secondary-label text-[11px]">
+          {comment.sectionTitle}
+          {hasLineRange ? ` · ${comment.rangeLabel}` : null}
+        </div>
+      </div>
+      {quotedText.length > 0 && (
+        <blockquote className="border-primary/40 border-l-2 pl-2 text-secondary-label text-xs italic whitespace-pre-wrap wrap-break-word">
+          {quotedText}
+        </blockquote>
+      )}
+      {comment.text.length > 0 && (
+        <div className="whitespace-pre-wrap wrap-break-word text-sm">
+          <SkillInlineText text={comment.text} skills={ctx.skills} />
+        </div>
+      )}
+      {comment.author ? (
+        <div className="text-secondary-label text-[11px]">— {comment.author}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentContext }) {
   const ctx = use(TimelineRowCtx);
   const fenceLanguage = comment.fenceLanguage ?? "diff";
@@ -2052,6 +2098,11 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
     buildReviewCommentRenderablePatch(comment),
     `review-comment:${comment.id}`,
   );
+
+  // T3-CUSTOM(expbkt3): plan feedback quotes prose and names a plan, not a path.
+  if (isPlanReviewSectionId(comment.sectionId)) {
+    return <UserMessagePlanReviewCommentCard comment={comment} />;
+  }
 
   return (
     <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
