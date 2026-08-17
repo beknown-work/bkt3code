@@ -2,8 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  mergePlannotatorPreferences,
   normalizePlannotatorPreferenceCookie,
+  parsePlannotatorPreferenceCookie,
+  parseStoredPlannotatorPreferences,
   plannotatorPreferenceFragment,
+  plannotatorPreferencesFromCookieHeader,
   PlannotatorFocusSurface,
   plannotatorStatusUrl,
   readPlannotatorDecision,
@@ -94,15 +98,61 @@ describe("PlannotatorFocusSurface", () => {
   });
 
   it("passes only Plannotator preferences to the opaque iframe fragment", () => {
-    const fragment = plannotatorPreferenceFragment(
+    const preferences = plannotatorPreferencesFromCookieHeader(
       "t3-auth=secret; plannotator-auto-close=5; plannotator-theme=dark",
     );
-    expect(fragment).toMatch(/^#t3-preferences=/);
-    expect(JSON.parse(decodeURIComponent(fragment.slice("#t3-preferences=".length)))).toEqual({
+    expect(preferences).toEqual({
       "plannotator-auto-close": "5",
       "plannotator-theme": "dark",
     });
+
+    const fragment = plannotatorPreferenceFragment(preferences);
+    expect(fragment).toMatch(/^#t3-preferences=/);
+    expect(JSON.parse(decodeURIComponent(fragment.slice("#t3-preferences=".length)))).toEqual(
+      preferences,
+    );
     expect(fragment).not.toContain("secret");
-    expect(plannotatorPreferenceFragment("t3-auth=secret")).toBe("");
+    expect(
+      plannotatorPreferenceFragment(plannotatorPreferencesFromCookieHeader("t3-auth=secret"))
+        .length,
+    ).toBe(0);
+  });
+
+  it("keeps preferences in a store every T3 client can write", () => {
+    // `document.cookie` is inert on the desktop renderer's `t3code://app`
+    // origin, so the localStorage record — not the cookie jar — decides.
+    expect(
+      parseStoredPlannotatorPreferences(
+        JSON.stringify({
+          "plannotator-permission-mode-configured": "true",
+          "t3-auth": "secret",
+          "plannotator-broken": 7,
+        }),
+      ),
+    ).toEqual({ "plannotator-permission-mode-configured": "true" });
+    expect(parseStoredPlannotatorPreferences(null)).toEqual({});
+    expect(parseStoredPlannotatorPreferences("not json")).toEqual({});
+    expect(parseStoredPlannotatorPreferences("[1,2]")).toEqual({});
+
+    expect(
+      mergePlannotatorPreferences(
+        { "plannotator-theme": "dark", "plannotator-auto-close": "3" },
+        { "plannotator-theme": "light" },
+      ),
+    ).toEqual({ "plannotator-theme": "light", "plannotator-auto-close": "3" });
+  });
+
+  it("parses the preference write the iframe asks its parent to persist", () => {
+    expect(
+      parsePlannotatorPreferenceCookie(
+        "plannotator-auto-close=3; path=/; max-age=31536000; SameSite=Lax",
+      ),
+    ).toEqual({ name: "plannotator-auto-close", value: "3", deleted: false });
+    expect(parsePlannotatorPreferenceCookie("plannotator-auto-close=; path=/; max-age=0")).toEqual({
+      name: "plannotator-auto-close",
+      value: "",
+      deleted: true,
+    });
+    expect(parsePlannotatorPreferenceCookie("t3-auth=secret")).toBeNull();
   });
 });

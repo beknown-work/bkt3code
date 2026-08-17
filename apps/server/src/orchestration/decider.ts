@@ -27,6 +27,8 @@ import { requireThreadLineageAcyclic } from "./threadLineage.ts";
 import { resolveCreatedThreadMemberUserIds } from "./inheritedThreadMembers.ts";
 // T3-CUSTOM(expbkt3): fork command decisions
 import { decideForkOrchestrationCommand, isForkOrchestrationCommand } from "./deciderForkCases.ts";
+// T3-CUSTOM(expbkt3): bound activity payload bytes before they reach storage.
+import { capActivityPayload } from "./activityPayloadCap.ts";
 import { projectEvent } from "./projector.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1520,6 +1522,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? ((command.activity.payload as { requestId: string })
               .requestId as OrchestrationEvent["metadata"]["requestId"])
           : undefined;
+      // T3-CUSTOM(expbkt3): BEGIN — bound the payload before it reaches storage.
+      // This event is written to the append-only log AND projected into
+      // `projection_thread_activities`, so an uncapped provider payload costs
+      // its bytes twice plus WAL amplification. Capping here, at the single
+      // point where the event is constructed, covers both.
+      const cappedPayload = capActivityPayload(command.activity.payload);
+      const activity =
+        cappedPayload === command.activity.payload
+          ? command.activity
+          : { ...command.activity, payload: cappedPayload };
+      // T3-CUSTOM(expbkt3): END
       const activityAppendedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1531,7 +1544,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.activity-appended",
         payload: {
           threadId: command.threadId,
-          activity: command.activity,
+          // T3-CUSTOM(expbkt3): capped above.
+          activity,
         },
       };
       // An approval or user-input request is blocked-on-you work — it must

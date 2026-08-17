@@ -138,6 +138,24 @@ IDs when saved annotations are replayed. Keep lifecycle changes inside
 `apps/server/src/plannotator/` and the existing focused-surface seam so upstream
 plan rendering remains isolated.
 
+Two preference seams keep a reopened review from behaving like a first run, and
+both are easy to break while merging upstream:
+
+- The parent bridge in `PlannotatorFocusSurface.tsx` stores `plannotator-*`
+  preferences in `localStorage`, not in the cookie jar. `document.cookie` is
+  inert on origins whose scheme is not cookieable, and the desktop renderer's
+  `t3code://app` is one: a write there succeeds silently and reads back empty.
+  The cookie is written too, but only so a browser served by the same origin
+  keeps seeding the shim across an in-iframe reload — never rely on it alone.
+- `PLANNOTATOR_EMBEDDED_ONBOARDING_SEEDS` in `plannotator/model.ts` marks
+  Plannotator's one-time onboarding as already answered. T3 owns the
+  post-approval permission mode (`applyDecision` issues
+  `thread.interaction-mode.set` and never reads Plannotator's choice), so that
+  prompt configures nothing here. Seed only the gating flags, never the mode
+  itself, and keep client-stored values winning over the seeds. The announcement
+  values are Plannotator revisions, so a future upstream revision legitimately
+  shows that announcement once.
+
 Process lifetime follows an in-memory browser lease registry rather than thread
 state. Every mounted focus surface has an unpersisted UUID lease: visible
 surfaces renew through the 500 ms status cadence, retained-hidden surfaces renew
