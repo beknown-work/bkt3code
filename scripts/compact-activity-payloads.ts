@@ -14,10 +14,21 @@
  * replay keep working exactly as before. Only the tail of oversized strings goes.
  *
  * This runs against a LIVE production database, so it is deliberately timid:
- * small batches in short transactions, a sleep between them, a busy timeout so
- * the server always wins a lock fight, passive WAL checkpoints so its own writes
- * cannot balloon the WAL, and an I/O-pressure brake so it can never recreate the
- * disk saturation that started this work. It is resumable and idempotent.
+ * small batches in short transactions, a sleep between them, a busy timeout,
+ * passive WAL checkpoints so its own writes cannot balloon the WAL, and an
+ * I/O-pressure brake so it can never recreate the disk saturation that started
+ * this work. It is resumable and idempotent.
+ *
+ * The batch defaults are not arbitrary. SQLite in WAL mode admits exactly one
+ * writer, so every transaction taken here is a transaction the server cannot
+ * take. The first production run used 100 rows per transaction — roughly 5 MB of
+ * rewrites — and held the write lock long enough that two `runtime` event
+ * appends exceeded the SERVER's busy timeout and were dropped
+ * (`thread.token-usage.updated`, `task.progress`). Our own busy timeout does not
+ * help there: it governs how long WE wait, not how long the server waits on us.
+ * The only lever that protects the server is keeping each transaction short, so
+ * the default batch is small and the sleep between batches is long. Raise them
+ * only against an idle instance.
  *
  * Usage:
  *   node scripts/compact-activity-payloads.ts --db <path> [--dry-run]
@@ -58,8 +69,9 @@ function parseOptions(argv: ReadonlyArray<string>): Options {
   return {
     db,
     apply: argv.includes("--apply"),
-    batch: Number(get("--batch") ?? 200),
-    sleepMs: Number(get("--sleep") ?? 50),
+    // Small and slow by default: see the note on write-lock contention above.
+    batch: Number(get("--batch") ?? 25),
+    sleepMs: Number(get("--sleep") ?? 250),
     maxIoPressure: Number(get("--max-io-pressure") ?? 25),
     checkpointEvery: Number(get("--checkpoint-every") ?? 20),
   };
