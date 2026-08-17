@@ -394,7 +394,23 @@ Plannotator UI preferences (including auto-close, quick labels, plan saving, and
 integration choices) persist across focused-review openings. The review remains
 in an opaque-origin iframe: a narrow parent bridge accepts only
 `plannotator-*` preference cookies, while T3 authentication and pairing cookies
-are never exposed to reviewed content.
+are never exposed to reviewed content. The bridge keeps them in
+`localStorage`, because `document.cookie` is inert on any origin whose scheme is
+not cookieable — the desktop renderer's `t3code://app` is one, and there a
+preference silently wrote and read back empty, so every reopened review replayed
+Plannotator's first-run onboarding. Preferences remain per client; the cookie is
+still written so a browser served by the same origin keeps seeding the injected
+shim across an in-iframe reload.
+
+Plannotator's own one-time onboarding is seeded as already answered, so the
+first review in a fresh client opens on the plan rather than on a dialog. T3
+owns the post-approval permission mode — a captured approval issues
+`thread.interaction-mode.set` itself and never reads Plannotator's choice — so
+its permission-mode prompt configures nothing, and its two feature
+announcements advertise standalone Plannotator features that the embedded
+surface cannot act on. Only the flags that gate them are seeded, never the mode
+itself; a client that has stored its own value always wins, and Plannotator's
+Settings still changes any of them.
 
 Review manifests and plan files live under
 `<state-dir>/plannotator/{sessions,plans}`. Process logs live under

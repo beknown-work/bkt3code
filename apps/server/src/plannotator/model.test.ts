@@ -243,6 +243,27 @@ describe("rewritePlannotatorHtml", () => {
     expect(rewritten).toContain("<main>Plan</main>");
   });
 
+  it("seeds the one-time onboarding T3's embedding already answers", () => {
+    const seeded = rewritePlannotatorHtml("<html><head></head><body></body></html>", "/p/opaque");
+
+    // The permission-mode dialog configures a mode T3 never reads, and the two
+    // announcements advertise standalone features the review surface cannot act
+    // on. Without these the first review in every client opened on the dialog.
+    expect(seeded).toContain('"plannotator-permission-mode-configured":"true"');
+    expect(seeded).toContain('"plannotator-plan-ai-announcement-seen":"1"');
+    expect(seeded).toContain('"plannotator-look-feel-announcement-seen":"2"');
+    // T3 declines to pick an automation level for the user.
+    expect(seeded).not.toContain('"plannotator-permission-mode":');
+
+    const chosen = rewritePlannotatorHtml(
+      "<html><head></head><body></body></html>",
+      "/p/opaque",
+      "plannotator-permission-mode-configured=false",
+    );
+
+    expect(chosen).toContain('"plannotator-permission-mode-configured":"false"');
+  });
+
   it("filters the browser cookie header to Plannotator preferences", () => {
     expect(
       plannotatorPreferenceCookies(

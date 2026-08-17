@@ -39,17 +39,34 @@ interface PlannotatorFocusSurfaceProps {
 const PLANNOTATOR_PREFERENCE_MESSAGE = "t3:plannotator-preference-cookie";
 const PLANNOTATOR_PREFERENCE_COOKIE = /^plannotator-[A-Za-z0-9_-]{1,96}$/;
 const MAX_PLANNOTATOR_PREFERENCE_COOKIE_BYTES = 8192;
+const MAX_PLANNOTATOR_PREFERENCES = 64;
+const MAX_PLANNOTATOR_PREFERENCE_VALUE_LENGTH = 4096;
+/**
+ * T3-CUSTOM(expbkt3): `document.cookie` is inert on any origin whose scheme is
+ * not cookieable, and the desktop renderer is served from `t3code://app`. A
+ * preference written there silently succeeds and reads back empty, so every
+ * reopened review replayed Plannotator's first-run onboarding — including the
+ * permission-mode dialog. `localStorage` is available on every T3 client, so it
+ * is the store of record; the cookie is still written so that a same-origin
+ * browser keeps seeding the server-injected shim across an in-iframe reload.
+ */
+const PLANNOTATOR_PREFERENCE_STORAGE_KEY = "t3code:plannotator-preferences:v1";
+
+export interface PlannotatorPreferenceWrite {
+  readonly name: string;
+  readonly value: string;
+  readonly deleted: boolean;
+}
 
 /**
- * T3-CUSTOM(expbkt3): Normalize the only cookie namespace that the opaque
- * Plannotator iframe may ask its trusted parent to persist. The parent supplies
- * fixed attributes instead of accepting attributes authored inside a reviewed
- * plan.
+ * T3-CUSTOM(expbkt3): Parse the only cookie namespace that the opaque
+ * Plannotator iframe may ask its trusted parent to persist. Attributes authored
+ * inside a reviewed plan are discarded; the parent decides how to store the
+ * pair.
  */
-export function normalizePlannotatorPreferenceCookie(
+export function parsePlannotatorPreferenceCookie(
   rawCookie: unknown,
-  secure: boolean,
-): string | null {
+): PlannotatorPreferenceWrite | null {
   if (
     typeof rawCookie !== "string" ||
     rawCookie.length === 0 ||
@@ -68,25 +85,128 @@ export function normalizePlannotatorPreferenceCookie(
   const value = pair.slice(separator + 1);
   if (!PLANNOTATOR_PREFERENCE_COOKIE.test(name) || value.includes(";")) return null;
 
-  const deleted = /(?:^|;)\s*max-age\s*=\s*0(?:;|$)/i.test(rawCookie);
-  return `${name}=${deleted ? "" : value}; path=/; max-age=${deleted ? 0 : 31_536_000}; SameSite=Lax${secure ? "; Secure" : ""}`;
+  return { name, value, deleted: /(?:^|;)\s*max-age\s*=\s*0(?:;|$)/i.test(rawCookie) };
 }
 
-export function plannotatorPreferenceFragment(cookieHeader: string): string {
+/**
+ * The parent supplies fixed cookie attributes instead of accepting attributes
+ * authored inside a reviewed plan.
+ */
+export function normalizePlannotatorPreferenceCookie(
+  rawCookie: unknown,
+  secure: boolean,
+): string | null {
+  const write = parsePlannotatorPreferenceCookie(rawCookie);
+  if (!write) return null;
+  return `${write.name}=${write.deleted ? "" : write.value}; path=/; max-age=${write.deleted ? 0 : 31_536_000}; SameSite=Lax${secure ? "; Secure" : ""}`;
+}
+
+function isStorablePlannotatorPreference(name: string, value: unknown): value is string {
+  return (
+    PLANNOTATOR_PREFERENCE_COOKIE.test(name) &&
+    typeof value === "string" &&
+    value.length <= MAX_PLANNOTATOR_PREFERENCE_VALUE_LENGTH
+  );
+}
+
+export function plannotatorPreferencesFromCookieHeader(
+  cookieHeader: string,
+): Record<string, string> {
   const preferences: Record<string, string> = {};
-  let count = 0;
   for (const segment of cookieHeader.split(";")) {
-    if (count >= 64) break;
+    if (Object.keys(preferences).length >= MAX_PLANNOTATOR_PREFERENCES) break;
     const cookie = segment.trim();
     const separator = cookie.indexOf("=");
     if (separator <= 0) continue;
     const name = cookie.slice(0, separator).trim();
     const value = cookie.slice(separator + 1);
-    if (!PLANNOTATOR_PREFERENCE_COOKIE.test(name) || value.length > 4096) continue;
+    if (!isStorablePlannotatorPreference(name, value)) continue;
     preferences[name] = value;
-    count += 1;
   }
-  return count === 0 ? "" : `#t3-preferences=${encodeURIComponent(JSON.stringify(preferences))}`;
+  return preferences;
+}
+
+export function parseStoredPlannotatorPreferences(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return {};
+  const preferences: Record<string, string> = {};
+  for (const [name, value] of Object.entries(decoded)) {
+    if (Object.keys(preferences).length >= MAX_PLANNOTATOR_PREFERENCES) break;
+    if (!isStorablePlannotatorPreference(name, value)) continue;
+    preferences[name] = value;
+  }
+  return preferences;
+}
+
+/**
+ * The store of record wins over the cookie jar, which is only still read so
+ * preferences chosen before that store shipped survive.
+ */
+export function mergePlannotatorPreferences(
+  cookiePreferences: Readonly<Record<string, string>>,
+  storedPreferences: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries({ ...cookiePreferences, ...storedPreferences }).slice(
+      0,
+      MAX_PLANNOTATOR_PREFERENCES,
+    ),
+  );
+}
+
+export function plannotatorPreferenceFragment(
+  preferences: Readonly<Record<string, string>>,
+): string {
+  return Object.keys(preferences).length === 0
+    ? ""
+    : `#t3-preferences=${encodeURIComponent(JSON.stringify(preferences))}`;
+}
+
+function plannotatorPreferenceStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readPlannotatorPreferences(): Record<string, string> {
+  let stored: string | null = null;
+  try {
+    stored = plannotatorPreferenceStorage()?.getItem(PLANNOTATOR_PREFERENCE_STORAGE_KEY) ?? null;
+  } catch {
+    stored = null;
+  }
+  return mergePlannotatorPreferences(
+    plannotatorPreferencesFromCookieHeader(typeof document === "undefined" ? "" : document.cookie),
+    parseStoredPlannotatorPreferences(stored),
+  );
+}
+
+function persistPlannotatorPreference(write: PlannotatorPreferenceWrite): void {
+  const storage = plannotatorPreferenceStorage();
+  if (storage) {
+    try {
+      const preferences = readPlannotatorPreferences();
+      if (write.deleted) delete preferences[write.name];
+      else if (isStorablePlannotatorPreference(write.name, write.value))
+        preferences[write.name] = write.value;
+      storage.setItem(PLANNOTATOR_PREFERENCE_STORAGE_KEY, JSON.stringify(preferences));
+    } catch {
+      // A full or unavailable store must not break the review it belongs to.
+    }
+  }
+  const cookie = normalizePlannotatorPreferenceCookie(
+    `${write.name}=${write.value}${write.deleted ? "; max-age=0" : ""}`,
+    typeof window !== "undefined" && window.location.protocol === "https:",
+  );
+  if (cookie && typeof document !== "undefined") document.cookie = cookie;
 }
 
 export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
@@ -111,7 +231,7 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
   if (preferenceFragmentRef.current?.url !== url) {
     preferenceFragmentRef.current = {
       url,
-      value: typeof document === "undefined" ? "" : plannotatorPreferenceFragment(document.cookie),
+      value: plannotatorPreferenceFragment(readPlannotatorPreferences()),
     };
   }
   const preferenceFragment = preferenceFragmentRef.current.value;
@@ -147,11 +267,8 @@ export const PlannotatorFocusSurface = memo(function PlannotatorFocusSurface({
       ) {
         return;
       }
-      const cookie = normalizePlannotatorPreferenceCookie(
-        event.data.cookie,
-        window.location.protocol === "https:",
-      );
-      if (cookie) document.cookie = cookie;
+      const write = parsePlannotatorPreferenceCookie(event.data.cookie);
+      if (write) persistPlannotatorPreference(write);
     };
     window.addEventListener("message", persistPreference);
     return () => window.removeEventListener("message", persistPreference);
