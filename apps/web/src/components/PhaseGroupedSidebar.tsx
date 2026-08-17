@@ -197,6 +197,7 @@ import {
 import { useCurrentUserId } from "../state/identity";
 // T3-CUSTOM(expbkt3): directory for the co-participant filter facet.
 import { useOrgMembers } from "../state/orgMembers";
+import { useLongPressContextMenu } from "../mobile/useLongPressContextMenu";
 import {
   SidebarChromeFooter,
   SidebarChromeHeader,
@@ -1125,8 +1126,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onNavigate(threadRef);
   };
 
-  const handleContextMenu = async (event: ReactMouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
+  // Position, not the event: a right-click and a touch long-press open the same
+  // menu, and only one of them has a mouse event to hand.
+  const openRowContextMenu = async (position: { x: number; y: number }) => {
     const api = readLocalApi();
     if (!api) return;
     // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking items, capability-gated
@@ -1265,7 +1267,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         { id: "archive", label: "Archive" },
         { id: "delete", label: "Delete", destructive: true },
       ],
-      { x: event.clientX, y: event.clientY },
+      position,
     );
     if (action === "rename") onStartRename(row);
     if (action === "mark-unread") markThreadUnread(threadKey, row.thread.latestTurn?.completedAt);
@@ -1309,6 +1311,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "collapse-subtree") treeActions?.onSetSubtreeExpanded(threadKey, false);
   };
 
+  // Phones have no right button: holding the row is how the menu is reached.
+  const longPressContextMenu = useLongPressContextMenu((position) => {
+    void openRowContextMenu(position);
+  });
+
   return (
     <li
       data-thread-item
@@ -1330,7 +1337,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
         onDoubleClick={() => onStartRename(row)}
-        onContextMenu={(event) => void handleContextMenu(event)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          void openRowContextMenu({ x: event.clientX, y: event.clientY });
+        }}
+        {...longPressContextMenu}
       >
         {workBadge?.monitoring !== true &&
         (executionPresentation.active ||

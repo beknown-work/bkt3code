@@ -124,6 +124,8 @@ import {
 } from "../threadRoutes";
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
+// T3-CUSTOM(expbkt3): a phone has no right-click, so a held press stands in for it.
+import { useLongPressContextMenu } from "../mobile/useLongPressContextMenu";
 import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
@@ -943,6 +945,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     },
     [onContextMenu, threadRef],
   );
+  // T3-CUSTOM(expbkt3): same menu, reached by holding the row on a touch screen.
+  const longPressContextMenu = useLongPressContextMenu(
+    useCallback(
+      (position: { x: number; y: number }) => onContextMenu(threadRef, position),
+      [onContextMenu, threadRef],
+    ),
+  );
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
       if (event.target !== event.currentTarget) return;
@@ -1174,6 +1183,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
                 onContextMenu={handleContextMenu}
+                // T3-CUSTOM(expbkt3): touch long-press opens the row menu.
+                {...longPressContextMenu}
               />
             }
           >
@@ -1321,6 +1332,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
               onContextMenu={handleContextMenu}
+              // T3-CUSTOM(expbkt3): touch long-press opens the row menu.
+              {...longPressContextMenu}
             />
           }
         >
