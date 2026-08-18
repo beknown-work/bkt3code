@@ -274,6 +274,91 @@ describe("review comment context parsing", () => {
   });
 });
 
+// T3-CUSTOM(expbkt3): plan-review anchors are quoted text, not line numbers, so
+// a block can legitimately arrive without a range. Rejecting those made the
+// transcript render the raw XML at the reader.
+function firstParsedComment(value: string) {
+  return (
+    parseReviewCommentMessageSegments(value).flatMap((segment) =>
+      segment.kind === "review-comment" ? [segment.comment] : [],
+    )[0] ?? null
+  );
+}
+
+describe("review comments without a line range", () => {
+  const PLAN_BLOCK = [
+    '<review_comment sectionId="plan:plan-doc:ad144073" sectionTitle="Plan review" filePath="TEC-951 standup plan.md" rangeLabel="quoted text" author="Tushar Bhardwaj">',
+    "no ignore this",
+    "```markdown",
+    "1. Outbound email context",
+    "```",
+    "</review_comment>",
+  ].join("\n");
+
+  it("parses a rangeless plan comment as a card rather than raw text", () => {
+    const segments = parseReviewCommentMessageSegments(
+      `Plan approved. Implement the plan you proposed above, exactly as written.\n\n${PLAN_BLOCK}`,
+    );
+
+    expect(segments.map((segment) => segment.kind)).toEqual(["text", "review-comment"]);
+    expect(segments[1]).toEqual(
+      expect.objectContaining({
+        kind: "review-comment",
+        comment: expect.objectContaining({
+          sectionId: "plan:plan-doc:ad144073",
+          sectionTitle: "Plan review",
+          startIndex: null,
+          endIndex: null,
+          rangeLabel: "quoted text",
+          text: "no ignore this",
+          author: "Tushar Bhardwaj",
+          fenceLanguage: "markdown",
+        }),
+      }),
+    );
+  });
+
+  it("gives each rangeless comment in one message a distinct id", () => {
+    const segments = parseReviewCommentMessageSegments(`${PLAN_BLOCK}\n\n${PLAN_BLOCK}`);
+    const comments = segments.flatMap((segment) =>
+      segment.kind === "review-comment" ? [segment.comment] : [],
+    );
+
+    expect(comments).toHaveLength(2);
+    expect(comments[0]!.id).not.toBe(comments[1]!.id);
+  });
+
+  it("round trips a rangeless comment without inventing a range", () => {
+    const comment = firstParsedComment(PLAN_BLOCK);
+    const formatted = formatReviewCommentContext(comment!);
+
+    expect(formatted).not.toContain("startIndex=");
+    expect(formatted).not.toContain("endIndex=");
+    expect(formatted).toContain('rangeLabel="quoted text"');
+    expect(formatted).toContain('author="Tushar Bhardwaj"');
+
+    expect(firstParsedComment(formatted)).toEqual(comment);
+  });
+
+  it("cannot place a rangeless comment on a diff line", () => {
+    const fileDiff = parsePatchFiles(
+      [
+        "diff --git a/src/app.ts b/src/app.ts",
+        "--- a/src/app.ts",
+        "+++ b/src/app.ts",
+        "@@ -1,2 +1,2 @@",
+        " const a = 1;",
+        "-const b = 2;",
+        "+const b = 3;",
+      ].join("\n"),
+      "rangeless-review-comment",
+    )[0]!.files[0]!;
+    const comment = firstParsedComment(PLAN_BLOCK);
+
+    expect(restoreDiffReviewCommentRange(fileDiff, comment!)).toBeNull();
+  });
+});
+
 describe("formatReviewCommentContext escaping", () => {
   it("keeps a comment's own words from closing the block they travel in", () => {
     // A pull request's review bodies are written by whoever opened the tab, so this text is not

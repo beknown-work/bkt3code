@@ -47,6 +47,81 @@ describe("locateQuotedLineRange", () => {
   it("returns null for an empty quote", () => {
     expect(locateQuotedLineRange(PLAN, "   \n  ")).toBeNull();
   });
+
+  // The anchor arrives from the rendered document, where markdown syntax is
+  // already gone. Each of these missed before the anchor projection landed.
+  describe("anchors selected from the rendered plan", () => {
+    it("matches a bold line — the reported regression", () => {
+      const plan = [
+        "## Steps",
+        "",
+        "1. **Outbound email context**",
+        "   Ticket: new prospect threads must start with the full customization/copy context.",
+      ].join("\n");
+
+      expect(
+        locateQuotedLineRange(
+          plan,
+          [
+            "1. Outbound email context",
+            "Ticket: new prospect threads must start with the full customization/copy context.",
+          ].join("\n"),
+        ),
+      ).toEqual({ startIndex: 2, endIndex: 3 });
+    });
+
+    it("matches an inline-code line", () => {
+      const plan = "- Run the suite for `packages/shared` only";
+      expect(locateQuotedLineRange(plan, "Run the suite for packages/shared only")).toEqual({
+        startIndex: 0,
+        endIndex: 0,
+      });
+    });
+
+    it("matches a link by its text", () => {
+      const plan = "See [the customization registry](docs/operations/expbkt3.md) first";
+      expect(locateQuotedLineRange(plan, "See the customization registry first")).toEqual({
+        startIndex: 0,
+        endIndex: 0,
+      });
+    });
+
+    it("matches an image by its alt text without leaving a stray bang", () => {
+      expect(locateQuotedLineRange("![the panel](shot.png) shows the rail", "the panel")).toEqual({
+        startIndex: 0,
+        endIndex: 0,
+      });
+    });
+
+    it("matches italic, strikethrough and heading lines", () => {
+      const plan = ["### _Rollout_ plan", "", "~~Ship on Friday~~"].join("\n");
+      expect(locateQuotedLineRange(plan, "Rollout plan")).toEqual({
+        startIndex: 0,
+        endIndex: 0,
+      });
+      expect(locateQuotedLineRange(plan, "Ship on Friday")).toEqual({
+        startIndex: 2,
+        endIndex: 2,
+      });
+    });
+
+    it("matches a task list item whose checkbox the renderer draws", () => {
+      expect(locateQuotedLineRange("- [ ] Backfill the rows", "Backfill the rows")).toEqual({
+        startIndex: 0,
+        endIndex: 0,
+      });
+    });
+
+    it("matches a bullet whose marker the selection dropped", () => {
+      expect(
+        locateQuotedLineRange("- Tear down the branch env", "Tear down the branch env"),
+      ).toEqual({ startIndex: 0, endIndex: 0 });
+    });
+
+    it("still returns null for a quote that is genuinely not in the plan", () => {
+      expect(locateQuotedLineRange("1. **Ship it**", "Revert it")).toBeNull();
+    });
+  });
 });
 
 describe("planReviewFence", () => {
@@ -72,7 +147,9 @@ describe("formatPlanReviewComment", () => {
     expect(block).toContain('startIndex="4"');
     expect(block).toContain('endIndex="5"');
     expect(block).toContain('rangeLabel="L5 to L6"');
-    expect(block).toContain("— Tushar");
+    // The byline is an attribute, so the body stays the reviewer's words alone.
+    expect(block).toContain('author="Tushar"');
+    expect(block).not.toContain("— Tushar");
     expect(block.startsWith("<review_comment ")).toBe(true);
     expect(block.endsWith("</review_comment>")).toBe(true);
   });
@@ -86,7 +163,18 @@ describe("formatPlanReviewComment", () => {
       authorLabel: null,
     });
     expect(block).toContain('rangeLabel="L3"');
-    expect(block).not.toContain("—");
+    expect(block).not.toContain("author=");
+  });
+
+  it("escapes quotes in the author label", () => {
+    const block = formatPlanReviewComment("doc-1", "Plan", {
+      startIndex: 0,
+      endIndex: 0,
+      quotedText: "x",
+      body: "y",
+      authorLabel: 'Tushar "TB" Bhardwaj',
+    });
+    expect(block).toContain('author="Tushar &quot;TB&quot; Bhardwaj"');
   });
 
   it("omits the range when the quote could not be located", () => {
