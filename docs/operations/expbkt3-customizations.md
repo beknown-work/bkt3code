@@ -108,6 +108,7 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Sidebar people filters    | `PhaseGroupedSidebar.logic.ts` facets, `phaseSidebarFilterStore.ts`                                                                                                                                                                                | `PhaseGroupedSidebar.tsx` popover, chips, row projection                                                                                                                                                                                                                                                                                  |
 | Execution resume resync   | none — two marked seams only                                                                                                                                                                                                                       | `ws.ts` shell/thread resume, `client-runtime/state/shellReducer.ts` overlay merge                                                                                                                                                                                                                                                         |
 | Native plan review        | `apps/server/src/planreview/`, `persistence/PlanReviewDocuments.ts`, migration 1009, `packages/shared/src/planReview.ts`, `packages/contracts/src/planReview.ts`, `apps/web/src/components/planreview/`, `apps/web/src/fork/planReviewSurface.tsx` | fork RPC group + scopes + handlers, one `ws.ts` dep, right-panel store/tabs, `ChatView.tsx` branch, `ProposedPlanCard.tsx` button, Beta settings toggle, nullable comment range in `reviewCommentContext.ts` + `reviewCommentSelection.ts` + `nativeReviewDiffAdapter.ts`, plan-comment card in `MessagesTimeline.tsx` + `ThreadFeed.tsx` |
+| Session identity          | `apps/server/src/identity/SessionIdentityEnvironment.ts`                                                                                                                                                                                           | `ProviderCommandReactor.ts` execution-options seam, `ProviderService.ts` adapter-spawn seam, `identityEnvironment` on `ProviderSessionExecutionOptions`, conditional scrub in `SourceControlExecutionEnvironment.ts`, `server.ts` layer                                                                                                   |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                                                                                                                                                          | none                                                                                                                                                                                                                                                                                                                                      |
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
@@ -366,6 +367,39 @@ session is live, the durable route can be retired in favour of upstream's.
 `isPlaceholderTitle` also accepts a _truncation_ of the seed, not just an exact
 match, so a client that displays `truncate(prompt)` while seeding the full
 prompt still gets named.
+
+## Session identity environment
+
+Every provider session spawns with additive environment variables naming the
+people behind the turn, so an agent never has to infer them from the shared
+machine:
+
+| Variable                  | Value                                                                   |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `BK_IDENTITY_RUNTIME`     | Always `t3-code`. Marks the runtime even when nobody could be resolved. |
+| `BK_SESSION_OWNER_EMAIL`  | Primary email of the thread owner, from the environment-user directory. |
+| `BK_MESSAGE_SENDER_EMAIL` | Primary email of the user who actually sent the message being answered. |
+
+Four rules carry the behaviour:
+
+- **The directory is the only source.** Git config, `whoami`, and checked-in
+  dotfiles describe the machine; on a shared box they attribute one
+  contributor's session to another, which is the bug this replaces.
+- **The sender is never inferred.** Owner fallback is applied for credential
+  binding, but `BK_MESSAGE_SENDER_EMAIL` is set only from a real sender. An
+  absent variable means "unknown", and an agent must say so rather than guess.
+- **Unresolvable identity degrades, never blocks.** A missing user record or an
+  unreadable directory leaves the marker alone and the turn proceeds.
+- **A changed identity restarts the provider.** The process reads its
+  environment once at spawn, so `ProviderCommandReactor` fingerprints what each
+  live session was started with and restarts on an owner transfer or a new
+  sender, next to the existing credential-actor restart.
+
+The markers compose with source-control profiles rather than replacing them:
+`mergeSourceControlEnvironment` scrubs the machine's inherited Git and GitHub
+credentials only when the overlay carries a source-control identity of its own,
+so machine-identity mode keeps its own `GH_TOKEN` while still carrying the
+markers.
 
 ## Upstream merge workflow
 

@@ -68,6 +68,8 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+// T3-CUSTOM(expbkt3): session-identity markers for provider processes.
+import { withSessionIdentityEnvironment } from "../../identity/SessionIdentityEnvironment.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -522,7 +524,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
             runtimeMode: input.binding.runtimeMode ?? "full-access",
           },
-          input.executionOptions,
+          // T3-CUSTOM(expbkt3): a recovered session is a freshly spawned
+          // process, so it needs the identity markers too.
+          withSessionIdentityEnvironment(input.executionOptions),
         )
         .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
       bumpSessionGeneration(bindingInstanceId, input.binding.threadId);
@@ -749,7 +753,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                   ? { resumeCursor: effectiveResumeCursor }
                   : {}),
               },
-              executionOptions,
+              // T3-CUSTOM(expbkt3): fold the session-identity markers into the
+              // environment the adapter spawns with.
+              withSessionIdentityEnvironment(executionOptions),
             )
             .pipe(Effect.onError(() => clearMcpSession(threadId)));
 

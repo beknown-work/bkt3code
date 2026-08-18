@@ -43,12 +43,29 @@ export function scrubSourceControlIdentityEnvironment(
   return next;
 }
 
+export function carriesSourceControlIdentity(environment: NodeJS.ProcessEnv): boolean {
+  return Object.keys(environment).some(
+    (key) =>
+      RESERVED_SOURCE_CONTROL_ENVIRONMENT_KEYS.has(key) ||
+      key.startsWith("GIT_CONFIG_KEY_") ||
+      key.startsWith("GIT_CONFIG_VALUE_"),
+  );
+}
+
+/**
+ * Scrubbing the base is how a profile's identity replaces whatever the machine
+ * exported. An overlay that carries no source-control identity of its own —
+ * the additive session-identity markers — has nothing to replace, so the
+ * machine's own credentials have to survive it.
+ */
 export function mergeSourceControlEnvironment(
   baseEnvironment: NodeJS.ProcessEnv,
   sourceControlEnvironment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   return {
-    ...scrubSourceControlIdentityEnvironment(baseEnvironment),
+    ...(carriesSourceControlIdentity(sourceControlEnvironment)
+      ? scrubSourceControlIdentityEnvironment(baseEnvironment)
+      : baseEnvironment),
     ...sourceControlEnvironment,
   };
 }
