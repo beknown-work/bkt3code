@@ -102,6 +102,7 @@ import {
 import {
   collectPlanReviewBlocks,
   locatePlanReviewQuoteRange,
+  stripPlanReviewCommentMarks,
   type PlanReviewNodeLike,
 } from "./plate/planReviewCommentMarks";
 import {
@@ -344,6 +345,23 @@ function PlanReviewEditorImpl({
     editor.setOption(SuggestionPlugin, "isSuggesting", suggestionMode && !readOnly);
   }, [editor, suggestionMode, readOnly]);
 
+  /**
+   * Serializes the plan as if it carried no comments.
+   *
+   * Plate turns a commented leaf into an MDX JSX element that the markdown
+   * stringifier cannot handle — in a table cell it throws — and the change
+   * handler below reads a failed serialize as a reviewer edit. Highlighting a
+   * sentence would then mark the plan dirty and make the panel send the agent the
+   * whole document as an edit. Comments are review state, never document content.
+   */
+  const serializePlan = useCallback(
+    () =>
+      editor.api.markdown.serialize({
+        value: stripPlanReviewCommentMarks(editor.children) as never,
+      }),
+    [editor],
+  );
+
   /** Marks a located span as belonging to a saved discussion. */
   const markDiscussion = useCallback(
     (discussionId: string, at: object) => {
@@ -407,7 +425,7 @@ function PlanReviewEditorImpl({
     () => ({
       getMarkdown: () => {
         try {
-          const editorMarkdown = editor.api.markdown.serialize();
+          const editorMarkdown = serializePlan();
           return resolveSubmittedPlanMarkdown({
             canonicalMarkdown: loadedMarkdownRef.current ?? markdown,
             editorMarkdown,
@@ -436,7 +454,7 @@ function PlanReviewEditorImpl({
         heading?.scrollIntoView({ block: "start", behavior: "smooth" });
       },
     }),
-    [editor, markdown],
+    [editor, markdown, serializePlan],
   );
 
   const handleChange = useCallback(() => {
@@ -448,7 +466,7 @@ function PlanReviewEditorImpl({
           baselineEditorMarkdown !== null &&
           !hasPlanReviewEditorChange({
             baselineEditorMarkdown,
-            editorMarkdown: editor.api.markdown.serialize(),
+            editorMarkdown: serializePlan(),
           })
         ) {
           return;
@@ -460,7 +478,7 @@ function PlanReviewEditorImpl({
       hasReviewerEditsRef.current = true;
     }
     onChanged();
-  }, [editor, onChanged]);
+  }, [onChanged, serializePlan]);
 
   /**
    * Marks the current selection and returns its range, so the span can be

@@ -37,10 +37,17 @@ export interface PlanReviewRange {
   readonly focus: PlanReviewPoint;
 }
 
-/** The minimum of a Slate node this module needs to walk a tree. */
+/**
+ * The minimum of a Slate node this module needs to walk a tree.
+ *
+ * The index signature is load-bearing rather than laziness: a leaf carries its
+ * marks as arbitrary properties, and `stripPlanReviewCommentMarks` exists
+ * precisely to read and remove the ones it does not know the names of up front.
+ */
 export interface PlanReviewNodeLike {
   readonly text?: string;
   readonly children?: ReadonlyArray<PlanReviewNodeLike>;
+  readonly [markKey: string]: unknown;
 }
 
 function isTextNode(node: PlanReviewNodeLike): boolean {
@@ -190,4 +197,66 @@ export function locatePlanReviewQuoteRange(
   }
 
   return null;
+}
+
+/**
+ * Returns the document as it would read with no comments on it.
+ *
+ * Plate serializes a commented leaf as an MDX JSX element, which
+ * `mdast-util-to-markdown` cannot stringify — inside a table cell it throws
+ * outright. The editor treats "cannot serialize" as a reviewer edit, so simply
+ * highlighting a sentence used to mark the plan dirty and make the panel re-send
+ * the entire document as a reviewer edit. Stripping the marks first means a
+ * comment can never influence what the agent is told changed.
+ *
+ * Leaves that `split: true` fragmented are merged back when nothing else
+ * distinguishes them, so the serialized text matches the unmarked document
+ * exactly rather than merely closely.
+ */
+export function stripPlanReviewCommentMarks<T>(nodes: ReadonlyArray<T>): ReadonlyArray<T> {
+  return nodes.map((node) => stripNode(node as PlanReviewNodeLike) as T);
+}
+
+function isCommentProperty(key: string): boolean {
+  return key === "comment" || key.startsWith("comment_") || key === "commentTransient";
+}
+
+function stripNode(node: PlanReviewNodeLike): PlanReviewNodeLike {
+  const children = node.children;
+  if (children === undefined) {
+    return stripLeaf(node);
+  }
+  return { ...node, children: mergeAdjacentLeaves(children.map(stripNode)) };
+}
+
+function stripLeaf(leaf: PlanReviewNodeLike): PlanReviewNodeLike {
+  const entries = Object.entries(leaf).filter(([key]) => !isCommentProperty(key));
+  return Object.fromEntries(entries) as PlanReviewNodeLike;
+}
+
+/** Two leaves merge when their text is the only thing that differs. */
+function sameFormatting(left: PlanReviewNodeLike, right: PlanReviewNodeLike): boolean {
+  if (left.children !== undefined || right.children !== undefined) return false;
+  const key = (node: PlanReviewNodeLike) =>
+    JSON.stringify(
+      Object.entries(node)
+        .filter(([name]) => name !== "text")
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+  return key(left) === key(right);
+}
+
+function mergeAdjacentLeaves(
+  nodes: ReadonlyArray<PlanReviewNodeLike>,
+): ReadonlyArray<PlanReviewNodeLike> {
+  const merged: PlanReviewNodeLike[] = [];
+  for (const node of nodes) {
+    const previous = merged.at(-1);
+    if (previous !== undefined && sameFormatting(previous, node)) {
+      merged[merged.length - 1] = { ...previous, text: (previous.text ?? "") + (node.text ?? "") };
+      continue;
+    }
+    merged.push(node);
+  }
+  return merged;
 }

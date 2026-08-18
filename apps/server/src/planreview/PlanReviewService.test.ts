@@ -463,7 +463,11 @@ describe("PlanReviewService approval", () => {
         });
 
         const text = turnText(yield* Ref.get(dispatched));
-        expect(text).toContain("Plan approved. Implement the plan you proposed above");
+        // T3-CUSTOM(expbkt3): approving with comments open means "start now, and
+        // fold these in" — so the prompt must not also say "exactly as written".
+        expect(text).toContain("Plan approved — start implementing it now.");
+        expect(text).toContain("apply them as you implement");
+        expect(text).not.toContain("exactly as written");
         expect(text).toContain("Reviewer notes:\nStart with the migration.");
         expect(text).toContain("<review_comment ");
         expect(text).toContain("Keep this safe for a rolling deploy.");

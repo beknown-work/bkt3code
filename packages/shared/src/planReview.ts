@@ -206,6 +206,13 @@ export function buildPlanReviewFeedbackPrompt(input: PlanReviewFeedbackInput): s
 export function buildPlanReviewApprovalPrompt(input: PlanReviewApprovalInput): string {
   const sections: string[] = [];
   const notes = input.notes.trim();
+  /**
+   * Approving with comments open is a deliberate act, not an oversight: the
+   * reviewer wants implementation to start and has refinements to fold in on the
+   * way. Telling the model to implement "exactly as written" and then handing it
+   * a list of changes contradicts itself, so the instruction changes instead.
+   */
+  const hasRefinements = input.comments.length > 0 || notes.length > 0;
 
   if (input.fullPlanMarkdown !== null) {
     sections.push(
@@ -218,7 +225,21 @@ export function buildPlanReviewApprovalPrompt(input: PlanReviewApprovalInput): s
       sections.push(`(The full plan is repeated because ${input.fullPlanReason}.)`);
     }
   } else {
-    sections.push("Plan approved. Implement the plan you proposed above, exactly as written.");
+    sections.push(
+      hasRefinements
+        ? "Plan approved — start implementing it now."
+        : "Plan approved. Implement the plan you proposed above, exactly as written.",
+    );
+  }
+
+  if (hasRefinements) {
+    sections.push(
+      [
+        "The reviewer approved the plan and left the refinements below. Treat them as",
+        "amendments to the approved plan and apply them as you implement. Do not go back",
+        "to planning or wait for another approval.",
+      ].join("\n"),
+    );
   }
 
   for (const comment of input.comments) {

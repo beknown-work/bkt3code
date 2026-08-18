@@ -10,7 +10,14 @@ import type {
   PlanReviewSnapshotResult,
   PlanReviewVersion,
 } from "@t3tools/contracts";
-import { CheckIcon, HistoryIcon, MessageSquareIcon, SendIcon, Trash2Icon } from "lucide-react";
+import {
+  CheckIcon,
+  HistoryIcon,
+  MessageSquareIcon,
+  SaveIcon,
+  SendIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PlanReviewDiscussions } from "./PlanReviewDiscussions";
@@ -360,6 +367,11 @@ export default function PlanReviewPanel({
 
   const isHtmlPlan = snapshot.document.format === "html";
   const hasFeedbackToSend = openDiscussionCount > 0 || globalComment.trim().length > 0 || isDirty;
+  /**
+   * A hand edit that is not yet a version. An HTML plan is never editable, so it
+   * can never be in this state and must not be gated by it.
+   */
+  const hasUnsavedEdits = isDirty && !isHtmlPlan;
 
   return (
     /*
@@ -495,42 +507,60 @@ export default function PlanReviewPanel({
               onChange={(event) => setGlobalComment(event.target.value)}
             />
             {/*
-              Two decisions on one row, and feedback only claims the primary slot
-              once there is feedback to send — an outlined button that is usually
-              disabled reads as the thing you are supposed to press.
+              Unsaved edits take the whole row. Deciding on a plan whose edits are
+              not yet a version is ambiguous — neither the reviewer nor the agent
+              can say afterwards which text was approved — so saving is made the
+              one available move rather than a third button competing with two.
             */}
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-1.5">
-                {hasFeedbackToSend ? (
+              {hasUnsavedEdits ? (
+                <>
+                  <Button size="sm" onClick={handleSaveVersion}>
+                    <SaveIcon className="size-3.5" aria-hidden /> Save the plan
+                  </Button>
+                  <p className="text-muted-foreground text-[11px]">
+                    Save your edits as a version to approve or send feedback.
+                  </p>
+                </>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  {hasFeedbackToSend ? (
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => handleSubmit("changes-requested")}
+                    >
+                      <SendIcon className="size-3.5" aria-hidden /> Send feedback
+                      {openDiscussionCount > 0 ? (
+                        <span className="ml-1 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">
+                          {openDiscussionCount}
+                        </span>
+                      ) : null}
+                    </Button>
+                  ) : null}
                   <Button
                     size="sm"
+                    variant={hasFeedbackToSend ? "outline" : "default"}
                     className="flex-1"
-                    onClick={() => handleSubmit("changes-requested")}
+                    onClick={() => handleSubmit("approved")}
+                    title={
+                      openDiscussionCount > 0
+                        ? "Start implementing, with your open comments sent as refinements"
+                        : undefined
+                    }
                   >
-                    <SendIcon className="size-3.5" aria-hidden /> Send feedback
-                    {openDiscussionCount > 0 ? (
-                      <span className="ml-1 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">
-                        {openDiscussionCount}
-                      </span>
-                    ) : null}
+                    <CheckIcon className="size-3.5" aria-hidden />{" "}
+                    {openDiscussionCount > 0 ? "Approve with comments" : "Approve"}
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant={hasFeedbackToSend ? "outline" : "default"}
-                  className="flex-1"
-                  onClick={() => handleSubmit("approved")}
-                >
-                  <CheckIcon className="size-3.5" aria-hidden /> Approve
-                </Button>
-              </div>
+                </div>
+              )}
               <div className="flex items-center gap-1">
                 <Button
                   size="sm"
                   variant="ghost"
                   className="flex-1"
                   onClick={handleSaveVersion}
-                  disabled={!isDirty || isHtmlPlan}
+                  disabled={!isDirty || isHtmlPlan || hasUnsavedEdits}
                 >
                   Save version
                 </Button>

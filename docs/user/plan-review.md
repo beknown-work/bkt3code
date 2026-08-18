@@ -58,6 +58,9 @@ changes are recorded as tracked changes attributed to you rather than silently
 overwriting what the agent wrote. Turn it off to edit in place.
 
 **Save version** records your edits as a new version without sending anything.
+While you have unsaved edits, **Save the plan** replaces the decision buttons:
+approving or sending feedback on a plan whose edits are not yet a version leaves
+it ambiguous which text was actually agreed, so saving comes first.
 
 If two people edit the same plan at once, the second save is refused with a
 notice rather than overwriting the first. Reload the panel to pick up their
@@ -82,6 +85,9 @@ one.
   genuinely cannot see the plan any more — the session compacted its context
   after the plan was written, or it is no longer running — the full plan is
   repeated, and the confirmation says so.
+  - With open comments the button reads **Approve with comments**. Implementation
+    still starts; your comments travel as refinements to apply along the way,
+    rather than as a request to go back and re-plan.
 - **Send feedback** asks for a revision. The agent receives your comments with
   the lines they point at, plus a diff of any edits you made — not the document.
 - **Discard** closes the review without telling the agent anything.
