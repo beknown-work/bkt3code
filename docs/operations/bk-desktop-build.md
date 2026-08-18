@@ -244,6 +244,10 @@ Six guards run before anything is published, each blocking:
 
 Assets are uploaded to a **draft**, verified by name, byte size and upload state, and only then flipped to a prerelease. A draft is not in the releases feed, so no client can observe a half-uploaded release and 404 mid-update. A failed upload leaves a draft behind — delete it and re-run rather than publishing over it.
 
+If a publish fails partway, it leaves a **draft** holding that version's tag. That is intentional — a draft is invisible to clients — but it used to wedge the channel: the build job resolves the next version with `contents: read`, and GitHub hides drafts from callers without push access, so it kept reissuing the same version while the publisher kept rejecting it as taken. The publisher now deletes a stale draft for the version it is publishing and continues. A draft left by an _unrelated_ failure can still be removed by hand with `gh release delete <tag> --yes`.
+
+Release notes record the signing identity as a **fingerprint of the designated requirement**, never the raw string. This repository is public and an Apple-issued certificate embeds the developer's email and Team ID in its common name; publishing the raw requirement would put that on every release. The fingerprint answers "did the signing identity change between builds?", which is the operational question. For the raw value, run `codesign -dr -` against the app.
+
 Once a version is published, **never replace its ZIP or manifest.** Clients cache by version; a mutated asset is undetectable and unfixable from their side. Publish a higher version instead.
 
 After publishing, confirm the upstream pipeline did not fire and that npm is untouched:

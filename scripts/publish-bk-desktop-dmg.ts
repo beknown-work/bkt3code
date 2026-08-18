@@ -59,7 +59,9 @@ const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
 
-const GhReleaseList = Schema.Array(Schema.Struct({ tagName: Schema.String }));
+const GhReleaseList = Schema.Array(
+  Schema.Struct({ tagName: Schema.String, isDraft: Schema.Boolean }),
+);
 const decodeGhReleaseList = Schema.decodeUnknownEffect(Schema.fromJsonString(GhReleaseList));
 
 const GhAssetList = Schema.Struct({
@@ -251,6 +253,22 @@ export class IncompleteReleaseUploadError extends Schema.TaggedErrorClass<Incomp
   }
 }
 
+export class StaleDraftCleanupError extends Schema.TaggedErrorClass<StaleDraftCleanupError>()(
+  "StaleDraftCleanupError",
+  {
+    tag: Schema.String,
+    stderrTail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `Could not remove the stale draft ${this.tag} left by an earlier failed publish: ` +
+      `${this.stderrTail}. Delete it by hand with \`gh release delete ${this.tag} --yes\`; ` +
+      `until it is gone this channel cannot publish.`
+    );
+  }
+}
+
 export class InvalidPublishChannelError extends Schema.TaggedErrorClass<InvalidPublishChannelError>()(
   "InvalidPublishChannelError",
   {
@@ -354,7 +372,7 @@ const listPublishedTags = Effect.fn("listPublishedTags")(function* () {
     "--limit",
     "100",
     "--json",
-    "tagName",
+    "tagName,isDraft",
   ]);
   if (result.exitCode !== 0) {
     return yield* new GhCommandFailedError({
@@ -364,8 +382,7 @@ const listPublishedTags = Effect.fn("listPublishedTags")(function* () {
     });
   }
 
-  const releases = yield* decodeGhReleaseList(result.stdout);
-  return releases.map((release) => release.tagName);
+  return yield* decodeGhReleaseList(result.stdout);
 });
 
 const collectAssets = Effect.fn("collectAssets")(function* (
@@ -460,25 +477,38 @@ const assertSignedBuild = Effect.fn("assertSignedBuild")(function* (
 });
 
 /**
- * Reads the signing authority and the designated requirement, for the notes.
+ * Stable, non-identifying fingerprint of a designated requirement.
+ *
+ * Normalises away the `Executable=` suffix `codesign -dr -` appends, which is
+ * the build machine's temp path and differs on every run — including it would
+ * make two identical identities look different, and leak a runner path.
+ */
+export function fingerprintDesignatedRequirement(requirement: string): string {
+  const withoutExecutable = requirement.split(/\s*Executable=/)[0]?.trim() ?? requirement.trim();
+  return NodeCrypto.createHash("sha256").update(withoutExecutable).digest("hex").slice(0, 16);
+}
+
+/**
+ * Fingerprints the designated requirement, for the release notes.
  *
  * The *requirement* is the load-bearing value, not the CDHash: Squirrel.Mac
  * validates an update by checking it satisfies the installed app's designated
- * requirement, and for a self-signed certificate that requirement pins the leaf
- * certificate hash. So when an update refuses to install, "do these two strings
- * match?" is the first question, and the answer belongs in the release rather
+ * requirement. So when an update refuses to install, "did this change between
+ * builds?" is the first question, and the answer belongs in the release rather
  * than only on somebody's laptop.
  *
  * Deliberately not `CDHash`, which `codesign -dv` also prints: that is a hash of
  * the code directory and changes with every build, so recording it as though it
  * identified the certificate would mislead exactly when it matters.
+ *
+ * Published as a HASH, never the raw string. This repository is public, and an
+ * Apple-issued certificate embeds the developer's email and Team ID in its
+ * common name — which the raw requirement would then publish on every release.
+ * A hash answers "did the signing identity change?" without putting personal
+ * data in a public place. The raw string is still one `codesign -dr -` away for
+ * anyone actually debugging an install.
  */
 const describeSignature = Effect.fn("describeSignature")(function* (appPath: string) {
-  // codesign writes its description to stderr, including on success.
-  const described = yield* runCommand("codesign", ["-dv", "--verbose=4", appPath]);
-  const authority =
-    /^Authority=(.+)$/m.exec(`${described.stderr}\n${described.stdout}`)?.[1]?.trim() ?? "unknown";
-
   const requirement = yield* runCommand("codesign", ["-dr", "-", appPath]);
   const designated =
     /designated\s*=>\s*(.+)/s
@@ -486,7 +516,7 @@ const describeSignature = Effect.fn("describeSignature")(function* (appPath: str
       ?.trim()
       .replace(/\s+/g, " ") ?? "unknown";
 
-  return { authority, designatedRequirement: designated };
+  return { fingerprint: fingerprintDesignatedRequirement(designated) };
 });
 
 /**
@@ -656,10 +686,39 @@ const command = Command.make(
         });
       }
 
-      const publishedTags = yield* listPublishedTags();
-      if (publishedTags.some((published) => published.trim() === tag)) {
+      const releases = yield* listPublishedTags();
+      const existing = releases.find((release) => release.tagName.trim() === tag);
+      if (existing && !existing.isDraft) {
         return yield* new ReleaseTagAlreadyExistsError({ tag });
       }
+      if (existing?.isDraft) {
+        // A draft holding this tag is the wreckage of an earlier failed publish,
+        // not a real release: drafts create no git tag, and nothing has ever been
+        // visible to a client. Left alone it wedges the channel permanently,
+        // because the version resolver in the build job runs with `contents: read`
+        // and GitHub hides drafts from callers without push access — so it keeps
+        // handing out this same version, and this guard keeps rejecting it.
+        // Clear it and continue; the assets are re-uploaded below either way.
+        yield* Console.log(`Removing a stale draft left by an earlier failed publish: ${tag}`);
+        const removed = yield* runGh([
+          "release",
+          "delete",
+          tag,
+          "--repo",
+          BK_DESKTOP_RELEASE_REPOSITORY,
+          "--yes",
+        ]);
+        if (removed.exitCode !== 0) {
+          return yield* new StaleDraftCleanupError({
+            tag,
+            stderrTail: removed.stderr.trim() || removed.stdout.trim(),
+          });
+        }
+      }
+
+      const publishedTags = releases
+        .filter((release) => !release.isDraft)
+        .map((release) => release.tagName);
 
       // Guard 3: the version must be strictly newer *within its own channel*, or
       // the updater ignores it. The other app's releases are irrelevant here.
@@ -710,12 +769,11 @@ const command = Command.make(
         `| Bundle id | \`${brand.appId}\` |`,
         `| Updater channel | \`${brand.updateChannel}\` |`,
         `| Architecture | arm64 (Apple Silicon) |`,
-        `| Signing identity | ${signature.authority} |`,
-        `| Designated requirement | \`${signature.designatedRequirement}\` |`,
+        `| Signing identity | \`${signature.fingerprint}\` (designated-requirement fingerprint) |`,
         ``,
         `Keyless build: identity comes from the device-bound pairing credential, not Clerk.`,
         ``,
-        `Self-signed and not notarised, so macOS quarantines it on first install:`,
+        `Code signed but not notarised, so macOS quarantines it on first install:`,
         ``,
         "```sh",
         `xattr -dr com.apple.quarantine "/Applications/${brand.productName}.app"`,
@@ -724,8 +782,7 @@ const command = Command.make(
         `Later builds arrive through the in-app updater, which notifies you when one is ready.`,
       ].join("\n");
 
-      yield* Console.log(`Signature verified: ${signature.authority}`);
-      yield* Console.log(`Designated requirement: ${signature.designatedRequirement}`);
+      yield* Console.log(`Signature verified (identity fingerprint ${signature.fingerprint}).`);
       yield* Console.log(`Assets (${assets.length}):`);
       for (const asset of assets) {
         yield* Console.log(`  ${path.basename(asset)}`);
