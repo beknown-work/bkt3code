@@ -41,6 +41,12 @@ export interface ProviderSessionExecutionOptions {
   readonly environment?: NodeJS.ProcessEnv;
   /** T3-CUSTOM(expbkt3): User whose delegated MCP grants back this ACP generation. */
   readonly actorUserId?: UserId | null;
+  /**
+   * T3-CUSTOM(expbkt3): Additive session-identity markers, folded into
+   * `environment` just before the adapter spawns. Kept separate from it so
+   * `environment` keeps meaning "source-control identity" everywhere else.
+   */
+  readonly identityEnvironment?: NodeJS.ProcessEnv;
 }
 
 export interface ProviderThreadTurnSnapshot {

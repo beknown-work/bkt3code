@@ -109,6 +109,8 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ClerkIdentityVerifier from "./auth/ClerkIdentityVerifier.ts";
 import * as EnvironmentUserService from "./auth/EnvironmentUserService.ts";
+// T3-CUSTOM(expbkt3): session-identity markers for provider sessions.
+import * as SessionIdentityEnvironment from "./identity/SessionIdentityEnvironment.ts";
 import {
   connectHttpApiLayer,
   pendingServiceUpdateExists,
@@ -427,6 +429,12 @@ const AuthLayerLive = EnvironmentUserService.layer.pipe(
   Layer.provideMerge(ClerkIdentityVerifier.layer),
 );
 
+// T3-CUSTOM(expbkt3): provider sessions read owner and sender identity from the
+// same environment-user directory the auth layer already builds.
+const SessionIdentityLayerLive = SessionIdentityEnvironment.layer.pipe(
+  Layer.provideMerge(AuthLayerLive),
+);
+
 const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   RelayClientLive,
   CloudManagedEndpointRuntime.layer.pipe(
@@ -541,7 +549,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
-  Layer.provideMerge(AuthLayerLive),
+  Layer.provideMerge(SessionIdentityLayerLive),
   // T3-CUSTOM(expbkt3): Keep the personal MCP store beside its write-only
   // secret dependency in one merge seam. Besides making upstream rebases
   // mechanical, grouping these avoids exceeding Effect's typed pipe arity.

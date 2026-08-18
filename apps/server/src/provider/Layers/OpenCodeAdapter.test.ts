@@ -323,6 +323,31 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  // T3-CUSTOM(expbkt3): the session-identity markers travel in the same field
+  // as a source-control identity but claim none, so they must not turn an
+  // external OpenCode server into a failed session start.
+  it.effect("starts against an external OpenCode server carrying identity markers", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const session = yield* adapter.startSession(
+        {
+          provider: ProviderDriverKind.make("opencode"),
+          threadId: asThreadId("thread-external-markers"),
+          runtimeMode: "full-access",
+        },
+        {
+          environment: {
+            BK_IDENTITY_RUNTIME: "t3-code",
+            BK_SESSION_OWNER_EMAIL: "alice@example.com",
+          },
+        },
+      );
+
+      NodeAssert.equal(session.threadId, asThreadId("thread-external-markers"));
+      yield* adapter.stopSession(asThreadId("thread-external-markers"));
+    }),
+  );
+
   it.effect("injects thread-owned identity into a locally managed OpenCode server", () =>
     Effect.gen(function* () {
       const localSettings = yield* decodeOpenCodeSettings({

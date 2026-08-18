@@ -18,6 +18,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  SourceControlProfileId,
   ThreadId,
   TurnId,
   UserId,
@@ -46,6 +47,13 @@ import {
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
 import { TextGeneration, type TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+// T3-CUSTOM(expbkt3): session identity carried into provider sessions.
+import {
+  SessionIdentityEnvironmentService,
+  buildSessionIdentityEnvironment,
+  type SessionIdentityRequest,
+} from "../../identity/SessionIdentityEnvironment.ts";
+import { SourceControlProfileService } from "../../sourceControl/SourceControlProfileService.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -238,6 +246,12 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
     readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
+    /**
+     * T3-CUSTOM(expbkt3): source-control environment a thread profile would
+     * inject. Absent means machine identity mode, where the profile service
+     * resolves no context at all.
+     */
+    readonly sourceControlEnvironment?: NodeJS.ProcessEnv;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -253,7 +267,9 @@ describe("ProviderCommandReactor", () => {
       model: "gpt-5-codex",
     };
     const startSessionEffect = input?.startSessionEffect;
-    const startSession = vi.fn((_: unknown, input: unknown) => {
+    // T3-CUSTOM(expbkt3): the third argument carries execution options, which
+    // now include the session identity the provider spawns with.
+    const startSession = vi.fn((_: unknown, input: unknown, _executionOptions?: unknown) => {
       const sessionIndex = nextSessionIndex++;
       const resumeCursor =
         typeof input === "object" && input !== null && "resumeCursor" in input
@@ -504,6 +520,41 @@ describe("ProviderCommandReactor", () => {
         Layer.mock(TextGeneration, {
           generateBranchName,
           generateThreadTitle,
+        }),
+      ),
+      // T3-CUSTOM(expbkt3): identity comes from the environment-user directory;
+      // the harness stands in for it with a deterministic address per user.
+      Layer.provideMerge(
+        Layer.succeed(
+          SessionIdentityEnvironmentService,
+          SessionIdentityEnvironmentService.of({
+            resolve: (request: SessionIdentityRequest) =>
+              Effect.succeed(
+                buildSessionIdentityEnvironment({
+                  ownerEmail:
+                    request.ownerUserId === null ? null : `${request.ownerUserId}@example.test`,
+                  senderEmail:
+                    request.senderUserId === null ? null : `${request.senderUserId}@example.test`,
+                }),
+              ),
+          }),
+        ),
+      ),
+      Layer.provideMerge(
+        Layer.mock(SourceControlProfileService)({
+          resolveThreadExecutionContext: () =>
+            Effect.succeed(
+              input?.sourceControlEnvironment === undefined
+                ? null
+                : {
+                    profileId: SourceControlProfileId.make("github_test"),
+                    provider: "github" as const,
+                    login: "test-login",
+                    gitName: "Test Profile",
+                    gitEmail: "test@users.noreply.github.com",
+                    environment: input.sourceControlEnvironment,
+                  },
+            ),
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -2058,6 +2109,179 @@ describe("ProviderCommandReactor", () => {
         yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
         expect(harness.stopSession.mock.calls.length).toBe(0);
       }),
+  );
+
+  // T3-CUSTOM(expbkt3): TEC-964 — an agent must be able to name the person it
+  // works for without reading the shared machine.
+  effectIt.effect("carries the thread owner and message sender into the provider session", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.owner.transfer",
+        commandId: CommandId.make("cmd-identity-transfer-1"),
+        threadId: ThreadId.make("thread-1"),
+        userId: UserId.make("user-owner"),
+      });
+      yield* harness.engine.dispatch(
+        {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-identity-turn-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-identity-1"),
+            role: "user",
+            text: "who am I talking to",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        },
+        { actorUserId: UserId.make("user-sender") },
+      );
+
+      yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+      expect(harness.startSession.mock.calls[0]?.[2]).toMatchObject({
+        identityEnvironment: {
+          BK_IDENTITY_RUNTIME: "t3-code",
+          BK_SESSION_OWNER_EMAIL: "user-owner@example.test",
+          BK_MESSAGE_SENDER_EMAIL: "user-sender@example.test",
+        },
+      });
+      // Machine identity mode injects no source-control environment.
+      const executionOptions = harness.startSession.mock.calls[0]?.[2] as
+        | { readonly environment?: NodeJS.ProcessEnv }
+        | undefined;
+      expect(executionOptions?.environment).toBeUndefined();
+    }),
+  );
+
+  effectIt.effect("reports no sender when the turn has no identified author", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-identity-anonymous-1"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-identity-anonymous-1"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+      const executionOptions = harness.startSession.mock.calls[0]?.[2] as
+        | { readonly identityEnvironment?: NodeJS.ProcessEnv }
+        | undefined;
+      expect(executionOptions?.identityEnvironment).toStrictEqual({
+        BK_IDENTITY_RUNTIME: "t3-code",
+      });
+    }),
+  );
+
+  effectIt.effect("composes identity with a thread source-control profile", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ sourceControlEnvironment: { GH_TOKEN: "profile-token" } }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch(
+        {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-identity-profile-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-identity-profile-1"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        },
+        { actorUserId: UserId.make("user-sender") },
+      );
+
+      yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+      expect(harness.startSession.mock.calls[0]?.[2]).toMatchObject({
+        environment: { GH_TOKEN: "profile-token" },
+        identityEnvironment: {
+          BK_IDENTITY_RUNTIME: "t3-code",
+          BK_MESSAGE_SENDER_EMAIL: "user-sender@example.test",
+        },
+      });
+    }),
+  );
+
+  effectIt.effect("restarts the provider session when the thread changes owner", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch(
+        {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-identity-owner-turn-1"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-identity-owner-1"),
+            role: "user",
+            text: "first",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        },
+        { actorUserId: UserId.make("user-sender") },
+      );
+      yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      // The sender is unchanged, so only the owner transfer can restart this.
+      yield* harness.engine.dispatch({
+        type: "thread.owner.transfer",
+        commandId: CommandId.make("cmd-identity-owner-transfer-1"),
+        threadId: ThreadId.make("thread-1"),
+        userId: UserId.make("user-new-owner"),
+      });
+      yield* harness.engine.dispatch(
+        {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-identity-owner-turn-2"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-identity-owner-2"),
+            role: "user",
+            text: "second",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        },
+        { actorUserId: UserId.make("user-sender") },
+      );
+
+      yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 2));
+      expect(harness.startSession.mock.calls[1]?.[2]).toMatchObject({
+        identityEnvironment: {
+          BK_SESSION_OWNER_EMAIL: "user-new-owner@example.test",
+          BK_MESSAGE_SENDER_EMAIL: "user-sender@example.test",
+        },
+      });
+    }),
   );
 
   it("restarts an existing Codex thread on a compatible requested instance", async () => {

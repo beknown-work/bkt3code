@@ -64,6 +64,12 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadExecutionSupervisor } from "../../execution/ThreadExecutionSupervisor.ts";
 import { SourceControlProfileService } from "../../sourceControl/SourceControlProfileService.ts";
+// T3-CUSTOM(expbkt3): session-identity markers injected into provider sessions.
+import {
+  SessionIdentityEnvironmentService,
+  sessionIdentityFingerprint,
+  unresolvedSessionIdentityEnvironment,
+} from "../../identity/SessionIdentityEnvironment.ts";
 import { ServerConfig } from "../../config.ts";
 // T3-CUSTOM(expbkt3): schema guards preserve setup launch certainty across the durable boundary.
 import {
@@ -449,6 +455,9 @@ const make = Effect.gen(function* () {
   // T3-CUSTOM(expbkt3): optional keeps isolated upstream reactor tests lightweight.
   const durableIntentRepository = yield* Effect.serviceOption(DurableExecutionIntentRepository);
   const sourceControlProfiles = yield* Effect.serviceOption(SourceControlProfileService);
+  // T3-CUSTOM(expbkt3): optional for the same reason as the profile service —
+  // isolated upstream reactor tests do not build the user directory.
+  const sessionIdentity = yield* Effect.serviceOption(SessionIdentityEnvironmentService);
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -470,6 +479,10 @@ const make = Effect.gen(function* () {
   // were bound when this reactor started each ACP session. An absent entry
   // means a pre-existing session has not yet been rebound in this process.
   const threadCredentialActors = new Map<ThreadId, UserId | null>();
+  // T3-CUSTOM(expbkt3): identity environment the live provider process for each
+  // thread was spawned with. A process reads its environment once, so this is
+  // what makes an owner transfer or a new sender observable as staleness.
+  const threadSessionIdentities = new Map<ThreadId, NodeJS.ProcessEnv>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -603,6 +616,48 @@ const make = Effect.gen(function* () {
     return context ? { environment: context.environment } : undefined;
   });
 
+  // T3-CUSTOM(expbkt3): resolves who owns this thread and who sent the message
+  // being answered, from the durable environment-user directory. `undefined`
+  // means "this operation has no sender of its own" — an interrupt or an
+  // approval reply — and reuses whatever the live session was started with, so
+  // a session recovered by one of those paths does not drift from the identity
+  // this reactor is tracking for the thread.
+  const resolveSessionIdentityEnvironment = Effect.fnUntraced(function* (
+    thread: OrchestrationThread,
+    senderUserId: UserId | null | undefined,
+  ) {
+    if (senderUserId === undefined) {
+      const bound = threadSessionIdentities.get(thread.id);
+      if (bound !== undefined) {
+        return bound;
+      }
+    }
+    return yield* Option.match(sessionIdentity, {
+      onNone: () => Effect.succeed(unresolvedSessionIdentityEnvironment()),
+      onSome: (service) =>
+        service.resolve({
+          ownerUserId: thread.ownerUserId,
+          senderUserId: senderUserId ?? null,
+        }),
+    });
+  });
+
+  // T3-CUSTOM(expbkt3): the source-control profile environment and the identity
+  // markers compose — a thread-profile session carries both, a machine-identity
+  // session carries the markers alone.
+  const resolveSessionExecutionOptions = Effect.fnUntraced(function* (
+    thread: OrchestrationThread,
+    method: string,
+    senderUserId: UserId | null | undefined,
+  ): Effect.fn.Return<ProviderSessionExecutionOptions, ProviderAdapterRequestError> {
+    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+      thread,
+      method,
+    );
+    const identityEnvironment = yield* resolveSessionIdentityEnvironment(thread, senderUserId);
+    return { ...sourceControlExecutionOptions, identityEnvironment };
+  });
+
   const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly currentModelSelection: ModelSelection;
@@ -715,6 +770,12 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
       readonly actorUserId?: UserId | null;
+      /**
+       * T3-CUSTOM(expbkt3): the user who actually sent this message, with no
+       * owner fallback — an inferred sender is the misattribution this exists
+       * to prevent.
+       */
+      readonly messageSenderUserId?: UserId | null;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -853,10 +914,15 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
-    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+    // T3-CUSTOM(expbkt3): source-control profile environment plus the session
+    // identity markers the agent reads to name the person it works for.
+    const sessionExecutionOptions = yield* resolveSessionExecutionOptions(
       thread,
       "thread.turn.start",
+      options?.messageSenderUserId ?? null,
     );
+    const desiredSessionIdentity =
+      sessionExecutionOptions.identityEnvironment ?? unresolvedSessionIdentityEnvironment();
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -874,7 +940,7 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
         },
         {
-          ...sourceControlExecutionOptions,
+          ...sessionExecutionOptions,
           actorUserId: desiredCredentialActor,
         },
       );
@@ -889,6 +955,7 @@ const make = Effect.gen(function* () {
           });
         }
         threadCredentialActors.set(threadId, desiredCredentialActor);
+        threadSessionIdentities.set(threadId, desiredSessionIdentity);
         yield* setThreadSession({
           threadId,
           session: {
@@ -935,6 +1002,14 @@ const make = Effect.gen(function* () {
       const credentialActorChanged =
         !threadCredentialActors.has(threadId) ||
         threadCredentialActors.get(threadId) !== desiredCredentialActor;
+      // T3-CUSTOM(expbkt3): the running process already read its environment,
+      // so an owner transfer or a different sender only reaches the agent
+      // through a fresh session.
+      const boundSessionIdentity = threadSessionIdentities.get(threadId);
+      const sessionIdentityChanged =
+        boundSessionIdentity === undefined ||
+        sessionIdentityFingerprint(boundSessionIdentity) !==
+          sessionIdentityFingerprint(desiredSessionIdentity);
 
       if (
         !runtimeModeChanged &&
@@ -942,7 +1017,8 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !credentialActorChanged
+        !credentialActorChanged &&
+        !sessionIdentityChanged
       ) {
         return existingSessionThreadId;
       }
@@ -968,6 +1044,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         credentialActorChanged,
+        sessionIdentityChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -997,6 +1074,8 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
     readonly actorUserId?: UserId | null;
+    /** T3-CUSTOM(expbkt3): sender of this message, never the owner by fallback. */
+    readonly messageSenderUserId?: UserId | null;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -1009,6 +1088,7 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
       actorUserId: input.actorUserId ?? thread.ownerUserId,
+      messageSenderUserId: input.messageSenderUserId ?? null,
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1523,6 +1603,7 @@ const make = Effect.gen(function* () {
         : {}),
       interactionMode: event.payload.interactionMode,
       actorUserId: message.sentByUserId ?? thread.ownerUserId,
+      messageSenderUserId: message.sentByUserId ?? null,
       createdAt: event.payload.createdAt,
     }).pipe(
       // T3-CUSTOM(expbkt3): record the failure for the user, then re-fail with
@@ -1535,9 +1616,10 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+    const sessionExecutionOptions = yield* resolveSessionExecutionOptions(
       thread,
       "thread.turn.start",
+      message.sentByUserId ?? null,
     );
 
     if (!(yield* executionSupervisor.canContinueExecution(event.payload.threadId, executionId))) {
@@ -1558,7 +1640,7 @@ const make = Effect.gen(function* () {
           canContinue
             ? providerService.sendTurn(
                 { ...sendTurnRequest, clientExecutionId: executionId },
-                sourceControlExecutionOptions,
+                sessionExecutionOptions,
               )
             : Effect.succeed(undefined),
         ),
@@ -1588,13 +1670,14 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+    const sessionExecutionOptions = yield* resolveSessionExecutionOptions(
       thread,
       "thread.turn.interrupt",
+      undefined,
     );
     yield* providerService.interruptTurn(
       { threadId: event.payload.threadId },
-      sourceControlExecutionOptions,
+      sessionExecutionOptions,
     );
   });
 
@@ -1618,9 +1701,10 @@ const make = Effect.gen(function* () {
       });
     }
 
-    const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+    const sessionExecutionOptions = yield* resolveSessionExecutionOptions(
       thread,
       "thread.approval.respond",
+      undefined,
     );
     yield* providerService
       .respondToRequest(
@@ -1629,7 +1713,7 @@ const make = Effect.gen(function* () {
           requestId: event.payload.requestId,
           decision: event.payload.decision,
         },
-        sourceControlExecutionOptions,
+        sessionExecutionOptions,
       )
       .pipe(
         Effect.catchCause((cause) =>
@@ -1669,9 +1753,10 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const sourceControlExecutionOptions = yield* resolveSourceControlExecutionOptions(
+      const sessionExecutionOptions = yield* resolveSessionExecutionOptions(
         thread,
         "thread.user-input.respond",
+        undefined,
       );
       yield* providerService
         .respondToUserInput(
@@ -1680,7 +1765,7 @@ const make = Effect.gen(function* () {
             requestId: event.payload.requestId,
             answers: event.payload.answers,
           },
-          sourceControlExecutionOptions,
+          sessionExecutionOptions,
         )
         .pipe(
           Effect.catchCause((cause) =>
@@ -2319,6 +2404,7 @@ const make = Effect.gen(function* () {
           : { modelSelection: input.intent.modelSelection }),
         interactionMode: input.event.payload.interactionMode,
         actorUserId: input.intent.actingUserId ?? thread.ownerUserId,
+        messageSenderUserId: input.intent.actingUserId ?? null,
         createdAt: input.event.payload.createdAt,
       }).pipe(
         Effect.mapError(
@@ -2331,9 +2417,10 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-      const executionOptions = yield* resolveSourceControlExecutionOptions(
+      const executionOptions = yield* resolveSessionExecutionOptions(
         thread,
         "thread.turn.start",
+        input.intent.actingUserId ?? null,
       ).pipe(
         Effect.mapError(
           (cause) =>
@@ -2620,9 +2707,10 @@ const make = Effect.gen(function* () {
               readProviderThread !== undefined &&
               (mode === "inspect-or-continue" || intent.providerTurnId !== null)
             ) {
-              const executionOptions = yield* resolveSourceControlExecutionOptions(
+              const executionOptions = yield* resolveSessionExecutionOptions(
                 thread,
                 "thread.turn.start",
+                undefined,
               ).pipe(
                 Effect.mapError(
                   (cause) =>
