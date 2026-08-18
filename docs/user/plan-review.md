@@ -25,10 +25,14 @@ the maximise control in the panel header for a full-width read.
 ## Commenting
 
 Select any text in the plan and choose **Comment**. The selection highlights as
-soon as you start, and a comment box opens beside it — `⌘/Ctrl+Enter` saves,
-`Esc` cancels. The comment is anchored to the exact lines you selected, and those
-lines are quoted back to the agent when you send feedback — the rest of the plan
-is not repeated.
+soon as you start, and a comment box opens under the plan, quoting what you
+selected — `⌘/Ctrl+Enter` saves, `Esc` cancels. Your place in the plan is not
+disturbed, and the box grows as you write, up to a third of the window, so a
+longer comment stays readable while you write it.
+
+The comment is anchored to the exact lines you selected, and those lines are
+quoted back to the agent when you send feedback — the rest of the plan is not
+repeated.
 
 Saved comments keep an amber highlight on the text they point at, so you can see
 what has already been commented on without reading the rail. Hovering or clicking

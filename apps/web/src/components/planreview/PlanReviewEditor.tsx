@@ -68,7 +68,7 @@ import {
   useState,
 } from "react";
 
-import { PlanReviewCommentPopover } from "./plate/PlanReviewCommentPopover";
+import { PlanReviewCommentComposer } from "./plate/PlanReviewCommentComposer";
 import {
   PLAN_REVIEW_QUICK_LABELS,
   PlanReviewFloatingToolbar,
@@ -576,17 +576,22 @@ function PlanReviewEditorImpl({
           readOnly={readOnly}
           hidden={pendingQuote !== null}
         />
-        {pendingQuote !== null ? (
-          <PlanReviewCommentPopover
-            containerRef={surfaceRef}
-            quotedText={pendingQuote}
-            body={commentBody}
-            onBodyChange={setCommentBody}
-            onSubmit={submitComment}
-            onCancel={cancelComment}
-          />
-        ) : null}
       </div>
+
+      {/*
+        Outside the scroll container on purpose: as a child it scrolled the plan
+        when it took focus, which threw the reviewer back to the top of a long
+        document the moment they started writing.
+      */}
+      {pendingQuote !== null ? (
+        <PlanReviewCommentComposer
+          quotedText={pendingQuote}
+          body={commentBody}
+          onBodyChange={setCommentBody}
+          onSubmit={submitComment}
+          onCancel={cancelComment}
+        />
+      ) : null}
     </div>
   );
 }

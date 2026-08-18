@@ -523,14 +523,12 @@ export default function PlanReviewPanel({
                   </p>
                 </>
               ) : (
-                <div className="flex items-center gap-1.5">
+                /* Stacked, not side by side: the rail is 288px and
+                   "Approve with comments" was being cut in half by a shared row. */
+                <div className="flex flex-col gap-1.5">
                   {hasFeedbackToSend ? (
-                    <Button
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => handleSubmit("changes-requested")}
-                    >
-                      <SendIcon className="size-3.5" aria-hidden /> Send feedback
+                    <Button size="sm" onClick={() => handleSubmit("changes-requested")}>
+                      <SendIcon className="size-3.5 shrink-0" aria-hidden /> Send feedback
                       {openDiscussionCount > 0 ? (
                         <span className="ml-1 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">
                           {openDiscussionCount}
@@ -541,7 +539,6 @@ export default function PlanReviewPanel({
                   <Button
                     size="sm"
                     variant={hasFeedbackToSend ? "outline" : "default"}
-                    className="flex-1"
                     onClick={() => handleSubmit("approved")}
                     title={
                       openDiscussionCount > 0
@@ -549,8 +546,10 @@ export default function PlanReviewPanel({
                         : undefined
                     }
                   >
-                    <CheckIcon className="size-3.5" aria-hidden />{" "}
-                    {openDiscussionCount > 0 ? "Approve with comments" : "Approve"}
+                    <CheckIcon className="size-3.5 shrink-0" aria-hidden />
+                    <span className="truncate">
+                      {openDiscussionCount > 0 ? "Approve with comments" : "Approve"}
+                    </span>
                   </Button>
                 </div>
               )}

@@ -110,10 +110,10 @@ export function PlanReviewFloatingToolbar({
   readonly onComment: () => void;
   readonly onQuickLabel: (label: PlanReviewQuickLabel) => void;
   readonly readOnly: boolean;
-  /** Suppressed while the comment popover owns the selection. */
+  /** Suppressed while the comment composer owns the selection. */
   readonly hidden?: boolean;
 }) {
-  const anchor = useSelectionAnchor({ containerRef, frozen: hidden });
+  const anchor = useSelectionAnchor({ containerRef });
 
   if (hidden || anchor === null) return null;
 
