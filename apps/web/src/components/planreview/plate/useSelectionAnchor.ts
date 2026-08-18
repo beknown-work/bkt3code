@@ -6,9 +6,9 @@
  * `getBoundingClientRect` is far less weight than another positioning
  * dependency.
  *
- * Shared by the selection toolbar and the comment popover so the two agree on
- * where "beside the selection" is, and so the clamping that keeps a surface
- * inside a narrow right-hand panel is written once.
+ * Used by the selection toolbar. The comment composer deliberately does not use
+ * it: it docks under the document instead of floating over it, because a surface
+ * inside the scroll container scrolls the plan when it takes focus.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -16,22 +16,14 @@ export interface SelectionAnchor {
   /** Offsets within the scrolling container, not the viewport. */
   readonly top: number;
   readonly left: number;
-  /** Bottom edge of the selection, for a surface that sits below it. */
-  readonly bottom: number;
 }
 
 export interface UseSelectionAnchorOptions {
   readonly containerRef: React.RefObject<HTMLElement | null>;
-  /**
-   * Freezes the anchor. A popover opens against the selection and must not move
-   * when clicking into its own textarea collapses that selection.
-   */
-  readonly frozen?: boolean;
 }
 
 export function useSelectionAnchor({
   containerRef,
-  frozen = false,
 }: UseSelectionAnchorOptions): SelectionAnchor | null {
   const [anchor, setAnchor] = useState<SelectionAnchor | null>(null);
 
@@ -64,20 +56,18 @@ export function useSelectionAnchor({
       // Sit just above the selection, clamped inside the panel so the surface
       // never escapes a narrow right-hand panel.
       top: Math.max(4, rect.top - bounds.top + container.scrollTop - 44),
-      bottom: rect.bottom - bounds.top + container.scrollTop + 8,
       left,
     });
   }, [containerRef]);
 
   useEffect(() => {
-    if (frozen) return;
     document.addEventListener("selectionchange", syncToSelection);
     window.addEventListener("resize", syncToSelection);
     return () => {
       document.removeEventListener("selectionchange", syncToSelection);
       window.removeEventListener("resize", syncToSelection);
     };
-  }, [frozen, syncToSelection]);
+  }, [syncToSelection]);
 
   return anchor;
 }
