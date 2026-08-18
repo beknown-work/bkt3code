@@ -2,6 +2,19 @@ import { CommentPlugin } from "@platejs/comment/react";
 import { getCommentKey, getDraftCommentKey } from "@platejs/comment";
 import { MarkdownPlugin } from "@platejs/markdown";
 import { BoldPlugin } from "@platejs/basic-nodes/react";
+import {
+  BulletedListPlugin,
+  ListItemContentPlugin,
+  ListItemPlugin,
+  ListPlugin,
+  NumberedListPlugin,
+} from "@platejs/list-classic/react";
+import {
+  TableCellHeaderPlugin,
+  TableCellPlugin,
+  TablePlugin,
+  TableRowPlugin,
+} from "@platejs/table/react";
 import { TextApi } from "platejs";
 import { createPlateEditor } from "platejs/react";
 import remarkGfm from "remark-gfm";
@@ -10,6 +23,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   collectPlanReviewBlocks,
   locatePlanReviewQuoteRange,
+  stripPlanReviewCommentMarks,
   type PlanReviewNodeLike,
 } from "./planReviewCommentMarks";
 import { hasPlanReviewEditorChange } from "../planReviewMarkdown";
@@ -230,5 +244,134 @@ describe("comment marks and the serialized document", () => {
     // Only the draft key is unset; the plugin's normalizer drops the orphaned
     // `comment` mark, so no residue is left behind.
     expect(JSON.stringify(editor.children)).toBe(before);
+  });
+});
+
+describe("stripPlanReviewCommentMarks", () => {
+  it("removes comment properties and leaves everything else alone", () => {
+    expect(
+      stripPlanReviewCommentMarks([
+        {
+          children: [
+            { text: "kept", bold: true, comment: true, comment_d1: true },
+            { text: " plain", commentTransient: true },
+          ],
+        },
+      ] as ReadonlyArray<PlanReviewNodeLike>),
+    ).toEqual([{ children: [{ text: "kept", bold: true }, { text: " plain" }] }]);
+  });
+
+  it("merges leaves that split:true fragmented, so the text reads as one run", () => {
+    expect(
+      stripPlanReviewCommentMarks([
+        {
+          children: [
+            { text: "Backfill " },
+            { text: "the rows", comment: true, comment_d1: true },
+            { text: " safely" },
+          ],
+        },
+      ] as ReadonlyArray<PlanReviewNodeLike>),
+    ).toEqual([{ children: [{ text: "Backfill the rows safely" }] }]);
+  });
+
+  it("keeps differently formatted neighbours apart", () => {
+    expect(
+      stripPlanReviewCommentMarks([
+        {
+          children: [
+            { text: "bold", bold: true, comment: true, comment_d1: true },
+            { text: " plain", comment: true, comment_d1: true },
+          ],
+        },
+      ] as ReadonlyArray<PlanReviewNodeLike>),
+    ).toEqual([{ children: [{ text: "bold", bold: true }, { text: " plain" }] }]);
+  });
+});
+
+/**
+ * The regression behind the reported full-plan resend.
+ *
+ * Plate serializes a commented leaf as an MDX JSX element. In a table cell
+ * `mdast-util-to-markdown` throws on it outright, and the editor reads a failed
+ * serialize as a reviewer edit — so merely commenting on a plan containing a
+ * table made the panel send the agent the entire document back as an edit.
+ */
+describe("commenting a plan with a table, list and inline marks", () => {
+  const RICH = [
+    "## Goals & Non-Goals",
+    "",
+    "| Item | Notes |",
+    "| ---- | ----- |",
+    "| Exercise blocks | headings, tables, fences |",
+    "| Stay readable | scannable in ~30 seconds |",
+    "",
+    "Task list:",
+    "",
+    "- Write the demo plan",
+    "- Include a table",
+    "  - Nested child item",
+    "",
+    "Ordinary prose with **bold**, *italic*, and `inline code`.",
+  ].join("\n");
+
+  function richEditor() {
+    const editor = createPlateEditor({
+      plugins: [
+        BoldPlugin,
+        ListPlugin,
+        ListItemContentPlugin,
+        ListItemPlugin,
+        BulletedListPlugin,
+        NumberedListPlugin,
+        TablePlugin,
+        TableRowPlugin,
+        TableCellPlugin,
+        TableCellHeaderPlugin,
+        CommentPlugin,
+        MarkdownPlugin.configure({ options: { remarkPlugins: [remarkGfm] } }),
+      ],
+    });
+    editor.tf.setValue(editor.api.markdown.deserialize(RICH));
+    return editor;
+  }
+
+  function commentEverywhere(editor: ReturnType<typeof richEditor>) {
+    const blocks = collectPlanReviewBlocks(
+      editor.children as unknown as ReadonlyArray<PlanReviewNodeLike>,
+    );
+    let marked = 0;
+    for (const quote of ["Include a table", "Stay readable", "Ordinary prose with bold"]) {
+      const range = locatePlanReviewQuoteRange(blocks, quote);
+      if (range === null) continue;
+      editor.tf.setNodes(
+        { comment: true, [getCommentKey(`plan-discussion:${quote}`)]: true } as never,
+        { at: range, match: TextApi.isText, split: true } as never,
+      );
+      marked += 1;
+    }
+    return marked;
+  }
+
+  it("still serializes, and byte-identically, once the marks are stripped", () => {
+    const editor = richEditor();
+    const before = editor.api.markdown.serialize();
+
+    expect(commentEverywhere(editor)).toBe(3);
+
+    expect(
+      editor.api.markdown.serialize({
+        value: stripPlanReviewCommentMarks(editor.children) as never,
+      }),
+    ).toBe(before);
+  });
+
+  it("proves the raw serializer is what breaks, so the strip is load-bearing", () => {
+    const editor = richEditor();
+    commentEverywhere(editor);
+
+    // Guards against someone deleting stripPlanReviewCommentMarks because "Plate
+    // seems to handle it now". If this ever stops throwing, the strip can go.
+    expect(() => editor.api.markdown.serialize()).toThrow();
   });
 });

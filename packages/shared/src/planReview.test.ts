@@ -313,6 +313,66 @@ describe("buildPlanReviewApprovalPrompt", () => {
     expect(prompt).not.toContain("3. Flip the flag");
   });
 
+  // T3-CUSTOM(expbkt3): approving with comments open is deliberate — start
+  // implementing, and fold the refinements in. The old wording told the model to
+  // implement "exactly as written" and then handed it a list of changes.
+  describe("approving with open feedback", () => {
+    const withComment = {
+      ...base,
+      comments: [
+        {
+          startIndex: 5,
+          endIndex: 5,
+          quotedText: "2. Backfill the rows",
+          body: "Batch this.",
+          authorLabel: "Tushar",
+        },
+      ],
+    };
+
+    it("tells the agent to implement now and apply the refinements", () => {
+      const prompt = buildPlanReviewApprovalPrompt(withComment);
+
+      expect(prompt).toContain("Plan approved — start implementing it now.");
+      expect(prompt).toContain("Treat them as");
+      expect(prompt).toContain("apply them as you implement");
+      expect(prompt).toContain("Do not go back");
+      expect(prompt).toContain("Batch this.");
+    });
+
+    it("never tells the agent to implement it exactly as written", () => {
+      expect(buildPlanReviewApprovalPrompt(withComment)).not.toContain("exactly as written");
+    });
+
+    it("treats overall notes alone as refinements too", () => {
+      const prompt = buildPlanReviewApprovalPrompt({ ...base, notes: "Ship behind a flag." });
+
+      expect(prompt).toContain("Plan approved — start implementing it now.");
+      expect(prompt).toContain("Reviewer notes:\nShip behind a flag.");
+      expect(prompt).not.toContain("exactly as written");
+    });
+
+    it("keeps the short form when the plan is approved untouched", () => {
+      const prompt = buildPlanReviewApprovalPrompt(base);
+
+      expect(prompt).toBe(
+        "Plan approved. Implement the plan you proposed above, exactly as written.",
+      );
+    });
+
+    it("still applies the refinement instruction when the plan had to be repeated", () => {
+      const prompt = buildPlanReviewApprovalPrompt({
+        ...withComment,
+        fullPlanMarkdown: PLAN,
+        fullPlanReason: "this session compacted its context after the plan was written",
+      });
+
+      expect(prompt).toContain("PLEASE IMPLEMENT THIS APPROVED PLAN:");
+      expect(prompt).toContain("apply them as you implement");
+      expect(prompt).toContain("Batch this.");
+    });
+  });
+
   it("repeats the plan and explains why when the policy demands it", () => {
     const prompt = buildPlanReviewApprovalPrompt({
       ...base,
