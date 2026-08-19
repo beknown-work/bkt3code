@@ -1160,4 +1160,138 @@ describe("EnvironmentSupervisor", () => {
       expect(Option.isNone(yield* SubscriptionRef.get(supervisor.session))).toBe(true);
     }),
   );
+  it.effect("reconnects a half-open connection that never delivers a close event", () =>
+    Effect.gen(function* () {
+      // The deploy case: the server is gone but the socket stays open, so no
+      // close event ever arrives and no signal is queued. Only the idle
+      // heartbeat can notice.
+      const harness = yield* makeHarness({
+        probe: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+
+      // Idle until the heartbeat fires, then the probe stalls out.
+      yield* TestClock.adjust("20 seconds");
+      yield* TestClock.adjust("10 seconds");
+      yield* eventuallyState(supervisor.state, (state) => state.phase !== "connected");
+      expect(Option.isNone(yield* SubscriptionRef.get(supervisor.session))).toBe(true);
+
+      yield* TestClock.adjust("3 seconds");
+      yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(yield* Ref.get(harness.sessionCount)).toBe(2);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("keeps a healthy idle connection untouched while probing it", () =>
+    Effect.gen(function* () {
+      const probeCount = yield* Ref.make(0);
+      const harness = yield* makeHarness({
+        probe: () => Ref.update(probeCount, (count) => count + 1),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* TestClock.adjust("20 seconds");
+      yield* TestClock.adjust("20 seconds");
+      yield* eventuallyState(supervisor.state, (state) => state.phase === "connected");
+
+      // A live connection must not churn: same session, same generation.
+      expect(yield* Ref.get(probeCount)).toBeGreaterThan(0);
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("takes the normal first backoff rung after a heartbeat failure", () =>
+    Effect.gen(function* () {
+      // Unlike a foreground wake probe, nobody is waiting on the app, so a
+      // heartbeat failure must not skip the ladder — that is what keeps a
+      // flapping server from becoming a reconnect storm.
+      const harness = yield* makeHarness({
+        probe: (attempt) =>
+          attempt === 1 ? Effect.fail(transient("The live session is stale.")) : Effect.void,
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* TestClock.adjust("20 seconds");
+      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+
+      yield* TestClock.adjust("3 seconds");
+      yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("probes when a subscription reports the live session as suspect", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        probe: (attempt) =>
+          attempt === 1 ? Effect.fail(transient("The live session is stale.")) : Effect.void,
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      const live = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      yield* supervisor.notifySessionSuspect(live);
+
+      yield* awaitState(supervisor.state, (state) => state.phase !== "connected");
+      yield* TestClock.adjust("3 seconds");
+      yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("ignores a suspect report about a session that is no longer live", () =>
+    Effect.gen(function* () {
+      const probeCount = yield* Ref.make(0);
+      const harness = yield* makeHarness({
+        probe: () => Ref.update(probeCount, (count) => count + 1),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      const stale = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+
+      // Replace the lease, then report the old session: the supervisor must
+      // not probe or churn the connection it just established.
+      yield* harness.closeLatestSession();
+      yield* eventuallyState(supervisor.state, (state) => state.phase !== "connected");
+      yield* TestClock.adjust("3 seconds");
+      yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+
+      const sessionsBefore = yield* Ref.get(harness.sessionCount);
+      yield* supervisor.notifySessionSuspect(stale);
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(probeCount)).toBe(0);
+      expect(yield* Ref.get(harness.sessionCount)).toBe(sessionsBefore);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });

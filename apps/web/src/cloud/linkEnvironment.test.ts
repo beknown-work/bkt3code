@@ -109,6 +109,7 @@ function registryLayer(options?: {
         connect: Effect.void,
         disconnect: Effect.void,
         retryNow: Effect.void,
+        notifySessionSuspect: () => Effect.void,
       } satisfies EnvironmentSupervisor["Service"]);
       const registry = {
         run: <A, E, R>(_environmentId: EnvironmentId, effect: Effect.Effect<A, E, R>) =>

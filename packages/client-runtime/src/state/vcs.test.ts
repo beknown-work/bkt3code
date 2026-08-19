@@ -161,6 +161,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
 
         yield* Stream.unwrap(
@@ -294,6 +295,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
         const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
           _environmentId,
@@ -393,6 +395,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
         const refs = yield* Stream.unwrap(
           makeCachedVcsRefsChanges(
@@ -456,6 +459,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
         const refs = yield* Stream.unwrap(
           makeCachedVcsRefsChanges({ cwd: "/repo", limit: 100 }).pipe(
@@ -494,6 +498,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
 
         const result = Stream.unwrap(
@@ -544,6 +549,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
 
         const result = Stream.unwrap(
@@ -589,6 +595,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
         const stream = Stream.unwrap(
           makeCachedVcsRefsChanges({ cwd: "/repo", limit: 100 }).pipe(
@@ -625,6 +632,7 @@ describe("cached VCS refs", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
 
         const refs = yield* Stream.unwrap(

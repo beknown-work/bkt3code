@@ -90,6 +90,7 @@ describe("source control environment atoms", () => {
           connect: Effect.void,
           disconnect: Effect.void,
           retryNow: Effect.void,
+          notifySessionSuspect: () => Effect.void,
         } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
         const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
           _environmentId,
