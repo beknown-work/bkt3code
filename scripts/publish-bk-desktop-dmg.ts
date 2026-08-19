@@ -363,6 +363,80 @@ const runCommand = Effect.fn("runCommand")(function* (
 
 const runGh = (args: ReadonlyArray<string>) => runCommand("gh", args);
 
+/** How many change lines a release body carries before it summarises the rest. */
+const CHANGELOG_LIMIT = 15;
+
+/**
+ * Turns commit subjects into the short "what changed" list a release body wants.
+ *
+ * Merge commits are dropped: on this fork every change arrives through a merge,
+ * so keeping them would list each change twice — once as "Merge pull request
+ * #N", once as the work itself. The conventional-commit prefix is kept because
+ * it is the fastest way to see whether a build is a fix or a feature.
+ */
+export function summarizeCommitSubjects(
+  messages: ReadonlyArray<string>,
+  limit: number = CHANGELOG_LIMIT,
+): ReadonlyArray<string> {
+  const subjects = messages
+    .map((message) => message.split("\n", 1)[0]?.trim() ?? "")
+    .filter((subject) => subject.length > 0 && !subject.startsWith("Merge "));
+  const unique = [...new Set(subjects)];
+  if (unique.length <= limit) return unique;
+  return [...unique.slice(0, limit), `…and ${unique.length - limit} more commits.`];
+}
+
+const GhCompare = Schema.Struct({
+  commits: Schema.Array(Schema.Struct({ commit: Schema.Struct({ message: Schema.String }) })),
+});
+const decodeGhCompare = Schema.decodeUnknownEffect(Schema.fromJsonString(GhCompare));
+
+const GhReleaseTarget = Schema.Struct({ targetCommitish: Schema.String });
+const decodeGhReleaseTarget = Schema.decodeUnknownEffect(Schema.fromJsonString(GhReleaseTarget));
+
+/**
+ * The commits between the previous build of this channel and this one.
+ *
+ * Resolved through the compare API rather than `git log` because the publish job
+ * checks out at depth 1 and has no history to walk.
+ *
+ * Never fails the publish. A release that ships without its change list is a
+ * cosmetic loss; a release that does not ship because the notes could not be
+ * assembled is an outage of the update channel.
+ */
+const collectChangelog = Effect.fn("collectChangelog")(function* (
+  previousTag: string | undefined,
+  targetSha: string,
+) {
+  if (previousTag === undefined) return [] as ReadonlyArray<string>;
+
+  const viewed = yield* runGh([
+    "release",
+    "view",
+    previousTag,
+    "--repo",
+    BK_DESKTOP_RELEASE_REPOSITORY,
+    "--json",
+    "targetCommitish",
+  ]);
+  if (viewed.exitCode !== 0) return [] as ReadonlyArray<string>;
+
+  const target = yield* decodeGhReleaseTarget(viewed.stdout).pipe(Effect.orElseSucceed(() => null));
+  const previousSha = target?.targetCommitish;
+  if (!previousSha || previousSha === targetSha) return [] as ReadonlyArray<string>;
+
+  const compared = yield* runGh([
+    "api",
+    `repos/${BK_DESKTOP_RELEASE_REPOSITORY}/compare/${previousSha}...${targetSha}`,
+  ]);
+  if (compared.exitCode !== 0) return [] as ReadonlyArray<string>;
+
+  const parsed = yield* decodeGhCompare(compared.stdout).pipe(Effect.orElseSucceed(() => null));
+  if (parsed === null) return [] as ReadonlyArray<string>;
+
+  return summarizeCommitSubjects(parsed.commits.map((entry) => entry.commit.message));
+});
+
 const listPublishedTags = Effect.fn("listPublishedTags")(function* () {
   const result = yield* runGh([
     "release",
@@ -723,6 +797,11 @@ const command = Command.make(
       // Guard 3: the version must be strictly newer *within its own channel*, or
       // the updater ignores it. The other app's releases are irrelevant here.
       const newest = resolveNewestNightlyVersion(publishedTags, variant);
+      // The most recent published build of *this* channel is what the reader is
+      // upgrading from, so it is the right base for "what changed".
+      const previousTag = publishedTags.find((candidate) =>
+        candidate.includes(`-${brand.updateChannel}-nightly.`),
+      );
       if (newest && compareNightlyVersions(parsed, newest) <= 0) {
         return yield* new ReleaseVersionNotNewerError({
           version,
@@ -758,9 +837,13 @@ const command = Command.make(
 
       const signature = yield* describeSignature(signedAppPath);
       const sourceBranch = variant === "staging" ? "expbkmain" : "bkmain";
+      const changelog = yield* collectChangelog(previousTag, targetSha);
       const notes = [
         `Beknown fork desktop build — **${brand.productName}**.`,
         ``,
+        ...(changelog.length > 0
+          ? [`**What changed**`, ``, ...changelog.map((line) => `- ${line}`), ``]
+          : []),
         `| | |`,
         `|---|---|`,
         `| Source branch | \`${sourceBranch}\` |`,

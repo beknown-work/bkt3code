@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { fingerprintDesignatedRequirement } from "./publish-bk-desktop-dmg.ts";
+import {
+  fingerprintDesignatedRequirement,
+  summarizeCommitSubjects,
+} from "./publish-bk-desktop-dmg.ts";
 
 // A real Apple-issued requirement embeds the developer's email and Team ID in
 // the certificate common name. This repository is public, so the raw string must
@@ -37,5 +40,42 @@ describe("fingerprintDesignatedRequirement", () => {
     expect(fingerprintDesignatedRequirement(rotated)).not.toBe(
       fingerprintDesignatedRequirement(APPLE_REQUIREMENT),
     );
+  });
+});
+
+describe("summarizeCommitSubjects", () => {
+  it("keeps the subject line and drops the body", () => {
+    expect(
+      summarizeCommitSubjects(["fix(web): stop the panel flickering\n\nLong explanation."]),
+    ).toEqual(["fix(web): stop the panel flickering"]);
+  });
+
+  it("drops merge commits, which would otherwise list every change twice", () => {
+    expect(
+      summarizeCommitSubjects([
+        "Merge pull request #118 from beknown-work/t3code/plan-comment-box",
+        "fix(planreview): dock the comment box under the plan",
+      ]),
+    ).toEqual(["fix(planreview): dock the comment box under the plan"]);
+  });
+
+  it("collapses duplicate subjects from a rebase or cherry-pick", () => {
+    expect(summarizeCommitSubjects(["fix: same", "fix: same", "fix: other"])).toEqual([
+      "fix: same",
+      "fix: other",
+    ]);
+  });
+
+  it("summarises the tail instead of printing a wall of commits", () => {
+    const many = Array.from({ length: 20 }, (_, index) => `fix: change ${index}`);
+    const summarized = summarizeCommitSubjects(many, 15);
+
+    expect(summarized).toHaveLength(16);
+    expect(summarized[15]).toBe("…and 5 more commits.");
+  });
+
+  it("returns nothing when there is nothing to say", () => {
+    expect(summarizeCommitSubjects([])).toEqual([]);
+    expect(summarizeCommitSubjects(["Merge branch 'bkmain' into expbkmain", "  ", ""])).toEqual([]);
   });
 });

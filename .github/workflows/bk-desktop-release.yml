@@ -256,14 +256,18 @@ jobs:
       # The only job that can write releases, and it runs no build scripts and
       # holds no signing key.
       contents: write
-    # Gate production behind a protected environment so a merge to bkmain cannot
-    # publish to the team without whatever reviewers that environment requires.
+    # Both channels publish automatically: a merge to bkmain ships the production
+    # app without waiting for anyone, the same way expbkmain already shipped
+    # staging. The required-reviewer rule that used to gate `bk-desktop-production`
+    # was removed from the environment's settings, not from here — protection
+    # rules live in repository settings and no workflow file can express their
+    # absence. If a build must be held again, add the reviewer back there.
     #
-    # Both branches of this expression name a REAL environment on purpose.
-    # Resolving to an empty string to mean "no environment" is a widely used
-    # trick that GitHub does not actually document, and this is the first-publish
-    # path — not somewhere to find out. `bk-desktop-staging` exists with no
-    # protection rules, so it never blocks; it just records the deployment.
+    # The environments themselves stay, and both branches of this expression name
+    # a REAL one on purpose: they record each deployment, and resolving to an
+    # empty string to mean "no environment" is a widely used trick that GitHub
+    # does not actually document — this is the first-publish path, not somewhere
+    # to find out.
     environment: >-
       ${{ needs.build.outputs.channel == 'production'
           && 'bk-desktop-production'
