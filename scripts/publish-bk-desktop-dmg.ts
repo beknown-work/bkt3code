@@ -386,6 +386,23 @@ export function summarizeCommitSubjects(
   return [...unique.slice(0, limit), `…and ${unique.length - limit} more commits.`];
 }
 
+/**
+ * The newest published tag belonging to one channel.
+ *
+ * Keyed on the channel — `staging` / `production` — and not on the brand's
+ * `updateChannel`, which is already `staging-nightly`; matching on that produced
+ * `-staging-nightly-nightly.`, found nothing, and silently shipped a release with
+ * no change list. Same predicate the workflow's already-published check uses.
+ *
+ * `gh release list` returns newest first, so the first hit is the previous build.
+ */
+export function findPreviousChannelTag(
+  publishedTags: ReadonlyArray<string>,
+  variant: BkManagedChannel,
+): string | undefined {
+  return publishedTags.find((candidate) => candidate.includes(`-${variant}-nightly.`));
+}
+
 const GhCompare = Schema.Struct({
   commits: Schema.Array(Schema.Struct({ commit: Schema.Struct({ message: Schema.String }) })),
 });
@@ -799,9 +816,7 @@ const command = Command.make(
       const newest = resolveNewestNightlyVersion(publishedTags, variant);
       // The most recent published build of *this* channel is what the reader is
       // upgrading from, so it is the right base for "what changed".
-      const previousTag = publishedTags.find((candidate) =>
-        candidate.includes(`-${brand.updateChannel}-nightly.`),
-      );
+      const previousTag = findPreviousChannelTag(publishedTags, variant);
       if (newest && compareNightlyVersions(parsed, newest) <= 0) {
         return yield* new ReleaseVersionNotNewerError({
           version,
