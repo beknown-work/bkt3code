@@ -162,6 +162,7 @@ export type CodexSessionRuntimeError =
   | CodexSessionRuntimePendingApprovalNotFoundError
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
+  | CodexSessionRuntimeNoActiveTurnError
   | CodexSessionRuntimeThreadIdMissingError;
 
 export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimePendingApprovalNotFoundError>()(
@@ -194,6 +195,17 @@ export class CodexSessionRuntimeInvalidUserInputAnswersError extends Schema.Tagg
 ) {
   override get message(): string {
     return `Invalid Codex user input answers for question '${this.questionId}'`;
+  }
+}
+
+export class CodexSessionRuntimeNoActiveTurnError extends Schema.TaggedErrorClass<CodexSessionRuntimeNoActiveTurnError>()(
+  "CodexSessionRuntimeNoActiveTurnError",
+  {
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Codex session has no active turn to interrupt for ${this.threadId}`;
   }
 }
 
@@ -1916,7 +1928,14 @@ export const makeCodexSessionRuntime = (
           ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
           const effectiveTurnId = turnId ?? session.activeTurnId;
           if (!effectiveTurnId) {
-            return;
+            // Succeeding silently here made Stop a no-op on a session that
+            // had been recovered without its turn (the common shape after a
+            // server restart): no turn.completed was ever emitted, so the
+            // thread stayed "Working" forever. Fail instead, so callers can
+            // settle the orchestration turn themselves.
+            return yield* new CodexSessionRuntimeNoActiveTurnError({
+              threadId: options.threadId,
+            });
           }
           yield* client.request("turn/interrupt", {
             threadId: providerThreadId,
