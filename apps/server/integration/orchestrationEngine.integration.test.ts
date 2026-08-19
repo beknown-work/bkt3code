@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ThreadId,
+  TurnId,
   ModelSelection,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -31,6 +32,12 @@ import {
   type OrchestrationIntegrationHarness,
 } from "./OrchestrationEngineHarness.integration.ts";
 import { checkpointRefForThreadTurn } from "../src/checkpointing/Utils.ts";
+import {
+  isStaleProviderSession,
+  makeProviderSessionRestartSweep,
+} from "../src/orchestration/Layers/ProviderSessionRestartSweep.ts";
+import { OrchestrationEngineService } from "../src/orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 import type {
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
@@ -153,6 +160,21 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
       sourceControlProfileId: null,
       createdAt,
     });
+  });
+
+const waitForStableSession = (harness: OrchestrationIntegrationHarness) =>
+  Effect.gen(function* () {
+    let previous: string | null = null;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const thread = yield* harness.waitForThread(THREAD_ID, (entry) => entry.session != null);
+      const updatedAt = thread.session!.updatedAt;
+      if (previous === updatedAt) {
+        return thread;
+      }
+      previous = updatedAt;
+      yield* Effect.sleep(100);
+    }
+    return yield* Effect.die(new IntegrationWaitTimeoutError({ description: "stable session" }));
   });
 
 const startTurn = (input: {
@@ -992,6 +1014,148 @@ it.live("starts a claudeAgent session on first turn when provider is requested",
         assert.equal(thread.session?.providerName, "claudeAgent");
       }),
     CLAUDE_AGENT_PROVIDER,
+  ),
+);
+
+it.live("sweeps sessions stranded mid-turn by a server restart and restarts the turn", () =>
+  withHarness((harness) =>
+    Effect.gen(function* () {
+      yield* seedProjectAndThread(harness);
+
+      yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+        events: [
+          {
+            type: "turn.started",
+            ...runtimeBase("evt-restart-sweep-1", "2026-02-24T10:11:00.000Z"),
+            threadId: THREAD_ID,
+            turnId: FIXTURE_TURN_ID,
+          },
+          {
+            type: "message.delta",
+            ...runtimeBase("evt-restart-sweep-2", "2026-02-24T10:11:00.050Z"),
+            threadId: THREAD_ID,
+            turnId: FIXTURE_TURN_ID,
+            delta: "Half-finished work.\n",
+          },
+          {
+            type: "turn.completed",
+            ...runtimeBase("evt-restart-sweep-3", "2026-02-24T10:11:00.100Z"),
+            threadId: THREAD_ID,
+            turnId: FIXTURE_TURN_ID,
+            status: "completed",
+          },
+        ],
+      });
+
+      yield* startTurn({
+        harness,
+        commandId: "cmd-turn-start-restart-sweep",
+        messageId: "msg-user-restart-sweep",
+        text: "Refactor the billing module",
+      });
+
+      const ran = yield* harness.waitForThread(
+        THREAD_ID,
+        (entry) => entry.latestTurn?.turnId === "turn-1" && entry.session?.threadId === "thread-1",
+      );
+      assert.ok(ran.session);
+
+      // Processes die with the server.
+      yield* harness.adapterHarness!.adapter.stopAll();
+      yield* waitForSync(
+        () => harness.adapterHarness!.listActiveSessionIds(),
+        (sessionIds) => sessionIds.length === 0,
+        "provider stopAll",
+      );
+
+      // The state a deploy leaves behind: a session row the projection still
+      // believes is live, pinned to the turn that was in flight, with no
+      // process behind it. Handed to the sweep directly because a live
+      // ingestion reactor immediately re-derives any session row written into
+      // this harness — on a real restart nothing consumes those events, which
+      // is exactly why the stale row survives to be swept.
+      const sweep = yield* makeProviderSessionRestartSweep.pipe(
+        Effect.provideService(OrchestrationEngineService, harness.engine),
+        Effect.provideService(ProjectionSnapshotQuery, harness.snapshotQuery),
+        Effect.provide(NodeServices.layer),
+      );
+      // The sweep skips any session that changed after it was captured, so the
+      // candidate has to be built from a session the ingestion has finished
+      // settling — otherwise this test races its own guard.
+      const beforeSweep = yield* waitForStableSession(harness);
+      const stranded = {
+        threadId: THREAD_ID,
+        session: {
+          ...beforeSweep.session!,
+          status: "running" as const,
+          activeTurnId: TurnId.make("turn-1"),
+        },
+        activeTurnId: TurnId.make("turn-1"),
+        sessionUpdatedAt: beforeSweep.session!.updatedAt,
+      };
+      assert.ok(
+        isStaleProviderSession({ ...beforeSweep, session: stranded.session }),
+        "expected the stranded session to be swept",
+      );
+
+      yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+        events: [
+          {
+            type: "turn.started",
+            ...runtimeBase("evt-restart-sweep-4", "2026-02-24T10:11:02.000Z"),
+            threadId: THREAD_ID,
+            turnId: FIXTURE_TURN_ID,
+          },
+          {
+            type: "message.delta",
+            ...runtimeBase("evt-restart-sweep-5", "2026-02-24T10:11:02.050Z"),
+            threadId: THREAD_ID,
+            turnId: FIXTURE_TURN_ID,
+            delta: "Resumed after restart.\n",
+          },
+          {
+            type: "turn.completed",
+            ...runtimeBase("evt-restart-sweep-6", "2026-02-24T10:11:02.100Z"),
+            threadId: THREAD_ID,
+            turnId: FIXTURE_TURN_ID,
+            status: "completed",
+          },
+        ],
+      });
+
+      yield* sweep.sweepStaleProviderSessions([stranded]);
+
+      // The interrupted turn restarts on a session recovered from the
+      // persisted resume cursor, and runs to completion. No user action
+      // anywhere after the restart.
+      const recovered = yield* harness.waitForThread(
+        THREAD_ID,
+        (entry) =>
+          entry.session?.activeTurnId === null &&
+          entry.messages.some((message) => message.text.includes("Resumed after restart.")),
+        30_000,
+      );
+
+      const restartPrompt = recovered.messages.find(
+        (message) =>
+          message.role === "user" && message.text.includes("A server restart interrupted"),
+      );
+      assert.ok(restartPrompt, "expected an automatic restart prompt");
+      assert.ok(
+        restartPrompt!.text.includes("Refactor the billing module"),
+        "expected the restart prompt to restate the interrupted request",
+      );
+
+      const restartActivity = recovered.activities.find(
+        (activity) => activity.kind === "provider.session.restart-interrupted",
+      );
+      assert.ok(restartActivity, "expected a restart-interrupted activity");
+
+      // Idempotent: the swept thread is clean, so the next boot finds nothing
+      // and cannot restart the turn a second time.
+      const staleAfter = yield* sweep.findStaleProviderSessions();
+      assert.equal(staleAfter.length, 0);
+    }),
   ),
 );
 

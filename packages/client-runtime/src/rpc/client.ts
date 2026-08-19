@@ -265,6 +265,13 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                                   method: tag,
                                   environmentId: supervisor.target.environmentId,
                                 },
+                              ).pipe(
+                                // Waiting alone deadlocks when the supervisor
+                                // still believes this lease is healthy: no new
+                                // session ever arrives. Report the session so
+                                // it gets probed; if it is alive this is a
+                                // no-op and the stream still waits.
+                                Effect.andThen(supervisor.notifySessionSuspect(session)),
                               ),
                             ).pipe(Stream.drain);
                           }

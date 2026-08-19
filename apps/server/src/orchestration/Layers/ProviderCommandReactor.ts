@@ -55,6 +55,7 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
+import { makeProviderSessionRestartSweep } from "./ProviderSessionRestartSweep.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
 import {
   resolveSourceControlWriterModelSelection,
@@ -407,6 +408,25 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
   );
 }
 
+/**
+ * An interrupt that could not be delivered because nothing was running.
+ *
+ * After a server restart the provider process is gone, so the orchestration
+ * turn is the only thing left to settle — respawning an agent just to stop it
+ * would be absurd. Both shapes reach here as adapter request errors: the
+ * service refuses to route to a dead session, and codex reports a session
+ * with no active turn.
+ */
+function isDeadSessionInterruptError(cause: Cause.Cause<ProviderServiceError>): boolean {
+  const error = findProviderAdapterRequestError(cause);
+  const detail = (error ? error.detail : Cause.pretty(cause)).toLowerCase();
+  return (
+    detail.includes("no live provider session") ||
+    detail.includes("no active turn to interrupt") ||
+    detail.includes("no persisted provider binding exists")
+  );
+}
+
 function stalePendingRequestDetail(
   requestKind: "approval" | "user-input",
   requestId: string,
@@ -458,6 +478,7 @@ const make = Effect.gen(function* () {
   // T3-CUSTOM(expbkt3): optional for the same reason as the profile service —
   // isolated upstream reactor tests do not build the user directory.
   const sessionIdentity = yield* Effect.serviceOption(SessionIdentityEnvironmentService);
+  const providerSessionRestartSweep = yield* makeProviderSessionRestartSweep;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -574,6 +595,33 @@ const make = Effect.gen(function* () {
         status: session?.status === "stopped" ? "stopped" : "error",
         activeTurnId: null,
         lastError: input.detail,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  const setThreadSessionInterrupted = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return;
+    }
+    const session = thread.session;
+    yield* setThreadSession({
+      threadId: input.threadId,
+      session: {
+        ...(session ?? {
+          threadId: input.threadId,
+          providerName: null,
+          providerInstanceId: thread.modelSelection.instanceId,
+          runtimeMode: thread.runtimeMode,
+        }),
+        status: session?.status === "stopped" ? "stopped" : "interrupted",
+        activeTurnId: null,
+        lastError: null,
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
@@ -1675,10 +1723,43 @@ const make = Effect.gen(function* () {
       "thread.turn.interrupt",
       undefined,
     );
-    yield* providerService.interruptTurn(
-      { threadId: event.payload.threadId },
-      sessionExecutionOptions,
-    );
+    yield* providerService
+      .interruptTurn({ threadId: event.payload.threadId }, sessionExecutionOptions)
+      .pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.interrupt;
+          }
+          // Stop must always be able to unstick a thread. When the provider
+          // session is already gone there is nothing to interrupt, so settle
+          // the orchestration turn directly instead of leaving it pinned.
+          if (isDeadSessionInterruptError(cause)) {
+            return setThreadSessionInterrupted({
+              threadId: event.payload.threadId,
+              createdAt: event.payload.createdAt,
+            }).pipe(
+              Effect.andThen(
+                appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.turn.interrupt.failed",
+                  summary: "Turn stopped",
+                  detail: "The provider session was no longer running, so the turn was closed.",
+                  turnId: event.payload.turnId ?? null,
+                  createdAt: event.payload.createdAt,
+                }),
+              ),
+            );
+          }
+          return appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.interrupt.failed",
+            summary: "Provider turn interrupt failed",
+            detail: formatFailureDetail(cause),
+            turnId: event.payload.turnId ?? null,
+            createdAt: event.payload.createdAt,
+          });
+        }),
+      );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -2911,6 +2992,7 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.as([]));
       }),
     );
+    const staleProviderSessions = yield* providerSessionRestartSweep.findStaleProviderSessions();
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
         (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
@@ -2948,11 +3030,19 @@ const make = Effect.gen(function* () {
         );
       }),
     );
+    // Provider processes die with the server, so any session the projection
+    // still calls live is restart debris. Sweeping it here (after the event
+    // stream is attached, so the sweep's own dispatches are processed) is
+    // what makes a deploy recoverable without user intervention.
+    const sweepStaleSessions =
+      providerSessionRestartSweep.sweepStaleProviderSessions(staleProviderSessions);
     const activation = yield* ServerActivation;
     if (activation === undefined) {
       yield* clearInterrupted;
+      yield* sweepStaleSessions;
     } else {
       yield* forkParked(clearInterrupted);
+      yield* forkParked(sweepStaleSessions);
     }
   });
 
