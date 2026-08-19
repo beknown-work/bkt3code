@@ -29,7 +29,10 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { mergeSourceControlEnvironment } from "../../sourceControl/SourceControlExecutionEnvironment.ts";
+import {
+  carriesSourceControlIdentity,
+  mergeSourceControlEnvironment,
+} from "../../sourceControl/SourceControlExecutionEnvironment.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   ProviderAdapterProcessError,
@@ -1212,7 +1215,14 @@ export function makeOpenCodeAdapter(
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
-        if (serverUrl && executionOptions?.environment) {
+        // T3-CUSTOM(expbkt3): only a source-control identity is a hard stop —
+        // an external server takes no environment from us. The additive session
+        // identity markers ride in the same field and are simply not delivered.
+        if (
+          serverUrl &&
+          executionOptions?.environment &&
+          carriesSourceControlIdentity(executionOptions.environment)
+        ) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "startSession",

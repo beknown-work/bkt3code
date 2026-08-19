@@ -31,6 +31,16 @@ Deploying restarts the target service, which **kills the agent sessions hosted o
 
 **Ship to `expbkmain` first.** Every fork change — features, not just upstream merges — goes to `expbkmain` and is verified running at expbkt3.dev.beknown.live before it merges to `bkmain`. bkt3 hosts the team's live coding sessions, so a regression there interrupts real work, and the failure modes that matter most (migrations against an existing database, startup ordering, provider processes) only appear on a real deploy. expbkt3 is cheap to break: reset it from `bkmain`, merge the branch, wait for the timer, and exercise the change in the browser. Only then open or merge the `bkmain` PR.
 
+**Merging to `expbkmain` is pre-authorised, and you own it until it is live.** You do
+not need to ask before merging a green PR to `expbkmain` — merge it, then stay on it:
+watch the branch workflow, wait for the systemd timer to install the artifact, and
+confirm the running service is on the merge SHA. Report once, when it is deployed, not
+when it is merged. "Merged" is not a delivery; the reviewer cannot verify anything until
+expbkt3 is actually serving the new build, and a build or install can still fail after a
+green PR. Ground truth is `/home/ubuntu/.t3/expbkt3-dev/deployed-sha` matching the merge
+commit, plus `t3-expbkt3.service` active. This authorisation covers `expbkmain` only —
+`bkmain` still needs a human, because deploying it kills the team's live sessions.
+
 ## Building features that survive upstream merges
 
 We track a fast-moving upstream. Every line this fork changes inside an upstream-owned file is a line that has to be re-resolved, by hand, on every future merge — and a merge that touches 25 files of core code costs a day and risks silently dropping fork behavior. Cost is driven by _where_ we write code far more than by how much we write.
@@ -170,6 +180,9 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 ## Pull requests
 
 - Never make a PR unless the developer explicitly asks you to do so.
+- Merging a green PR into `expbkmain` needs no further ask, but it is not finished at
+  merge: follow it through the deploy and report only once expbkt3 is serving it. See
+  "Beknown fork and deployments". Merging to `bkmain` still needs a human.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
 - Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.
 - UI changes need before/after images. Motion or timing needs a short video.

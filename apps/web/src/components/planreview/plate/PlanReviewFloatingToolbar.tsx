@@ -2,9 +2,12 @@
  * T3-CUSTOM(expbkt3): the selection toolbar that makes the panel feel like a
  * document rather than a textarea.
  *
- * Anchored to the DOM selection rectangle rather than pulled in through
- * `@platejs/floating`: the panel is the only consumer, and one `getBoundingRect`
- * is far less weight than another positioning dependency.
+ * Positioning lives in `useSelectionAnchor`, shared with the comment popover so
+ * both agree on where "beside the selection" is.
+ *
+ * Alongside the formatting marks it carries quick labels: a reviewer who only
+ * wants to say "yes, this part is fine" or "drop this" should not have to open a
+ * composer and type it out.
  */
 import {
   BoldPlugin,
@@ -21,17 +24,23 @@ import {
   ItalicIcon,
   MessageSquarePlusIcon,
   StrikethroughIcon,
+  ThumbsUpIcon,
+  Trash2Icon,
   UnderlineIcon,
 } from "lucide-react";
 import { useMarkToolbarButton, useMarkToolbarButtonState } from "platejs/react";
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import { type ComponentType } from "react";
 
 import { cn } from "../../../lib/utils";
+import { useSelectionAnchor } from "./useSelectionAnchor";
 
-interface ToolbarPosition {
-  readonly top: number;
-  readonly left: number;
-}
+/** Canned bodies, so a one-click label still reads as a real comment upstream. */
+export const PLAN_REVIEW_QUICK_LABELS = {
+  approve: "👍 Looks good",
+  remove: "Remove this.",
+} as const;
+
+export type PlanReviewQuickLabel = keyof typeof PLAN_REVIEW_QUICK_LABELS;
 
 function MarkButton({
   nodeType,
@@ -63,64 +72,55 @@ function MarkButton({
   );
 }
 
+function QuickLabelButton({
+  label,
+  icon: Icon,
+  onClick,
+  className,
+}: {
+  readonly label: string;
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly onClick: () => void;
+  readonly className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={cn(
+        "flex size-7 items-center justify-center rounded transition-colors hover:bg-accent",
+        className,
+      )}
+    >
+      <Icon className="size-4" />
+    </button>
+  );
+}
+
 export function PlanReviewFloatingToolbar({
   containerRef,
   onComment,
+  onQuickLabel,
   readOnly,
+  hidden = false,
 }: {
   readonly containerRef: React.RefObject<HTMLElement | null>;
   readonly onComment: () => void;
+  readonly onQuickLabel: (label: PlanReviewQuickLabel) => void;
   readonly readOnly: boolean;
+  /** Suppressed while the comment composer owns the selection. */
+  readonly hidden?: boolean;
 }) {
-  const [position, setPosition] = useState<ToolbarPosition | null>(null);
+  const anchor = useSelectionAnchor({ containerRef });
 
-  const syncToSelection = useCallback(() => {
-    const container = containerRef.current;
-    if (container === null) return setPosition(null);
-
-    const selection = window.getSelection();
-    if (
-      !selection ||
-      selection.isCollapsed ||
-      selection.rangeCount === 0 ||
-      selection.toString().trim().length === 0
-    ) {
-      return setPosition(null);
-    }
-
-    const range = selection.getRangeAt(0);
-    if (!container.contains(range.commonAncestorContainer)) return setPosition(null);
-
-    const rect = range.getBoundingClientRect();
-    const bounds = container.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return setPosition(null);
-
-    setPosition({
-      // Sit just above the selection, clamped inside the panel so the toolbar
-      // never escapes a narrow right-hand panel.
-      top: Math.max(4, rect.top - bounds.top + container.scrollTop - 44),
-      left: Math.min(
-        Math.max(4, rect.left - bounds.left + rect.width / 2),
-        Math.max(4, bounds.width - 4),
-      ),
-    });
-  }, [containerRef]);
-
-  useEffect(() => {
-    document.addEventListener("selectionchange", syncToSelection);
-    window.addEventListener("resize", syncToSelection);
-    return () => {
-      document.removeEventListener("selectionchange", syncToSelection);
-      window.removeEventListener("resize", syncToSelection);
-    };
-  }, [syncToSelection]);
-
-  if (position === null) return null;
+  if (hidden || anchor === null) return null;
 
   return (
     <div
       className="pointer-events-auto absolute z-30 -translate-x-1/2 rounded-lg border bg-popover p-0.5 shadow-lg"
-      style={{ top: position.top, left: position.left }}
+      style={{ top: anchor.top, left: anchor.left }}
       // Keep the selection alive: losing it would clear the toolbar mid-click.
       onMouseDown={(event) => event.preventDefault()}
       role="toolbar"
@@ -152,6 +152,18 @@ export function PlanReviewFloatingToolbar({
           <MessageSquarePlusIcon className="size-4" />
           Comment
         </button>
+        <span aria-hidden className="mx-0.5 h-5 w-px bg-border" />
+        <QuickLabelButton
+          label="Looks good"
+          icon={ThumbsUpIcon}
+          onClick={() => onQuickLabel("approve")}
+        />
+        <QuickLabelButton
+          label="Ask to remove this"
+          icon={Trash2Icon}
+          className="text-destructive"
+          onClick={() => onQuickLabel("remove")}
+        />
       </div>
     </div>
   );

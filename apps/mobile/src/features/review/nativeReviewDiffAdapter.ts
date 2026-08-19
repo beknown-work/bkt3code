@@ -375,6 +375,11 @@ function mapFileRows(
     if (comment.filePath !== file.path) {
       return;
     }
+    // T3-CUSTOM(expbkt3): an anchored plan comment carries no line range, so
+    // there is no diff row to attach it under.
+    if (comment.endIndex === null) {
+      return;
+    }
     const endIndex = Math.min(comment.endIndex, lineRows.length - 1);
     if (endIndex < 0) {
       return;

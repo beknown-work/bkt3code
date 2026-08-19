@@ -60,6 +60,7 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
   );
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
   const retryCount = yield* Ref.make(0);
+  const suspectedSessions = yield* Ref.make<ReadonlyArray<RpcSession.RpcSession>>([]);
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: TARGET,
     state,
@@ -68,10 +69,13 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Ref.update(retryCount, (count) => count + 1),
+    notifySessionSuspect: (suspect) =>
+      Ref.update(suspectedSessions, (current) => [...current, suspect]),
   } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
   return {
     activeSession,
     retryCount,
+    suspectedSessions,
     supervisor,
   };
 });
@@ -228,6 +232,44 @@ describe("environment RPC", () => {
 
       expect(subscriptions).toEqual(["first", "second"]);
       expect(yield* Ref.get(retryCount)).toBe(0);
+    }),
+  );
+
+  it.effect("reports the session as suspect when a subscription loses its transport", () =>
+    Effect.gen(function* () {
+      // Without this report the subscription drains and waits for a session
+      // the supervisor may never replace, because it still believes the
+      // half-open lease is healthy.
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.fail(
+            new RpcClientError.RpcClientError({
+              reason: new RpcClientError.RpcClientDefect({
+                message: "socket closed",
+                cause: new Error("socket closed"),
+              }),
+            }),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, suspectedSessions, supervisor } = yield* makeHarness();
+      const live = session(client);
+
+      const subscriptionFiber = yield* subscribe(WS_METHODS.subscribeTerminalEvents, {}).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* SubscriptionRef.set(activeSession, Option.some(live));
+      for (
+        let attempt = 0;
+        attempt < 100 && (yield* Ref.get(suspectedSessions)).length < 1;
+        attempt += 1
+      ) {
+        yield* Effect.yieldNow;
+      }
+      yield* Fiber.interrupt(subscriptionFiber);
+
+      expect(yield* Ref.get(suspectedSessions)).toEqual([live]);
     }),
   );
 

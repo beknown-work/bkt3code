@@ -54,11 +54,26 @@ import {
   TablePlugin,
   TableRowPlugin,
 } from "@platejs/table/react";
+import { getCommentKey, getDraftCommentKey } from "@platejs/comment";
+import { TextApi } from "platejs";
 import { ParagraphPlugin, Plate, PlateContent, usePlateEditor } from "platejs/react";
 import remarkGfm from "remark-gfm";
-import { memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import { PlanReviewFloatingToolbar } from "./plate/PlanReviewFloatingToolbar";
+import { PlanReviewCommentComposer } from "./plate/PlanReviewCommentComposer";
+import {
+  PLAN_REVIEW_QUICK_LABELS,
+  PlanReviewFloatingToolbar,
+  type PlanReviewQuickLabel,
+} from "./plate/PlanReviewFloatingToolbar";
 import {
   BlockquoteElement,
   BulletedListElement,
@@ -84,14 +99,24 @@ import {
   TableRowElement,
   TaskListElement,
 } from "./plate/PlanReviewNodes";
-import { CommentLeaf, SuggestionLeaf } from "./plate/PlanReviewReviewMarks";
+import {
+  collectPlanReviewBlocks,
+  locatePlanReviewQuoteRange,
+  stripPlanReviewCommentMarks,
+  type PlanReviewNodeLike,
+} from "./plate/planReviewCommentMarks";
+import {
+  CommentLeaf,
+  PlanReviewMarkStateProvider,
+  SuggestionLeaf,
+} from "./plate/PlanReviewReviewMarks";
 import {
   hasPlanReviewEditorChange,
+  nextPlanDiscussionId,
   normalizeQuotedText,
   resolveSubmittedPlanMarkdown,
 } from "./planReviewMarkdown";
 import { replacePlanReviewEditorValue } from "./planReviewEditorValue";
-import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
 /**
@@ -192,6 +217,17 @@ const PLAN_REVIEW_PLUGINS = [
  */
 export interface PlanReviewEditorHandle {
   readonly getMarkdown: () => string;
+  /** Brings a commented span into view. Used when the rail card is clicked. */
+  readonly scrollToDiscussion: (discussionId: string) => void;
+  /** Brings a heading into view. Used by the outline rail. */
+  readonly scrollToHeading: (text: string) => void;
+}
+
+/** The anchor and resolution state the editor needs to restore a highlight. */
+export interface PlanReviewEditorDiscussion {
+  readonly discussionId: string;
+  readonly quotedText: string;
+  readonly isResolved: boolean;
 }
 
 interface PlanReviewEditorProps {
@@ -202,10 +238,18 @@ interface PlanReviewEditorProps {
   readonly handleRef: React.RefObject<PlanReviewEditorHandle | null>;
   /** Cheap notification that the reviewer changed something. */
   readonly onChanged: () => void;
-  /** Fires when the reviewer comments on a selection. */
-  readonly onAddComment: (quotedText: string, body: string) => void;
+  /**
+   * Fires when the reviewer comments on a selection. The editor owns the id so
+   * it can mark the span it still has selected, rather than waiting for a round
+   * trip to learn what to highlight.
+   */
+  readonly onAddComment: (discussionId: string, quotedText: string, body: string) => void;
   /** Reports whether Plate's markdown round trip reached a fixed point. */
   readonly onRoundTripUnstable: () => void;
+  /** Every discussion on this plan, so their spans can be highlighted. */
+  readonly discussions: ReadonlyArray<PlanReviewEditorDiscussion>;
+  readonly activeDiscussionId: string | null;
+  readonly onSelectDiscussion: (discussionId: string) => void;
 }
 
 function PlanReviewEditorImpl({
@@ -216,6 +260,9 @@ function PlanReviewEditorImpl({
   onChanged,
   onAddComment,
   onRoundTripUnstable,
+  discussions,
+  activeDiscussionId,
+  onSelectDiscussion,
 }: PlanReviewEditorProps) {
   const editor = usePlateEditor({ plugins: PLAN_REVIEW_PLUGINS });
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
@@ -225,8 +272,43 @@ function PlanReviewEditorImpl({
   const hasReviewerEditsRef = useRef(false);
   // Loading a version fires Plate's onChange; that is not a reviewer edit.
   const loadingRef = useRef(false);
-  const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  // The selection the open popover is about, held across the focus change that
+  // opening it causes.
+  const pendingRangeRef = useRef<object | null>(null);
+
+  const resolvedDiscussionIds = useMemo(
+    () =>
+      new Set(
+        discussions
+          .filter((discussion) => discussion.isResolved)
+          .map((discussion) => discussion.discussionId),
+      ),
+    [discussions],
+  );
+
+  /**
+   * Applies a comment transform without it reading as a reviewer edit.
+   *
+   * Comment marks are leaf properties that the markdown serializer drops, so
+   * `handleChange`'s own comparison would already ignore them — but only until
+   * the reviewer's first real edit, after which every change notifies the panel
+   * and schedules a draft save. Suppressing the notification outright keeps
+   * commenting free of write traffic either way.
+   */
+  const withoutReportingChange = useCallback((apply: () => void) => {
+    const wasLoading = loadingRef.current;
+    loadingRef.current = true;
+    try {
+      apply();
+    } finally {
+      // Restore on the next frame: Plate's onChange for this transform has not
+      // fired yet, and clearing the flag synchronously would let it through.
+      requestAnimationFrame(() => {
+        loadingRef.current = wasLoading;
+      });
+    }
+  }, []);
 
   // Load canonical markdown into the editor whenever the reviewed version
   // changes. Guarded by the last-loaded value so our own edits do not reload.
@@ -263,12 +345,87 @@ function PlanReviewEditorImpl({
     editor.setOption(SuggestionPlugin, "isSuggesting", suggestionMode && !readOnly);
   }, [editor, suggestionMode, readOnly]);
 
+  /**
+   * Serializes the plan as if it carried no comments.
+   *
+   * Plate turns a commented leaf into an MDX JSX element that the markdown
+   * stringifier cannot handle — in a table cell it throws — and the change
+   * handler below reads a failed serialize as a reviewer edit. Highlighting a
+   * sentence would then mark the plan dirty and make the panel send the agent the
+   * whole document as an edit. Comments are review state, never document content.
+   */
+  const serializePlan = useCallback(
+    () =>
+      editor.api.markdown.serialize({
+        value: stripPlanReviewCommentMarks(editor.children) as never,
+      }),
+    [editor],
+  );
+
+  /** Marks a located span as belonging to a saved discussion. */
+  const markDiscussion = useCallback(
+    (discussionId: string, at: object) => {
+      // `comment` and the per-id key must be set together: the plugin's
+      // normalizer strips a bare `comment` mark that carries no id.
+      editor.tf.setNodes(
+        { comment: true, [getCommentKey(discussionId)]: true } as never,
+        { at, match: TextApi.isText, split: true } as never,
+      );
+    },
+    [editor],
+  );
+
+  /** Clears the in-progress draft highlight, wherever it ended up. */
+  const clearDraftMark = useCallback(() => {
+    const draftKey = getDraftCommentKey();
+    withoutReportingChange(() => {
+      // Only the draft key is unset; the normalizer removes the now-orphaned
+      // `comment` mark, and leaves it alone on a span that also carries a
+      // saved id — which is what overlapping comments need.
+      editor.tf.unsetNodes([draftKey], {
+        at: [],
+        match: (node: object) =>
+          TextApi.isText(node) && (node as never as Record<string, unknown>)[draftKey] === true,
+      } as never);
+    });
+  }, [editor, withoutReportingChange]);
+
+  /**
+   * Restores highlights for discussions this editor has not marked yet.
+   *
+   * A comment made in this session is marked from the live selection and needs
+   * nothing here. This covers the rest: reopening the panel, and a teammate's
+   * comment arriving over the subscription.
+   */
+  useEffect(() => {
+    if (discussions.length === 0) return;
+    const missing = discussions.filter(
+      (discussion) => !editor.api.comment.has({ id: discussion.discussionId }),
+    );
+    if (missing.length === 0) return;
+
+    const blocks = collectPlanReviewBlocks(
+      editor.children as unknown as ReadonlyArray<PlanReviewNodeLike>,
+    );
+    if (blocks.length === 0) return;
+
+    withoutReportingChange(() => {
+      for (const discussion of missing) {
+        const range = locatePlanReviewQuoteRange(blocks, discussion.quotedText);
+        // A quote whose text the agent has since rewritten simply has no
+        // highlight; the rail still carries the comment.
+        if (range === null) continue;
+        markDiscussion(discussion.discussionId, range);
+      }
+    });
+  }, [discussions, editor, markDiscussion, withoutReportingChange]);
+
   useImperativeHandle(
     handleRef,
     () => ({
       getMarkdown: () => {
         try {
-          const editorMarkdown = editor.api.markdown.serialize();
+          const editorMarkdown = serializePlan();
           return resolveSubmittedPlanMarkdown({
             canonicalMarkdown: loadedMarkdownRef.current ?? markdown,
             editorMarkdown,
@@ -280,8 +437,24 @@ function PlanReviewEditorImpl({
           return "";
         }
       },
+      scrollToDiscussion: (discussionId: string) => {
+        // The leaf renders its discussion id, so the highlight can be found
+        // without a Plate-to-DOM lookup.
+        surfaceRef.current
+          ?.querySelector(`[data-plan-discussion-id="${CSS.escape(discussionId)}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      },
+      scrollToHeading: (text: string) => {
+        const surface = surfaceRef.current;
+        if (surface === null) return;
+        // Matched on rendered text, which is what the outline was parsed into.
+        const heading = Array.from(surface.querySelectorAll("h1, h2, h3, h4, h5, h6")).find(
+          (element) => element.textContent?.trim() === text,
+        );
+        heading?.scrollIntoView({ block: "start", behavior: "smooth" });
+      },
     }),
-    [editor, markdown],
+    [editor, markdown, serializePlan],
   );
 
   const handleChange = useCallback(() => {
@@ -293,7 +466,7 @@ function PlanReviewEditorImpl({
           baselineEditorMarkdown !== null &&
           !hasPlanReviewEditorChange({
             baselineEditorMarkdown,
-            editorMarkdown: editor.api.markdown.serialize(),
+            editorMarkdown: serializePlan(),
           })
         ) {
           return;
@@ -305,24 +478,74 @@ function PlanReviewEditorImpl({
       hasReviewerEditsRef.current = true;
     }
     onChanged();
-  }, [editor, onChanged]);
+  }, [onChanged, serializePlan]);
+
+  /**
+   * Marks the current selection and returns its range, so the span can be
+   * promoted to a saved discussion after the reviewer commits.
+   *
+   * The range is captured before the popover opens, because focusing its
+   * textarea collapses the DOM selection and the editor's own selection moves
+   * with it.
+   */
+  const captureSelection = useCallback(() => {
+    const quote = normalizeQuotedText(window.getSelection()?.toString() ?? "");
+    if (quote.length === 0) return null;
+    const range = editor.selection;
+    if (!range) return null;
+    return { quote, range };
+  }, [editor]);
 
   const startComment = useCallback(() => {
-    const quote = normalizeQuotedText(window.getSelection()?.toString() ?? "");
-    if (quote.length === 0) return;
-    setPendingQuote(quote);
+    const captured = captureSelection();
+    if (captured === null) return;
+    // Highlight immediately: the reviewer sees what they are about to comment on
+    // for as long as they are composing it.
+    withoutReportingChange(() => editor.tf.comment.setDraft({ at: captured.range } as never));
+    pendingRangeRef.current = captured.range;
+    setPendingQuote(captured.quote);
     setCommentBody("");
-    requestAnimationFrame(() => commentInputRef.current?.focus());
-  }, []);
+  }, [captureSelection, editor, withoutReportingChange]);
+
+  const cancelComment = useCallback(() => {
+    clearDraftMark();
+    pendingRangeRef.current = null;
+    setPendingQuote(null);
+    setCommentBody("");
+  }, [clearDraftMark]);
+
+  /** Promotes the draft highlight to a saved discussion and reports it up. */
+  const commitComment = useCallback(
+    (quotedText: string, body: string, range: object | null) => {
+      const discussionId = nextPlanDiscussionId();
+      if (range !== null) {
+        withoutReportingChange(() => markDiscussion(discussionId, range));
+      }
+      clearDraftMark();
+      onAddComment(discussionId, quotedText, body);
+    },
+    [clearDraftMark, markDiscussion, onAddComment, withoutReportingChange],
+  );
 
   const submitComment = useCallback(() => {
     if (pendingQuote === null) return;
     const body = commentBody.trim();
     if (body.length === 0) return;
-    onAddComment(pendingQuote, body);
+    commitComment(pendingQuote, body, pendingRangeRef.current);
+    pendingRangeRef.current = null;
     setPendingQuote(null);
     setCommentBody("");
-  }, [commentBody, onAddComment, pendingQuote]);
+  }, [commentBody, commitComment, pendingQuote]);
+
+  /** One click, one canned body, no composer. */
+  const addQuickLabel = useCallback(
+    (label: PlanReviewQuickLabel) => {
+      const captured = captureSelection();
+      if (captured === null) return;
+      commitComment(captured.quote, PLAN_REVIEW_QUICK_LABELS[label], captured.range);
+    },
+    [captureSelection, commitComment],
+  );
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -331,49 +554,43 @@ function PlanReviewEditorImpl({
         className="relative min-h-0 flex-1 cursor-text select-text overflow-y-auto caret-primary selection:bg-primary/25"
       >
         <Plate editor={editor} onChange={handleChange}>
-          <PlateContent
-            className={cn(
-              "min-h-full px-5 pt-3 pb-24 text-[15px] text-foreground leading-relaxed outline-none",
-            )}
-            readOnly={readOnly}
-            placeholder="This plan is empty."
-            aria-label="Plan document"
-          />
+          <PlanReviewMarkStateProvider
+            resolvedDiscussionIds={resolvedDiscussionIds}
+            activeDiscussionId={activeDiscussionId}
+            onSelectDiscussion={onSelectDiscussion}
+          >
+            <PlateContent
+              className={cn(
+                "min-h-full px-5 pt-3 pb-24 text-[15px] text-foreground leading-relaxed outline-none",
+              )}
+              readOnly={readOnly}
+              placeholder="This plan is empty."
+              aria-label="Plan document"
+            />
+          </PlanReviewMarkStateProvider>
         </Plate>
         <PlanReviewFloatingToolbar
           containerRef={surfaceRef}
           onComment={startComment}
+          onQuickLabel={addQuickLabel}
           readOnly={readOnly}
+          hidden={pendingQuote !== null}
         />
       </div>
 
+      {/*
+        Outside the scroll container on purpose: as a child it scrolled the plan
+        when it took focus, which threw the reviewer back to the top of a long
+        document the moment they started writing.
+      */}
       {pendingQuote !== null ? (
-        <div className="border-t bg-card p-3">
-          <blockquote className="mb-2 border-primary/40 border-l-2 pl-2 text-muted-foreground text-xs italic">
-            {pendingQuote}
-          </blockquote>
-          <textarea
-            ref={commentInputRef}
-            className="w-full resize-y rounded-md border bg-background p-2 text-sm"
-            rows={3}
-            value={commentBody}
-            placeholder="What should change here?"
-            aria-label="Comment body"
-            onChange={(event) => setCommentBody(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setPendingQuote(null);
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) submitComment();
-            }}
-          />
-          <div className="mt-2 flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setPendingQuote(null)}>
-              Cancel
-            </Button>
-            <Button size="sm" onClick={submitComment} disabled={commentBody.trim().length === 0}>
-              Add comment
-            </Button>
-          </div>
-        </div>
+        <PlanReviewCommentComposer
+          quotedText={pendingQuote}
+          body={commentBody}
+          onBodyChange={setCommentBody}
+          onSubmit={submitComment}
+          onCancel={cancelComment}
+        />
       ) : null}
     </div>
   );

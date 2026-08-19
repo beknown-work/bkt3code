@@ -37,4 +37,39 @@ describe("SourceControlExecutionEnvironment", () => {
     assert.equal(merged.GH_TOKEN, "alice-token");
     assert.equal(merged.GIT_AUTHOR_NAME, "Alice");
   });
+
+  // T3-CUSTOM(expbkt3): the session-identity markers are an additive overlay,
+  // so machine-identity mode must keep the machine's own credentials.
+  it("keeps inherited source-control credentials under an additive overlay", () => {
+    const merged = mergeSourceControlEnvironment(
+      { PATH: "/bin", GH_TOKEN: "machine", GIT_AUTHOR_NAME: "Machine User" },
+      { BK_IDENTITY_RUNTIME: "t3-code", BK_SESSION_OWNER_EMAIL: "alice@example.com" },
+    );
+
+    assert.deepStrictEqual(merged, {
+      PATH: "/bin",
+      GH_TOKEN: "machine",
+      GIT_AUTHOR_NAME: "Machine User",
+      BK_IDENTITY_RUNTIME: "t3-code",
+      BK_SESSION_OWNER_EMAIL: "alice@example.com",
+    });
+  });
+
+  it("still replaces machine credentials when the overlay carries an identity", () => {
+    const merged = mergeSourceControlEnvironment(
+      { PATH: "/bin", GH_TOKEN: "machine", GIT_CONFIG_KEY_0: "credential.helper" },
+      {
+        GH_TOKEN: "alice-token",
+        GIT_AUTHOR_NAME: "Alice",
+        BK_IDENTITY_RUNTIME: "t3-code",
+      },
+    );
+
+    assert.deepStrictEqual(merged, {
+      PATH: "/bin",
+      GH_TOKEN: "alice-token",
+      GIT_AUTHOR_NAME: "Alice",
+      BK_IDENTITY_RUNTIME: "t3-code",
+    });
+  });
 });

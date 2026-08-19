@@ -28,6 +28,7 @@ import {
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -68,6 +69,8 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+// T3-CUSTOM(expbkt3): session-identity markers for provider processes.
+import { withSessionIdentityEnvironment } from "../../identity/SessionIdentityEnvironment.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -190,6 +193,16 @@ function readSourceControlIdentityRequired(
     runtimePayload.sourceControlIdentityRequired === true,
   );
 }
+
+/**
+ * Provider session starts spawn a child process and complete a protocol
+ * handshake. The codex app-server JSON-RPC client awaits an unbounded
+ * deferred, so an alive-but-wedged child (locked CODEX_HOME, stalled MCP
+ * server) would otherwise hang the caller — and with it the single provider
+ * command worker — forever. Fail instead, so the failure surfaces as a
+ * thread error the user can act on.
+ */
+const PROVIDER_SESSION_START_TIMEOUT_MS = 60_000;
 
 const dieOnMissingBindingInstanceId = (
   operation: string,
@@ -522,9 +535,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
             runtimeMode: input.binding.runtimeMode ?? "full-access",
           },
-          input.executionOptions,
+          // T3-CUSTOM(expbkt3): a recovered session is a freshly spawned
+          // process, so it needs the identity markers too.
+          withSessionIdentityEnvironment(input.executionOptions),
         )
-        .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+        .pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.millis(PROVIDER_SESSION_START_TIMEOUT_MS),
+            orElse: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: input.binding.provider,
+                  method: "session/start",
+                  detail: `Provider session start timed out after ${PROVIDER_SESSION_START_TIMEOUT_MS}ms while recovering thread '${input.binding.threadId}'.`,
+                }),
+              ),
+          }),
+          Effect.onError(() => clearMcpSession(input.binding.threadId)),
+        );
       bumpSessionGeneration(bindingInstanceId, input.binding.threadId);
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
@@ -749,7 +777,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                   ? { resumeCursor: effectiveResumeCursor }
                   : {}),
               },
-              executionOptions,
+              // T3-CUSTOM(expbkt3): fold the session-identity markers into the
+              // environment the adapter spawns with.
+              withSessionIdentityEnvironment(executionOptions),
             )
             .pipe(Effect.onError(() => clearMcpSession(threadId)));
 
@@ -978,10 +1008,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
+        // Recovery is deliberately off: interrupting a dead session must not
+        // respawn the agent it is trying to stop. Callers turn this failure
+        // into a clean interrupted state instead.
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
+          allowRecovery: false,
           ...(executionOptions ? { executionOptions } : {}),
         });
         metricProvider = routed.adapter.provider;
@@ -991,6 +1024,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
+        if (!routed.isActive) {
+          return yield* new ProviderAdapterRequestError({
+            provider: routed.adapter.provider,
+            method: "turn/interrupt",
+            detail: `No live provider session for thread '${input.threadId}'; interrupt does not respawn sessions.`,
+          });
+        }
         yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
@@ -1413,7 +1453,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
       ),
     ).pipe(Effect.asVoid);
-    yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
+    // The service launcher SIGKILLs us 5s after SIGTERM. Stopping adapters
+    // one at a time (each waiting on its own child) can overrun that budget
+    // and lose the binding rewrite below, so stop them together and give up
+    // on stragglers rather than the whole shutdown.
+    yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll(), {
+      concurrency: "unbounded",
+    }).pipe(Effect.timeoutOption(Duration.seconds(3)), Effect.asVoid);
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
     McpProviderSession.clearAllMcpProviderSessions();
     const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
@@ -1441,6 +1487,49 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
     yield* analytics.flush;
   });
+
+  // No adapter can hold a live session at process start, so any binding still
+  // marked running/starting is debris from the previous process — a SIGKILL
+  // skips runStopAll entirely. Reconciling at boot keeps the reaper's view and
+  // recovery decisions honest. directory.upsert preserves resumeCursor, so
+  // lazy recovery is unaffected.
+  yield* directory.listBindings().pipe(
+    Effect.orElseSucceed(() => []),
+    Effect.flatMap((bindings) =>
+      Effect.forEach(
+        bindings.filter(
+          (binding) =>
+            binding.providerInstanceId !== undefined &&
+            binding.status !== "stopped" &&
+            binding.status !== "error",
+        ),
+        (binding) =>
+          nowIso.pipe(
+            Effect.flatMap((lastRuntimeEventAt) =>
+              directory.upsert({
+                threadId: binding.threadId,
+                provider: binding.provider,
+                ...(binding.providerInstanceId !== undefined
+                  ? { providerInstanceId: binding.providerInstanceId }
+                  : {}),
+                status: "stopped",
+                runtimePayload: {
+                  activeTurnId: null,
+                  lastRuntimeEvent: "provider.bootReconcile",
+                  lastRuntimeEventAt,
+                },
+              }),
+            ),
+          ),
+        { discard: true },
+      ),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("failed to reconcile provider session bindings at boot", {
+        errorTag: causeErrorTag(cause),
+      }),
+    ),
+  );
 
   yield* Effect.addFinalizer(() =>
     runStopAll().pipe(

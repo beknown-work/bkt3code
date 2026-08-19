@@ -716,6 +716,60 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&lt;/review_comment&gt;");
   });
 
+  // T3-CUSTOM(expbkt3): the reported regression. An anchored plan comment whose
+  // quote could not be located carries no line range, which the parser used to
+  // reject — the transcript then printed the raw XML and the quote as a code block.
+  it("renders an anchored plan comment without a line range as a quotation card", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.make("message-plan-comment"),
+              role: "user",
+              text: [
+                "Plan approved. Implement the plan you proposed above, exactly as written.",
+                "",
+                '<review_comment sectionId="plan:plan-doc:ad144073" sectionTitle="Plan review" filePath="TEC-951 standup plan.md" rangeLabel="quoted text" author="Tushar Bhardwaj">',
+                "no ignore this",
+                "```markdown",
+                "1. Outbound email context",
+                "```",
+                "</review_comment>",
+              ].join("\n"),
+              turnId: null,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              updatedAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+              sentByUserId: null,
+            },
+          },
+        ]}
+      />,
+    );
+
+    // No raw wire format reaches the reader.
+    expect(markup).not.toContain("&lt;review_comment");
+    expect(markup).not.toContain("&lt;/review_comment&gt;");
+    expect(markup).not.toContain("sectionId=");
+    // The plan title, not a workspace-relative path, and no synthetic extension.
+    expect(markup).toContain("TEC-951 standup plan");
+    expect(markup).not.toContain("TEC-951 standup plan.md");
+    // The quote is a blockquote, not a fenced code block.
+    expect(markup).toContain("<blockquote");
+    expect(markup).toContain("1. Outbound email context");
+    expect(markup).not.toContain("```markdown");
+    // Body and byline both survive.
+    expect(markup).toContain("no ignore this");
+    expect(markup).toContain("Tushar Bhardwaj");
+    // A placeholder range label is not shown as if it were a line range.
+    expect(markup).not.toContain("quoted text");
+  });
+
   it("renders file review comments as source code instead of diffs", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

@@ -7,7 +7,7 @@
  */
 import type { PlanReviewComment, PlanReviewDiscussion } from "@t3tools/contracts";
 import { CheckIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 
 import { Avatar, userDisplayName } from "../ui/avatar";
 import { Button } from "../ui/button";
@@ -20,6 +20,9 @@ interface PlanReviewDiscussionsProps {
   readonly comments: ReadonlyArray<PlanReviewComment>;
   readonly onResolve: (discussionId: string, isResolved: boolean) => void;
   readonly disabled: boolean;
+  /** Highlighted in the document as well, so the pair reads as one thing. */
+  readonly activeDiscussionId: string | null;
+  readonly onSelectDiscussion: (discussionId: string) => void;
 }
 
 function PlanReviewDiscussionsImpl({
@@ -27,9 +30,21 @@ function PlanReviewDiscussionsImpl({
   comments,
   onResolve,
   disabled,
+  activeDiscussionId,
+  onSelectDiscussion,
 }: PlanReviewDiscussionsProps) {
   const { resolveUser } = useOrgMembers();
   const viewerUserId = useCurrentUserId();
+  const listRef = useRef<HTMLUListElement | null>(null);
+
+  // Clicking a highlight in the document selects its discussion; the card it
+  // names may be scrolled out of the rail, so bring it back.
+  useEffect(() => {
+    if (activeDiscussionId === null) return;
+    listRef.current
+      ?.querySelector(`[data-discussion-id="${CSS.escape(activeDiscussionId)}"]`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeDiscussionId]);
 
   const commentsByDiscussion = useMemo(() => {
     const grouped = new Map<string, PlanReviewComment[]>();
@@ -53,18 +68,26 @@ function PlanReviewDiscussionsImpl({
   }
 
   return (
-    <ul className="flex flex-col gap-2 p-2">
+    <ul ref={listRef} className="flex flex-col gap-2 p-2">
       {discussions.map((discussion) => {
         const thread = commentsByDiscussion.get(discussion.discussionId) ?? [];
         return (
           <li
             key={discussion.discussionId}
+            data-discussion-id={discussion.discussionId}
+            // Selecting a card is what pairs it with its highlight, so the whole
+            // card is the target rather than a separate affordance. `button` is
+            // wrong here — the card already contains one.
+            onClick={() => onSelectDiscussion(discussion.discussionId)}
             className={cn(
-              "rounded-md border p-2",
+              "cursor-pointer rounded-md border p-2 transition-colors",
               discussion.isResolved ? "border-border/50 opacity-60" : "border-border",
+              discussion.discussionId === activeDiscussionId
+                ? "border-amber-400/70 bg-amber-300/10"
+                : "hover:bg-accent/40",
             )}
           >
-            <blockquote className="mb-2 border-primary/40 border-l-2 pl-2 text-muted-foreground text-xs italic">
+            <blockquote className="mb-2 border-amber-400/60 border-l-2 pl-2 text-muted-foreground text-xs italic">
               {discussion.quotedText}
             </blockquote>
 
@@ -93,7 +116,11 @@ function PlanReviewDiscussionsImpl({
                 size="sm"
                 variant="ghost"
                 disabled={disabled}
-                onClick={() => onResolve(discussion.discussionId, !discussion.isResolved)}
+                onClick={(event) => {
+                  // The card selects on click; resolving is not selecting.
+                  event.stopPropagation();
+                  onResolve(discussion.discussionId, !discussion.isResolved);
+                }}
               >
                 {discussion.isResolved ? (
                   <>

@@ -33,6 +33,14 @@ const RETRY_DELAYS_MS = [3_000, 4_000, 8_000, 16_000] as const;
 const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 const MOBILE_CONNECTION_PROBE_TIMEOUT = "3 seconds";
+// T3-CUSTOM(expbkt3): idle heartbeat for the connected phase.
+// How long a connected lease may sit idle before we check it is still alive.
+// Nothing else here has a timer while connected, so a server restart that
+// leaves a half-open socket (a proxy or tunnel in the path) would otherwise
+// keep the supervisor "connected" indefinitely. Interval plus probe timeout
+// bounds silent-death detection at roughly 30 seconds.
+const CONNECTED_HEARTBEAT_INTERVAL = "20 seconds";
+const HEARTBEAT_PROBE_TIMEOUT = "10 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
 
 interface SupervisorIntent {
@@ -205,6 +213,13 @@ export class EnvironmentSupervisor extends Context.Service<
     readonly connect: Effect.Effect<void>;
     readonly disconnect: Effect.Effect<void>;
     readonly retryNow: Effect.Effect<void>;
+    // T3-CUSTOM(expbkt3): BEGIN dead-transport escalation entry point
+    /**
+     * Report that a session's transport looks dead. The supervisor probes and
+     * reconnects if the report is right, and ignores it otherwise.
+     */
+    readonly notifySessionSuspect: (session: RpcSession.RpcSession) => Effect.Effect<void>;
+    // T3-CUSTOM(expbkt3): END dead-transport escalation entry point
   }
 >()("@t3tools/client-runtime/connection/supervisor/EnvironmentSupervisor") {}
 
@@ -397,7 +412,23 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     lease: ConnectionDriver.EnvironmentConnectionLease,
   ) {
     for (;;) {
-      const next = yield* Queue.take(signals);
+      // T3-CUSTOM(expbkt3): BEGIN heartbeat wait
+      //
+      // Idle timeout, not just a signal wait: a dead transport delivers no
+      // close event and therefore no signal, so waiting forever is the same
+      // as never noticing. A synthesized heartbeat runs the same guarded
+      // probe a foreground wake does.
+      const next = yield* Queue.take(signals).pipe(
+        Effect.timeoutOrElse({
+          duration: CONNECTED_HEARTBEAT_INTERVAL,
+          orElse: () =>
+            Effect.succeed({
+              _tag: "Wakeup",
+              reason: "connection-heartbeat",
+            } satisfies SupervisorSignal),
+        }),
+      );
+      // T3-CUSTOM(expbkt3): END heartbeat wait
       switch (next._tag) {
         case "DisconnectRequested":
         case "RetryRequested":
@@ -418,13 +449,22 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             // replaces that lease and starts a fresh attempt without backoff.
             return true;
           }
-          if (next.reason === "application-active" || next.reason === "application-active-probe") {
+          // T3-CUSTOM(expbkt3): BEGIN heartbeats reuse the foreground wake probe
+          if (
+            next.reason === "application-active" ||
+            next.reason === "application-active-probe" ||
+            next.reason === "connection-heartbeat"
+          ) {
+            // T3-CUSTOM(expbkt3): END heartbeats reuse the foreground wake probe
             const probe = yield* lease.session.probe.pipe(
               Effect.timeoutOrElse({
+                // T3-CUSTOM(expbkt3): heartbeat gets its own, shorter deadline.
                 duration:
                   next.reason === "application-active-probe"
                     ? MOBILE_CONNECTION_PROBE_TIMEOUT
-                    : CONNECTION_PROBE_TIMEOUT,
+                    : next.reason === "connection-heartbeat"
+                      ? HEARTBEAT_PROBE_TIMEOUT
+                      : CONNECTION_PROBE_TIMEOUT,
                 orElse: () =>
                   Effect.fail(
                     new ConnectionTransientError({
@@ -445,7 +485,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
                 ),
               );
               if (probeEvent._tag === "ProbeCompleted") {
-                if (Exit.isFailure(probeEvent.exit)) {
+                // T3-CUSTOM(expbkt3): heartbeat failures keep the normal ladder.
+                // wakeProbeFailed means "the user is returning to the app right
+                // now" and skips the first backoff rung. An idle heartbeat is
+                // not that, so its failures take the normal ladder — which is
+                // also what stops repeated heartbeat failures from becoming a
+                // reconnect storm.
+                if (Exit.isFailure(probeEvent.exit) && next.reason !== "connection-heartbeat") {
                   yield* Ref.set(wakeProbeFailed, true);
                 }
                 yield* probeEvent.exit;
@@ -794,6 +840,25 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN dead-transport escalation
+  //
+  // Escalation path for subscriptions that lost their transport. They cannot
+  // tell a dead connection from a server that simply closed one stream, so
+  // they report the session and let the supervisor decide by probing. The
+  // reference-equality gate is the whole debounce: reports about a session
+  // that is no longer the live lease (or arriving while disconnected) are
+  // dropped, and concurrent reports collapse into one queued heartbeat.
+  const notifySessionSuspect = Effect.fn("EnvironmentSupervisor.notifySessionSuspect")(function* (
+    suspect: RpcSession.RpcSession,
+  ) {
+    const current = yield* SubscriptionRef.get(session);
+    if (Option.isNone(current) || current.value !== suspect) {
+      return;
+    }
+    yield* signal({ _tag: "Wakeup", reason: "connection-heartbeat" });
+  });
+  // T3-CUSTOM(expbkt3): END dead-transport escalation
+
   yield* Effect.addFinalizer(() => Queue.shutdown(signals).pipe(Effect.andThen(clearLease)));
 
   return EnvironmentSupervisor.of({
@@ -804,6 +869,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     connect,
     disconnect,
     retryNow,
+    // T3-CUSTOM(expbkt3): exposed for the dead-transport escalation above.
+    notifySessionSuspect,
   });
 });
 
