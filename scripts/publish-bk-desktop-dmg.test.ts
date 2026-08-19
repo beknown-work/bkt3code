@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   fingerprintDesignatedRequirement,
+  findPreviousChannelTag,
   summarizeCommitSubjects,
 } from "./publish-bk-desktop-dmg.ts";
 
@@ -77,5 +78,37 @@ describe("summarizeCommitSubjects", () => {
   it("returns nothing when there is nothing to say", () => {
     expect(summarizeCommitSubjects([])).toEqual([]);
     expect(summarizeCommitSubjects(["Merge branch 'bkmain' into expbkmain", "  ", ""])).toEqual([]);
+  });
+});
+
+/**
+ * These tags are the real shapes, because the first version of this lookup keyed
+ * on the brand's `updateChannel` — already `staging-nightly` — and searched for
+ * `-staging-nightly-nightly.`. It matched nothing, so a release shipped with an
+ * empty change list and nothing failed to say so.
+ */
+describe("findPreviousChannelTag", () => {
+  const TAGS = [
+    "v0.0.34-staging-nightly.20260819.1",
+    "v0.0.34-production-nightly.20260818.2",
+    "v0.0.34-staging-nightly.20260818.6",
+    "v0.0.34-production-nightly.20260817.1",
+  ];
+
+  it("finds the newest tag of the requested channel", () => {
+    expect(findPreviousChannelTag(TAGS, "staging")).toBe("v0.0.34-staging-nightly.20260819.1");
+    expect(findPreviousChannelTag(TAGS, "production")).toBe(
+      "v0.0.34-production-nightly.20260818.2",
+    );
+  });
+
+  it("never returns the other channel's build", () => {
+    expect(findPreviousChannelTag(["v0.0.34-production-nightly.20260818.2"], "staging")).toBe(
+      undefined,
+    );
+  });
+
+  it("returns undefined for the very first build of a channel", () => {
+    expect(findPreviousChannelTag([], "production")).toBe(undefined);
   });
 });
