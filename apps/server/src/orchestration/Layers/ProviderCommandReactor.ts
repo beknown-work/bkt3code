@@ -31,6 +31,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+// T3-CUSTOM(expbkt3): one bounded seam keeps the upstream worker model intact.
+import { runProviderCommandWithinLaneDeadline } from "../providerCommandLane.expbkt3.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { decideWorktreeRecovery, describeWorktreeRecreation } from "../threadWorktreeRecovery.ts";
 import {
@@ -2981,7 +2983,12 @@ const make = Effect.gen(function* () {
   });
 
   const processDomainEventSafely = (event: ProviderIntentEvent) =>
-    processDomainEvent(event).pipe(
+    // T3-CUSTOM(expbkt3): bound the one global lane without replacing it.
+    runProviderCommandWithinLaneDeadline(processDomainEvent(event), {
+      eventType: event.type,
+      threadId: event.payload.threadId,
+      commandId: event.commandId,
+    }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.interrupt;
