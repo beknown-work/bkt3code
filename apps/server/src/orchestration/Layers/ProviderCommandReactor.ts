@@ -1866,6 +1866,9 @@ const make = Effect.gen(function* () {
     },
   );
 
+  // T3-CUSTOM(expbkt3): upper bound on a provider stop holding the reactor lane.
+  const SESSION_STOP_TIMEOUT = "15 seconds";
+
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
@@ -1879,7 +1882,19 @@ const make = Effect.gen(function* () {
     // process remains alive. Treat session.stop as idempotent against the
     // provider registry so the sidebar's force-stop escape hatch is real.
     if (thread.session) {
-      yield* providerService.stopSession({ threadId: thread.id });
+      // T3-CUSTOM(expbkt3): this runs on the reactor's single sequential lane.
+      // A provider stop that never returned blocked every later turn wake,
+      // approval, and interrupt for every thread (2026-08-20 outage). Bound it;
+      // the projection below still converges to stopped either way.
+      const stopped = yield* providerService
+        .stopSession({ threadId: thread.id })
+        .pipe(Effect.timeoutOption(SESSION_STOP_TIMEOUT));
+      if (Option.isNone(stopped)) {
+        yield* Effect.logWarning("provider session stop timed out on the reactor lane", {
+          threadId: thread.id,
+          timeout: SESSION_STOP_TIMEOUT,
+        });
+      }
     }
     threadCredentialActors.delete(thread.id);
 

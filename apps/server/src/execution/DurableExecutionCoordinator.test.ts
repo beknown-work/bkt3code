@@ -1,9 +1,12 @@
 import { CommandId, CorrelationId, EventId, MessageId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import { PersistenceSqlError } from "../persistence/Errors.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -429,6 +432,78 @@ layer("DurableExecutionCoordinator", (it) => {
       // acknowledgement; staying `queued` forever is the regression itself.
       assert.notStrictEqual(claimed.value.phase, "queued");
       assert.strictEqual(yield* Ref.get(remainingFailures), 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("claims work accepted without a wake within the safety poll", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("safety-poll", 910);
+      const workItemId = event.commandId ?? "";
+      const transitioned = yield* Deferred.make<string>();
+      const parked = yield* Deferred.make<void>();
+      const waitScans = yield* Ref.make(0);
+      // Nothing scheduled: the loop has no timer to fall back on and relies on
+      // a wake alone. `start` offers one wake, so the loop scans, drains that
+      // wake, scans again, and only then parks. Signal after that second scan
+      // has returned so the accept below cannot race the loop's own first pass.
+      const observedRepository: DurableExecutionIntentRepository["Service"] = {
+        ...repository,
+        // The in-memory database is shared across this block; leftover rows
+        // would be claimed here and each claim re-offers a wake, which would
+        // hide a loop that never parks on its own.
+        listRunnable: (input) =>
+          repository
+            .listRunnable(input)
+            .pipe(
+              Effect.map((rows) => rows.filter((row) => row.threadId === event.payload.threadId)),
+            ),
+        nextRunnableAt: () =>
+          Ref.updateAndGet(waitScans, (n) => n + 1).pipe(
+            Effect.flatMap((n) =>
+              n >= 2 ? Deferred.succeed(parked, undefined).pipe(Effect.asVoid) : Effect.void,
+            ),
+            Effect.as(Option.none()),
+          ),
+      };
+
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "coordinator-safety-poll",
+        now: () => Effect.succeed(event.occurredAt),
+        safetyPollIntervalMs: 50,
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () =>
+          Effect.succeed({
+            providerTurnId: "provider-turn-safety-poll",
+            providerInstanceId: "codex",
+          }),
+        recover: () => Effect.die("recovery must not run"),
+        onTransition: ({ workItemId: transitionedId }) =>
+          transitionedId === workItemId
+            ? Deferred.succeed(transitioned, transitionedId).pipe(Effect.asVoid)
+            : Effect.void,
+      }).pipe(Effect.provideService(DurableExecutionIntentRepository, observedRepository));
+
+      yield* coordinator.start();
+      yield* Deferred.await(parked);
+      // Accept after the loop has parked and deliberately never call `wake`:
+      // the lost-wake shape of the 2026-08-20 outage, where the reactor lane
+      // that delivers wakes was wedged. Before the bounded wait this loop sat
+      // in `Queue.take` forever and the work item stayed `queued`.
+      yield* acceptEvent(repository, event);
+
+      // Only the bounded wait's timer can move the loop now. Without it the
+      // loop is parked in `Queue.take` and no amount of time helps.
+      for (let i = 0; i < 20 && !(yield* Deferred.isDone(transitioned)); i += 1) {
+        yield* TestClock.adjust(Duration.millis(60));
+        yield* Effect.yieldNow;
+      }
+
+      assert.strictEqual(yield* Deferred.await(transitioned), workItemId);
+      const claimed = yield* repository.getByWorkItemId({ workItemId });
+      assert.isTrue(claimed._tag === "Some");
+      if (claimed._tag === "None") return;
+      assert.notStrictEqual(claimed.value.phase, "queued");
     }).pipe(Effect.scoped),
   );
 });

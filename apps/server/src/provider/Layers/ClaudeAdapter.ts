@@ -182,6 +182,9 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+// T3-CUSTOM(expbkt3): upper bound on waiting for the SDK stream fiber during stop.
+const STREAM_FIBER_INTERRUPT_TIMEOUT = "5 seconds";
+
 interface ToolInFlight {
   readonly itemId: string;
   readonly itemType: CanonicalItemType;
@@ -3688,6 +3691,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
     context.pendingApprovals.clear();
 
+    // T3-CUSTOM(expbkt3): a pending AskUserQuestion outlives its turn (the
+    // max-run-time watchdog settles the turn but not this Deferred). Until it
+    // settles, the SDK's canUseTool promise keeps the query iterator open and
+    // the stream fiber below can never finish its finalizer (2026-08-20 outage).
+    for (const [requestId, pending] of context.pendingUserInputs) {
+      context.pendingUserInputs.delete(requestId);
+      yield* Deferred.succeed(pending.answers, {} as ProviderUserInputAnswers);
+    }
+
     if (context.turnState) {
       yield* completeTurn(context, "interrupted", "Session stopped.");
     }
@@ -3697,7 +3709,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const streamFiber = context.streamFiber;
     context.streamFiber = undefined;
     if (streamFiber && streamFiber.pollUnsafe() === undefined) {
-      yield* Fiber.interrupt(streamFiber);
+      // T3-CUSTOM(expbkt3): callers hold the per-thread lifecycle lock and may
+      // be the reactor's single worker lane; never wait on the stream forever.
+      // `query.close()` below ends the runtime whether or not the fiber settled.
+      const interrupted = yield* Fiber.interrupt(streamFiber).pipe(
+        Effect.timeoutOption(STREAM_FIBER_INTERRUPT_TIMEOUT),
+      );
+      if (Option.isNone(interrupted)) {
+        yield* Effect.logWarning("claude stream fiber did not settle before stop timeout", {
+          threadId: context.session.threadId,
+          timeout: STREAM_FIBER_INTERRUPT_TIMEOUT,
+        });
+      }
     }
 
     yield* Effect.try({
