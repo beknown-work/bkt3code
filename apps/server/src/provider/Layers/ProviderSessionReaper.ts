@@ -12,6 +12,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as OrchestrationEngine from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
+  interruptRunningSession,
   listRunningSessionRows,
   settleRunningSession,
 } from "../../orchestration/reconcileRunningTurns.ts";
@@ -67,6 +68,11 @@ const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  * session but has clearly gone nowhere. Deliberately generous: silence is not
  * evidence of death (see reconcileRunningTurns), so this must never be the
  * mechanism that ends a normal turn.
+ *
+ * T3-CUSTOM(expbkt3): measured against the thread's last recorded event, not
+ * the turn start. Agents here legitimately run multi-hour monitoring turns that
+ * emit steadily; a turn that is still producing events has not "gone nowhere",
+ * and capping it by age alone started the settle/recover loop of 2026-08-20.
  */
 const DEFAULT_TURN_ABSOLUTE_CAP_MS = 2 * 60 * 60 * 1000;
 /**
@@ -144,17 +150,36 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       for (const row of rows) {
         const startedMs = Date.parse(row.turnStartedAt ?? row.updatedAt);
         const runningForMs = Number.isNaN(startedMs) ? 0 : now - startedMs;
+        // T3-CUSTOM(expbkt3): silence, not age, is what the cap measures.
+        const lastActivityMs = Date.parse(row.lastActivityAt ?? row.turnStartedAt ?? row.updatedAt);
+        const silentForMs = Number.isNaN(lastActivityMs) ? runningForMs : now - lastActivityMs;
+        const sessionLive = liveThreadIds.has(row.threadId);
 
-        const reason = !liveThreadIds.has(row.threadId)
+        const reason = !sessionLive
           ? runningForMs >= ORPHAN_EVIDENCE_GRACE_MS
             ? "Interrupted: the agent session is no longer running."
             : null
-          : runningForMs >= turnAbsoluteCapMs
-            ? "Interrupted: the turn exceeded the maximum run time."
+          : silentForMs >= turnAbsoluteCapMs
+            ? `Interrupted: the turn produced no events for ${Math.round(turnAbsoluteCapMs / 60_000)} minutes.`
             : null;
 
         if (reason === null) {
           continue;
+        }
+
+        // T3-CUSTOM(expbkt3): a live-but-silent turn is interrupted for real
+        // first, so the durable work item is terminal and the provider is told
+        // to stop before the projection is settled. Settling alone re-armed
+        // durable recovery against the still-running provider turn.
+        if (sessionLive) {
+          yield* interruptRunningSession({ row, reason }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.session.reaper.interrupt-silent-turn-failed", {
+                threadId: row.threadId,
+                cause,
+              }),
+            ),
+          );
         }
 
         yield* settleRunningSession({ row, reason }).pipe(
@@ -162,6 +187,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
             Effect.logInfo("provider.session.reaper.settled-orphaned-turn", {
               threadId: row.threadId,
               runningForMs,
+              silentForMs,
               reason,
             }),
           ),
@@ -307,6 +333,25 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           });
           continue;
         }
+
+        // T3-CUSTOM(expbkt3): BEGIN - the projection's activeTurnId is not
+        // proof of idleness: the orphaned-turn pass above clears it in this
+        // same sweep, and lastSeenAt only moves on runtime operations, never on
+        // streamed events. Ask the adapter whether a turn is actually running
+        // before terminating a process that may be mid tool call (2026-08-20
+        // 17:33:50 and 19:29:17, `mcp:1e019f68`).
+        const inspection = yield* providerService
+          .inspectSession(binding.threadId)
+          .pipe(Effect.catchCause(() => Effect.succeed(null)));
+        if (inspection?.activeProviderTurnId != null) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-live-provider-turn", {
+            threadId: binding.threadId,
+            activeProviderTurnId: inspection.activeProviderTurnId,
+            idleDurationMs,
+          });
+          continue;
+        }
+        // T3-CUSTOM(expbkt3): END
 
         // The turn can settle while background work runs on (subagent
         // fleets, workflow runs, Monitor watch loops). Those live inside the

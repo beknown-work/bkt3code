@@ -22,12 +22,15 @@
  */
 import {
   CommandId,
+  EventId,
   IsoDateTime,
   ProviderInstanceId,
   type RuntimeMode,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -42,6 +45,8 @@ export interface RunningSessionRow {
   readonly updatedAt: string;
   readonly lastActivityAt: string | null;
   readonly turnStartedAt: string | null;
+  /** T3-CUSTOM(expbkt3): the orchestration turn id the session projection is pinned to. */
+  readonly activeTurnId: string | null;
 }
 
 /**
@@ -58,6 +63,7 @@ export const listRunningSessionRows = Effect.gen(function* () {
       s.provider_instance_id AS "providerInstanceId",
       s.runtime_mode AS "runtimeMode",
       s.updated_at AS "updatedAt",
+      s.active_turn_id AS "activeTurnId",
       (
         SELECT MAX(e.occurred_at)
         FROM orchestration_events e
@@ -109,3 +115,63 @@ export const settleRunningSession = (input: {
       createdAt: settleAt,
     });
   });
+
+// T3-CUSTOM(expbkt3): BEGIN - interrupt a live turn for real before settling it.
+/**
+ * Ask the provider to end a turn that is still alive in memory but has gone
+ * silent, through the same `thread.turn.interrupt` path the Stop button uses.
+ *
+ * `settleRunningSession` alone only rewrites the projection: the provider turn
+ * keeps running, durable recovery then sees that live turn, re-adopts it, and
+ * the reaper settles it again on its next sweep — ten "successful" recoveries
+ * later the work item is an unclaimable zombie that blocks every later prompt
+ * (2026-08-20, `mcp:1e019f68`). Dispatching the interrupt first makes the
+ * durable work item terminal (`stopThread`) and tells the provider to stop, so
+ * provider, projection and intent agree and there is nothing left to recover.
+ */
+export const interruptRunningSession = (input: {
+  readonly row: RunningSessionRow;
+  readonly reason: string;
+}) =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+    const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+    const threadId = ThreadId.make(input.row.threadId);
+    const uuid = yield* crypto.randomUUIDv4;
+    const createdAt = IsoDateTime.make(DateTime.formatIso(yield* DateTime.now));
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.make(`server:reconcile-running-turn-interrupt:${uuid}`),
+      threadId,
+      ...(input.row.activeTurnId !== null ? { turnId: TurnId.make(input.row.activeTurnId) } : {}),
+      createdAt,
+    });
+    // Leave the reason in the thread feed; the interrupt itself carries none.
+    const activityUuid = yield* crypto.randomUUIDv4;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make(`server:reconcile-running-turn-activity:${activityUuid}`),
+      threadId,
+      activity: {
+        id: EventId.make(activityUuid),
+        tone: "info",
+        kind: "provider.turn.interrupted",
+        summary: input.reason,
+        payload: {
+          detail: input.reason,
+          activeTurnId: input.row.activeTurnId,
+          lastActivityAt: input.row.lastActivityAt,
+        },
+        turnId: input.row.activeTurnId !== null ? TurnId.make(input.row.activeTurnId) : null,
+        createdAt,
+      },
+      createdAt,
+    });
+    yield* Effect.logInfo("provider.session.reaper.interrupted-silent-turn", {
+      threadId: input.row.threadId,
+      activeTurnId: input.row.activeTurnId,
+      reason: input.reason,
+    });
+  });
+// T3-CUSTOM(expbkt3): END

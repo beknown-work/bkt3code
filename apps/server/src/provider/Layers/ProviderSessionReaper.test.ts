@@ -16,6 +16,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -211,6 +212,11 @@ describe("ProviderSessionReaper", () => {
     readonly configEnv?: Record<string, string>;
     readonly inactivityThresholdMs?: number;
     readonly sweepIntervalMs?: number;
+    // T3-CUSTOM(expbkt3): orphaned-turn pass doubles.
+    readonly turnAbsoluteCapMs?: number;
+    readonly listSessions?: ProviderServiceShape["listSessions"];
+    readonly inspectSession?: ProviderServiceShape["inspectSession"];
+    readonly dispatch?: OrchestrationEngineService["Service"]["dispatch"];
   }) {
     const terminatedThreadIds = new Set<ThreadId>();
     const terminateSession = vi.fn<ProviderServiceShape["terminateSession"]>(
@@ -227,13 +233,13 @@ describe("ProviderSessionReaper", () => {
       startSession: () => unsupported(),
       sendTurn: () => unsupported(),
       interruptTurn: () => unsupported(),
-      inspectSession: () => Effect.succeed(null),
+      inspectSession: input.inspectSession ?? (() => Effect.succeed(null)),
       requestTurnInterrupt: () => unsupported(),
       terminateSession,
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession: () => unsupported(),
-      listSessions: () => Effect.succeed([]),
+      listSessions: input.listSessions ?? (() => Effect.succeed([])),
       // T3-CUSTOM(expbkt3): explicit durable execution behavior.
       getCapabilities: () =>
         Effect.succeed({
@@ -267,6 +273,9 @@ describe("ProviderSessionReaper", () => {
     const layer = makeProviderSessionReaperLive({
       inactivityThresholdMs: input.inactivityThresholdMs ?? 1_000,
       sweepIntervalMs: input.sweepIntervalMs ?? 60_000,
+      ...(input.turnAbsoluteCapMs !== undefined
+        ? { turnAbsoluteCapMs: input.turnAbsoluteCapMs }
+        : {}),
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
@@ -307,7 +316,7 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(
         Layer.succeed(OrchestrationEngineService, {
           readEvents: () => Stream.empty,
-          dispatch: () => Effect.die("unused"),
+          dispatch: input.dispatch ?? (() => Effect.die("unused")),
           streamDomainEvents: Stream.empty,
           latestSequence: Effect.succeed(0),
         }),
@@ -800,4 +809,267 @@ describe("ProviderSessionReaper", () => {
       [{ threadId }],
     ]);
   });
+  // T3-CUSTOM(expbkt3): BEGIN - orphaned-turn pass: silence, real interrupts,
+  // and no termination of a turn the adapter still reports as running.
+  const sqlQuote = (value: string | number | null) =>
+    value === null
+      ? "NULL"
+      : typeof value === "number"
+        ? String(value)
+        : `'${value.replace(/'/g, "''")}'`;
+
+  async function seedRow(table: string, values: Record<string, string | number | null>) {
+    // The harness layer merges SqlitePersistenceMemory in, but the runtime's
+    // declared context is narrowed to the reaper services.
+    const sqlRuntime = runtime as unknown as ManagedRuntime.ManagedRuntime<
+      SqlClient.SqlClient,
+      never
+    >;
+    await sqlRuntime.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const columns = yield* sql.unsafe<{
+          readonly name: string;
+          readonly notnull: number;
+          readonly dflt_value: string | null;
+          readonly pk: number;
+        }>(`PRAGMA table_info(${table})`);
+        const row: Record<string, string | number | null> = { ...values };
+        for (const column of columns) {
+          if (column.notnull === 1 && column.dflt_value === null && !(column.name in row)) {
+            row[column.name] = column.name.endsWith("_json")
+              ? "{}"
+              : column.name.endsWith("_at")
+                ? "2026-01-01T00:00:00.000Z"
+                : "";
+          }
+        }
+        const names = Object.keys(row).join(", ");
+        const placeholders = Object.values(row).map(sqlQuote).join(", ");
+        yield* sql.unsafe(`INSERT INTO ${table} (${names}) VALUES (${placeholders})`);
+      }),
+    );
+  }
+
+  async function seedRunningTurn(input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly startedAt: string;
+    readonly lastEventAt: string | null;
+  }) {
+    await seedRow("projection_threads", {
+      thread_id: input.threadId,
+      project_id: "project-provider-session-reaper",
+      title: "silent turn",
+      created_at: input.startedAt,
+      updated_at: input.startedAt,
+    });
+    await seedRow("projection_thread_sessions", {
+      thread_id: input.threadId,
+      status: "running",
+      provider_name: "codex",
+      provider_instance_id: "codex",
+      active_turn_id: input.turnId,
+      updated_at: input.startedAt,
+    });
+    await seedRow("projection_turns", {
+      thread_id: input.threadId,
+      turn_id: input.turnId,
+      state: "running",
+      requested_at: input.startedAt,
+      started_at: input.startedAt,
+      checkpoint_files_json: "[]",
+    });
+    if (input.lastEventAt !== null) {
+      await seedRow("orchestration_events", {
+        event_id: `event-${input.threadId}`,
+        aggregate_kind: "thread",
+        stream_id: input.threadId,
+        stream_version: 1,
+        event_type: "thread.activity-appended",
+        occurred_at: input.lastEventAt,
+        actor_kind: "provider",
+        payload_json: "{}",
+        metadata_json: "{}",
+      });
+    }
+  }
+
+  function liveCodexSession(threadId: ThreadId, at: string) {
+    return () =>
+      Effect.succeed([
+        {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          status: "running" as const,
+          runtimeMode: "full-access" as const,
+          threadId,
+          createdAt: at,
+          updatedAt: at,
+        },
+      ]);
+  }
+
+  it("interrupts for real, then settles, a live turn that has been silent past the cap", async () => {
+    const threadId = ThreadId.make("thread-reaper-silent");
+    const turnId = TurnId.make("turn-reaper-silent");
+    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const threeHoursAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000));
+    const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+    const dispatched: Array<{ readonly type: string }> = [];
+    const harness = await createHarness({
+      inactivityThresholdMs: 24 * 60 * 60 * 1000,
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: threeHoursAgo,
+          },
+        },
+      ]),
+      listSessions: liveCodexSession(threadId, threeHoursAgo),
+      dispatch: (command) => {
+        dispatched.push(command);
+        return Effect.succeed({ sequence: dispatched.length });
+      },
+    });
+    await seedRunningTurn({
+      threadId,
+      turnId,
+      startedAt: threeHoursAgo,
+      lastEventAt: threeHoursAgo,
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: nowIso,
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await waitFor(() => dispatched.length >= 3);
+
+    expect(dispatched.map((command) => command.type)).toEqual([
+      "thread.turn.interrupt",
+      "thread.activity.append",
+      "thread.session.set",
+    ]);
+    const interrupt = dispatched[0] as { readonly turnId?: string };
+    expect(interrupt.turnId).toBe(turnId);
+    const settle = dispatched[2] as unknown as { readonly session: { readonly status: string } };
+    expect(settle.session.status).toBe("interrupted");
+    expect(harness.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves a live turn alone while it is still emitting events, however old it is", async () => {
+    const threadId = ThreadId.make("thread-reaper-busy");
+    const turnId = TurnId.make("turn-reaper-busy");
+    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const threeHoursAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000));
+    const oneMinuteAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 60 * 1000));
+    const dispatched: Array<{ readonly type: string }> = [];
+    const harness = await createHarness({
+      inactivityThresholdMs: 24 * 60 * 60 * 1000,
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: threeHoursAgo,
+          },
+        },
+      ]),
+      listSessions: liveCodexSession(threadId, threeHoursAgo),
+      dispatch: (command) => {
+        dispatched.push(command);
+        return Effect.succeed({ sequence: dispatched.length });
+      },
+    });
+    await seedRunningTurn({
+      threadId,
+      turnId,
+      startedAt: threeHoursAgo,
+      lastEventAt: oneMinuteAgo,
+    });
+
+    await startReaper();
+    await Effect.runPromise(Effect.sleep("200 millis"));
+
+    expect(dispatched).toEqual([]);
+    expect(harness.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it("does not terminate an idle-looking session while the adapter reports an active turn", async () => {
+    const threadId = ThreadId.make("thread-reaper-adapter-turn");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      configEnv: { T3CODE_PROVIDER_SESSION_INACTIVITY_MS: "0" },
+      inactivityThresholdMs: 600_000,
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      inspectSession: () =>
+        Effect.succeed({
+          threadId,
+          generation: 1,
+          state: "running" as const,
+          activeProviderTurnId: TurnId.make("turn-still-running"),
+          runtimeAlive: true,
+        }),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(Effect.sleep("200 millis"));
+
+    expect(harness.terminateSession).not.toHaveBeenCalled();
+  });
+  // T3-CUSTOM(expbkt3): END
 });
