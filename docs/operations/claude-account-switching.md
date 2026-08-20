@@ -80,7 +80,7 @@ Two caveats:
 
 ## Automatic switching on usage limits
 
-`claude-autoswitch` runs every five minutes from `claude-autoswitch.timer` and elects a
+`claude-autoswitch` runs every 30 seconds from `claude-autoswitch.timer` and elects a
 different profile when the active account is nearly spent.
 
 It makes **no network requests and never spawns `claude`**. Usage comes from
@@ -94,6 +94,39 @@ claude-autoswitch --status      # all profiles, effective percentages, which is 
 claude-autoswitch --dry-run     # decide without switching
 tail ~/.claude-profiles/.autoswitch.jsonl        # every decision, with its inputs
 ```
+
+### Authoritative provider rejection
+
+The timer remains the fallback, but it cannot act promptly when Claude rejects a request before
+its local utilization cache catches up. T3 therefore listens for the SDK's typed
+`rate_limit_event`. Only `rate_limit_info.status == "rejected"` with one of `five_hour`,
+`seven_day`, `seven_day_opus`, `seven_day_sonnet`, or `overage` is authoritative. Warnings,
+ordinary HTTP/provider errors, missing limit types, and every other event are ignored.
+
+For an authoritative rejection, T3 invokes the credential-free host contract:
+
+```bash
+/home/ubuntu/.local/bin/claude-autoswitch --hard-limit <type> --json
+```
+
+The hard-limit and timer paths hold the same machine-wide lock across candidate election, atomic
+symlink replacement, and autoswitch state persistence. Hard-limit mode bypasses the stale cache
+for the rejected account and the normal cooldown for that decision only; it does not rewrite the
+cache. The host command returns one JSON object:
+
+- exit 0 with `status: "switched"`: the election committed;
+- exit 0 with `status: "no-op"`: no eligible authorized profile was available;
+- exit 1 with `status: "failure"`: election failed.
+
+T3 validates the JSON, requested limit type, exit code, and `switched` status. Only then does it
+stop the Claude provider session for the thread that emitted the rejection, so its next resume
+spawns through `~/.claude-active` and reads the newly elected profile. Other Claude threads keep
+running. Repeated copies of the same provider-instance, limit-type, and reset condition are
+consumed once. A no-op, nonzero exit, invalid response, timeout, or command error is logged and
+leaves the affected session running for the timer or an operator to recover.
+
+Manual selection semantics remain in the host election policy. The timer only reverses its own
+automatic move; the event-driven path does not inspect profiles or credentials in T3.
 
 Config lives in `~/.claude-profiles/.autoswitch.json`:
 
@@ -128,6 +161,36 @@ Disable with `"enabled": false`, or:
 sudo systemctl disable --now claude-autoswitch.timer
 ```
 
+That disables the fallback timer. To disable only T3's immediate-rejection listener while keeping
+the timer active, set `T3_CLAUDE_HARD_LIMIT_ROTATION=0` in the deployment service environment and
+restart that environment.
+
+## Staging verification
+
+Verify on `expbkt3` before promotion:
+
+1. Run the focused behavior test:
+   `VITEST_MAX_THREADS=2 vp test run apps/server/src/provider/claudeHardLimitRotation.expbkt3.test.ts --maxWorkers=2`.
+2. Keep two Claude threads active and record both thread identifiers. Inject one typed five-hour
+   rejection fixture while the cached utilization is below its normal trip threshold. Confirm one
+   `confirmed profile election` log followed by one `recycled affected provider session` log for
+   the emitting thread.
+3. Deliver the same rejection again. Confirm there is no second host command or recycle log, and
+   confirm the unrelated Claude thread remains active.
+4. Inject an `allowed_warning`, a generic HTTP 429/runtime error, and a rejected event without a
+   supported `rateLimitType`. Confirm none invokes the host command or stops a session.
+5. Exercise host no-op, nonzero, invalid-JSON, and timeout fixtures. Confirm each logs why the
+   election was unconfirmed and leaves the emitting session active.
+
+## Manual rollback
+
+Set `T3_CLAUDE_HARD_LIMIT_ROTATION=0` and restart `t3-expbkt3.service` to roll back the application
+hook without disabling the timer. If the host prerequisite itself must be rolled back, an operator
+can restore `/home/ubuntu/.local/bin/claude-autoswitch.bak-20260820-tec961` to
+`/home/ubuntu/.local/bin/claude-autoswitch`; the application will then treat the missing hard-limit
+contract as an unconfirmed command response and will not recycle a session. Revert the bkt3 commit
+before promotion for a complete rollback.
+
 ## Operational notes
 
 The election is **machine-global**. Whichever profile is elected absorbs the usage of
@@ -147,7 +210,7 @@ why the machine-global point above matters more than the account count.
 | `~/.local/share/claude-profile/shell-init.sh`              | `cs` shell function, sourced from `~/.bashrc` |
 | `~/.local/bin/claude-autoswitch`                           | usage-based switcher (python3, stdlib only)   |
 | `~/.local/bin/claude-elected`                              | unused fallback wrapper; see note below       |
-| `/etc/systemd/system/claude-autoswitch.{service,timer}`    | five-minute timer, `User=ubuntu`              |
+| `/etc/systemd/system/claude-autoswitch.{service,timer}`    | 30-second timer, `User=ubuntu`                |
 | `~/.claude-profiles/.autoswitch{.json,-state.json,.jsonl}` | config, state, decision log                   |
 
 `claude-elected` injects the elected config directory via a wrapper set as `binaryPath`.
