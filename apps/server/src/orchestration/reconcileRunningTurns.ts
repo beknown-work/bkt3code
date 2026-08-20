@@ -175,3 +175,21 @@ export const interruptRunningSession = (input: {
     });
   });
 // T3-CUSTOM(expbkt3): END
+
+// T3-CUSTOM(expbkt3): BEGIN - event-based liveness for the inactivity pass.
+/**
+ * When the thread last recorded any event. `lastSeenAt` on the provider
+ * binding only moves on runtime operations (start, sendTurn), so it cannot
+ * tell a streaming agent from a dead one; the event stream can.
+ */
+export const latestThreadEventAt = (threadId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly lastActivityAt: string | null }>`
+      SELECT MAX(occurred_at) AS "lastActivityAt"
+      FROM orchestration_events
+      WHERE stream_id = ${threadId}
+    `;
+    return rows[0]?.lastActivityAt ?? null;
+  });
+// T3-CUSTOM(expbkt3): END

@@ -13,6 +13,7 @@ import * as OrchestrationEngine from "../../orchestration/Services/Orchestration
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   interruptRunningSession,
+  latestThreadEventAt,
   listRunningSessionRows,
   settleRunningSession,
 } from "../../orchestration/reconcileRunningTurns.ts";
@@ -335,21 +336,31 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         }
 
         // T3-CUSTOM(expbkt3): BEGIN - the projection's activeTurnId is not
-        // proof of idleness: the orphaned-turn pass above clears it in this
-        // same sweep, and lastSeenAt only moves on runtime operations, never on
-        // streamed events. Ask the adapter whether a turn is actually running
-        // before terminating a process that may be mid tool call (2026-08-20
-        // 17:33:50 and 19:29:17, `mcp:1e019f68`).
+        // proof of idleness: it can be cleared (by the orphaned-turn pass, or a
+        // turn.started lost to the generation fence) while the agent streams,
+        // and lastSeenAt only moves on runtime operations. If the adapter still
+        // holds a turn AND the thread recorded an event inside the threshold,
+        // the agent is alive - do not terminate it mid tool call (2026-08-20
+        // 17:33:50, `mcp:1e019f68`). A held turn with no events past the
+        // threshold is a session we have gone blind to; that one is reaped.
         const inspection = yield* providerService
           .inspectSession(binding.threadId)
           .pipe(Effect.catchCause(() => Effect.succeed(null)));
         if (inspection?.activeProviderTurnId != null) {
-          yield* Effect.logDebug("provider.session.reaper.skipped-live-provider-turn", {
-            threadId: binding.threadId,
-            activeProviderTurnId: inspection.activeProviderTurnId,
-            idleDurationMs,
-          });
-          continue;
+          const lastEventAt = yield* latestThreadEventAt(binding.threadId).pipe(
+            Effect.provide(reconcileContext),
+            Effect.catchCause(() => Effect.succeed(null)),
+          );
+          const lastEventMs = lastEventAt === null ? Number.NaN : Date.parse(lastEventAt);
+          if (!Number.isNaN(lastEventMs) && now - lastEventMs < inactivityThresholdMs) {
+            yield* Effect.logDebug("provider.session.reaper.skipped-live-provider-turn", {
+              threadId: binding.threadId,
+              activeProviderTurnId: inspection.activeProviderTurnId,
+              idleDurationMs,
+              lastEventAt,
+            });
+            continue;
+          }
         }
         // T3-CUSTOM(expbkt3): END
 

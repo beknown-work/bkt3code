@@ -1020,7 +1020,21 @@ describe("ProviderSessionReaper", () => {
     expect(harness.terminateSession).not.toHaveBeenCalled();
   });
 
-  it("does not terminate an idle-looking session while the adapter reports an active turn", async () => {
+  async function seedThreadEvent(threadId: ThreadId, occurredAt: string) {
+    await seedRow("orchestration_events", {
+      event_id: `event-${threadId}-${occurredAt}`,
+      aggregate_kind: "thread",
+      stream_id: threadId,
+      stream_version: 1,
+      event_type: "thread.activity-appended",
+      occurred_at: occurredAt,
+      actor_kind: "provider",
+      payload_json: "{}",
+      metadata_json: "{}",
+    });
+  }
+
+  it("does not terminate an idle-looking session while the adapter reports a turn that is still emitting", async () => {
     const threadId = ThreadId.make("thread-reaper-adapter-turn");
     const now = "2026-01-01T00:00:00.000Z";
     const harness = await createHarness({
@@ -1065,11 +1079,70 @@ describe("ProviderSessionReaper", () => {
         runtimePayload: null,
       }),
     );
+    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    await seedThreadEvent(threadId, DateTime.formatIso(DateTime.makeUnsafe(nowMs - 30_000)));
 
     await startReaper();
     await Effect.runPromise(Effect.sleep("200 millis"));
 
     expect(harness.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it("still terminates a session whose adapter holds a turn but that stopped producing events", async () => {
+    const threadId = ThreadId.make("thread-reaper-blind-turn");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      configEnv: { T3CODE_PROVIDER_SESSION_INACTIVITY_MS: "0" },
+      inactivityThresholdMs: 600_000,
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      inspectSession: () =>
+        Effect.succeed({
+          threadId,
+          generation: 1,
+          state: "running" as const,
+          activeProviderTurnId: TurnId.make("turn-nobody-hears"),
+          runtimeAlive: true,
+        }),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: null,
+        runtimePayload: null,
+      }),
+    );
+    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    await seedThreadEvent(
+      threadId,
+      DateTime.formatIso(DateTime.makeUnsafe(nowMs - 2 * 60 * 60 * 1000)),
+    );
+
+    await startReaper();
+    await waitFor(() => harness.terminateSession.mock.calls.length === 1);
+
+    expect(harness.terminatedThreadIds.has(threadId)).toBe(true);
   });
   // T3-CUSTOM(expbkt3): END
 });
