@@ -40,6 +40,13 @@ const MAX_GLOBAL_CONCURRENCY = 2;
 const WAKE_RETRY_INTERVAL_MS = 5_000;
 /** Backstop pause before relaunching a claim loop that terminated unexpectedly. */
 const LOOP_RESTART_DELAY_MS = 1_000;
+/**
+ * Upper bound on any idle wait. Wakes arrive through the provider command
+ * reactor's single worker lane; when that lane stalled (2026-08-20: a provider
+ * stop that never returned) this loop sat in `Queue.take` for over an hour with
+ * runnable rows in the table. A lost wake now costs one poll, not an outage.
+ */
+export const DEFAULT_SAFETY_POLL_INTERVAL_MS = 10_000;
 
 export function shouldPublishRecoveryActivity(
   kind: "started" | "recovered" | "paused" | "exhausted",
@@ -98,6 +105,8 @@ type TurnStartEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-req
 export interface DurableExecutionCoordinatorOptions {
   readonly ownerId: string;
   readonly now?: () => Effect.Effect<string>;
+  /** Override of {@link DEFAULT_SAFETY_POLL_INTERVAL_MS}; tests use a short one. */
+  readonly safetyPollIntervalMs?: number;
   readonly loadEvent: (
     intent: DurableExecutionIntent,
   ) => Effect.Effect<TurnStartEvent, DurableExecutionDispatchError>;
@@ -143,6 +152,7 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     const globalConcurrency = yield* Semaphore.make(MAX_GLOBAL_CONCURRENCY);
     const wakeQueue = yield* Queue.unbounded<string>();
     const now = options.now ?? (() => Effect.map(DateTime.now, DateTime.formatIso));
+    const safetyPollIntervalMs = options.safetyPollIntervalMs ?? DEFAULT_SAFETY_POLL_INTERVAL_MS;
     const notifyTransition = (intent: DurableExecutionIntent) =>
       options.onTransition?.({ workItemId: intent.workItemId, threadId: intent.threadId }) ??
       Effect.void;
@@ -516,11 +526,13 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     const waitForWakeOrDue = Effect.gen(function* () {
       const at = yield* now();
       const next = yield* repository.nextRunnableAt({ now: at });
-      if (Option.isNone(next)) return yield* Queue.take(wakeQueue);
-      if (next.value <= at) return "";
+      if (Option.isSome(next) && next.value <= at) return "";
+      const waitMs = Option.isNone(next)
+        ? safetyPollIntervalMs
+        : Math.min(safetyPollIntervalMs, millisUntil(at, next.value));
       return yield* Effect.race(
         Queue.take(wakeQueue),
-        Effect.sleep(Duration.millis(millisUntil(at, next.value))).pipe(Effect.as("")),
+        Effect.sleep(Duration.millis(waitMs)).pipe(Effect.as("")),
       );
     }).pipe(
       // `runDue` and `run` were already guarded; this wait was the one step in
