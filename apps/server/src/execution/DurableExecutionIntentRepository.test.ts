@@ -463,4 +463,112 @@ layer("DurableExecutionIntentRepository", (it) => {
         );
       }),
   );
+  // T3-CUSTOM(expbkt3): an interrupted session must not park a spent work item
+  // in 'recovering' (unclaimable, non-terminal, blocks the thread's queue).
+  it.effect("exhausts a spent work item on session loss instead of parking it in recovering", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-spent-budget");
+      const makeEvent = (suffix: string, sequence: number, occurredAt: string) => ({
+        type: "thread.turn-start-requested" as const,
+        sequence,
+        eventId: EventId.make(`event-${suffix}`),
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        occurredAt,
+        commandId: CommandId.make(`command-${suffix}`),
+        causationEventId: null,
+        correlationId: CorrelationId.make(`command-${suffix}`),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.make(`message-${suffix}`),
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          createdAt: occurredAt,
+        },
+      });
+      const accept = (suffix: string, sequence: number, occurredAt: string) => {
+        const event = makeEvent(suffix, sequence, occurredAt);
+        return repository.acceptFromEvent({
+          event,
+          message: {
+            messageId: event.payload.messageId,
+            threadId,
+            turnId: null,
+            role: "user",
+            text: suffix,
+            attachments: [],
+            isStreaming: false,
+            sentByUserId: null,
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      };
+
+      yield* accept("spent", 70, "2026-01-01T00:00:00.000Z");
+      // Ten successful re-adoptions of a still-live provider turn leave the
+      // item running with its whole recovery budget consumed.
+      yield* sql`
+        UPDATE projection_thread_execution_intents
+        SET phase = 'running', delivery_certainty = 'provider-acknowledged',
+            provider_turn_id = 'provider-turn-spent',
+            recovery_attempts = maximum_recovery_attempts,
+            claim_owner = NULL, claim_expires_at = NULL
+        WHERE work_item_id = 'command-spent'
+      `;
+
+      yield* repository.observeSession({
+        threadId,
+        status: "interrupted",
+        providerTurnId: null,
+        error: "Interrupted: the turn produced no events for 120 minutes.",
+        at: "2026-01-01T02:00:00.000Z",
+      });
+
+      const spent = yield* repository.getByWorkItemId({ workItemId: "command-spent" });
+      assert.isTrue(spent._tag === "Some");
+      if (spent._tag === "None") return;
+      assert.strictEqual(spent.value.phase, "recovery-exhausted");
+      assert.strictEqual(spent.value.desiredState, "stopped");
+      assert.isFalse(spent.value.runnable);
+      assert.strictEqual(spent.value.terminalAt, "2026-01-01T02:00:00.000Z");
+      assert.strictEqual(spent.value.exhaustedAt, "2026-01-01T02:00:00.000Z");
+
+      // The next prompt on the thread is not stuck behind it.
+      yield* accept("next", 71, "2026-01-01T02:05:00.000Z");
+      const runnable = yield* repository.listRunnable({
+        now: "2026-01-01T02:05:01.000Z",
+        limit: 10,
+      });
+      assert.deepStrictEqual(
+        runnable.filter((item) => item.threadId === threadId).map((item) => item.workItemId),
+        ["command-next"],
+      );
+
+      // An item with budget left still goes through normal recovery.
+      yield* accept("fresh", 72, "2026-01-01T02:10:00.000Z");
+      yield* sql`
+        UPDATE projection_thread_execution_intents
+        SET phase = 'running', delivery_certainty = 'provider-acknowledged', runnable = 1,
+            claim_owner = NULL, claim_expires_at = NULL
+        WHERE work_item_id = 'command-next'
+      `;
+      yield* repository.observeSession({
+        threadId,
+        status: "interrupted",
+        providerTurnId: null,
+        error: "Session stopped",
+        at: "2026-01-01T02:11:00.000Z",
+      });
+      const next = yield* repository.getByWorkItemId({ workItemId: "command-next" });
+      assert.isTrue(next._tag === "Some");
+      if (next._tag === "None") return;
+      assert.strictEqual(next.value.phase, "recovering");
+      assert.strictEqual(next.value.desiredState, "running");
+      assert.isNull(next.value.terminalAt);
+    }),
+  );
 });

@@ -1439,11 +1439,40 @@ const make = Effect.gen(function* () {
             input.status === "interrupted" ||
             input.status === "stopped"
           ) {
+            // T3-CUSTOM(expbkt3): an item whose recovery budget is already spent
+            // cannot be claimed again (`recovery_attempts < maximum_recovery_attempts`
+            // gates every claim), so parking it in 'recovering' leaves a zombie
+            // that shows "Recovering" forever and head-of-line-blocks every later
+            // prompt on the thread. Exhaust it terminally instead; the user gets
+            // Retry/Dismiss and the next prompt runs.
             yield* sql`
             UPDATE projection_thread_execution_intents
-            SET phase = 'recovering',
+            SET phase = CASE
+                  WHEN recovery_attempts >= maximum_recovery_attempts THEN 'recovery-exhausted'
+                  ELSE 'recovering'
+                END,
+                desired_state = CASE
+                  WHEN recovery_attempts >= maximum_recovery_attempts THEN 'stopped'
+                  ELSE desired_state
+                END,
+                runnable = CASE
+                  WHEN recovery_attempts >= maximum_recovery_attempts THEN 0
+                  ELSE runnable
+                END,
                 delivery_certainty = CASE WHEN phase = 'starting' THEN 'uncertain' ELSE delivery_certainty END,
-                next_attempt_at = ${input.at}, last_failure_type = ${failureType},
+                next_attempt_at = CASE
+                  WHEN recovery_attempts >= maximum_recovery_attempts THEN NULL
+                  ELSE ${input.at}
+                END,
+                exhausted_at = CASE
+                  WHEN recovery_attempts >= maximum_recovery_attempts THEN ${input.at}
+                  ELSE exhausted_at
+                END,
+                terminal_at = CASE
+                  WHEN recovery_attempts >= maximum_recovery_attempts THEN ${input.at}
+                  ELSE terminal_at
+                END,
+                last_failure_type = ${failureType},
                 last_failure_detail = ${input.error}, updated_at = ${input.at}
             WHERE work_item_id = (
               SELECT work_item_id FROM projection_thread_execution_intents

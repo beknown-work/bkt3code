@@ -2967,7 +2967,11 @@ const make = Effect.gen(function* () {
           }
         }
         yield* processSessionRestartRequested(event);
-        if (durableCoordinator !== null) yield* durableCoordinator.runDue;
+        // T3-CUSTOM(expbkt3): wake the coordinator instead of dispatching here.
+        // Dispatching inline runs the provider start under this bounded,
+        // short-lived command fiber; the coordinator's own fiber is the one
+        // place a turn start may run from.
+        if (durableCoordinator !== null) yield* durableCoordinator.wake("");
         return;
       case "thread.archived":
         // T3-CUSTOM(expbkt3): archive fences the durable item transactionally
@@ -2977,7 +2981,8 @@ const make = Effect.gen(function* () {
           .pipe(Effect.catchCause(Effect.logWarning), Effect.asVoid);
         return;
       case "thread.session-set":
-        if (durableCoordinator !== null) yield* durableCoordinator.runDue;
+        // T3-CUSTOM(expbkt3): see session-restart-requested above.
+        if (durableCoordinator !== null) yield* durableCoordinator.wake("");
         return;
     }
   });
