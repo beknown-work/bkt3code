@@ -39,6 +39,8 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+// T3-CUSTOM(expbkt3): per-turn sender identity injected into Claude sessions.
+import { claudeSessionIdentityTurnContext } from "../claudeSessionIdentity.expbkt3.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
@@ -708,6 +710,84 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN per-turn sender identity (see claudeSessionIdentity.expbkt3.ts).
+  it.effect("registers a UserPromptSubmit identity hook for T3 Code sessions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const identityEnvironment = {
+        BK_IDENTITY_RUNTIME: "t3-code",
+        BK_MESSAGE_SENDER_EMAIL: "sender@example.test",
+      };
+      yield* adapter.startSession(
+        {
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        },
+        { environment: identityEnvironment },
+      );
+
+      const createInput = harness.getLastCreateQueryInput();
+      const matchers = createInput?.options.hooks?.UserPromptSubmit;
+      assert.equal(matchers?.length, 1);
+      const callback = matchers?.[0]?.hooks[0];
+      assert.isFunction(callback);
+      const output = yield* Effect.promise(() =>
+        callback!(
+          {
+            hook_event_name: "UserPromptSubmit",
+            session_id: "session-1",
+            transcript_path: "/tmp/transcript.jsonl",
+            cwd: "/tmp",
+            prompt: "who am i",
+          },
+          undefined,
+          { signal: new AbortController().signal },
+        ),
+      );
+      const additionalContext = claudeSessionIdentityTurnContext(identityEnvironment);
+      assert.isString(additionalContext);
+      assert.deepEqual(output, {
+        hookSpecificOutput: {
+          hookEventName: "UserPromptSubmit",
+          additionalContext: additionalContext!,
+        },
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves non-T3 Claude sessions without the identity hook", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      // The adapter inherits `process.env`, and this suite itself may run inside
+      // a T3 Code session, so clear the runtime marker rather than omit it.
+      yield* adapter.startSession(
+        {
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        },
+        { environment: { BK_IDENTITY_RUNTIME: "", BK_MESSAGE_SENDER_EMAIL: "" } },
+      );
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.hooks, undefined);
+      assert.deepEqual(createInput?.options.systemPrompt, {
+        type: "preset",
+        preset: "claude_code",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it.effect("maps the Claude Opus 4.7 default effort to the SDK-supported max value", () => {
     const harness = makeHarness();
