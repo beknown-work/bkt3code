@@ -102,6 +102,8 @@ import {
 import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+// T3-CUSTOM(expbkt3): Claude's shared account email is not the T3 message sender.
+import { claudeSessionIdentitySystemPrompt } from "../claudeSessionIdentity.expbkt3.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
@@ -4193,11 +4195,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? [input.cwd] : []),
         serverConfig.attachmentsDir,
       ];
+      // T3-CUSTOM(expbkt3): BEGIN override Claude's shared-account userEmail context.
+      const sessionIdentitySystemPrompt = claudeSessionIdentitySystemPrompt(sessionEnvironment);
+      // T3-CUSTOM(expbkt3): END
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
-        systemPrompt: { type: "preset", preset: "claude_code" },
+        // T3-CUSTOM(expbkt3): BEGIN preserve the native prompt with T3 sender identity appended.
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          ...(sessionIdentitySystemPrompt ? { append: sessionIdentitySystemPrompt } : {}),
+        },
+        // T3-CUSTOM(expbkt3): END
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
         // normalized to `xhigh` above and paired with `settings.ultracode`.

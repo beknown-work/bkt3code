@@ -395,6 +395,14 @@ Four rules carry the behaviour:
   live session was started with and restarts on an owner transfer or a new
   sender, next to the existing credential-actor restart.
 
+Claude Code's native system prompt normally derives `userEmail` from the
+authenticated Claude account. That account is shared in the Beknown runtime, so
+the Claude adapter appends the resolved `BK_MESSAGE_SENDER_EMAIL` as the
+authoritative `userEmail`. When the sender is unresolved, the appended context
+explicitly leaves `userEmail` unknown and forbids inference from the shared
+Claude account, operating-system identity, or Git identity. Non-T3 Claude
+sessions keep the upstream system prompt unchanged.
+
 The markers compose with source-control profiles rather than replacing them:
 `mergeSourceControlEnvironment` scrubs the machine's inherited Git and GitHub
 credentials only when the overlay carries a source-control identity of its own,
