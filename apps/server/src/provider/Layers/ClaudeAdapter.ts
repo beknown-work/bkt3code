@@ -103,7 +103,10 @@ import { makeObservableLifecycle } from "../observableLifecycle.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 // T3-CUSTOM(expbkt3): Claude's shared account email is not the T3 message sender.
-import { claudeSessionIdentitySystemPrompt } from "../claudeSessionIdentity.expbkt3.ts";
+import {
+  claudeSessionIdentitySystemPrompt,
+  withClaudeSessionIdentityTurnHook,
+} from "../claudeSessionIdentity.expbkt3.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
@@ -4292,11 +4295,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.query.path_to_executable": claudeBinaryPath,
       });
 
+      // T3-CUSTOM(expbkt3): BEGIN re-state the sender at user-message position on
+      // every turn. The system-prompt append above loses to the CLI's native
+      // `# userEmail` section on Sonnet; a UserPromptSubmit hook does not.
+      const identityAwareQueryOptions = withClaudeSessionIdentityTurnHook(
+        queryOptions,
+        sessionEnvironment,
+      );
+      // T3-CUSTOM(expbkt3): END
+
       const queryRuntime = yield* Effect.try({
         try: () =>
           createQuery({
             prompt,
-            options: queryOptions,
+            // T3-CUSTOM(expbkt3): identity turn hook folded into the SDK options.
+            options: identityAwareQueryOptions,
           }),
         catch: (cause) =>
           new ProviderAdapterProcessError({
