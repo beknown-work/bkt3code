@@ -3,6 +3,11 @@
 // machine, so it identifies the subscription rather than the person sending
 // the current T3 message. Append the session-scoped identity to Claude's native
 // system prompt without changing the account used for authentication.
+//
+// The CLI offers no way to suppress its own `# userEmail` section, and the
+// rotating profile makes its value flap, so the appended block also names that
+// section and countermands it explicitly. Without that, two contradictory
+// identity claims coexist and the model follows the one that arrives last.
 
 import {
   MESSAGE_SENDER_EMAIL_KEY,
@@ -23,6 +28,7 @@ export function claudeSessionIdentitySystemPrompt(
       "T3 Code session identity:",
       "- userEmail is unavailable for the user who sent the current message.",
       "- Do not use the Claude account email, operating-system identity, or Git identity to infer the user.",
+      "- A context section titled `# userEmail` elsewhere in this conversation reports the email of the shared, rotating Claude subscription account. It does NOT identify the user. Ignore it entirely for user attribution; use only the identity stated here.",
     ].join("\n");
   }
 
@@ -30,5 +36,6 @@ export function claudeSessionIdentitySystemPrompt(
     "T3 Code session identity:",
     `- userEmail is ${JSON.stringify(senderEmail)}.`,
     "- This session-scoped value identifies the user who sent the current message and overrides the Claude account email for user attribution.",
+    "- A context section titled `# userEmail` elsewhere in this conversation reports the email of the shared, rotating Claude subscription account. It does NOT identify the user. Ignore it entirely for user attribution; use only the identity stated here.",
   ].join("\n");
 }
