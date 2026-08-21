@@ -1778,22 +1778,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
-        const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
-          Effect.gen(function* () {
-            yield* writeNativeEvent(event);
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
-            if (runtimeEvents.length === 0) {
-              yield* Effect.logDebug("ignoring unhandled Codex provider event", {
-                method: event.method,
-                threadId: event.threadId,
-                turnId: event.turnId,
-                itemId: event.itemId,
-              });
-              return;
-            }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
-          }),
-        ).pipe(Effect.forkChild);
+        const eventFiber = yield* Stream.runForEach(
+          runtime.events,
+          (event) =>
+            Effect.gen(function* () {
+              yield* writeNativeEvent(event);
+              const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
+              if (runtimeEvents.length === 0) {
+                yield* Effect.logDebug("ignoring unhandled Codex provider event", {
+                  method: event.method,
+                  threadId: event.threadId,
+                  turnId: event.turnId,
+                  itemId: event.itemId,
+                });
+                return;
+              }
+              yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            }),
+          // T3-CUSTOM(expbkt3): the reader lives as long as the session, never
+          // as long as the caller. `forkChild` tied it to whichever fiber ran
+          // startSession; when that was a short-lived reactor command fiber the
+          // reader died the moment sendTurn returned and the server went blind
+          // to a Codex process that kept working (2026-08-20, `mcp:1e019f68`).
+        ).pipe(Effect.forkIn(sessionScope));
 
         const started = yield* runtime.start().pipe(
           Effect.mapError(

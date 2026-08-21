@@ -1499,3 +1499,59 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
     }
   }),
 );
+
+// T3-CUSTOM(expbkt3): the event reader belongs to the session scope, not to
+// whichever fiber happened to call startSession. A short-lived caller (a bounded
+// reactor command fiber) ending must not blind the server to a live runtime.
+const readerRuntimeFactory = makeRuntimeFactory();
+const readerLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: readerRuntimeFactory.factory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+readerLayer("CodexAdapterLive event reader lifetime", (it) => {
+  it.effect("keeps delivering runtime events after the fiber that started the session ends", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const starter = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-reader"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* Fiber.join(starter);
+      const runtime = readerRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* runtime.emit({
+        id: asEventId("evt-reader-closed"),
+        kind: "session",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-reader"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "session/closed",
+        message: "Session stopped",
+      });
+      const firstEvent = yield* Fiber.join(firstEventFiber).pipe(Effect.timeout("3 seconds"));
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      NodeAssert.equal(firstEvent.value.type, "session.exited");
+      NodeAssert.equal(firstEvent.value.threadId, "thread-reader");
+    }),
+  );
+});
