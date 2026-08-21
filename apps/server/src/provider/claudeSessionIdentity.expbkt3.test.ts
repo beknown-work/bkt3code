@@ -14,17 +14,23 @@ describe("claudeSessionIdentitySystemPrompt", () => {
         "T3 Code session identity:",
         '- userEmail is "sender@example.test".',
         "- This session-scoped value identifies the user who sent the current message and overrides the Claude account email for user attribution.",
+        "- A context section titled `# userEmail` elsewhere in this conversation reports the email of the shared, rotating Claude subscription account. It does NOT identify the user. Ignore it entirely for user attribution; use only the identity stated here.",
       ].join("\n"),
     );
   });
 
   it("keeps the user unknown when T3 cannot resolve the message sender", () => {
-    assert.include(
+    assert.equal(
       claudeSessionIdentitySystemPrompt({
         BK_IDENTITY_RUNTIME: "t3-code",
         BK_SESSION_OWNER_EMAIL: "owner@example.test",
-      }) ?? "",
-      "userEmail is unavailable",
+      }),
+      [
+        "T3 Code session identity:",
+        "- userEmail is unavailable for the user who sent the current message.",
+        "- Do not use the Claude account email, operating-system identity, or Git identity to infer the user.",
+        "- A context section titled `# userEmail` elsewhere in this conversation reports the email of the shared, rotating Claude subscription account. It does NOT identify the user. Ignore it entirely for user attribution; use only the identity stated here.",
+      ].join("\n"),
     );
   });
 
