@@ -403,6 +403,15 @@ explicitly leaves `userEmail` unknown and forbids inference from the shared
 Claude account, operating-system identity, or Git identity. Non-T3 Claude
 sessions keep the upstream system prompt unchanged.
 
+The CLI still emits its own `# userEmail` context section on every turn and
+offers no switch to suppress it, so both branches of the appended block name
+that section and countermand it explicitly: it reports the shared, rotating
+subscription account, it does not identify the user, and it must be ignored for
+user attribution. Naming it matters — the native section arrives later in
+context than the appended block, and without the countermand a session answered
+"who am I" with the rotated account holder while the appended block correctly
+named the sender.
+
 The markers compose with source-control profiles rather than replacing them:
 `mergeSourceControlEnvironment` scrubs the machine's inherited Git and GitHub
 credentials only when the overlay carries a source-control identity of its own,
