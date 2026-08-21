@@ -108,7 +108,7 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Sidebar people filters    | `PhaseGroupedSidebar.logic.ts` facets, `phaseSidebarFilterStore.ts`                                                                                                                                                                                | `PhaseGroupedSidebar.tsx` popover, chips, row projection                                                                                                                                                                                                                                                                                  |
 | Execution resume resync   | none — two marked seams only                                                                                                                                                                                                                       | `ws.ts` shell/thread resume, `client-runtime/state/shellReducer.ts` overlay merge                                                                                                                                                                                                                                                         |
 | Native plan review        | `apps/server/src/planreview/`, `persistence/PlanReviewDocuments.ts`, migration 1009, `packages/shared/src/planReview.ts`, `packages/contracts/src/planReview.ts`, `apps/web/src/components/planreview/`, `apps/web/src/fork/planReviewSurface.tsx` | fork RPC group + scopes + handlers, one `ws.ts` dep, right-panel store/tabs, `ChatView.tsx` branch, `ProposedPlanCard.tsx` button, Beta settings toggle, nullable comment range in `reviewCommentContext.ts` + `reviewCommentSelection.ts` + `nativeReviewDiffAdapter.ts`, plan-comment card in `MessagesTimeline.tsx` + `ThreadFeed.tsx` |
-| Session identity          | `apps/server/src/identity/SessionIdentityEnvironment.ts`                                                                                                                                                                                           | `ProviderCommandReactor.ts` execution-options seam, `ProviderService.ts` adapter-spawn seam, `identityEnvironment` on `ProviderSessionExecutionOptions`, conditional scrub in `SourceControlExecutionEnvironment.ts`, `server.ts` layer                                                                                                   |
+| Session identity          | `apps/server/src/identity/SessionIdentityEnvironment.ts`, `apps/server/src/provider/claudeSessionIdentity.expbkt3.ts`                                                                                                                              | `ProviderCommandReactor.ts` execution-options seam, `ProviderService.ts` adapter-spawn seam, `identityEnvironment` on `ProviderSessionExecutionOptions`, conditional scrub in `SourceControlExecutionEnvironment.ts`, `server.ts` layer, `ClaudeAdapter.ts` system-prompt append + `UserPromptSubmit` hook seams                          |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                                                                                                                                                          | none                                                                                                                                                                                                                                                                                                                                      |
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
@@ -411,6 +411,24 @@ user attribution. Naming it matters — the native section arrives later in
 context than the appended block, and without the countermand a session answered
 "who am I" with the rotated account holder while the appended block correctly
 named the sender.
+
+The countermand alone is not enough on smaller models. Verified against the
+deployed build on 2026-08-21: Opus 5 answered "who am I" with the T3 sender,
+but Sonnet 5 at medium effort failed 3/3 — it quoted the countermand block back
+verbatim and still answered with the native `# userEmail` value. Position, not
+wording, is what the model weighs, and the native section is a user-context
+block that outranks anything written into the system prompt.
+
+So the adapter also registers an SDK `UserPromptSubmit` hook that returns the
+same identity as `additionalContext` on **every** turn, which lands at
+user-message position and does win (Sonnet 5 medium, 2/2, including adversarial
+prompt wording). `claudeSessionIdentityTurnContext` builds that text and
+`withClaudeSessionIdentityTurnHook` folds the hook into the SDK query options,
+merging with any hooks already registered rather than replacing them. The
+system-prompt append stays as the belt to the hook's braces; both are gated on
+`BK_IDENTITY_RUNTIME`, so upstream Claude sessions get neither. The identity
+environment is read once at spawn and a changed sender already restarts the
+provider, so the per-turn text cannot go stale.
 
 The markers compose with source-control profiles rather than replacing them:
 `mergeSourceControlEnvironment` scrubs the machine's inherited Git and GitHub
