@@ -81,6 +81,8 @@ import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ProviderRateLimits from "./provider/ProviderRateLimits.ts";
+// T3-CUSTOM(expbkt3): recycle only the Claude thread that reports a hard usage limit.
+import * as ClaudeHardLimitRotation from "./provider/claudeHardLimitRotation.expbkt3.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -443,10 +445,12 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
-const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
-  Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
-);
+// T3-CUSTOM(expbkt3): hard-limit rotation consumes the same provider event bus
+// and lifecycle service as the reaper, without widening upstream contracts.
+const ProviderRuntimeLayerLive = Layer.mergeAll(
+  ProviderSessionReaperLive,
+  ClaudeHardLimitRotation.layer,
+).pipe(Layer.provideMerge(ProviderLayerLive), Layer.provideMerge(OrchestrationLayerLive));
 
 // T3-CUSTOM(expbkt3): the supervisor records session recovery desired-state,
 // so its repository is composed in here rather than at every call site.
