@@ -5,7 +5,8 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
-const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:"]);
+// T3-CUSTOM(expbkt3): obsidian: is allowed so mirrored worktrees open in the local vault.
+const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "obsidian:"]);
 
 export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   if (typeof rawUrl !== "string") {
