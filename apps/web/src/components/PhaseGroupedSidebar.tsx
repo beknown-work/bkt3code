@@ -115,6 +115,8 @@ import { useUiStateStore } from "../uiStateStore";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { LinearIcon } from "./Icons";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
+// T3-CUSTOM(expbkt3): owner avatar on rows started by someone else.
+import { PhaseSidebarOwnerAvatar } from "./sidebar/PhaseSidebarOwnerAvatar";
 import {
   canReconnectThreadSession,
   hasUnseenCompletion,
@@ -136,6 +138,7 @@ import {
   derivePhaseSidebarRepositoryKey,
   filterVisiblePhaseSidebarRows,
   isThreadAssignedToUser,
+  phaseSidebarRowOwnerAvatarUserId,
   partitionPhaseSidebarRows,
   phaseSidebarGroupHeaderClassName,
   // T3-CUSTOM(expbkt3): Session priority badge tone.
@@ -990,6 +993,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     executionPresentation,
   });
   // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): whose session this is, when it is not mine.
+  const ownerAvatarUserId = phaseSidebarRowOwnerAvatarUserId({
+    ownerUserId: row.thread.ownerUserId,
+    currentUserId,
+  });
   const selected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const toggleThread = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -1741,6 +1749,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             >
               {formatThreadPriority(row.thread.priority)}
             </span>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): only on threads someone else started - my own
+              face on every row of my own sidebar would say nothing. */}
+          {ownerAvatarUserId !== null ? (
+            <PhaseSidebarOwnerAvatar ownerUserId={ownerAvatarUserId} threadId={row.thread.id} />
           ) : null}
           <Tooltip>
             <TooltipTrigger

@@ -28,6 +28,8 @@ import {
   derivePhaseSidebarRepositoryKey,
   isThreadAssignedToUser,
   phaseSidebarThreadParticipantIds,
+  // T3-CUSTOM(expbkt3): owner avatar on rows someone else started.
+  phaseSidebarRowOwnerAvatarUserId,
   filterVisiblePhaseSidebarRows,
   matchesPhaseSidebarFilters,
   partitionPhaseSidebarRows,
@@ -1024,6 +1026,31 @@ describe("phase sidebar metadata and filters", () => {
     expect(
       isThreadAssignedToUser(makeThread({ ownerUserId: null, memberUserIds: [] }), owner),
     ).toBe(false);
+  });
+
+  // T3-CUSTOM(expbkt3): the owner avatar exists to answer "whose session is
+  // this?" — so it only appears when the answer is not "mine".
+  describe("phaseSidebarRowOwnerAvatarUserId", () => {
+    const me = UserId.make("user_me");
+    const them = UserId.make("user_them");
+
+    it("shows the owner when somebody else started the thread", () => {
+      expect(phaseSidebarRowOwnerAvatarUserId({ ownerUserId: them, currentUserId: me })).toBe(them);
+    });
+
+    it("stays hidden on my own threads", () => {
+      expect(phaseSidebarRowOwnerAvatarUserId({ ownerUserId: me, currentUserId: me })).toBe(null);
+    });
+
+    it("stays hidden when the thread is unowned or the operator is unknown", () => {
+      expect(phaseSidebarRowOwnerAvatarUserId({ ownerUserId: null, currentUserId: me })).toBe(null);
+      expect(phaseSidebarRowOwnerAvatarUserId({ ownerUserId: them, currentUserId: null })).toBe(
+        null,
+      );
+      expect(phaseSidebarRowOwnerAvatarUserId({ ownerUserId: null, currentUserId: null })).toBe(
+        null,
+      );
+    });
   });
 
   // T3-CUSTOM(expbkt3): ownership, not "owner or tagged". The old filter matched
