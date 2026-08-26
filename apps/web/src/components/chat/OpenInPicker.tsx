@@ -2,7 +2,10 @@ import { EditorId, type EnvironmentId, type ResolvedKeybindingsConfig } from "@t
 import { memo, useCallback, useEffect, useMemo } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
-import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
+// T3-CUSTOM(expbkt3): BEGIN — GemIcon + Obsidian mirror opener for the default action.
+import { ChevronDownIcon, FolderClosedIcon, GemIcon } from "lucide-react";
+import { obsidianMirrorRelativePath, openWorktreeInObsidian } from "~/fork/openInObsidian";
+// T3-CUSTOM(expbkt3): END
 import { Button } from "../ui/button";
 import { Group, GroupSeparator } from "../ui/group";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "../ui/menu";
@@ -224,6 +227,14 @@ export const OpenInPicker = memo(function OpenInPicker({
     [environmentId, openInCwd, openInEditorMutation, preferredEditor, setPreferredEditor],
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — when the worktree is mirrored to the user's
+  // Obsidian vault (Syncthing on dev-server-1), Obsidian is the default action.
+  const obsidianRelativePath = useMemo(() => obsidianMirrorRelativePath(openInCwd), [openInCwd]);
+  const openObsidian = useCallback(() => {
+    void openWorktreeInObsidian(openInCwd);
+  }, [openInCwd]);
+  // T3-CUSTOM(expbkt3): END
+
   const openFavoriteEditorShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "editor.openFavorite"),
     [keybindings],
@@ -263,15 +274,23 @@ export const OpenInPicker = memo(function OpenInPicker({
         className="ps-[8.5px]"
         size="xs"
         variant="outline"
-        disabled={!preferredEditor || !openInCwd}
-        onClick={() => openInEditor(preferredEditor)}
+        // T3-CUSTOM(expbkt3): BEGIN — mirrored worktrees default to Obsidian.
+        disabled={obsidianRelativePath === null && (!preferredEditor || !openInCwd)}
+        onClick={() =>
+          obsidianRelativePath !== null ? openObsidian() : openInEditor(preferredEditor)
+        }
       >
-        {primaryOption?.Icon && (
-          <primaryOption.Icon
-            aria-hidden="true"
-            className={cn("size-3.5", getOpenInIconClass(primaryOption.kind))}
-          />
+        {obsidianRelativePath !== null ? (
+          <GemIcon aria-hidden="true" className="size-3.5 text-foreground" />
+        ) : (
+          primaryOption?.Icon && (
+            <primaryOption.Icon
+              aria-hidden="true"
+              className={cn("size-3.5", getOpenInIconClass(primaryOption.kind))}
+            />
+          )
         )}
+        {/* T3-CUSTOM(expbkt3): END */}
         <span
           className={
             compact
@@ -296,6 +315,14 @@ export const OpenInPicker = memo(function OpenInPicker({
           <ChevronDownIcon aria-hidden="true" className="size-4" />
         </MenuTrigger>
         <MenuPopup align="end">
+          {/* T3-CUSTOM(expbkt3): BEGIN — Obsidian entry for mirrored worktrees. */}
+          {obsidianRelativePath !== null && (
+            <MenuItem onClick={openObsidian}>
+              <GemIcon aria-hidden="true" className="text-foreground" />
+              Obsidian
+            </MenuItem>
+          )}
+          {/* T3-CUSTOM(expbkt3): END */}
           {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
           {options.map(({ label, Icon, value, kind }) => (
             <MenuItem key={value} onClick={() => openInEditor(value)}>
