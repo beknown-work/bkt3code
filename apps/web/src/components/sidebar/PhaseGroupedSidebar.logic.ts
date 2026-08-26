@@ -417,6 +417,25 @@ export function isThreadAssignedToUser(
   return thread.ownerUserId === userId || thread.memberUserIds.includes(userId);
 }
 
+/**
+ * T3-CUSTOM(expbkt3): whose face, if anyone's, belongs on a sidebar row.
+ *
+ * A row only earns an owner avatar when the thread was started by *somebody
+ * else*: my own sessions are the default case and a wall of my own face would
+ * carry no information. Returns the owner to show, or `null` to show nothing.
+ *
+ * `null` when the thread is unowned (single-user mode, or awaiting backfill),
+ * when we cannot identify the operator (no team identity — every row would
+ * light up), or when the operator *is* the owner.
+ */
+export function phaseSidebarRowOwnerAvatarUserId(input: {
+  readonly ownerUserId: UserId | null;
+  readonly currentUserId: UserId | null;
+}): UserId | null {
+  if (input.ownerUserId === null || input.currentUserId === null) return null;
+  return input.ownerUserId === input.currentUserId ? null : input.ownerUserId;
+}
+
 export interface PhaseSidebarRow {
   readonly thread: ThreadShell;
   readonly phaseId: PhaseSidebarPhaseId;
