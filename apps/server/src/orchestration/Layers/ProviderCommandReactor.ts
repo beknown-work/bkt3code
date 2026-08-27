@@ -1515,15 +1515,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // T3-CUSTOM(expbkt3): upstream #7839 recreates a missing worktree here; the fork's
-    // richer recovery helper (branch check + decideWorktreeRecovery + activity events)
-    // covers it, so its call replaces upstream's lighter local copy.
-    const turnStartProject = yield* resolveProject(thread.projectId);
-    yield* ensureThreadWorktree({
-      thread,
-      workspaceRoot: turnStartProject?.workspaceRoot ?? null,
-      createdAt: event.payload.createdAt,
-    });
+    // T3-CUSTOM(expbkt3): upstream #7839 recreates a missing worktree at the top of
+    // the turn; the fork already does it in startProviderSession with a richer
+    // recovery path (branch check, decideWorktreeRecovery, activity events), so the
+    // guarantee holds without running the recovery twice per turn.
 
     const userMessageCount = thread.messages.filter((entry) => entry.role === "user").length;
     const isFirstUserMessageTurn = userMessageCount === 1;

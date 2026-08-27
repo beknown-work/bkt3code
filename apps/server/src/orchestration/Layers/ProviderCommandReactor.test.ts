@@ -1678,7 +1678,13 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("recreates a missing worktree from the thread branch before starting a turn", async () => {
-    const harness = await createHarness();
+    // T3-CUSTOM(expbkt3): the fork's worktree recovery only recreates a worktree whose
+    // branch still exists, so the harness has to report the branch as surviving.
+    const harness = await createHarness({
+      gitWorkflow: {
+        listLocalBranchNames: () => Effect.succeed(["main", "feature/restore"]),
+      },
+    });
     const now = "2026-01-01T00:00:00.000Z";
     const worktreePath = NodePath.join(harness.stateDir, "missing-worktree");
 
@@ -2530,7 +2536,7 @@ describe("ProviderCommandReactor", () => {
 
         yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
         expect(listLocalBranchNames).toHaveBeenCalledWith("/tmp/provider-project");
-        expect(pruneWorktrees).toHaveBeenCalledWith("/tmp/provider-project");
+        expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-project" });
         expect(createWorktree).toHaveBeenCalledWith({
           cwd: "/tmp/provider-project",
           refName: "t3code/recovered",
