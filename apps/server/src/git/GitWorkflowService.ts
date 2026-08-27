@@ -84,10 +84,14 @@ export class GitWorkflowService extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
-    readonly pruneWorktrees: (cwd: string) => Effect.Effect<void, GitCommandError>;
+    readonly pruneWorktrees: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<void, GitCommandError>;
+    // T3-CUSTOM(expbkt3): BEGIN worktree codename allocation reads live branch names.
     readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
     // T3-CUSTOM(expbkt3): live local + remote names reserve generated worktree codenames.
     readonly listWorktreeBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+    // T3-CUSTOM(expbkt3): END
     readonly createRef: (
       input: VcsCreateRefInput,
     ) => Effect.Effect<VcsCreateRefResult, GitCommandError>;
@@ -323,10 +327,11 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(git.removeWorktree(input)),
       ),
-    pruneWorktrees: (cwd) =>
-      ensureGitCommand("GitWorkflowService.pruneWorktrees", cwd).pipe(
-        Effect.andThen(git.pruneWorktrees(cwd)),
+    pruneWorktrees: (input) =>
+      ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
+        Effect.andThen(git.pruneWorktrees(input)),
       ),
+    // T3-CUSTOM(expbkt3): BEGIN worktree codename allocation reads live branch names.
     listLocalBranchNames: (cwd) =>
       ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
         Effect.andThen(git.listLocalBranchNames(cwd)),
@@ -335,6 +340,8 @@ export const make = Effect.gen(function* () {
     listWorktreeBranchNames: (cwd) =>
       ensureGitCommand("GitWorkflowService.listWorktreeBranchNames", cwd).pipe(
         Effect.andThen(git.listWorktreeBranchNames(cwd)),
+      ),
+    // T3-CUSTOM(expbkt3): END
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(

@@ -231,10 +231,9 @@ export function resolveThreadOutboxDeliveryAction(input: {
     return input.environmentConnected && input.shellStatus === "live" ? "send" : "wait";
   }
   if (!input.threadExists) return input.shellStatus === "live" ? "remove" : "wait";
-  return input.environmentConnected &&
-    (!input.threadBusy || input.durableExecutionRecovery === true)
-    ? "send"
-    : "wait";
+  // T3-CUSTOM(expbkt3): relocated from apps/mobile thread-outbox-model.ts; follows
+  // upstream #6543 (steer active turns by default) — `threadBusy` no longer gates sends.
+  return input.environmentConnected ? "send" : "wait";
 }
 
 export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): boolean {

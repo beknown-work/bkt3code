@@ -107,6 +107,12 @@ import Migration1015 from "./Migrations/1015_AuthPairingSelfIssued.ts";
 import Migration1016 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
 import Migration1017 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
 import Migration1018 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
+// T3-CUSTOM(expbkt3): upstream ships these as migrations 41-43, which the
+// legacy fork block (33-42) and remap 43 already occupy. They register at the
+// next free IDs in the 1000+ lane instead; the files keep their upstream names.
+import Migration1019 from "./Migrations/041_AuthSessionClientConnection.ts";
+import Migration1020 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
+import Migration1021 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -212,6 +218,11 @@ const migrationEntries = [
   [1016, "ProjectionThreadsPinOrderKey", Migration1016],
   [1017, "ProjectionProjectsDefaultThreadEnvMode", Migration1017],
   [1018, "ProjectionProjectFaviconPath", Migration1018],
+  // T3-CUSTOM(expbkt3): upstream migrations 41-43, remapped into the 1000+ lane
+  // because the legacy fork block occupies 33-42 (and 43 is a legacy remap).
+  [1019, "AuthSessionClientConnection", Migration1019],
+  [1020, "ProjectionThreadLinkedPullRequest", Migration1020],
+  [1021, "ProjectionThreadsUnsettledAt", Migration1021],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

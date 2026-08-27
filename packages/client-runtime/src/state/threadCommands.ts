@@ -4,11 +4,12 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, WS_METHODS } from "@t3tools/contracts";
 
 import {
   createAtomCommandScheduler,
   createEnvironmentCommand,
+  createEnvironmentRpcCommand,
   createRuntimeCommand,
 } from "./runtime.ts";
 import {
@@ -438,6 +439,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    // T3-CUSTOM(expbkt3): BEGIN — session restart and thread membership commands.
     restartSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:restart-session",
       execute: (input: RestartThreadSessionInput) => restartThreadSession(input),
@@ -459,6 +461,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     transferOwnership: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:transfer-ownership",
       execute: (input: TransferThreadOwnershipInput) => transferThreadOwnership(input),
+      scheduler,
+      concurrency,
+    }),
+    // T3-CUSTOM(expbkt3): END
+    uploadFeedback: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:upload-feedback",
+      tag: WS_METHODS.providerUploadFeedback,
       scheduler,
       concurrency,
     }),

@@ -10,7 +10,12 @@
  *
  * @module OrchestrationEngineService
  */
-import type { OrchestrationCommand, OrchestrationEvent, UserId } from "@t3tools/contracts";
+import type {
+  OrchestrationClientOrigin,
+  OrchestrationCommand,
+  OrchestrationEvent,
+  UserId, // T3-CUSTOM(expbkt3): actor attribution for team mode.
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -41,11 +46,13 @@ export interface OrchestrationEngineShape {
    * Dispatch a validated orchestration command.
    *
    * @param command - Valid orchestration command.
-   * @param options - Optional dispatch context. `actorUserId` is the Clerk
-   *   operator behind the command (team mode); it is stamped into every
-   *   produced event's `metadata.actorUserId` (audit trail) and threaded into
-   *   the decider so `thread.create`/`project.create` record ownership. Omit
-   *   (or pass null) in single-user mode for byte-for-byte unchanged behavior.
+   * @param options - Optional client origin (surface/app version) stamped into
+   *   the metadata of every event the command produces.
+   *   T3-CUSTOM(expbkt3): `actorUserId` is the Clerk operator behind the
+   *   command (team mode); it is stamped into every produced event's
+   *   `metadata.actorUserId` (audit trail) and threaded into the decider so
+   *   `thread.create`/`project.create` record ownership. Omit (or pass null) in
+   *   single-user mode for byte-for-byte unchanged behavior.
    * @returns Effect containing the sequence of the persisted event.
    *
    * Dispatch is serialized through an internal queue and deduplicated via
@@ -53,7 +60,11 @@ export interface OrchestrationEngineShape {
    */
   readonly dispatch: (
     command: OrchestrationCommand,
-    options?: { readonly actorUserId?: UserId | null },
+    options?: {
+      readonly origin?: OrchestrationClientOrigin;
+      // T3-CUSTOM(expbkt3): acting operator for ownership + audit trail.
+      readonly actorUserId?: UserId | null;
+    },
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**

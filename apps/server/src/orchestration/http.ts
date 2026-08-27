@@ -13,10 +13,12 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
-import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
+// T3-CUSTOM(expbkt3): BEGIN — supervised dispatch + delegated thread ownership.
 import * as OrchestrationCommandDispatcher from "./dispatchCommand.ts";
 // T3-CUSTOM(expbkt3): actorless trusted HTTP callers may delegate thread ownership.
 import { resolveDelegatedThreadOwner } from "./DelegatedThreadOwnership.ts";
+// T3-CUSTOM(expbkt3): END
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -246,6 +248,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           return yield* commandDispatcher
             .dispatch(normalizedCommand, { actorUserId: dispatchActorUserId })
             .pipe(
+              Effect.tapError(() =>
+                cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+              ),
               Effect.catchTag(
                 "ThreadTurnAdmissionConflictError",
                 (conflict) =>

@@ -10,7 +10,13 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 
-import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import {
+  createAttachmentId,
+  planAttachmentClaim,
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+  parseThreadSegmentFromAttachmentId,
+  resolveAttachmentPath,
+} from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -57,6 +63,29 @@ export const canonicalizeClientCommandTimestamps = (
   // T3-CUSTOM(expbkt3): END
 };
 
+const removeClaimedAttachmentPaths = Effect.fn("Normalizer.removeClaimedAttachmentPaths")(
+  function* (attachmentPaths: ReadonlyArray<string>) {
+    if (attachmentPaths.length === 0) {
+      return;
+    }
+    const fileSystem = yield* FileSystem.FileSystem;
+    yield* Effect.forEach(
+      attachmentPaths,
+      (attachmentPath) =>
+        fileSystem.remove(attachmentPath, { force: true }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("Failed to remove an unclaimed attachment copy.", {
+              attachmentPath,
+              cause,
+            }),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      { concurrency: 1 },
+    );
+  },
+);
+
 export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
   Effect.gen(function* () {
     const receivedAt = DateTime.formatIso(yield* DateTime.now);
@@ -94,77 +123,144 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         );
 
     // T3-CUSTOM(expbkt3): BEGIN — bootstrap initial turns use the same bounded,
-    // persisted attachment normalization as ordinary turn starts.
+    // persisted attachment normalization as ordinary turn starts. The body is
+    // upstream's thread.turn.start attachment loop (uploaded-attachment claims
+    // plus inline data URLs), parameterized by thread id so both call sites share it.
     const normalizeAttachments = (input: {
       readonly threadId: string;
-      readonly attachments: ReadonlyArray<{
-        readonly dataUrl: string;
-        readonly name: string;
-      }>;
+      readonly attachments: Extract<
+        ClientOrchestrationCommand,
+        { type: "thread.turn.start" }
+      >["message"]["attachments"];
     }) =>
-      Effect.forEach(
-        input.attachments,
-        (attachment) =>
-          Effect.gen(function* () {
-            const parsed = parseBase64DataUrl(attachment.dataUrl);
-            if (!parsed || !parsed.mimeType.startsWith("image/")) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `Invalid image attachment payload for '${attachment.name}'.`,
-              });
-            }
+      Effect.gen(function* () {
+        const claimedAttachmentPaths: string[] = [];
+        const normalizedAttachments = yield* Effect.forEach(
+          input.attachments,
+          (attachment) =>
+            Effect.gen(function* () {
+              if (!("dataUrl" in attachment)) {
+                const claim = planAttachmentClaim({
+                  attachmentsDir: serverConfig.attachmentsDir,
+                  threadId: input.threadId,
+                  attachmentId: attachment.id,
+                });
+                if (!claim.ok) {
+                  return yield* new OrchestrationDispatchCommandError({
+                    message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
+                  });
+                }
 
-            const bytes = Buffer.from(parsed.base64, "base64");
-            if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `Image attachment '${attachment.name}' is empty or too large.`,
-              });
-            }
+                const info = yield* fileSystem.stat(claim.currentPath).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationDispatchCommandError({
+                        message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+                        cause,
+                      }),
+                  ),
+                );
+                if (Number(info.size) !== attachment.sizeBytes) {
+                  return yield* new OrchestrationDispatchCommandError({
+                    message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
+                  });
+                }
 
-            const attachmentId = createAttachmentId(input.threadId);
-            if (!attachmentId) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: "Failed to create a safe attachment id.",
-              });
-            }
+                const normalizedAttachment = {
+                  ...attachment,
+                  id: claim.finalId,
+                  mimeType: attachment.mimeType.toLowerCase(),
+                };
+                const expectedPath = resolveAttachmentPath({
+                  attachmentsDir: serverConfig.attachmentsDir,
+                  attachment: normalizedAttachment,
+                });
+                if (expectedPath !== claim.finalPath) {
+                  return yield* new OrchestrationDispatchCommandError({
+                    message: `Attachment '${attachment.name}' cannot be sent: image type does not match the upload.`,
+                  });
+                }
 
-            const persistedAttachment = {
-              type: "image" as const,
-              id: attachmentId,
-              name: attachment.name,
-              mimeType: parsed.mimeType.toLowerCase(),
-              sizeBytes: bytes.byteLength,
-            };
-            const attachmentPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment: persistedAttachment,
-            });
-            if (!attachmentPath) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `Failed to resolve persisted path for '${attachment.name}'.`,
-              });
-            }
-            yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-              Effect.mapError(
-                () =>
-                  new OrchestrationDispatchCommandError({
-                    message: `Failed to create attachment directory for '${attachment.name}'.`,
-                  }),
-              ),
-            );
-            yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-              Effect.mapError(
-                () =>
-                  new OrchestrationDispatchCommandError({
-                    message: `Failed to persist attachment '${attachment.name}'.`,
-                  }),
-              ),
-            );
-            return persistedAttachment;
-          }),
-        { concurrency: 1 },
-      );
+                // Keep the pending copy until the turn succeeds. A failed thread
+                // bootstrap can then retry with a fresh thread id.
+                yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationDispatchCommandError({
+                        message: `Failed to claim attachment '${attachment.name}' for this thread.`,
+                        cause,
+                      }),
+                  ),
+                );
+                claimedAttachmentPaths.push(claim.finalPath);
 
+                return normalizedAttachment;
+              }
+
+              const parsed = parseBase64DataUrl(attachment.dataUrl);
+              if (!parsed || !parsed.mimeType.startsWith("image/")) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Invalid image attachment payload for '${attachment.name}'.`,
+                });
+              }
+
+              const bytes = Buffer.from(parsed.base64, "base64");
+              if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Image attachment '${attachment.name}' is empty or too large.`,
+                });
+              }
+
+              const attachmentId = createAttachmentId(input.threadId);
+              if (!attachmentId) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: "Failed to create a safe attachment id.",
+                });
+              }
+
+              const persistedAttachment = {
+                type: "image" as const,
+                id: attachmentId,
+                name: attachment.name,
+                mimeType: parsed.mimeType.toLowerCase(),
+                sizeBytes: bytes.byteLength,
+              };
+
+              const attachmentPath = resolveAttachmentPath({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachment: persistedAttachment,
+              });
+              if (!attachmentPath) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Failed to resolve persisted path for '${attachment.name}'.`,
+                });
+              }
+
+              yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+                Effect.mapError(
+                  () =>
+                    new OrchestrationDispatchCommandError({
+                      message: `Failed to create attachment directory for '${attachment.name}'.`,
+                    }),
+                ),
+              );
+              yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
+                Effect.mapError(
+                  () =>
+                    new OrchestrationDispatchCommandError({
+                      message: `Failed to persist attachment '${attachment.name}'.`,
+                    }),
+                ),
+              );
+
+              return persistedAttachment;
+            }),
+          { concurrency: 1 },
+        ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
+        return normalizedAttachments;
+      });
     // T3-CUSTOM(expbkt3): END
+
     if (canonicalCommand.type === "project.create") {
       return {
         ...canonicalCommand,
@@ -219,3 +315,33 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
     } satisfies OrchestrationCommand;
     // T3-CUSTOM(expbkt3): END
   });
+
+export const cleanupFailedUploadedAttachments = Effect.fn(
+  "Normalizer.cleanupFailedUploadedAttachments",
+)(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
+  if (command.type !== "thread.turn.start" || normalizedCommand.type !== "thread.turn.start") {
+    return;
+  }
+
+  const serverConfig = yield* ServerConfig;
+  const claimedPaths: string[] = [];
+  for (const [index, attachment] of normalizedCommand.message.attachments.entries()) {
+    const original = command.message.attachments[index];
+    if (
+      !original ||
+      "dataUrl" in original ||
+      parseThreadSegmentFromAttachmentId(original.id) !== PENDING_ATTACHMENT_THREAD_SEGMENT
+    ) {
+      continue;
+    }
+
+    const claimedPath = resolveAttachmentPath({
+      attachmentsDir: serverConfig.attachmentsDir,
+      attachment,
+    });
+    if (claimedPath) {
+      claimedPaths.push(claimedPath);
+    }
+  }
+  yield* removeClaimedAttachmentPaths(claimedPaths);
+});

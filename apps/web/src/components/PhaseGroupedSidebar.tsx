@@ -1876,6 +1876,8 @@ export function PhaseGroupedSidebar() {
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
+  // T3-CUSTOM(expbkt3): follow the same auto-settle-on-merge setting as the default sidebar.
+  const autoSettleOnMerge = useClientSettings((state) => state.sidebarAutoSettleOnMerge);
   const currentUserId = useCurrentUserId();
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze clocks. `now` is quantized to
   // the minute so the settled partition does not churn on every render
@@ -2064,6 +2066,7 @@ export function PhaseGroupedSidebar() {
           threadBootstrapSupported:
             serverConfig?.environment.capabilities.durableThreadBootstrap === true,
           changeRequestState: vcsStatus?.pr?.state ?? null,
+          changeRequestUpdatedAt: vcsStatus?.pr?.updatedAt ?? null,
           // T3-CUSTOM(expbkt3): END
         };
       }),
@@ -2106,9 +2109,10 @@ export function PhaseGroupedSidebar() {
         now: nowMinute,
         preciseNow: new Date().toISOString(),
         autoSettleAfterDays,
+        autoSettleOnMerge,
       },
     );
-  }, [allRows, autoSettleAfterDays, nowMinute, snoozeWakeTick]);
+  }, [allRows, autoSettleAfterDays, autoSettleOnMerge, nowMinute, snoozeWakeTick]);
   // T3-CUSTOM(expbkt3): the shelves are flat history lists, so they filter
   // row-by-row as before. Only the lifecycle groups nest.
   const activeRows = unfilteredActiveRows;

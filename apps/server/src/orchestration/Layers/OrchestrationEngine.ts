@@ -1,4 +1,5 @@
 import type {
+  OrchestrationClientOrigin,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
@@ -35,6 +36,7 @@ import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
+  OrchestrationCommandIdConflictError,
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
   type OrchestrationDispatchError,
@@ -51,10 +53,13 @@ import {
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
+const isOrchestrationCommandIdConflictError = Schema.is(OrchestrationCommandIdConflictError);
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
+  origin: OrchestrationClientOrigin | undefined;
+  // T3-CUSTOM(expbkt3): acting operator for ownership + audit trail.
   actorUserId: UserId | null;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
@@ -146,6 +151,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           commandId: envelope.command.commandId,
         });
         if (Option.isSome(existingReceipt)) {
+          // A receipt only proves this exact command was handled. Replaying it
+          // for a command aimed at another aggregate would report success for
+          // work that never happened.
+          if (
+            existingReceipt.value.aggregateKind !== aggregateRef.aggregateKind ||
+            existingReceipt.value.aggregateId !== aggregateRef.aggregateId
+          ) {
+            return yield* new OrchestrationCommandIdConflictError({
+              commandId: envelope.command.commandId,
+              receiptAggregateKind: existingReceipt.value.aggregateKind,
+              receiptAggregateId: existingReceipt.value.aggregateId,
+              commandAggregateKind: aggregateRef.aggregateKind,
+              commandAggregateId: aggregateRef.aggregateId,
+            });
+          }
           if (existingReceipt.value.status === "accepted") {
             return {
               sequence: existingReceipt.value.resultSequence,
@@ -173,18 +193,28 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
           ),
         );
-        const decidedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
-        // Stamp the acting operator into every produced event's metadata in one
-        // place (audit trail via the existing metadata_json column). No-op in
-        // single-user mode where actorUserId is null.
+        const plannedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
+        // Stamp the dispatching client's origin onto every event the command
+        // produced. The decider stays pure; attribution is an engine concern.
+        const originStampedEvents =
+          envelope.origin === undefined
+            ? plannedEvents
+            : plannedEvents.map((planned) => ({
+                ...planned,
+                metadata: { ...planned.metadata, origin: envelope.origin },
+              }));
+        // T3-CUSTOM(expbkt3): BEGIN — stamp the acting operator into every
+        // produced event's metadata in one place (audit trail via the existing
+        // metadata_json column). No-op in single-user mode where actorUserId is null.
         const actorUserId = envelope.actorUserId;
         const eventBases =
           actorUserId === null
-            ? decidedEvents
-            : decidedEvents.map((decided) => ({
+            ? originStampedEvents
+            : originStampedEvents.map((decided) => ({
                 ...decided,
                 metadata: { ...decided.metadata, actorUserId },
               }));
+        // T3-CUSTOM(expbkt3): END
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
@@ -286,7 +316,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           const error = Cause.squash(exit.cause) as OrchestrationDispatchError;
-          if (!isOrchestrationCommandPreviouslyRejectedError(error)) {
+          if (
+            !isOrchestrationCommandPreviouslyRejectedError(error) &&
+            !isOrchestrationCommandIdConflictError(error)
+          ) {
             yield* reconcileReadModelAfterDispatchFailure.pipe(
               Effect.catch(() =>
                 Effect.logWarning(
@@ -338,6 +371,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       yield* Queue.offer(commandQueue, {
         command,
+        origin: options?.origin,
+        // T3-CUSTOM(expbkt3): acting operator for ownership + audit trail.
         actorUserId: options?.actorUserId ?? null,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,

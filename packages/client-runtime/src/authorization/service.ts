@@ -143,6 +143,7 @@ export const make = Effect.gen(function* () {
         wsBaseUrl: input.wsBaseUrl,
         httpBaseUrl: input.httpBaseUrl,
         bearerToken: input.bearerToken,
+        clientMetadata: presentation.metadata,
       }).pipe(
         Effect.mapError(mapRemoteEnvironmentError),
         Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -182,6 +183,7 @@ export const make = Effect.gen(function* () {
         httpBaseUrl: token.endpoint.httpBaseUrl,
         accessToken: token.accessToken,
         dpopProof: ticketProof,
+        clientMetadata: presentation.metadata,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
     },

@@ -1,3 +1,4 @@
+// T3-CUSTOM(expbkt3): `planModeEnabled` is `planModeAvailable` in the fork (fresh key, default on).
 import {
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -23,6 +24,7 @@ export type ComposerProviderStateInput = {
   models: ReadonlyArray<ServerProviderModel>;
   promptInjectionState?: ComposerPromptInjectionState;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  planModeAvailable: boolean;
 };
 
 export type ComposerPromptInjectionState = "none" | "ultrathink";
@@ -46,6 +48,7 @@ type TraitsRenderInput = {
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  planModeAvailable: boolean;
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -53,8 +56,15 @@ export function getComposerPromptInjectionState(prompt: string): ComposerPromptI
 }
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
-  const { provider, model, models, modelOptions, promptInjectionState = "none" } = input;
-  const caps = getProviderModelCapabilities(models, model, provider);
+  const {
+    provider,
+    model,
+    models,
+    modelOptions,
+    promptInjectionState = "none",
+    planModeAvailable,
+  } = input;
+  const caps = getProviderModelCapabilities(models, model, provider, planModeAvailable);
   const descriptors = getProviderOptionDescriptors({ caps, selections: modelOptions });
   const primarySelectDescriptor = descriptors.find(
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
@@ -94,11 +104,19 @@ function renderTraitsControl(
     modelOptions,
     prompt,
     onPromptChange,
+    planModeAvailable,
   } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
   if (
     !hasTarget ||
-    !shouldRenderTraitsControls({ provider, models, model, modelOptions, prompt })
+    !shouldRenderTraitsControls({
+      provider,
+      models,
+      model,
+      modelOptions,
+      prompt,
+      planModeAvailable,
+    })
   ) {
     return null;
   }
@@ -113,6 +131,7 @@ function renderTraitsControl(
       modelOptions={modelOptions}
       prompt={prompt}
       onPromptChange={onPromptChange}
+      planModeAvailable={planModeAvailable}
     />
   );
 }
