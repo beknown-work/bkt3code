@@ -253,6 +253,8 @@ import {
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 // T3-CUSTOM(expbkt3): buildThreadRouteParams is used by the fork's promotion navigation.
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
+// T3-CUSTOM(expbkt3): durable right-panel layout preference.
+import { useRightPanelMaximizedPreference } from "../rightPanelLayoutPreference";
 // T3-CUSTOM(expbkt3): Keep delayed draft promotion from stealing navigation.
 import { useDraftPromotionNavigationGuard } from "../hooks/useDraftPromotionNavigationGuard";
 import {
@@ -1521,9 +1523,11 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
-  const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
-    null,
-  );
+  // T3-CUSTOM(expbkt3): upstream keeps "is the right panel maximized" as a
+  // per-thread key in component state, so the layout resets on every thread
+  // switch and reload. Persist the choice instead — see rightPanelLayoutPreference.
+  const [rightPanelMaximizedPreference, setRightPanelMaximizedPreference] =
+    useRightPanelMaximizedPreference();
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
@@ -1956,8 +1960,8 @@ function ChatViewContent(props: ChatViewProps) {
   const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
   const rightPanelOpen = rightPanelState.isOpen;
   const canMaximizeRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
-  const rightPanelMaximized =
-    canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
+  // T3-CUSTOM(expbkt3): every thread opens the panel in the last shape the user chose.
+  const rightPanelMaximized = canMaximizeRightPanel && rightPanelMaximizedPreference;
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUseRightPanelSheet;
 
   useEffect(() => {
@@ -4058,7 +4062,8 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activePreviewState.activeTabId, activeThreadRef, createBrowserSurface, previewPanelOpen]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
-      setMaximizedRightPanelThreadKey(null);
+      // T3-CUSTOM(expbkt3): upstream cleared the maximized flag here. The fork
+      // keeps it: closing a panel is not a decision about how the next one opens.
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
@@ -4266,10 +4271,9 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, closePreviewPanel, rightPanelOpen]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
-    setMaximizedRightPanelThreadKey((threadKey) =>
-      threadKey === routeThreadKey ? null : routeThreadKey,
-    );
-  }, [canMaximizeRightPanel, routeThreadKey]);
+    // T3-CUSTOM(expbkt3): the toggle records a durable preference, not thread state.
+    setRightPanelMaximizedPreference((maximized) => !maximized);
+  }, [canMaximizeRightPanel, setRightPanelMaximizedPreference]);
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
