@@ -43,7 +43,6 @@ export function EnvironmentBadgeView({
     return (
       <span
         aria-label={label}
-        title={label}
         className={cn("inline-block size-2 shrink-0 rounded-full", className)}
         style={{ backgroundColor: color }}
       />
@@ -63,7 +62,6 @@ export function EnvironmentBadgeView({
     return (
       <span
         aria-label={label}
-        title={label}
         className={cn(
           "inline-flex size-5 shrink-0 items-center justify-center rounded-[5px] border",
           className,
@@ -81,7 +79,7 @@ export function EnvironmentBadgeView({
 
   return (
     <span
-      title={label}
+      aria-label={label}
       className={cn(
         "inline-flex min-w-0 shrink-0 items-center gap-1 rounded-[5px] border px-1.5 py-0.5 text-[11px] leading-none font-medium",
         className,

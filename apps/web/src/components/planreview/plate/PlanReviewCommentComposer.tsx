@@ -63,7 +63,7 @@ export function PlanReviewCommentComposer({
       <div className="flex items-start gap-2 px-3 pt-2">
         <blockquote
           className="min-w-0 flex-1 border-amber-400/60 border-l-2 pl-2 text-muted-foreground text-xs italic"
-          title={quotedText}
+          aria-label={quotedText}
         >
           <span className="line-clamp-2 whitespace-pre-wrap wrap-break-word">{quotedText}</span>
         </blockquote>

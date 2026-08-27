@@ -14,11 +14,12 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection } from "@t3tools/contracts";
+import { ModelSelection, ThreadLinkedPullRequest } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -40,6 +41,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path,
           source_control_profile_id,
+          linked_pull_request_json,
           latest_turn_id,
           owner_user_id,
           created_at,
@@ -47,6 +49,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           archived_at,
           settled_override,
           settled_at,
+          unsettled_at,
           snoozed_until,
           snoozed_at,
           priority,
@@ -78,6 +81,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.branch},
           ${row.worktreePath},
           ${row.sourceControlProfileId},
+          ${row.linkedPullRequest === undefined || row.linkedPullRequest === null ? null : JSON.stringify(row.linkedPullRequest)},
           ${row.latestTurnId},
           ${row.ownerUserId},
           ${row.createdAt},
@@ -85,6 +89,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.archivedAt},
           ${row.settledOverride},
           ${row.settledAt},
+          ${row.unsettledAt},
           ${row.snoozedUntil},
           ${row.snoozedAt},
           ${row.priority},
@@ -116,6 +121,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           source_control_profile_id = excluded.source_control_profile_id,
+          linked_pull_request_json = excluded.linked_pull_request_json,
           latest_turn_id = excluded.latest_turn_id,
           owner_user_id = COALESCE(excluded.owner_user_id, projection_threads.owner_user_id),
           created_at = excluded.created_at,
@@ -123,6 +129,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           archived_at = excluded.archived_at,
           settled_override = excluded.settled_override,
           settled_at = excluded.settled_at,
+          unsettled_at = excluded.unsettled_at,
           snoozed_until = excluded.snoozed_until,
           snoozed_at = excluded.snoozed_at,
           priority = excluded.priority,
@@ -161,6 +168,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           source_control_profile_id AS "sourceControlProfileId",
+          linked_pull_request_json AS "linkedPullRequest",
           latest_turn_id AS "latestTurnId",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -168,6 +176,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           archived_at AS "archivedAt",
           settled_override AS "settledOverride",
           settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
           priority,
@@ -208,6 +217,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           source_control_profile_id AS "sourceControlProfileId",
+          linked_pull_request_json AS "linkedPullRequest",
           latest_turn_id AS "latestTurnId",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -215,6 +225,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           archived_at AS "archivedAt",
           settled_override AS "settledOverride",
           settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
           priority,

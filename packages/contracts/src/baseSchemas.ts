@@ -76,6 +76,14 @@ export type RpcClientId = typeof RpcClientId.Type;
 /** Clerk user id (e.g. "user_2abc..."). Identifies a person operating the server. */
 export const UserId = makeEntityId("UserId");
 export type UserId = typeof UserId.Type;
+/**
+ * Which client app a connection comes from. Unlike
+ * `AuthClientMetadataDeviceType` (a UA-style device class where web and
+ * desktop are both "desktop"), this names the actual product surface.
+ * Optional everywhere it appears: old clients never send it.
+ */
+export const ClientSurface = Schema.Literals(["web", "desktop", "mobile"]);
+export type ClientSurface = typeof ClientSurface.Type;
 
 export const ProviderItemId = makeEntityId("ProviderItemId");
 export type ProviderItemId = typeof ProviderItemId.Type;

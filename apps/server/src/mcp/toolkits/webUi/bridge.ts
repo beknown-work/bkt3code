@@ -300,6 +300,9 @@ export const invokeWebUiRpcCalls = Effect.fn("McpWebUiBridge.invokeCalls")(funct
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const handlerLayer = makeAuthenticatedWsRpcHandlerLayer(
         session,
+        // T3-CUSTOM(expbkt3): the MCP web-UI bridge is not a client surface, so it
+        // reports an empty client origin to upstream's analytics plumbing.
+        {},
         previewAutomationBroker,
         serverSelfUpdate,
       );

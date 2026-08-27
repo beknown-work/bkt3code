@@ -52,7 +52,7 @@ function PlanReviewOutlineImpl({
                   heading.depth <= 1 ? "font-medium text-foreground" : "text-muted-foreground",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate" title={heading.text}>
+                <span className="min-w-0 flex-1 truncate" aria-label={heading.text}>
                   {heading.text}
                 </span>
                 {count > 0 ? (

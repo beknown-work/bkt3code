@@ -4,6 +4,7 @@ import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import {
   AuthSessionId,
+  ClientSurface,
   EnvironmentUserId,
   ForwardCompatibleArray,
   TrimmedNonEmptyString,
@@ -231,7 +232,9 @@ export const AuthClientPresentationMetadata = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   deviceType: Schema.optionalKey(AuthClientMetadataDeviceType),
   os: Schema.optionalKey(TrimmedNonEmptyString),
-  // T3-CUSTOM(expbkt3): identify stale client bundles in connection diagnostics.
+  osMajorVersion: Schema.optionalKey(Schema.Int),
+  deviceModel: Schema.optionalKey(TrimmedNonEmptyString),
+  surface: Schema.optionalKey(ClientSurface),
   appVersion: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientPresentationMetadata = typeof AuthClientPresentationMetadata.Type;

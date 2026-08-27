@@ -1,9 +1,11 @@
 import {
+  isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { estimateBase64ByteSize } from "./base64";
+import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 
 export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
@@ -22,6 +24,68 @@ export function toUploadChatImageAttachments(
     sizeBytes: attachment.sizeBytes,
     dataUrl: attachment.dataUrl,
   }));
+}
+
+// T3-CUSTOM(expbkt3): since upstream #8048 a queued attachment may be uploaded
+// already, carrying only its asset id. Only locally-held ones (with a data url)
+// can go back into a composer draft.
+export function toDraftComposerImageAttachments(
+  attachments: ReadonlyArray<{
+    readonly type: "image";
+    readonly id: string;
+    readonly name: string;
+    readonly mimeType: string;
+    readonly sizeBytes: number;
+    readonly dataUrl?: string | undefined;
+    readonly previewUri?: string | undefined;
+  }>,
+): ReadonlyArray<DraftComposerImageAttachment> {
+  return attachments.flatMap((attachment) => {
+    const dataUrl = attachment.dataUrl;
+    if (dataUrl === undefined) return [];
+    return [
+      {
+        type: attachment.type,
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        dataUrl,
+        previewUri: attachment.previewUri ?? dataUrl,
+      },
+    ];
+  });
+}
+
+// T3-CUSTOM(expbkt3): re-sending a queued message keeps whichever form the queue
+// holds: an uploaded asset id (upstream #8048) or the original inline data url.
+export function toQueuedResendAttachments(
+  attachments: ReadonlyArray<{
+    readonly type: "image";
+    readonly id: string;
+    readonly name: string;
+    readonly mimeType: string;
+    readonly sizeBytes: number;
+    readonly dataUrl?: string | undefined;
+  }>,
+) {
+  return attachments.map((attachment) =>
+    attachment.dataUrl === undefined
+      ? {
+          type: attachment.type,
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+        }
+      : {
+          type: attachment.type,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          dataUrl: attachment.dataUrl,
+        },
+  );
 }
 
 const OWNED_PASTED_IMAGE_DIRECTORY = "t3-composer-paste";
@@ -65,13 +129,21 @@ export async function pickComposerImages(input: { readonly existingCount: number
     };
   }
 
-  const result = await imagePicker.launchImageLibraryAsync({
-    mediaTypes: ["images"],
-    allowsMultipleSelection: true,
-    selectionLimit: remainingSlots,
-    base64: true,
-    quality: 1,
-  });
+  // The picker covers the Android activity, which reports the app as
+  // backgrounded; the guard keeps background-triggered restarts away mid-pick.
+  const endHandoff = beginForegroundHandoff();
+  let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
+  try {
+    result = await imagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: remainingSlots,
+      base64: true,
+      quality: 1,
+    });
+  } finally {
+    endHandoff();
+  }
 
   if (result.canceled) {
     return {
@@ -87,6 +159,10 @@ export async function pickComposerImages(input: { readonly existingCount: number
     const mimeType = asset.mimeType?.toLowerCase();
     if (!mimeType?.startsWith("image/")) {
       error = `Unsupported file type for '${asset.fileName ?? "image"}'.`;
+      continue;
+    }
+    if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
+      error = `'${asset.fileName ?? "image"}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`;
       continue;
     }
 

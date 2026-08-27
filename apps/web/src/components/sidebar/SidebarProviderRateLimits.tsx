@@ -100,7 +100,7 @@ function ProviderRateLimitRollingChip({
         onBackdrop ? "text-white/75" : rollingToneClass[rolling.tone],
       )}
       data-rolling-window="true"
-      title={`${rolling.windowLabel ?? "Rolling"} window: ${rolling.remainingPercent}% remaining${
+      aria-label={`${rolling.windowLabel ?? "Rolling"} window: ${rolling.remainingPercent}% remaining${
         countdown === null ? "" : `, resets in ${countdown}`
       }`}
     >
@@ -171,7 +171,7 @@ function ProviderRateLimitProgressRow({
             onBackdrop ? "text-white/45" : "text-muted-foreground/70",
           )}
           data-weekly-reset="true"
-          title={`Usage resets in ${weeklyCountdown}`}
+          aria-label={`Usage resets in ${weeklyCountdown}`}
         >
           {weeklyCountdown}
         </span>

@@ -32,6 +32,7 @@ import {
 } from "./planReviewMarkdown";
 import { locateQuotedLineRange } from "@t3tools/shared/planReview";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { planReviewEnvironment } from "../../state/planReview";
 import { toastManager } from "../ui/toast";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -465,17 +466,23 @@ export default function PlanReviewPanel({
         </nav>
 
         {!isResolved && !isHtmlPlan ? (
-          <label
-            className="flex items-center gap-1.5 border-b px-3 py-1.5 text-xs"
-            title="Record your edits as tracked suggestions instead of editing in place"
-          >
-            <input
-              type="checkbox"
-              checked={suggestionMode}
-              onChange={(event) => setSuggestionMode(event.target.checked)}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <label className="flex items-center gap-1.5 border-b px-3 py-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={suggestionMode}
+                    onChange={(event) => setSuggestionMode(event.target.checked)}
+                  />
+                  Suggest edits
+                </label>
+              }
             />
-            Suggest edits
-          </label>
+            <TooltipPopup side="bottom">
+              Record your edits as tracked suggestions instead of editing in place
+            </TooltipPopup>
+          </Tooltip>
         ) : null}
 
         <div className="min-h-0 flex-1 overflow-auto">

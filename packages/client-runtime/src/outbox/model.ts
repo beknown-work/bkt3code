@@ -23,7 +23,6 @@ import {
   type RuntimeMode as RuntimeModeType,
   type SourceControlProfileId as SourceControlProfileIdType,
   type ThreadId as ThreadIdType,
-  type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -61,12 +60,17 @@ const QueuedThreadCreationSchema = Schema.Struct({
 
 export const QueuedThreadImageAttachmentSchema = Schema.Struct({
   id: Schema.String,
-  previewUri: Schema.String,
   type: Schema.Literal("image"),
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
-  dataUrl: Schema.String,
+  // T3-CUSTOM(expbkt3): BEGIN — upstream (#8048) uploads images before send, so a
+  // queued attachment may carry only the uploaded asset id. The inline data url
+  // (and the preview derived from it) stays optional for locally-held images and
+  // for queue entries written by older clients.
+  previewUri: Schema.optional(Schema.String),
+  dataUrl: Schema.optional(Schema.String),
+  // T3-CUSTOM(expbkt3): END
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -104,9 +108,17 @@ export interface QueuedThreadCreation {
   readonly sourceControlProfileId?: SourceControlProfileIdType | undefined;
 }
 
-export interface QueuedThreadImageAttachment extends UploadChatImageAttachment {
+// T3-CUSTOM(expbkt3): mirrors QueuedThreadImageAttachmentSchema. Deliberately not
+// extending UploadChatImageAttachment: since upstream #8048 an attachment can be
+// uploaded ahead of the send, in which case only its asset id is queued.
+export interface QueuedThreadImageAttachment {
+  readonly type: "image";
   readonly id: string;
-  readonly previewUri: string;
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly dataUrl?: string | undefined;
+  readonly previewUri?: string | undefined;
 }
 
 export interface QueuedThreadMessage {
@@ -231,10 +243,9 @@ export function resolveThreadOutboxDeliveryAction(input: {
     return input.environmentConnected && input.shellStatus === "live" ? "send" : "wait";
   }
   if (!input.threadExists) return input.shellStatus === "live" ? "remove" : "wait";
-  return input.environmentConnected &&
-    (!input.threadBusy || input.durableExecutionRecovery === true)
-    ? "send"
-    : "wait";
+  // T3-CUSTOM(expbkt3): relocated from apps/mobile thread-outbox-model.ts; follows
+  // upstream #6543 (steer active turns by default) — `threadBusy` no longer gates sends.
+  return input.environmentConnected ? "send" : "wait";
 }
 
 export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): boolean {

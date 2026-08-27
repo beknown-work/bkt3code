@@ -44,9 +44,9 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 // T3-CUSTOM(expbkt3): attach the built client version to connection metadata.
 import { APP_VERSION } from "../branding";
+import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 // T3-CUSTOM(expbkt3): the operator's Clerk token, for identity-bearing pairing.
 import { readTeamClerkToken } from "../state/teamIdentityToken";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
@@ -151,6 +151,8 @@ function clientMetadata() {
     deviceType: "desktop" as const,
     appVersion: APP_VERSION,
     ...(platform === "" ? {} : { os: platform }),
+    surface: desktop ? ("desktop" as const) : ("web" as const),
+    ...(APP_VERSION === "0.0.0" ? {} : { appVersion: APP_VERSION }),
   };
 }
 

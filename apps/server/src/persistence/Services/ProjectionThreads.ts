@@ -15,6 +15,7 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   SourceControlProfileId,
+  ThreadLinkedPullRequest,
   ThreadId,
   ThreadPriority,
   TurnId,
@@ -37,6 +38,7 @@ export const ProjectionThread = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   sourceControlProfileId: Schema.NullOr(SourceControlProfileId),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurnId: Schema.NullOr(TurnId),
   ownerUserId: Schema.NullOr(UserId),
   createdAt: IsoDateTime,
@@ -44,6 +46,7 @@ export const ProjectionThread = Schema.Struct({
   archivedAt: Schema.NullOr(IsoDateTime),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(IsoDateTime),
+  unsettledAt: Schema.NullOr(IsoDateTime),
   snoozedUntil: Schema.NullOr(IsoDateTime),
   snoozedAt: Schema.NullOr(IsoDateTime),
   // T3-CUSTOM(expbkt3): session priority (P0..P4 as 0..4, null = unset).
