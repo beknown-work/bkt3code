@@ -219,6 +219,78 @@ function readBaseline(): ReadonlySet<string> {
   );
 }
 
+/**
+ * A marker comment in JSX *children* position is rendered by React as literal
+ * text. A 2026-08-27 upstream merge shipped four of them into the composer's
+ * traits chip and the settings model row, where users saw
+ * "// T3-CUSTOM(expbkt3): ..." printed beside the model picker.
+ *
+ * Markers between a JSX element's attributes are legal, so the scan first walks
+ * back to decide whether the comment sits inside an unterminated opening tag.
+ */
+function isInsideOpeningTag(lines: ReadonlyArray<string>, index: number): boolean {
+  for (let cursor = index - 1; cursor >= 0 && cursor > index - 40; cursor -= 1) {
+    const line = lines[cursor]?.trim() ?? "";
+    if (line.length === 0 || line.startsWith("//")) continue;
+    if (
+      line.endsWith(">") ||
+      line.endsWith("/>") ||
+      line.endsWith(")") ||
+      line.endsWith(";") ||
+      line.endsWith("{") ||
+      line.endsWith(",")
+    ) {
+      return false;
+    }
+    if (/<[A-Za-z][\w.]*$/.test(line)) return true;
+  }
+  return false;
+}
+
+function neighbourLine(
+  lines: ReadonlyArray<string>,
+  index: number,
+  step: 1 | -1,
+  skipComments: boolean,
+): string {
+  for (let cursor = index + step; cursor >= 0 && cursor < lines.length; cursor += step) {
+    const line = lines[cursor]?.trim() ?? "";
+    if (line.length === 0) continue;
+    if (skipComments && line.startsWith("//")) continue;
+    return line;
+  }
+  return "";
+}
+
+/** Every `.tsx` file in the repo, minus vendored and generated trees. */
+function tsxFiles(): string[] {
+  return git(["ls-files", "*.tsx"])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith(".repos/"));
+}
+
+export function findRenderedMarkers(): Violation[] {
+  const violations: Violation[] = [];
+  for (const file of tsxFiles()) {
+    if (!NodeFS.existsSync(file)) continue;
+    const lines = NodeFS.readFileSync(file, "utf8").split("\n");
+    lines.forEach((rawLine, index) => {
+      if (!rawLine.trim().startsWith(`// ${MARKER}`)) return;
+      if (isInsideOpeningTag(lines, index)) return;
+      const previous = neighbourLine(lines, index, -1, true);
+      const next = neighbourLine(lines, index, 1, false);
+      const closesJsx =
+        previous.endsWith(">") || previous.endsWith("<>") || previous.endsWith(")}");
+      const opensJsx = next.startsWith("<") || next.startsWith("{");
+      if (closesJsx && opensJsx) {
+        violations.push({ file, startLine: index + 1, lineCount: 1 });
+      }
+    });
+  }
+  return violations;
+}
+
 function main(): number {
   const argv = new Set(process.argv.slice(2));
   const writeBaseline = argv.has("--write-baseline");
@@ -238,6 +310,19 @@ function main(): number {
         (force ? " (--force: existing violations adopted)" : ""),
     );
     return 0;
+  }
+
+  // Rendered markers are never baselined: they are a visible product defect,
+  // not merge debt, and the fix is always to delete or move one comment.
+  const rendered = findRenderedMarkers();
+  if (rendered.length > 0) {
+    console.error(
+      `\n${MARKER} comments in JSX children position are rendered to users as text.\n` +
+        "Delete them, or move them into the element's attribute list.\n",
+    );
+    for (const violation of rendered) {
+      console.error(`  ${violation.file}:${violation.startLine}`);
+    }
   }
 
   const baseline = readBaseline();
@@ -267,7 +352,7 @@ function main(): number {
     for (const file of nowClean) console.error(`  ${file}`);
   }
 
-  if (unmarked.length === 0 && nowClean.length === 0) {
+  if (unmarked.length === 0 && nowClean.length === 0 && rendered.length === 0) {
     const skipped = baseline.size;
     console.log(
       `Fork marker check passed. ${modified.length} modified upstream file(s), ` +
