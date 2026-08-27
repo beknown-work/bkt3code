@@ -469,6 +469,8 @@ describe("buildThreadListV2Items", () => {
       createdAt: "2026-05-20T00:00:00.000Z",
       pinnedAt: "2026-05-21T00:00:00.000Z",
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId: TurnId.make("turn-inactive"),
         state: "completed",
         requestedAt: "2026-05-21T00:00:00.000Z",

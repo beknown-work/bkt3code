@@ -252,6 +252,8 @@ describe("buildThreadFeed", () => {
       role: "assistant" as const,
       text: "Newer server response",
       turnId: null,
+      // T3-CUSTOM(expbkt3): fork-required sender identity.
+      sentByUserId: null,
       createdAt: "2026-08-23T00:00:02.000Z",
       updatedAt: "2026-08-23T00:00:02.000Z",
       streaming: false,
@@ -583,6 +585,8 @@ describe("buildThreadFeed", () => {
       projectId: ProjectId.make("project-1"),
       title: "Bounded narration",
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId,
         state: "completed",
         requestedAt: "2026-04-01T00:00:00.000Z",
@@ -592,6 +596,8 @@ describe("buildThreadFeed", () => {
       },
       messages: [
         {
+          // T3-CUSTOM(expbkt3): fork-required sender identity.
+          sentByUserId: null,
           id: MessageId.make("assistant-first"),
           role: "assistant",
           text: "The main result is ready.",
@@ -601,6 +607,8 @@ describe("buildThreadFeed", () => {
           updatedAt: "2026-04-01T00:00:02.000Z",
         },
         {
+          // T3-CUSTOM(expbkt3): fork-required sender identity.
+          sentByUserId: null,
           id: MessageId.make("assistant-middle"),
           role: "assistant",
           text: "I am checking one more detail.",
@@ -610,6 +618,8 @@ describe("buildThreadFeed", () => {
           updatedAt: "2026-04-01T00:00:04.000Z",
         },
         {
+          // T3-CUSTOM(expbkt3): fork-required sender identity.
+          sentByUserId: null,
           id: MessageId.make("assistant-final"),
           role: "assistant",
           text: "Verification finished.",
