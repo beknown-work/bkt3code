@@ -236,14 +236,16 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
                 });
               }
 
-              yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-                Effect.mapError(
-                  () =>
-                    new OrchestrationDispatchCommandError({
-                      message: `Failed to create attachment directory for '${attachment.name}'.`,
-                    }),
-                ),
-              );
+              yield* fileSystem
+                .makeDirectory(path.dirname(attachmentPath), { recursive: true })
+                .pipe(
+                  Effect.mapError(
+                    () =>
+                      new OrchestrationDispatchCommandError({
+                        message: `Failed to create attachment directory for '${attachment.name}'.`,
+                      }),
+                  ),
+                );
               yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
                 Effect.mapError(
                   () =>
