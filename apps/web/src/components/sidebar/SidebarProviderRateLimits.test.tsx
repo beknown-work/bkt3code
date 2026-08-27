@@ -152,9 +152,9 @@ describe("SidebarProviderRateLimits", () => {
     expect(markup).toContain("5h 40%");
     expect(markup).toContain("· 1h 8m");
     expect(markup).toContain('data-rolling-window="true"');
-    expect(markup).toContain('title="5h window: 40% remaining, resets in 1h 8m"');
+    expect(markup).toContain('aria-label="5h window: 40% remaining, resets in 1h 8m"');
     // The weekly countdown stays put while the rolling chip is on screen.
-    expect(markup).toContain('title="Usage resets in 5d"');
+    expect(markup).toContain('aria-label="Usage resets in 5d"');
   });
 
   it("always shows the headline reset countdown in a single compact unit", () => {
@@ -196,7 +196,7 @@ describe("SidebarProviderRateLimits", () => {
     // Rounded up to whole days, so the label never exceeds three characters.
     expect(markup).toContain('data-weekly-reset="true"');
     expect(markup).toContain(">5d<");
-    expect(markup).toContain('title="Usage resets in 5d"');
+    expect(markup).toContain('aria-label="Usage resets in 5d"');
     // The countdown is unconditional: no rolling chip is on screen here.
     expect(markup).not.toContain('data-rolling-window="true"');
   });
