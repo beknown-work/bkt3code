@@ -50,6 +50,8 @@ export function codexFeedbackMessage(
     role,
     text,
     turnId: null,
+    // T3-CUSTOM(expbkt3): locally generated messages have no sender identity.
+    sentByUserId: null,
     streaming: false,
     createdAt: submission.createdAt,
     updatedAt: submission.createdAt,

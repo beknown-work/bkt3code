@@ -39,6 +39,7 @@ import {
   shouldRetryThreadOutboxDelivery,
   threadOutboxRetryDelayMs,
 } from "@t3tools/client-runtime/outbox";
+import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
   submitCodexFeedback,
@@ -58,13 +59,13 @@ import {
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
-import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
-import { describeThreadExecution } from "@t3tools/shared/threadExecution";
 import {
   getTerminalLabel,
   nextTerminalId,
   resolveTerminalSessionLabel,
 } from "@t3tools/shared/terminalLabels";
+// T3-CUSTOM(expbkt3): durable execution drives the working label.
+import { describeThreadExecution } from "@t3tools/shared/threadExecution";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -1829,8 +1830,24 @@ function ChatViewContent(props: ChatViewProps) {
           messageId: failedOutboxItem.messageId,
           role: "user",
           text: failedOutboxItem.text,
-          attachments: failedOutboxItem.attachments.map(
-            ({ id: _id, previewUri: _previewUri, ...attachment }) => attachment,
+          // T3-CUSTOM(expbkt3): since upstream #8048 a queued attachment is either
+          // already uploaded (send its asset id) or still local (send its data url).
+          attachments: failedOutboxItem.attachments.map((attachment) =>
+            attachment.dataUrl === undefined
+              ? {
+                  type: attachment.type,
+                  id: attachment.id,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: attachment.sizeBytes,
+                }
+              : {
+                  type: attachment.type,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: attachment.sizeBytes,
+                  dataUrl: attachment.dataUrl,
+                },
           ),
         },
         ...(failedOutboxItem.modelSelection === undefined
@@ -1856,7 +1873,13 @@ function ChatViewContent(props: ChatViewProps) {
     setComposerDraftPrompt(composerDraftTarget, failedOutboxItem.text);
     addComposerDraftImages(
       composerDraftTarget,
-      hydrateImagesFromPersisted(failedOutboxItem.attachments),
+      // T3-CUSTOM(expbkt3): only locally-held images can go back into the composer;
+      // an already-uploaded attachment has no data url to rehydrate from.
+      hydrateImagesFromPersisted(
+        failedOutboxItem.attachments.flatMap((attachment) =>
+          attachment.dataUrl === undefined ? [] : [{ ...attachment, dataUrl: attachment.dataUrl }],
+        ),
+      ),
     );
     void discardDurableOutbox(failedOutboxItem);
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
@@ -2688,8 +2711,24 @@ function ChatViewContent(props: ChatViewProps) {
           messageId: queued.messageId,
           role: "user",
           text: queued.text,
-          attachments: queued.attachments.map(
-            ({ id: _id, previewUri: _previewUri, ...attachment }) => attachment,
+          // T3-CUSTOM(expbkt3): since upstream #8048 a queued attachment is either
+          // already uploaded (send its asset id) or still local (send its data url).
+          attachments: queued.attachments.map((attachment) =>
+            attachment.dataUrl === undefined
+              ? {
+                  type: attachment.type,
+                  id: attachment.id,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: attachment.sizeBytes,
+                }
+              : {
+                  type: attachment.type,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: attachment.sizeBytes,
+                  dataUrl: attachment.dataUrl,
+                },
           ),
         },
         ...(queued.modelSelection === undefined ? {} : { modelSelection: queued.modelSelection }),
@@ -6598,7 +6637,8 @@ function ChatViewContent(props: ChatViewProps) {
             const nextDraft = await handleNewThread(
               scopeProjectRef(activeProject.environmentId, activeProject.id),
               resolveBackgroundDraftWorkspaceOptions({
-                envMode: sendEnvMode,
+                // T3-CUSTOM(expbkt3): the fork derives envMode itself (see above).
+                envMode,
                 branch: activeThreadBranch,
                 startFromOrigin,
               }),
@@ -6751,13 +6791,15 @@ function ChatViewContent(props: ChatViewProps) {
   // every future send in this tab, with no error to explain why.
   const onSend = async (
     e?: { preventDefault: () => void },
+    submissionIntent: ComposerSubmissionIntent = "foreground",
+    // T3-CUSTOM(expbkt3): a preview annotation can be sent straight from the panel.
     directAnnotation?: {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
   ) => {
     try {
-      await runSend(e, directAnnotation);
+      await runSend(e, submissionIntent, directAnnotation);
     } finally {
       sendInFlightRef.current = false;
     }

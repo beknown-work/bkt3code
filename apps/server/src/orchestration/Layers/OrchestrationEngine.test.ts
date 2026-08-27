@@ -1450,6 +1450,8 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
+        // T3-CUSTOM(expbkt3): fork-required thread attribution.
+        sourceControlProfileId: null,
         commandId: CommandId.make("cmd-retry-thread-create"),
         threadId: ThreadId.make("thread-retry"),
         projectId: asProjectId("project-retry"),
@@ -1515,6 +1517,8 @@ describe("OrchestrationEngine", () => {
       await system.run(
         engine.dispatch({
           type: "thread.create",
+          // T3-CUSTOM(expbkt3): fork-required thread attribution.
+          sourceControlProfileId: null,
           commandId: CommandId.make(`cmd-${threadId}-create`),
           threadId: ThreadId.make(threadId),
           projectId: asProjectId("project-conflict"),

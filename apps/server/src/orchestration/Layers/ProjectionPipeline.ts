@@ -183,28 +183,9 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   );
 }
 
-// A full refresh loads all thread history, so skip events that cannot change the summary.
-function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
-  if (event.type === "thread.message-sent") {
-    return event.payload.role === "user";
-  }
-
-  if (event.type !== "thread.activity-appended") {
-    return true;
-  }
-
-  switch (event.payload.activity.kind) {
-    case "approval.requested":
-    case "approval.resolved":
-    case "provider.approval.respond.failed":
-    case "user-input.requested":
-    case "user-input.resolved":
-    case "provider.user-input.respond.failed":
-      return true;
-    default:
-      return false;
-  }
-}
+// T3-CUSTOM(expbkt3): the fork relocated this predicate to
+// ../threadShellSummaryRefresh.ts (imported above); upstream later added an
+// equivalent inline copy, which is dropped here to keep one implementation.
 
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,

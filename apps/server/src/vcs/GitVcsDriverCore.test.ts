@@ -805,7 +805,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           .pipe(Effect.flip);
         assert.equal(blocked._tag, "GitCommandError");
 
-        yield* driver.pruneWorktrees(cwd);
+        yield* driver.pruneWorktrees({ cwd });
         const recreated = yield* driver.createWorktree({
           cwd,
           refName: "feature/recovered",

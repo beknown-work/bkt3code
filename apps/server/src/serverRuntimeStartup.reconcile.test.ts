@@ -56,6 +56,10 @@ const makeProviderService = (liveThreadIds: ReadonlyArray<ThreadId> = []) =>
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
     uploadFeedback: () => Effect.die("unused"),
+    // T3-CUSTOM(expbkt3): fork-required provider surface for durable execution.
+    inspectSession: () => Effect.die("unused"),
+    requestTurnInterrupt: () => Effect.die("unused"),
+    terminateSession: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }) satisfies ProviderService.ProviderService["Service"];
 

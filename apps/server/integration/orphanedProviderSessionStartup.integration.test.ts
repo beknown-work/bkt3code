@@ -35,6 +35,8 @@ import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSes
 import * as ProviderService from "../src/provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../src/provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "../src/provider/Services/ProviderSessionReaper.ts";
+import * as SessionArchiveSweeper from "../src/sessionArchive/SessionArchiveSweeper.ts";
+import { SessionRecovery } from "../src/recovery/SessionRecovery.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import * as ServerLifecycleEvents from "../src/serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "../src/serverRuntimeStartup.ts";
@@ -73,6 +75,13 @@ const startupDependencies = Layer.mergeAll(
     start: () => Effect.void,
   }),
   Layer.succeed(ProviderSessionReaper.ProviderSessionReaper, {
+    start: () => Effect.void,
+  }),
+  // T3-CUSTOM(expbkt3): fork services the runtime startup requires.
+  Layer.succeed(SessionArchiveSweeper.SessionArchiveSweeper, {
+    start: () => Effect.void,
+  }),
+  Layer.succeed(SessionRecovery, {
     start: () => Effect.void,
   }),
   ServerLifecycleEvents.layer,
@@ -117,6 +126,10 @@ const startupDependencies = Layer.mergeAll(
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
     uploadFeedback: () => Effect.die("unused"),
+    // T3-CUSTOM(expbkt3): fork-required provider surface for durable execution.
+    inspectSession: () => Effect.die("unused"),
+    requestTurnInterrupt: () => Effect.die("unused"),
+    terminateSession: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),
 );
@@ -145,6 +158,8 @@ it.effect(
         });
         yield* engine.dispatch({
           type: "thread.create",
+          // T3-CUSTOM(expbkt3): fork-required thread attribution.
+          sourceControlProfileId: null,
           commandId: CommandId.make("command-create-thread"),
           threadId,
           projectId,
@@ -197,6 +212,8 @@ it.effect(
         });
         yield* engine.dispatch({
           type: "thread.create",
+          // T3-CUSTOM(expbkt3): fork-required thread attribution.
+          sourceControlProfileId: null,
           commandId: CommandId.make("command-create-stopped-binding-thread"),
           threadId: stoppedBindingThreadId,
           projectId,

@@ -123,11 +123,19 @@ const startThreadTurnDurably = Effect.fn("ThreadCommands.startThreadTurnDurably"
     messageId: serverInput.message.messageId,
     commandId,
     text: serverInput.message.text,
-    attachments: serverInput.message.attachments.map((attachment, index) => ({
-      ...attachment,
-      id: `${serverInput.message.messageId}-${index}`,
-      previewUri: attachment.dataUrl,
-    })),
+    // T3-CUSTOM(expbkt3): an uploaded attachment already has its asset id and no
+    // inline data url; a locally-held one supplies the data url and its preview.
+    attachments: serverInput.message.attachments.map((attachment, index) => {
+      const dataUrl = "dataUrl" in attachment ? attachment.dataUrl : undefined;
+      return {
+        type: attachment.type,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        id: "id" in attachment ? attachment.id : `${serverInput.message.messageId}-${index}`,
+        ...(dataUrl === undefined ? {} : { dataUrl, previewUri: dataUrl }),
+      };
+    }),
     ...(serverInput.modelSelection === undefined
       ? {}
       : { modelSelection: serverInput.modelSelection }),

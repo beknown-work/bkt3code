@@ -90,6 +90,8 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
+    // T3-CUSTOM(expbkt3): fork-required dead-transport escalation entry point.
+    notifySessionSuspect: () => Effect.void,
   } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
   const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (_environmentId, effect) =>
     Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);

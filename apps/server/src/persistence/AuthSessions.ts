@@ -338,6 +338,9 @@ export const make = Effect.gen(function* () {
         WHERE session_id = ${sessionId}
           AND revoked_at IS NULL
         RETURNING session_id AS "sessionId"
+      `,
+  });
+
   // COALESCE keeps the previous value when a client reports only one field, so
   // a partial report never nulls out data a fuller client stored earlier.
   const setClientConnectionRow = SqlSchema.void({
@@ -510,6 +513,8 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.map((rows) => rows.length > 0),
+    );
+
   const setClientConnection: AuthSessionRepository["Service"]["setClientConnection"] = (input) =>
     setClientConnectionRow(input).pipe(
       Effect.mapError(

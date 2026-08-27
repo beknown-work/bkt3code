@@ -1195,7 +1195,10 @@ const ClientThreadBootstrapRequestCommand = ThreadBootstrapRequestCommand.mapFie
       Schema.Struct({
         messageId: MessageId,
         text: Schema.String,
-        attachments: Schema.Array(UploadChatAttachment),
+        // T3-CUSTOM(expbkt3): a bootstrap initial turn accepts the same attachment
+        // shapes as thread.turn.start, so upstream's pre-uploaded attachments
+        // (#8048) work on the durable bootstrap path too.
+        attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
         titleSeed: Schema.optional(TrimmedNonEmptyString),
       }),
     ),

@@ -95,6 +95,8 @@ describe("changeRequestAutoSettles", () => {
         startedAt: "2026-04-02T00:00:05.000Z",
         completedAt: "2026-04-02T00:20:00.000Z",
         assistantMessageId: null,
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
       },
     };
     expect(

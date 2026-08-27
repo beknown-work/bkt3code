@@ -262,6 +262,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         pendingApprovalCount: 0,
         pendingUserInputCount: 0,
         hasActionableProposedPlan: 0,
+        // T3-CUSTOM(expbkt3): fork-required thread row columns.
+        ownerUserId: null,
+        sourceControlProfileId: null,
+        priority: null,
+        rollingSummary: null,
         deletedAt: null,
       });
 

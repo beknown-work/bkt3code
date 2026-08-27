@@ -698,6 +698,8 @@ describe("deriveMessagesTimelineRows", () => {
         message: {
           id: "assistant-first" as never,
           role: "assistant" as const,
+          // T3-CUSTOM(expbkt3): fork-required sender identity.
+          sentByUserId: null,
           text: "The main result is ready.",
           turnId: "turn-1" as never,
           createdAt: "2026-01-01T00:00:01Z",
@@ -712,6 +714,8 @@ describe("deriveMessagesTimelineRows", () => {
         message: {
           id: "assistant-middle" as never,
           role: "assistant" as const,
+          // T3-CUSTOM(expbkt3): fork-required sender identity.
+          sentByUserId: null,
           text: "I am checking one more detail.",
           turnId: "turn-1" as never,
           createdAt: "2026-01-01T00:00:03Z",
@@ -726,6 +730,8 @@ describe("deriveMessagesTimelineRows", () => {
         message: {
           id: "assistant-final" as never,
           role: "assistant" as const,
+          // T3-CUSTOM(expbkt3): fork-required sender identity.
+          sentByUserId: null,
           text: "Verification finished.",
           turnId: "turn-1" as never,
           createdAt: "2026-01-01T00:00:05Z",
@@ -1067,6 +1073,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId: "turn-1" as never,
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",
@@ -1112,6 +1120,8 @@ describe("deriveMessagesTimelineRows", () => {
           kind: "message",
           createdAt: "2026-01-01T00:00:06Z",
           message: {
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             id: "assistant-commentary" as never,
             role: "assistant",
             text: "Checking another thing.",
@@ -1138,6 +1148,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId: "turn-1" as never,
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",
@@ -1179,6 +1191,8 @@ describe("deriveMessagesTimelineRows", () => {
           kind: "message",
           createdAt: "2026-01-01T00:00:06Z",
           message: {
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             id: "assistant-commentary" as never,
             role: "assistant",
             text: "Starting another command.",
@@ -1205,6 +1219,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId: "turn-1" as never,
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",
@@ -1246,6 +1262,8 @@ describe("deriveMessagesTimelineRows", () => {
           kind: "message",
           createdAt: "2026-01-01T00:01:00Z",
           message: {
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             id: "user-followup" as never,
             role: "user",
             text: "continue",
@@ -1287,6 +1305,8 @@ describe("deriveMessagesTimelineRows", () => {
           kind: "message",
           createdAt: "2026-01-01T00:00:06Z",
           message: {
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             id: "assistant-commentary" as never,
             role: "assistant",
             text: "Starting another command.",
@@ -1313,6 +1333,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId: "turn-1" as never,
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",
@@ -1349,6 +1371,8 @@ describe("deriveMessagesTimelineRows", () => {
         },
       ],
       latestTurn: {
+        // T3-CUSTOM(expbkt3): fork-required turn duration.
+        durationMs: null,
         turnId: "turn-1" as never,
         state: "running",
         startedAt: "2026-01-01T00:00:00Z",

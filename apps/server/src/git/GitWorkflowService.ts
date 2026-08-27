@@ -342,7 +342,6 @@ export const make = Effect.gen(function* () {
         Effect.andThen(git.listWorktreeBranchNames(cwd)),
       ),
     // T3-CUSTOM(expbkt3): END
-      ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
         Effect.andThen(git.createRef(input)),

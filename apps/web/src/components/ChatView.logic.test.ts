@@ -977,6 +977,8 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
           status: "starting",
           updatedAt: "2026-03-29T00:01:00.000Z",
         },
+        // T3-CUSTOM(expbkt3): fork-required durable execution snapshot.
+        execution: null,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,

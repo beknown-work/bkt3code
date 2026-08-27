@@ -475,7 +475,6 @@ const buildAppUnderTest = (options?: {
     sourceControlProfileService?: Partial<
       SourceControlProfileService.SourceControlProfileService["Service"]
     >;
-    providerService?: Partial<ProviderService.ProviderService["Service"]>;
     reviewService?: Partial<ReviewService.ReviewService["Service"]>;
     vcsStatusBroadcaster?: Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>;
     projectSetupScriptRunner?: Partial<
@@ -5645,6 +5644,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           interactionMode: "default",
           branch: null,
           worktreePath: null,
+          // T3-CUSTOM(expbkt3): fork-required thread attribution.
+          sourceControlProfileId: null,
           createdAt: "2026-01-01T00:00:00.000Z",
         }) as const;
 

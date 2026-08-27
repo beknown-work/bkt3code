@@ -192,6 +192,8 @@ export function ProjectCreationDefaultsCard({
             provider={effectiveProvider}
             models={effectiveInstance?.models ?? []}
             model={effectiveModelSelection.model}
+            // T3-CUSTOM(expbkt3): the fork gates plan traits on planModeAvailable.
+            planModeAvailable={unifiedSettings.planModeAvailable}
             prompt=""
             onPromptChange={() => {}}
             modelOptions={effectiveModelSelection.options}

@@ -59,7 +59,8 @@ import {
 } from "../Services/ProviderCommandReactor.ts";
 import { makeProviderSessionRestartSweep } from "./ProviderSessionRestartSweep.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
-import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
+// T3-CUSTOM(expbkt3): canReplaceThreadTitle is wrapped locally to honour titleManuallySet.
+import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import {
   resolveSourceControlWriterModelSelection,
   ServerSettingsService,
@@ -472,7 +473,6 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
   const serverConfig = yield* ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const projectSetupScriptRunner = yield* Effect.serviceOption(ProjectSetupScriptRunner);
   // T3-CUSTOM(expbkt3): optional keeps isolated upstream reactor tests lightweight.
@@ -643,45 +643,6 @@ const make = Effect.gen(function* () {
    * worktree makes every later turn fail as a bogus "session not found".
    * Best-effort: on failure the turn proceeds and reports the real error.
    */
-  const ensureThreadWorktree = Effect.fnUntraced(function* (thread: {
-    readonly id: ThreadId;
-    readonly projectId: ProjectId;
-    readonly branch: string | null;
-    readonly worktreePath: string | null;
-  }) {
-    const { worktreePath, branch } = thread;
-    if (!worktreePath || !branch) {
-      return;
-    }
-    const exists = yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => true));
-    if (exists) {
-      return;
-    }
-    const project = yield* resolveProject(thread.projectId);
-    if (!project) {
-      return;
-    }
-    const cwd = project.workspaceRoot;
-    yield* Effect.logWarning("provider command reactor recreating missing worktree", {
-      threadId: thread.id,
-      worktreePath,
-      branch,
-    });
-    // A directory deleted without `git worktree remove` leaves an admin entry
-    // that makes `git worktree add` refuse the path; prune clears it.
-    yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(
-      Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("provider command reactor failed to recreate worktree", {
-              threadId: thread.id,
-              worktreePath,
-              cause: Cause.pretty(cause),
-            }),
-      ),
-    );
-  });
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
@@ -825,7 +786,7 @@ const make = Effect.gen(function* () {
     }
     // An `rm -rf` deletion leaves a stale `.git/worktrees/` registration that
     // keeps the branch "checked out" and blocks re-adding it at this path.
-    yield* gitWorkflow.pruneWorktrees(decision.workspaceRoot);
+    yield* gitWorkflow.pruneWorktrees({ cwd: decision.workspaceRoot });
     yield* gitWorkflow.createWorktree({
       cwd: decision.workspaceRoot,
       refName: decision.branch,
@@ -1554,7 +1515,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* ensureThreadWorktree(thread);
+    // T3-CUSTOM(expbkt3): upstream #7839 recreates a missing worktree here; the fork's
+    // richer recovery helper (branch check + decideWorktreeRecovery + activity events)
+    // covers it, so its call replaces upstream's lighter local copy.
+    const turnStartProject = yield* resolveProject(thread.projectId);
+    yield* ensureThreadWorktree({
+      thread,
+      workspaceRoot: turnStartProject?.workspaceRoot ?? null,
+      createdAt: event.payload.createdAt,
+    });
 
     const userMessageCount = thread.messages.filter((entry) => entry.role === "user").length;
     const isFirstUserMessageTurn = userMessageCount === 1;

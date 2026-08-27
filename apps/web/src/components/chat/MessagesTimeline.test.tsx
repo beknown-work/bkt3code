@@ -394,6 +394,8 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline
         {...buildProps()}
         latestTurn={{
+          // T3-CUSTOM(expbkt3): fork-required turn duration.
+          durationMs: null,
           turnId,
           state: "completed",
           startedAt: "2026-03-17T19:12:20.000Z",
@@ -664,6 +666,8 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnStartedAt={MESSAGE_CREATED_AT}
         latestTurn={{
+          // T3-CUSTOM(expbkt3): fork-required turn duration.
+          durationMs: null,
           turnId,
           state: "running",
           startedAt: MESSAGE_CREATED_AT,
@@ -1128,6 +1132,8 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnStartedAt={MESSAGE_CREATED_AT}
         latestTurn={{
+          // T3-CUSTOM(expbkt3): fork-required turn duration.
+          durationMs: null,
           turnId,
           state: "running",
           startedAt: MESSAGE_CREATED_AT,
@@ -1168,6 +1174,8 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnStartedAt={MESSAGE_CREATED_AT}
         latestTurn={{
+          // T3-CUSTOM(expbkt3): fork-required turn duration.
+          durationMs: null,
           turnId,
           state: "running",
           startedAt: MESSAGE_CREATED_AT,
@@ -1223,6 +1231,8 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnStartedAt={MESSAGE_CREATED_AT}
         latestTurn={{
+          // T3-CUSTOM(expbkt3): fork-required turn duration.
+          durationMs: null,
           turnId,
           state: "running",
           startedAt: MESSAGE_CREATED_AT,

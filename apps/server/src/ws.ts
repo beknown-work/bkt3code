@@ -113,7 +113,6 @@ import {
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 // T3-CUSTOM(expbkt3): provider rate-limit surface for the fork's usage panels.
 import * as ProviderRateLimits from "./provider/ProviderRateLimits.ts";
-import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -514,7 +513,6 @@ const makeWsRpcLayer = (
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       // T3-CUSTOM(expbkt3): provider rate limits feed the fork's usage panels.
       const providerRateLimits = yield* ProviderRateLimits.ProviderRateLimits;
-      const providerService = yield* ProviderService.ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -697,36 +695,9 @@ const makeWsRpcLayer = (
       const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
         Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
-      const appendSetupScriptActivity = (input: {
-        readonly threadId: ThreadId;
-        readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
-        readonly summary: string;
-        readonly createdAt: string;
-        readonly payload: Record<string, unknown>;
-        readonly tone: "info" | "error";
-      }) =>
-        Effect.all({
-          commandId: serverCommandId("setup-script-activity"),
-          activityId: serverEventId,
-        }).pipe(
-          Effect.flatMap(({ commandId, activityId }) =>
-            dispatchFromClient({
-              type: "thread.activity.append",
-              commandId,
-              threadId: input.threadId,
-              activity: {
-                id: activityId,
-                tone: input.tone,
-                kind: input.kind,
-                summary: input.summary,
-                payload: input.payload,
-                turnId: null,
-                createdAt: input.createdAt,
-              },
-              createdAt: input.createdAt,
-            }),
-          ),
-        );
+      // T3-CUSTOM(expbkt3): upstream appends setup-script activity from its inline
+      // bootstrap flow; the fork records it in orchestration/dispatchCommand.ts, so
+      // upstream's helper (and its serverCommandId/serverEventId scope) is not needed here.
 
       const toUnfencedShellStreamEvent = (
         event: OrchestrationEvent,

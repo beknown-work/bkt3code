@@ -2375,6 +2375,8 @@ export function GeneralSettingsPanel() {
                 provider={defaultThreadProvider}
                 models={defaultThreadInstanceEntry?.models ?? []}
                 model={defaultThreadModelSelection.model}
+                // T3-CUSTOM(expbkt3): the fork gates plan traits on planModeAvailable.
+                planModeAvailable={settings.planModeAvailable}
                 prompt=""
                 onPromptChange={() => {}}
                 modelOptions={defaultThreadModelSelection.options}
