@@ -702,6 +702,7 @@ export function AddProjectRepositoryScreen(props: {
       );
     }
     setIsSubmitting(false);
+  // T3-CUSTOM(expbkt3): clone url comes from the shared helper, so no provider dep.
   }, [environment, isSubmitting, lookupRepositoryQuery, navigation, repositoryInput, source]);
 
   return (
@@ -887,6 +888,7 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
   );
 }
 
+// T3-CUSTOM(expbkt3): clone url comes from the shared helper, so no provider dep.
 export function AddProjectDestinationScreen(props: {
   // T3-CUSTOM(expbkt3): The server resolves the acting user's GitHub profile.
   readonly environmentId?: string | string[];

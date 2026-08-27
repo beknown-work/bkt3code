@@ -24,6 +24,7 @@ export type ComposerProviderStateInput = {
   models: ReadonlyArray<ServerProviderModel>;
   promptInjectionState?: ComposerPromptInjectionState;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable: boolean;
 };
 
@@ -47,7 +48,9 @@ type TraitsRenderInput = {
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   prompt: string;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   onPromptChange: (prompt: string) => void;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable: boolean;
 };
 
@@ -59,11 +62,15 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   const {
     provider,
     model,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     models,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     modelOptions,
     promptInjectionState = "none",
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     planModeAvailable,
   } = input;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   const caps = getProviderModelCapabilities(models, model, provider, planModeAvailable);
   const descriptors = getProviderOptionDescriptors({ caps, selections: modelOptions });
   const primarySelectDescriptor = descriptors.find(
@@ -97,13 +104,17 @@ function renderTraitsControl(
   const {
     provider,
     instanceId,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     threadRef,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     draftId,
     model,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     models,
     modelOptions,
     prompt,
     onPromptChange,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     planModeAvailable,
   } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
@@ -115,6 +126,7 @@ function renderTraitsControl(
       model,
       modelOptions,
       prompt,
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       planModeAvailable,
     })
   ) {
@@ -131,6 +143,7 @@ function renderTraitsControl(
       modelOptions={modelOptions}
       prompt={prompt}
       onPromptChange={onPromptChange}
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       planModeAvailable={planModeAvailable}
     />
   );

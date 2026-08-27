@@ -304,10 +304,12 @@ export function withoutPlanAgentSelection(
 // flips. Users who already have plan mode off and a stored "plan" selection
 // never trip the toggle handler, so resolve the heal once per settings load.
 export function resolvePlanAgentHealPatch(input: {
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   readonly planModeAvailable: boolean;
   readonly textGenerationModelSelection: ModelSelection | null | undefined;
   readonly sourceControlWriterModelSelection: ModelSelection | null | undefined;
 }): ServerSettingsPatch | null {
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   if (input.planModeAvailable) {
     return null;
   }
@@ -353,8 +355,10 @@ export function resolveAppModelSelectionState(
     const { modelOptionsForDispatch } = getComposerProviderState({
       provider,
       model,
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       models: entry.models,
       modelOptions: selectedEntry ? selection.options : undefined,
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       planModeAvailable: settings.planModeAvailable,
     });
 
@@ -369,10 +373,13 @@ export function resolveAppModelSelectionState(
   const selectedModel = keptSelectedProvider ? selection.model : null;
   const model = resolveAppModelSelection(provider, settings, providers, selectedModel);
   const { modelOptionsForDispatch } = getComposerProviderState({
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     provider,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     model,
     models: getProviderModels(providers, provider),
     modelOptions: keptSelectedProvider ? selection.options : undefined,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     planModeAvailable: settings.planModeAvailable,
   });
 

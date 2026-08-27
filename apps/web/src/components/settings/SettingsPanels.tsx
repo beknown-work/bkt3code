@@ -2633,6 +2633,7 @@ export function GeneralSettingsPanel() {
                 onPromptChange={() => {}}
                 modelOptions={textGenModelOptions}
                 allowPromptInjectedEffort={false}
+                // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
                 planModeAvailable={settings.planModeAvailable}
                 triggerVariant="outline"
                 triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
@@ -2796,6 +2797,7 @@ export function ArchivedThreadsPanel() {
   );
 
   return (
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     <SettingsPageContainer>
       {/* T3-CUSTOM(expbkt3): BEGIN — reclaim disk from archived sessions' worktrees. */}
       <SessionArchiveReclaimSection

@@ -82,11 +82,13 @@ export function getProviderModelCapabilities(
   models: ReadonlyArray<ServerProviderModel>,
   model: string | null | undefined,
   provider: ProviderDriverKind,
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable = true,
 ): ModelCapabilities {
   const slug = normalizeModelSlug(model, provider);
   const caps =
     models.find((candidate) => candidate.slug === slug)?.capabilities ?? EMPTY_CAPABILITIES;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   if (planModeAvailable) {
     return caps;
   }

@@ -97,8 +97,10 @@ function getSelectedTraits(
   prompt: string,
   modelOptions: ProviderOptions | null | undefined,
   allowPromptInjectedEffort: boolean,
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable: boolean,
 ) {
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   const caps = getProviderModelCapabilities(models, model, provider, planModeAvailable);
   const descriptors = getProviderOptionDescriptors({
     caps,
@@ -167,8 +169,10 @@ function getTraitsSectionVisibility(input: {
   models: ReadonlyArray<ServerProviderModel>;
   model: string | null | undefined;
   prompt: string;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   modelOptions: ProviderOptions | null | undefined;
   allowPromptInjectedEffort?: boolean;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable: boolean;
 }) {
   const selected = getSelectedTraits(
@@ -178,6 +182,7 @@ function getTraitsSectionVisibility(input: {
     input.prompt,
     input.modelOptions,
     input.allowPromptInjectedEffort ?? true,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     input.planModeAvailable,
   );
 
@@ -200,11 +205,14 @@ function getTraitsSectionVisibility(input: {
 
 export function shouldRenderTraitsControls(input: {
   provider: ProviderDriverKind;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   models: ReadonlyArray<ServerProviderModel>;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   model: string | null | undefined;
   prompt: string;
   modelOptions: ProviderOptions | null | undefined;
   allowPromptInjectedEffort?: boolean;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable: boolean;
 }): boolean {
   return getTraitsSectionVisibility(input).hasAnyControls;
@@ -212,13 +220,16 @@ export function shouldRenderTraitsControls(input: {
 
 export interface TraitsMenuContentProps {
   provider: ProviderDriverKind;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   instanceId?: ProviderInstanceId;
   models: ReadonlyArray<ServerProviderModel>;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   model: string | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   modelOptions?: ProviderOptions | null | undefined;
   allowPromptInjectedEffort?: boolean;
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable: boolean;
   triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
   triggerClassName?: string;
@@ -227,12 +238,14 @@ export interface TraitsMenuContentProps {
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   provider,
   instanceId,
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   models,
   model,
   prompt,
   onPromptChange,
   modelOptions,
   allowPromptInjectedEffort = true,
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable,
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence) {
@@ -270,6 +283,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     prompt,
     modelOptions,
     allowPromptInjectedEffort,
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     planModeAvailable,
   });
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
@@ -448,12 +462,15 @@ export function buildTraitsTriggerDisplay(input: {
   // off an empty label list alone would also catch descriptors that resolved to
   // no label at all, printing a bogus "Normal" for a model without fast mode.
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
+    // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
     return { label: fastModeFallbackLabel, showFastModeIcon: false };
   }
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   return { label: labels.join(" · "), showFastModeIcon: fastModeEnabled };
 }
 
 export const TraitsPicker = memo(function TraitsPicker({
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   provider,
   instanceId,
   models,
@@ -462,6 +479,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   onPromptChange,
   modelOptions,
   allowPromptInjectedEffort = true,
+  // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
   planModeAvailable,
   triggerVariant,
   triggerClassName,
@@ -476,6 +494,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       prompt,
       modelOptions,
       allowPromptInjectedEffort,
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       planModeAvailable,
     });
   if (
@@ -486,6 +505,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       prompt,
       modelOptions,
       allowPromptInjectedEffort,
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       planModeAvailable,
     })
   ) {
@@ -537,15 +557,19 @@ export const TraitsPicker = memo(function TraitsPicker({
           <span className="flex min-w-0 w-full items-center gap-1.5 overflow-hidden">
             {fastModeIcon}
             <span className="min-w-0 truncate">{triggerLabel}</span>
+            // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
             <ComposerControlChevron />
+          // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
           </span>
         ) : (
           <>
+            // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
             {fastModeIcon}
             <span>{triggerLabel}</span>
             <ComposerControlChevron />
           </>
         )}
+      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       </MenuTrigger>
       <MenuPopup align="start">
         <TraitsMenuContent
@@ -557,6 +581,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           modelOptions={modelOptions}
           allowPromptInjectedEffort={allowPromptInjectedEffort}
+          // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
           planModeAvailable={planModeAvailable}
           {...persistence}
         />
