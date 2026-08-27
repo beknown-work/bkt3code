@@ -753,7 +753,6 @@ function PhaseSnoozePopoverButton({
             role="button"
             tabIndex={0}
             aria-label={label}
-            title="Snooze"
             data-testid={testId}
             className={ROW_ACTION_CLASS}
             onClick={(event) => event.stopPropagation()}

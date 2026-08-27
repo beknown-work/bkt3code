@@ -171,7 +171,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
             )}
             data-attention-state={counts.nonRunning >= 2 ? "attention" : "clear"}
             role="status"
-            title={`${counts.nonRunning} non-running session${counts.nonRunning === 1 ? "" : "s"}`}
+            aria-label={`${counts.nonRunning} non-running session${counts.nonRunning === 1 ? "" : "s"}`}
           >
             {counts.nonRunning}
           </span>
@@ -182,7 +182,8 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
                 ? "border-white/25 bg-white/12 text-white"
                 : "border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
             )}
-            title={`${counts.running} session${counts.running === 1 ? "" : "s"} running`}
+            aria-label={`${counts.running} session${counts.running === 1 ? "" : "s"} running`}
+            role="status"
           >
             {counts.running}
           </span>
@@ -197,10 +198,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           {showProviderRateLimits ? <SidebarProviderRateLimits onBackdrop={onBackdrop} /> : null}
           {syncing ? (
             <span
-              aria-label="Connection interrupted; syncing"
+              aria-label="Connection interrupted. Syncing…"
               className="inline-flex shrink-0"
               role="status"
-              title="Connection interrupted. Syncing…"
             >
               <LoaderIcon
                 className={cn(

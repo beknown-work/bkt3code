@@ -109,10 +109,7 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
-import {
-  resolveAvailableEditorsForConfig,
-  resolveFileManagerRevealKindForConfig,
-} from "./ws.ts";
+import { resolveAvailableEditorsForConfig, resolveFileManagerRevealKindForConfig } from "./ws.ts";
 // T3-CUSTOM(expbkt3): the fork keeps this predicate in its own module rather
 // than declaring it inside ws.ts, so the test imports it from the source.
 import { isThreadDetailEvent } from "./orchestration/threadDetailEvent.ts";

@@ -559,7 +559,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             <span className="min-w-0 truncate">{triggerLabel}</span>
             // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
             <ComposerControlChevron />
-          // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
+            // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
           </span>
         ) : (
           <>
@@ -569,7 +569,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             <ComposerControlChevron />
           </>
         )}
-      // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
+        // T3-CUSTOM(expbkt3): the fork setting is planModeAvailable (fresh key, default on).
       </MenuTrigger>
       <MenuPopup align="start">
         <TraitsMenuContent

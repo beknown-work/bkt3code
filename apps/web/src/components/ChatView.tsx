@@ -7840,7 +7840,6 @@ function ChatViewContent(props: ChatViewProps) {
                   <button
                     type="button"
                     aria-label="Open the plan in preview"
-                    title="Open the plan in preview"
                     data-plan-review-pill
                     onClick={() => openPlanReviewSurface(planReviewDocumentId)}
                     className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:cursor-pointer hover:border-border hover:text-foreground"

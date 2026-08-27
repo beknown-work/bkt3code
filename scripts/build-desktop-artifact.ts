@@ -2174,10 +2174,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // needs neither the server sidecar nor the server's extra resources.
     extraResources: clientOnly
       ? []
-      : [
-          ...DESKTOP_EXTRA_RESOURCES,
-          ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
-        ],
+      : [...DESKTOP_EXTRA_RESOURCES, ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : [])],
     // T3-CUSTOM(expbkt3): END
   };
   const updateChannel = resolveDesktopUpdateChannel(version);

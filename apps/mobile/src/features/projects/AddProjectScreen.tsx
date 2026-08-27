@@ -702,7 +702,7 @@ export function AddProjectRepositoryScreen(props: {
       );
     }
     setIsSubmitting(false);
-  // T3-CUSTOM(expbkt3): clone url comes from the shared helper, so no provider dep.
+    // T3-CUSTOM(expbkt3): clone url comes from the shared helper, so no provider dep.
   }, [environment, isSubmitting, lookupRepositoryQuery, navigation, repositoryInput, source]);
 
   return (

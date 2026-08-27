@@ -24,7 +24,12 @@ import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime"
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
-import { convertPastedImagesToAttachments, pasteComposerClipboard, pickComposerImages, toDraftComposerImageAttachments } from "../lib/composerImages";
+import {
+  convertPastedImagesToAttachments,
+  pasteComposerClipboard,
+  pickComposerImages,
+  toDraftComposerImageAttachments,
+} from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
