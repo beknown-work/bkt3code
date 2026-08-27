@@ -22,7 +22,9 @@ import { CommandId, EventId, type OrchestrationSession, type ThreadId } from "@t
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
+import * as ProviderSessionDirectory from "../provider/Services/ProviderSessionDirectory.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -36,6 +38,12 @@ export const runStaleSessionReconciliation = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  // Settling the projection is not enough on its own: the provider session
+  // directory still holds a "running" binding for a process that is gone, and
+  // upstream's reconcileProviderSessions only visits threads whose session is
+  // still running/starting — which this pass has just cleared. Stop the binding
+  // here so a restart cannot leave an unclaimable zombie behind.
+  const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
 
   const snapshot = yield* snapshotQuery.getShellSnapshot();
   const orphaned = snapshot.threads.flatMap((thread) =>
@@ -63,6 +71,25 @@ export const runStaleSessionReconciliation = Effect.gen(function* () {
     // 17h". Use the thread's last recorded event instead, so the duration
     // reflects the work that actually happened.
     const settleAt = Number.isFinite(Date.parse(input.lastActivityAt)) ? input.lastActivityAt : now;
+
+    yield* Effect.gen(function* () {
+      const binding = yield* directory.getBinding(input.threadId);
+      if (Option.isSome(binding)) {
+        yield* directory.upsert({
+          ...binding.value,
+          status: "stopped",
+          runtimePayload: { activeTurnId: null },
+        });
+      }
+    }).pipe(
+      // Fail-soft: a stale binding must never block startup.
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to stop the provider session binding of a stale session", {
+          threadId: input.threadId,
+          cause,
+        }),
+      ),
+    );
 
     yield* engine.dispatch({
       type: "thread.session.set",

@@ -1320,8 +1320,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           state: "open",
           updatedAt: "2026-03-10T07:00:00.000Z",
         });
+        // T3-CUSTOM(expbkt3): the fork's provider asks for the review/checks fields its
+        // pull-request panels render, so the arg string is longer than upstream's.
         expect(ghCalls).toContain(
-          "pr list --head contributor:main --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head contributor:main --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,

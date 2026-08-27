@@ -347,8 +347,12 @@ it.effect(
         };
       }).pipe(Effect.provide(startupLayer));
 
+      // T3-CUSTOM(expbkt3): the fork's reconcileRunningTurns settles a restart-orphaned
+      // session as "interrupted" rather than "error" — the turn really was interrupted,
+      // and the durable recovery path reads that status. Both are terminal, so every
+      // other assertion below is unchanged.
       assert.deepStrictEqual(result, {
-        sessionStatus: "error",
+        sessionStatus: "interrupted",
         activeTurnId: null,
         latestTurn: null,
         pendingTurnCount: 0,
@@ -358,7 +362,7 @@ it.effect(
         bindingStatus: "stopped",
         resumeCursor,
         runtimePayload: { activeTurnId: null, unrelated: "preserve-me" },
-        stoppedBindingSessionStatus: "error",
+        stoppedBindingSessionStatus: "interrupted",
         stoppedBindingStatus: "stopped",
         stoppedBindingResumeCursor,
         stoppedBindingRuntimePayload: {

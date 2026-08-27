@@ -507,7 +507,7 @@ function WorkSummaryTextCell({
         onToggleExpanded();
       }}
       className="text-muted-foreground hover:text-foreground w-full truncate text-left text-[11px]"
-      title={preview}
+      aria-label={preview}
     >
       {preview}
     </button>

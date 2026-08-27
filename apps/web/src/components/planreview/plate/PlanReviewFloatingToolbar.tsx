@@ -59,7 +59,6 @@ function MarkButton({
       type="button"
       aria-label={label}
       aria-pressed={props.pressed}
-      title={label}
       onClick={props.onClick}
       onMouseDown={props.onMouseDown}
       className={cn(
@@ -87,7 +86,6 @@ function QuickLabelButton({
     <button
       type="button"
       aria-label={label}
-      title={label}
       onClick={onClick}
       className={cn(
         "flex size-7 items-center justify-center rounded transition-colors hover:bg-accent",
@@ -145,7 +143,6 @@ export function PlanReviewFloatingToolbar({
         <button
           type="button"
           aria-label="Comment on selection"
-          title="Comment on selection"
           onClick={onComment}
           className="flex h-7 items-center gap-1.5 rounded px-2 text-xs transition-colors hover:bg-accent"
         >
