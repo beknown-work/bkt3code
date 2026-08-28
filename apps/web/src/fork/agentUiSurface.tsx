@@ -68,6 +68,31 @@ function toSrcDoc(html: string): string {
   ].join("");
 }
 
+const EMBED_SANDBOX_BASE = "allow-scripts allow-forms allow-popups allow-downloads";
+
+/**
+ * Sandbox for a framed URL.
+ *
+ * A real app needs its own origin back: without `allow-same-origin` the document
+ * is opaque, so `localStorage`, IndexedDB and cookies all throw. Excalidraw and
+ * anything else that persists state simply fails to boot without it.
+ *
+ * Pairing `allow-same-origin` with `allow-scripts` is only an escape when the
+ * framed document is same-origin with *this* page — then it can reach our DOM,
+ * our storage and the user's session directly. So it is withheld exactly there,
+ * which leaves a self-referential embed opaque and harmless instead of handing
+ * an agent arbitrary script in the signed-in app.
+ */
+export function resolveEmbedSandbox(url: string, pageOrigin: string): string {
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return EMBED_SANDBOX_BASE;
+  }
+  return origin === pageOrigin ? EMBED_SANDBOX_BASE : `${EMBED_SANDBOX_BASE} allow-same-origin`;
+}
+
 interface AgentUiSurfaceCardProps {
   readonly threadRef: ScopedThreadRef;
   readonly surface: AgentUiSurfaceHandle;
@@ -137,7 +162,7 @@ function AgentUiSurfaceCardImpl({ threadRef, surface }: AgentUiSurfaceCardProps)
               title={title}
               src={render.url}
               className="size-full border-0 bg-white"
-              sandbox="allow-scripts allow-forms allow-popups"
+              sandbox={resolveEmbedSandbox(render.url, window.location.origin)}
               referrerPolicy="no-referrer"
             />
           ) : null}
