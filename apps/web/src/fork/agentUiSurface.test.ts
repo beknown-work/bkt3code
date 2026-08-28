@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveAgentUiSurface } from "./agentUiSurface";
+import { resolveAgentUiSurface, resolveEmbedSandbox } from "./agentUiSurface";
 
 describe("resolveAgentUiSurface", () => {
   it("reads a well-formed handle", () => {
@@ -40,5 +40,34 @@ describe("resolveAgentUiSurface", () => {
     expect(resolveAgentUiSurface({ agentUi: { renderId: "a", height: -10 } })?.height).toBe(120);
     expect(resolveAgentUiSurface({ agentUi: { renderId: "a", height: "tall" } })?.height).toBe(360);
     expect(resolveAgentUiSurface({ agentUi: { renderId: "a" } })?.height).toBe(360);
+  });
+});
+
+describe("resolveEmbedSandbox", () => {
+  const page = "https://bkt3.dev.beknown.live";
+
+  it("gives a cross-origin app its own origin back so storage works", () => {
+    const sandbox = resolveEmbedSandbox("https://draw-canvas.dev.beknown.live/", page);
+    // Without this, localStorage and IndexedDB throw and real apps never boot.
+    expect(sandbox).toContain("allow-same-origin");
+    expect(sandbox).toContain("allow-scripts");
+  });
+
+  it("withholds allow-same-origin from a self-referential embed", () => {
+    // allow-scripts + allow-same-origin on our OWN origin is a sandbox escape:
+    // the frame could reach the signed-in session directly.
+    for (const url of [page, `${page}/settings`, `${page}/?x=1#y`]) {
+      expect(resolveEmbedSandbox(url, page)).not.toContain("allow-same-origin");
+    }
+  });
+
+  it("treats a different port or scheme on the same host as cross-origin", () => {
+    expect(resolveEmbedSandbox("https://bkt3.dev.beknown.live:8443/", page)).toContain(
+      "allow-same-origin",
+    );
+  });
+
+  it("falls back to the locked-down sandbox for an unparseable url", () => {
+    expect(resolveEmbedSandbox("not a url", page)).not.toContain("allow-same-origin");
   });
 });
