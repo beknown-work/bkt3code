@@ -15,6 +15,7 @@
 - [Source control integrations](./user/source-control.md)
 - [Worktree setup and new-thread defaults](./user/worktree-setup.md)
 - [T3 Code MCP control center](./user/t3-mcp-control.md)
+- [Agent views in chat](./user/agent-views.md)
 - [Background service (Linux)](./user/background-service.md)
 - [Provider usage limits](./user/provider-limits.md)
 - Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md)
