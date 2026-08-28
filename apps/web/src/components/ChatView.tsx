@@ -164,6 +164,8 @@ import {
 } from "../rightPanelStore";
 // T3-CUSTOM(expbkt3): native plan review surface.
 import { PlanReviewPanel, useOpenPlanReviewDocumentId } from "../fork/planReviewSurface";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import { AgentUiExpandedSurface } from "../fork/agentUiSurface";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -7854,6 +7856,8 @@ function ChatViewContent(props: ChatViewProps) {
                 </div>
               ) : null}
               {/* T3-CUSTOM(expbkt3): END */}
+              {/* T3-CUSTOM(expbkt3): an expanded agent view covers the transcript, not the composer. */}
+              <AgentUiExpandedSurface />
             </div>
 
             {/* Input bar — centered hero while a draft has no messages, docked at the bottom otherwise */}
