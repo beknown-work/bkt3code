@@ -16,10 +16,12 @@ import {
   AGENT_UI_MIN_HEIGHT,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { Maximize2Icon, XIcon } from "lucide-react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useClientSettings } from "../hooks/useSettings";
 import { agentUiEnvironment } from "../state/agentUi";
+import { useAgentUiExpandedStore } from "../agentUiExpandedStore";
 import { useEnvironmentQuery } from "../state/query";
 import { cn } from "../lib/utils";
 
@@ -93,18 +95,21 @@ export function resolveEmbedSandbox(url: string, pageOrigin: string): string {
   return origin === pageOrigin ? EMBED_SANDBOX_BASE : `${EMBED_SANDBOX_BASE} allow-same-origin`;
 }
 
-interface AgentUiSurfaceCardProps {
+/**
+ * Fetches one render and mounts it. Shared by the inline card and the expanded
+ * overlay so both agree on sandboxing, loading and failure states — the sandbox
+ * rules in particular must never drift between the two.
+ */
+const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
   readonly threadRef: ScopedThreadRef;
-  readonly surface: AgentUiSurfaceHandle;
-}
-
-function AgentUiSurfaceCardImpl({ threadRef, surface }: AgentUiSurfaceCardProps) {
-  const { environmentId, threadId } = threadRef;
-  const [collapsed, setCollapsed] = useState(false);
+  readonly renderId: string;
+  readonly onTitle?: ((title: string) => void) | undefined;
+}) {
+  const { environmentId, threadId } = props.threadRef;
   const query = useEnvironmentQuery(
     agentUiEnvironment.render({
       environmentId,
-      input: { threadId, renderId: surface.renderId },
+      input: { threadId, renderId: props.renderId },
     }),
   );
   const render = query.data?.render ?? null;
@@ -117,55 +122,95 @@ function AgentUiSurfaceCardImpl({ threadRef, surface }: AgentUiSurfaceCardProps)
     [render?.kind, render?.html],
   );
 
-  const height = render ? clampHeight(render.height) : surface.height;
-  const title = render?.title ?? "Agent view";
+  const onTitle = props.onTitle;
+  const title = render?.title;
+  useEffect(() => {
+    if (onTitle && title) onTitle(title);
+  }, [onTitle, title]);
+
+  if (query.isPending && render === null) {
+    return (
+      <div className="flex h-full items-center justify-center text-secondary-label text-xs">
+        Loading view…
+      </div>
+    );
+  }
+  if (render === null) {
+    return (
+      <div className="flex h-full items-center justify-center px-4 text-center text-secondary-label text-xs">
+        {query.error ?? "This view is no longer available."}
+      </div>
+    );
+  }
+  if (srcDoc !== null) {
+    return (
+      <iframe
+        // Keying on the render makes the browser build a fresh document; an
+        // iframe does not re-run scripts on a srcDoc mutation alone.
+        key={render.renderId}
+        title={render.title}
+        srcDoc={srcDoc}
+        className={cn("size-full border-0 bg-white")}
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+      />
+    );
+  }
+  if (render.url) {
+    return (
+      <iframe
+        key={render.renderId}
+        title={render.title}
+        src={render.url}
+        className="size-full border-0 bg-white"
+        sandbox={resolveEmbedSandbox(render.url, window.location.origin)}
+        referrerPolicy="no-referrer"
+      />
+    );
+  }
+  return null;
+});
+
+interface AgentUiSurfaceCardProps {
+  readonly threadRef: ScopedThreadRef;
+  readonly surface: AgentUiSurfaceHandle;
+}
+
+function AgentUiSurfaceCardImpl({ threadRef, surface }: AgentUiSurfaceCardProps) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [title, setTitle] = useState("Agent view");
+  const expand = useAgentUiExpandedStore((state) => state.expand);
 
   return (
     <div className="mt-1 ms-7 overflow-hidden rounded-lg border border-border/60 bg-card">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-accent/20"
-        onClick={() => setCollapsed((value) => !value)}
-        aria-expanded={!collapsed}
-      >
-        <span className="min-w-0 flex-1 truncate font-medium text-secondary-label text-xs">
-          {title}
-        </span>
-        <span className="shrink-0 text-[0.6875rem] text-secondary-label/70">
+      <div className="flex items-center gap-1 px-1.5 py-1">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-accent/20"
+          onClick={() => expand({ threadRef, renderId: surface.renderId })}
+          aria-label={`Expand ${title}`}
+        >
+          <span className="min-w-0 flex-1 truncate font-medium text-secondary-label text-xs">
+            {title}
+          </span>
+          <Maximize2Icon className="size-3 shrink-0 text-icon-muted opacity-70" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="shrink-0 rounded px-1.5 py-0.5 text-[0.6875rem] text-secondary-label/70 hover:bg-accent/20 hover:text-secondary-label"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-expanded={!collapsed}
+        >
           {collapsed ? "Show" : "Hide"}
-        </span>
-      </button>
+        </button>
+      </div>
       {collapsed ? null : (
-        <div className="border-border/60 border-t" style={{ height }}>
-          {query.isPending && render === null ? (
-            <div className="flex h-full items-center justify-center text-secondary-label text-xs">
-              Loading view…
-            </div>
-          ) : render === null ? (
-            <div className="flex h-full items-center justify-center px-4 text-center text-secondary-label text-xs">
-              {query.error ?? "This view is no longer available."}
-            </div>
-          ) : srcDoc !== null ? (
-            <iframe
-              // Keying on the render makes the browser build a fresh document;
-              // an iframe does not re-run scripts on a srcDoc mutation alone.
-              key={render.renderId}
-              title={title}
-              srcDoc={srcDoc}
-              className={cn("size-full border-0 bg-white")}
-              sandbox="allow-scripts"
-              referrerPolicy="no-referrer"
-            />
-          ) : render.url ? (
-            <iframe
-              key={render.renderId}
-              title={title}
-              src={render.url}
-              className="size-full border-0 bg-white"
-              sandbox={resolveEmbedSandbox(render.url, window.location.origin)}
-              referrerPolicy="no-referrer"
-            />
-          ) : null}
+        <div className="border-border/60 border-t" style={{ height: surface.height }}>
+          <AgentUiRenderFrame
+            threadRef={threadRef}
+            renderId={surface.renderId}
+            onTitle={setTitle}
+          />
         </div>
       )}
     </div>
@@ -193,6 +238,69 @@ export const AgentUiSurfaceRow = memo(function AgentUiSurfaceRow(props: {
     <div className="flex flex-col">
       {props.children}
       <AgentUiSurfaceCard threadRef={props.threadRef} surface={props.surface} />
+    </div>
+  );
+});
+
+/**
+ * The expanded view, filling the message area and leaving the composer usable.
+ *
+ * Mounted as the last child of the messages wrapper in `ChatView`, which is
+ * already `relative` and already excludes the input bar — so `absolute inset-0`
+ * covers exactly the transcript and nothing else. It cannot live inside the
+ * timeline row that opened it: those rows are virtualized, so they clip and get
+ * recycled out from under an overlay.
+ */
+export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
+  const enabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
+  const expanded = useAgentUiExpandedStore((state) => state.expanded);
+  const collapse = useAgentUiExpandedStore((state) => state.collapse);
+  const [title, setTitle] = useState("Agent view");
+
+  const open = enabled && expanded !== null;
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        collapse();
+      }
+    };
+    // Capture phase: the composer and the timeline both handle Escape, and the
+    // expanded view is the frontmost surface, so it answers first.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open, collapse]);
+
+  if (!open || expanded === null) return null;
+
+  return (
+    <div
+      className="absolute inset-0 z-40 flex flex-col bg-background"
+      role="dialog"
+      aria-label={title}
+    >
+      <div className="flex items-center gap-2 border-border/60 border-b px-3 py-1.5">
+        <span className="min-w-0 flex-1 truncate font-medium text-secondary-label text-xs">
+          {title}
+        </span>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[0.6875rem] text-secondary-label/70 hover:bg-accent/20 hover:text-secondary-label"
+          onClick={collapse}
+          aria-label="Close the expanded view"
+        >
+          <XIcon className="size-3" aria-hidden />
+          Close
+        </button>
+      </div>
+      <div className="min-h-0 flex-1">
+        <AgentUiRenderFrame
+          threadRef={expanded.threadRef}
+          renderId={expanded.renderId}
+          onTitle={setTitle}
+        />
+      </div>
     </div>
   );
 });
