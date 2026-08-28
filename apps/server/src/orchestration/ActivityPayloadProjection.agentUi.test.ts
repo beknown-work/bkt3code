@@ -65,6 +65,37 @@ describe("agent UI render handle projection", () => {
     expect(data.t3Ui).toEqual({ renderId: "aui_abc123", height: 420, kind: "html" });
   });
 
+  it("keeps the handle when a provider sends structuredContent instead of text", () => {
+    const data = projectedData({
+      itemType: "mcp_tool_call",
+      data: {
+        toolName: "mcp__t3-code__t3_show_ui",
+        result: {
+          content: [],
+          structuredContent: {
+            t3UiRender: true,
+            renderId: "aui_abc123",
+            kind: "html",
+            height: 420,
+          },
+        },
+      },
+    });
+
+    expect(data.t3Ui).toEqual({ renderId: "aui_abc123", height: 420, kind: "html" });
+  });
+
+  it("keeps the handle when the result object is the handle itself", () => {
+    const data = projectedData({
+      itemType: "mcp_tool_call",
+      data: {
+        result: { t3UiRender: true, renderId: "aui_abc123", kind: "url", height: 200 },
+      },
+    });
+
+    expect(data.t3Ui).toEqual({ renderId: "aui_abc123", height: 200, kind: "url" });
+  });
+
   it("leaves ordinary MCP results alone", () => {
     const data = projectedData({
       itemType: "mcp_tool_call",

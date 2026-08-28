@@ -209,26 +209,9 @@ function extractMcpResultText(result: unknown): string | null {
 }
 
 // T3-CUSTOM(expbkt3): BEGIN — agent-rendered UI surfaces.
-/**
- * The `t3_show_ui` handle, pulled out of an MCP result before the rest of it is
- * summarized away.
- *
- * The tool stores the document server-side and returns only this handle, so the
- * chat can mount the sandboxed box and fetch the body on demand. Bounded by
- * construction — four short scalar fields — so it costs nothing on the wire.
- */
-function extractAgentUiHandle(result: unknown): Record<string, unknown> | undefined {
-  const text = extractMcpResultText(result);
-  if (text === null || !text.includes("t3UiRender")) {
-    return undefined;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  const record = asRecord(parsed);
+/** Narrows a decoded value to a `t3_show_ui` handle, or nothing. */
+function readAgentUiHandle(value: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(value);
   if (!record || record.t3UiRender !== true) {
     return undefined;
   }
@@ -244,6 +227,43 @@ function extractAgentUiHandle(result: unknown): Record<string, unknown> | undefi
     handle.kind = record.kind;
   }
   return handle;
+}
+
+/**
+ * The `t3_show_ui` handle, pulled out of an MCP result before the rest of it is
+ * summarized away.
+ *
+ * The tool stores the document server-side and returns only this handle, so the
+ * chat can mount the sandboxed box and fetch the body on demand. Bounded by
+ * construction — four short scalar fields — so it costs nothing on the wire.
+ *
+ * Three shapes are accepted because providers disagree about where a tool result
+ * lands: the text content array, `structuredContent` (which Claude Code has
+ * shipped in place of the content array), and the bare result object. Missing a
+ * shape does not fail loudly — it silently turns every agent view back into an
+ * ordinary tool row — so this reads all three rather than betting on one.
+ */
+function extractAgentUiHandle(result: unknown): Record<string, unknown> | undefined {
+  const direct = readAgentUiHandle(result);
+  if (direct) {
+    return direct;
+  }
+
+  const record = asRecord(result);
+  const structured = record ? readAgentUiHandle(record.structuredContent) : undefined;
+  if (structured) {
+    return structured;
+  }
+
+  const text = extractMcpResultText(result);
+  if (text === null || !text.includes("t3UiRender")) {
+    return undefined;
+  }
+  try {
+    return readAgentUiHandle(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
 }
 // T3-CUSTOM(expbkt3): END
 
