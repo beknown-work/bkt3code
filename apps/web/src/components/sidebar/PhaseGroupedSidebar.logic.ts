@@ -417,6 +417,25 @@ export function isThreadAssignedToUser(
   return thread.ownerUserId === userId || thread.memberUserIds.includes(userId);
 }
 
+/**
+ * T3-CUSTOM(expbkt3): whose face, if anyone's, belongs on a sidebar row.
+ *
+ * A row only earns an owner avatar when the thread was started by *somebody
+ * else*: my own sessions are the default case and a wall of my own face would
+ * carry no information. Returns the owner to show, or `null` to show nothing.
+ *
+ * `null` when the thread is unowned (single-user mode, or awaiting backfill),
+ * when we cannot identify the operator (no team identity — every row would
+ * light up), or when the operator *is* the owner.
+ */
+export function phaseSidebarRowOwnerAvatarUserId(input: {
+  readonly ownerUserId: UserId | null;
+  readonly currentUserId: UserId | null;
+}): UserId | null {
+  if (input.ownerUserId === null || input.currentUserId === null) return null;
+  return input.ownerUserId === input.currentUserId ? null : input.ownerUserId;
+}
+
 export interface PhaseSidebarRow {
   readonly thread: ThreadShell;
   readonly phaseId: PhaseSidebarPhaseId;
@@ -449,8 +468,11 @@ export interface PhaseSidebarRow {
   readonly threadBootstrapSupported?: boolean;
   /** The row's pull-request state, when its VCS probe has reported one: a
       closed (abandoned) change request auto-settles the thread, an open one
-      holds it active, and a merge leaves the inactivity window in charge. */
+      holds it active, and a merge settles only when the user allows it. */
   readonly changeRequestState: ChangeRequestStateLike | null;
+  /** When the change request last changed, so a merge older than the thread's
+      own activity does not settle a thread the user has since worked on. */
+  readonly changeRequestUpdatedAt?: string | null;
 }
 
 /**
@@ -518,6 +540,7 @@ export function partitionPhaseSidebarRows(
     readonly now: string;
     readonly preciseNow: string;
     readonly autoSettleAfterDays: number | null;
+    readonly autoSettleOnMerge?: boolean;
   },
 ): PhaseSidebarPartition {
   const activeRows: PhaseSidebarRow[] = [];
@@ -534,7 +557,18 @@ export function partitionPhaseSidebarRows(
       effectiveSettled(row.thread, {
         now: options.now,
         autoSettleAfterDays: options.autoSettleAfterDays,
-        changeRequestState: row.changeRequestState,
+        ...(options.autoSettleOnMerge !== undefined
+          ? { autoSettleOnMerge: options.autoSettleOnMerge }
+          : {}),
+        changeRequest:
+          row.changeRequestState === null
+            ? null
+            : {
+                state: row.changeRequestState,
+                ...(row.changeRequestUpdatedAt !== undefined
+                  ? { updatedAt: row.changeRequestUpdatedAt }
+                  : {}),
+              },
       })
     ) {
       settledRows.push(row);

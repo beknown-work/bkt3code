@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
-import { toUploadChatImageAttachments } from "../lib/composerImages";
+import { toDraftComposerImageAttachments, toQueuedResendAttachments } from "../lib/composerImages";
 import { randomHex } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useServerConfigs, useThreadShells } from "./entities";
@@ -39,7 +39,7 @@ import {
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
 } from "./thread-outbox-model";
-import { environmentThreadShells, threadEnvironment } from "./threads";
+import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import {
   editingQueuedMessageIdsAtom,
@@ -253,7 +253,7 @@ export function useThreadOutboxDrain(): void {
             messageId: queuedMessage.messageId,
             role: "user",
             text: queuedMessage.text,
-            attachments: toUploadChatImageAttachments(queuedMessage.attachments),
+            attachments: toQueuedResendAttachments(queuedMessage.attachments),
           },
           modelSelection: settings.modelSelection,
           runtimeMode: settings.runtimeMode,
@@ -293,7 +293,7 @@ export function useThreadOutboxDrain(): void {
           messageId: queuedMessage.messageId,
           createdAt: queuedMessage.createdAt,
           text: queuedMessage.text.trim(),
-          attachments: queuedMessage.attachments,
+          attachments: toDraftComposerImageAttachments(queuedMessage.attachments),
           modelSelection,
           runtimeMode: queuedMessage.runtimeMode ?? DEFAULT_RUNTIME_MODE,
           interactionMode: queuedMessage.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -399,25 +399,10 @@ export function useThreadOutboxDrain(): void {
           return true;
         }
         // The guards evaluated before the confirmation await are stale by now:
-        // the thread may have gone busy, or the user may have opened this
-        // message in the editor. Re-read both and defer to the next drain pass
-        // (returning true skips the failure/backoff path) rather than sending
-        // a payload the user is editing or racing an active turn.
+        // the user may have opened this message in the editor. Re-read that
+        // guard and defer to the next drain pass (returning true skips the
+        // failure/backoff path) rather than sending a payload being edited.
         if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
-          return true;
-        }
-        const freshThread = findThread(
-          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
-          nextQueuedMessage,
-        );
-        const freshThreadBusy =
-          freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
-        if (
-          deliveryAction === "send" &&
-          creation === undefined &&
-          freshThreadBusy &&
-          !durableExecutionRecovery
-        ) {
           return true;
         }
         return deliveryAction === "remove"

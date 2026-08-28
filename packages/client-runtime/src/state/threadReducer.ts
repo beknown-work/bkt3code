@@ -108,6 +108,7 @@ export function applyThreadDetailEvent(
           archivedAt: null,
           settledOverride: null,
           settledAt: null,
+          unsettledAt: null,
           snoozedUntil: null,
           snoozedAt: null,
           deletedAt: null,
@@ -160,6 +161,7 @@ export function applyThreadDetailEvent(
           ...thread,
           settledOverride: "settled",
           settledAt: event.payload.settledAt,
+          unsettledAt: null,
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -171,6 +173,12 @@ export function applyThreadDetailEvent(
           ...thread,
           settledOverride: event.payload.reason === "user" ? "active" : null,
           settledAt: null,
+          // A thread already pinned active keeps its re-entry stamp: the
+          // activity reset that clears the pin must not reorder the list.
+          unsettledAt:
+            thread.settledOverride === "active"
+              ? (thread.unsettledAt ?? null)
+              : event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },
       };
@@ -257,6 +265,9 @@ export function applyThreadDetailEvent(
           // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
           ...(event.payload.parentThreadId !== undefined
             ? { parentThreadId: event.payload.parentThreadId }
+            : {}),
+          ...(event.payload.linkedPullRequest !== undefined
+            ? { linkedPullRequest: event.payload.linkedPullRequest }
             : {}),
           updatedAt: event.payload.updatedAt,
         },

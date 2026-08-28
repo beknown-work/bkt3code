@@ -4,11 +4,12 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, WS_METHODS } from "@t3tools/contracts";
 
 import {
   createAtomCommandScheduler,
   createEnvironmentCommand,
+  createEnvironmentRpcCommand,
   createRuntimeCommand,
 } from "./runtime.ts";
 import {
@@ -122,11 +123,19 @@ const startThreadTurnDurably = Effect.fn("ThreadCommands.startThreadTurnDurably"
     messageId: serverInput.message.messageId,
     commandId,
     text: serverInput.message.text,
-    attachments: serverInput.message.attachments.map((attachment, index) => ({
-      ...attachment,
-      id: `${serverInput.message.messageId}-${index}`,
-      previewUri: attachment.dataUrl,
-    })),
+    // T3-CUSTOM(expbkt3): an uploaded attachment already has its asset id and no
+    // inline data url; a locally-held one supplies the data url and its preview.
+    attachments: serverInput.message.attachments.map((attachment, index) => {
+      const dataUrl = "dataUrl" in attachment ? attachment.dataUrl : undefined;
+      return {
+        type: attachment.type,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        id: "id" in attachment ? attachment.id : `${serverInput.message.messageId}-${index}`,
+        ...(dataUrl === undefined ? {} : { dataUrl, previewUri: dataUrl }),
+      };
+    }),
     ...(serverInput.modelSelection === undefined
       ? {}
       : { modelSelection: serverInput.modelSelection }),
@@ -438,6 +447,7 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    // T3-CUSTOM(expbkt3): BEGIN — session restart and thread membership commands.
     restartSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:restart-session",
       execute: (input: RestartThreadSessionInput) => restartThreadSession(input),
@@ -459,6 +469,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     transferOwnership: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:transfer-ownership",
       execute: (input: TransferThreadOwnershipInput) => transferThreadOwnership(input),
+      scheduler,
+      concurrency,
+    }),
+    // T3-CUSTOM(expbkt3): END
+    uploadFeedback: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:upload-feedback",
+      tag: WS_METHODS.providerUploadFeedback,
       scheduler,
       concurrency,
     }),

@@ -1,16 +1,23 @@
 import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
-// T3-CUSTOM(expbkt3): BEGIN - attach a test-safe native build identity.
+import * as Device from "expo-device";
 import { Platform } from "react-native";
+// T3-CUSTOM(expbkt3): BEGIN - attach a test-safe native build identity.
 import { MOBILE_APP_VERSION } from "../../app-version";
 // T3-CUSTOM(expbkt3): END
 
-export function authClientMetadata(): AuthClientPresentationMetadata {
-  // T3-CUSTOM(expbkt3): BEGIN - expose the native version to connected servers.
+export function authClientMetadata(appVersion?: string): AuthClientPresentationMetadata {
+  const osMajorVersion = Number.parseInt(Device.osVersion?.split(".")[0] ?? "", 10);
+  const deviceModel = Device.modelName?.trim();
+
   return {
     label: "T3 Code Mobile",
     deviceType: "mobile",
-    appVersion: MOBILE_APP_VERSION,
+    // T3-CUSTOM(expbkt3): always expose the native version to connected servers;
+    // a caller-provided version still wins.
+    appVersion: appVersion ?? MOBILE_APP_VERSION,
     ...(Platform.OS === "ios" ? { os: "iOS" } : Platform.OS === "android" ? { os: "Android" } : {}),
+    ...(Number.isFinite(osMajorVersion) && osMajorVersion > 0 ? { osMajorVersion } : {}),
+    ...(deviceModel ? { deviceModel } : {}),
+    surface: "mobile",
   };
-  // T3-CUSTOM(expbkt3): END
 }

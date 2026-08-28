@@ -115,6 +115,8 @@ import { useUiStateStore } from "../uiStateStore";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { LinearIcon } from "./Icons";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
+// T3-CUSTOM(expbkt3): owner avatar on rows started by someone else.
+import { PhaseSidebarOwnerAvatar } from "./sidebar/PhaseSidebarOwnerAvatar";
 import {
   canReconnectThreadSession,
   hasUnseenCompletion,
@@ -136,6 +138,7 @@ import {
   derivePhaseSidebarRepositoryKey,
   filterVisiblePhaseSidebarRows,
   isThreadAssignedToUser,
+  phaseSidebarRowOwnerAvatarUserId,
   partitionPhaseSidebarRows,
   phaseSidebarGroupHeaderClassName,
   // T3-CUSTOM(expbkt3): Session priority badge tone.
@@ -750,7 +753,6 @@ function PhaseSnoozePopoverButton({
             role="button"
             tabIndex={0}
             aria-label={label}
-            title="Snooze"
             data-testid={testId}
             className={ROW_ACTION_CLASS}
             onClick={(event) => event.stopPropagation()}
@@ -990,6 +992,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     executionPresentation,
   });
   // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): whose session this is, when it is not mine.
+  const ownerAvatarUserId = phaseSidebarRowOwnerAvatarUserId({
+    ownerUserId: row.thread.ownerUserId,
+    currentUserId,
+  });
   const selected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const toggleThread = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -1742,6 +1749,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               {formatThreadPriority(row.thread.priority)}
             </span>
           ) : null}
+          {/* T3-CUSTOM(expbkt3): only on threads someone else started - my own
+              face on every row of my own sidebar would say nothing. */}
+          {ownerAvatarUserId !== null ? (
+            <PhaseSidebarOwnerAvatar ownerUserId={ownerAvatarUserId} threadId={row.thread.id} />
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1863,6 +1875,8 @@ export function PhaseGroupedSidebar() {
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
+  // T3-CUSTOM(expbkt3): follow the same auto-settle-on-merge setting as the default sidebar.
+  const autoSettleOnMerge = useClientSettings((state) => state.sidebarAutoSettleOnMerge);
   const currentUserId = useCurrentUserId();
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze clocks. `now` is quantized to
   // the minute so the settled partition does not churn on every render
@@ -2051,6 +2065,7 @@ export function PhaseGroupedSidebar() {
           threadBootstrapSupported:
             serverConfig?.environment.capabilities.durableThreadBootstrap === true,
           changeRequestState: vcsStatus?.pr?.state ?? null,
+          changeRequestUpdatedAt: vcsStatus?.pr?.updatedAt ?? null,
           // T3-CUSTOM(expbkt3): END
         };
       }),
@@ -2093,9 +2108,10 @@ export function PhaseGroupedSidebar() {
         now: nowMinute,
         preciseNow: new Date().toISOString(),
         autoSettleAfterDays,
+        autoSettleOnMerge,
       },
     );
-  }, [allRows, autoSettleAfterDays, nowMinute, snoozeWakeTick]);
+  }, [allRows, autoSettleAfterDays, autoSettleOnMerge, nowMinute, snoozeWakeTick]);
   // T3-CUSTOM(expbkt3): the shelves are flat history lists, so they filter
   // row-by-row as before. Only the lifecycle groups nest.
   const activeRows = unfilteredActiveRows;

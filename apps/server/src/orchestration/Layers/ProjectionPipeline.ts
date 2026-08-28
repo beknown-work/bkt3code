@@ -183,6 +183,10 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   );
 }
 
+// T3-CUSTOM(expbkt3): the fork relocated this predicate to
+// ../threadShellSummaryRefresh.ts (imported above); upstream later added an
+// equivalent inline copy, which is dropped here to keep one implementation.
+
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,
   terminalTurnIds: ReadonlySet<string>,
@@ -743,6 +747,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             sourceControlProfileId: event.payload.sourceControlProfileId,
+            linkedPullRequest: null,
             latestTurnId: null,
             ownerUserId: event.payload.createdByUserId ?? null,
             createdAt: event.payload.createdAt,
@@ -750,6 +755,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             archivedAt: null,
             settledOverride: null,
             settledAt: null,
+            unsettledAt: null,
             snoozedUntil: null,
             snoozedAt: null,
             // T3-CUSTOM(expbkt3): session priority.
@@ -891,6 +897,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             settledOverride: "settled",
             settledAt: event.payload.settledAt,
+            unsettledAt: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -907,6 +914,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             settledOverride: event.payload.reason === "user" ? "active" : null,
             settledAt: null,
+            // Re-entry stamp for active-list ordering. A thread already pinned
+            // active keeps its stamp: the activity reset that clears the pin
+            // is not a re-entry and must not reorder the list.
+            unsettledAt:
+              existingRow.value.settledOverride === "active"
+                ? existingRow.value.unsettledAt
+                : event.payload.updatedAt,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1029,6 +1043,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
+              : {}),
+            ...(event.payload.linkedPullRequest !== undefined
+              ? { linkedPullRequest: event.payload.linkedPullRequest }
               : {}),
             updatedAt: event.payload.updatedAt,
           });
@@ -1866,6 +1883,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             const resolvedDecision =
               resolvedDecisionRaw === "accept" ||
               resolvedDecisionRaw === "acceptForSession" ||
+              resolvedDecisionRaw === "acceptAlways" ||
               resolvedDecisionRaw === "decline" ||
               resolvedDecisionRaw === "cancel"
                 ? resolvedDecisionRaw

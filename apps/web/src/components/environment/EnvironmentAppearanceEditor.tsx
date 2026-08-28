@@ -86,7 +86,6 @@ export function EnvironmentAppearanceEditor({
               type="button"
               aria-label={option.label}
               aria-pressed={appearance.colorId === option.id}
-              title={option.label}
               onClick={() => update({ colorId: option.id })}
               className={cn(
                 "size-6 rounded-full border-2 transition-transform hover:scale-110",
@@ -110,7 +109,6 @@ export function EnvironmentAppearanceEditor({
                 type="button"
                 aria-label={option.label}
                 aria-pressed={selected}
-                title={option.label}
                 onClick={() => update({ iconId: option.id })}
                 className={cn(
                   "inline-flex size-7 items-center justify-center rounded-md border transition-colors",

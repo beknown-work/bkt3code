@@ -527,6 +527,8 @@ const makeStubSessionStore = (input: {
     verify: () => Effect.die("unused"),
     issueWebSocketToken: () => Effect.die("unused"),
     verifyWebSocketToken: () => Effect.die("unused"),
+    // Upstream #8169 records the connecting client's surface; unused by this test.
+    recordClientConnection: () => Effect.void,
     listActive: () =>
       Effect.succeed(
         input.clientSessions.map((clientSession) => ({

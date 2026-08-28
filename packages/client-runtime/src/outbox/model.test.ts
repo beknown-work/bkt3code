@@ -80,13 +80,26 @@ describe("shared durable thread outbox", () => {
     ).toBe("send");
   });
 
-  it("retains legacy busy-thread waiting against old servers", () => {
+  // T3-CUSTOM(expbkt3): upstream #6543 steers active turns by default, so a busy
+  // thread no longer holds a queued send back even without durable recovery. Only
+  // a disconnected environment waits.
+  it("sends to a busy thread even without durable recovery, and waits only when disconnected", () => {
     expect(
       resolveThreadOutboxDeliveryAction({
         isCreation: false,
         threadExists: true,
         shellStatus: "live",
         environmentConnected: true,
+        threadBusy: true,
+        durableExecutionRecovery: false,
+      }),
+    ).toBe("send");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: false,
         threadBusy: true,
         durableExecutionRecovery: false,
       }),

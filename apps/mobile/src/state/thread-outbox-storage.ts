@@ -1,6 +1,7 @@
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
+import { writeFileAtomically } from "../lib/atomic-file";
 // T3-CUSTOM(expbkt3): BEGIN — identity-scoped durable outbox files.
 import {
   ANONYMOUS_OUTBOX_IDENTITY,
@@ -11,6 +12,24 @@ import {
 // T3-CUSTOM(expbkt3): END
 
 const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
+
+const inFlightWrites = new Set<Promise<void>>();
+
+function trackInFlightWrite(operation: Promise<void>): Promise<void> {
+  inFlightWrites.add(operation);
+  void operation.catch(() => undefined).finally(() => inFlightWrites.delete(operation));
+  return operation;
+}
+
+/**
+ * Awaits queued-message writes so an app update restart cannot tear down the
+ * runtime while one is mid-file.
+ */
+export async function flushThreadOutboxWrites(): Promise<void> {
+  while (inFlightWrites.size > 0) {
+    await Promise.allSettled(inFlightWrites);
+  }
+}
 
 export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
@@ -101,11 +120,13 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   write: async (message) => {
     const fileName = messageFileName(message);
     try {
-      const file = await getMessageFile(message);
-      if (!file.exists) {
-        file.create({ intermediates: true, overwrite: true });
-      }
-      file.write(JSON.stringify(encodeQueuedThreadMessage(message)));
+      await trackInFlightWrite(
+        (async () => {
+          // T3-CUSTOM(expbkt3): identity-scoped file name resolves from the whole message.
+          const file = await getMessageFile(message);
+          await writeFileAtomically(file, JSON.stringify(encodeQueuedThreadMessage(message)));
+        })(),
+      );
     } catch (cause) {
       throw new ThreadOutboxStorageError({
         operation: "write",

@@ -48,6 +48,8 @@ export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
+  /** Missing on older servers, which still accept inline image attachments. */
+  attachmentUploads: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),
@@ -83,6 +85,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadCreationDefaults: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): accepted turns have durable desired-state and recovery. */
   durableExecutionRecovery: Schema.optionalKey(Schema.Boolean),
+  /** Server persists a pull request reference on thread.meta.update. */
+  threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */
@@ -90,6 +94,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream self-update progress before acknowledging the
       restart. Clients fall back to server.updateServer when absent. */
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  /** Agent-activity publishes (push notifications and Live Activities)
+      currently leave this environment: the publish opt-in is enabled and the
+      relay link credentials exist. Clients skip seeding a Live Activity when
+      this is false — no update would ever repaint it. Absent on older
+      servers, which may still publish, so only an explicit false skips. */
+  agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
