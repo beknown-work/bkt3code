@@ -73,6 +73,8 @@ import {
   XIcon,
   ZapIcon,
 } from "lucide-react";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import { AgentUiSurfaceRow, resolveAgentUiSurface } from "../../fork/agentUiSurface";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -2868,17 +2870,30 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   isExpandedToolGroupEntry: boolean;
 }) {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry } = props;
-  // Before any hooks: spawn CTA rows render their own component.
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces need the thread they belong
+  // to, so the context read moves above the spawn early return.
+  const { threadRef } = use(TimelineRowCtx);
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
   }
-  return (
+  const plainRow = (
     <PlainWorkEntryRow
       workEntry={workEntry}
       workspaceRoot={workspaceRoot}
       isExpandedToolGroupEntry={isExpandedToolGroupEntry}
     />
   );
+  // T3-CUSTOM(expbkt3): a `t3_show_ui` call keeps its ordinary row and mounts
+  // its sandboxed box underneath it.
+  const agentUiSurface = resolveAgentUiSurface(workEntry);
+  if (agentUiSurface) {
+    return (
+      <AgentUiSurfaceRow threadRef={threadRef} surface={agentUiSurface}>
+        {plainRow}
+      </AgentUiSurfaceRow>
+    );
+  }
+  return plainRow;
 });
 
 const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {

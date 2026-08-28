@@ -122,6 +122,8 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
 // T3-CUSTOM(expbkt3): native plan review service.
 import { PlanReviewService } from "./planreview/PlanReviewService.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import { AgentUiService } from "./agentui/AgentUiService.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -544,6 +546,8 @@ const makeWsRpcLayer = (
       const environmentUsers = yield* EnvironmentUserService.EnvironmentUserService;
       // T3-CUSTOM(expbkt3): BEGIN native plan review connection state.
       const planReview = yield* PlanReviewService;
+      // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+      const agentUi = yield* AgentUiService;
       // Resolved once per connection: it only labels this actor's own comments.
       const actorLabel =
         actorUserId === null
@@ -1280,6 +1284,7 @@ const makeWsRpcLayer = (
         sourceControlProfiles,
         environmentUsers,
         planReview,
+        agentUi,
         actorLabel,
         systemResourceMonitor,
         providerRateLimits,

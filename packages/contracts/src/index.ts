@@ -22,6 +22,8 @@ export * from "./personalMcp.ts";
 export * from "./linearIssue.ts";
 // T3-CUSTOM(expbkt3): native plan review contracts.
 export * from "./planReview.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+export * from "./agentUi.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";
 export * from "./sourceControl.ts";

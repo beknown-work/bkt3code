@@ -25,6 +25,8 @@ import {
   PersonalMcpTokenResult,
 } from "./personalMcp.ts";
 import { LinearIssueStatusInput, LinearIssueStatusResult } from "./linearIssue.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import { AgentUiError, AgentUiGetRenderInput, AgentUiGetRenderResult } from "./agentUi.ts";
 import {
   PlanReviewCutVersionInput,
   PlanReviewDocumentIdInput,
@@ -110,6 +112,8 @@ export const WS_FORK_METHODS = {
   sessionArchiveReclaim: "sessionArchive.reclaim",
   sessionArchiveBackfill: "sessionArchive.backfill",
   threadContextExport: "threadContext.export",
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  agentUiGetRender: "agentUi.getRender",
 } as const;
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_FORK_METHODS.personalMcpGetProfile, {
@@ -304,6 +308,15 @@ export const WsThreadContextExportRpc = Rpc.make(WS_FORK_METHODS.threadContextEx
   error: Schema.Union([SessionArchiveError, EnvironmentAuthorizationError]),
 });
 
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces. The render body is fetched on
+// demand rather than pushed through activity payloads, which keeps oversized
+// documents off the websocket and out of the activity string cap.
+export const WsAgentUiGetRenderRpc = Rpc.make(WS_FORK_METHODS.agentUiGetRender, {
+  payload: AgentUiGetRenderInput,
+  success: AgentUiGetRenderResult,
+  error: Schema.Union([AgentUiError, EnvironmentAuthorizationError]),
+});
+
 export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
   payload: OrchestrationRpcSchemas.stopExecution.input,
   success: OrchestrationRpcSchemas.stopExecution.output,
@@ -413,6 +426,7 @@ export const FORK_WS_RPCS = [
   WsSessionArchiveReclaimRpc,
   WsSessionArchiveBackfillRpc,
   WsThreadContextExportRpc,
+  WsAgentUiGetRenderRpc,
   WsOrchestrationStopExecutionRpc,
   WsOrchestrationReplayEventsRpc,
 ] as const;

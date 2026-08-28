@@ -146,6 +146,9 @@ import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
 // T3-CUSTOM(expbkt3): native plan review.
 import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
 import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import * as AgentUiRenders from "./persistence/AgentUiRenders.ts";
+import * as AgentUiServiceLayer from "./agentui/AgentUiService.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -704,6 +707,12 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         PlanReviewServiceLayer.layer.pipe(
           Layer.provide(PlanReviewDocuments.layer.pipe(Layer.provide(SqlitePersistenceMemory))),
+        ),
+      ),
+      // T3-CUSTOM(expbkt3): agent UI surfaces service for the fork RPC handlers.
+      Layer.provide(
+        AgentUiServiceLayer.layer.pipe(
+          Layer.provide(AgentUiRenders.layer.pipe(Layer.provide(SqlitePersistenceMemory))),
         ),
       ),
       Layer.provide(
