@@ -18,6 +18,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -67,6 +68,10 @@ function normalizeUrl(raw: string): string | null {
 
 export const make = Effect.gen(function* () {
   const repository = yield* AgentUiRepository;
+  const crypto = yield* Crypto.Crypto;
+
+  // A failing CSPRNG is a defect, not something a caller can recover from.
+  const uuid = crypto.randomUUIDv4.pipe(Effect.orDie);
 
   const show: AgentUiServiceShape["show"] = (input) =>
     Effect.gen(function* () {
@@ -103,7 +108,7 @@ export const make = Effect.gen(function* () {
 
       const kind = url === null ? ("html" as const) : ("url" as const);
       const height = clampHeight(input.height);
-      const renderId = `aui_${globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+      const renderId = `aui_${(yield* uuid).replaceAll("-", "").slice(0, 20)}`;
       const createdAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
 
       yield* repository
