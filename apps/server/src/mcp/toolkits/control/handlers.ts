@@ -33,6 +33,8 @@ import { ProjectionSnapshotQuery } from "../../../orchestration/Services/Project
 // T3-CUSTOM(expbkt3): bounded catch-up detail for t3_list_sessions.
 import type { ProjectionSessionListDetail } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { PlannotatorManager } from "../../../plannotator/PlannotatorManager.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import { AgentUiService } from "../../../agentui/AgentUiService.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "../../../serverSettings.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
@@ -1362,6 +1364,35 @@ const handlers = {
       };
     },
   ),
+
+  // T3-CUSTOM(expbkt3): BEGIN — agent-rendered UI surfaces in chat.
+  //
+  // Always renders into the caller's own session: the box appears where the tool
+  // call appears, so there is no cross-session target to authorize.
+  t3_show_ui: Effect.fn("T3ControlToolkit.showUi")(function* (input) {
+    const operation = "show-ui";
+    const scope = yield* requireCapability(operation, "t3.read");
+    const agentUi = yield* AgentUiService;
+    const handle = yield* agentUi
+      .show({
+        threadId: scope.threadId,
+        title: input.title,
+        html: input.html,
+        url: input.url,
+        height: input.height,
+      })
+      .pipe(mapControlError(operation));
+    // Small and single-line on purpose: activity projection summarizes an MCP
+    // result to one short line, and this handle has to survive that trip to
+    // reach the chat client.
+    return {
+      t3UiRender: true,
+      renderId: handle.renderId,
+      kind: handle.kind,
+      height: handle.height,
+    };
+  }),
+  // T3-CUSTOM(expbkt3): END
 
   t3_dispatch_command: Effect.fn("T3ControlToolkit.dispatchCommand")(function* (input) {
     const operation = "dispatch-command";

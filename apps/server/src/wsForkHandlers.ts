@@ -17,6 +17,8 @@ import {
   WS_METHODS,
   WsRpcGroup,
   EnvironmentAuthorizationError,
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  AgentUiError,
   OrchestrationGetSnapshotError,
   PlanReviewError,
   SessionArchiveError,
@@ -36,6 +38,8 @@ import type * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import type * as UserMcpProfileStore from "./mcp/UserMcpProfileStore.ts";
 import type * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import type * as PlanReviewService from "./planreview/PlanReviewService.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import type * as AgentUiService from "./agentui/AgentUiService.ts";
 import type * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts";
 import type { ProviderRateLimitsShape } from "./provider/ProviderRateLimits.ts";
@@ -64,6 +68,8 @@ export interface ForkWsHandlerDeps {
   readonly environmentUsers: EnvironmentUserService.EnvironmentUserService["Service"];
   // T3-CUSTOM(expbkt3): native plan review.
   readonly planReview: PlanReviewService.PlanReviewService["Service"];
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  readonly agentUi: AgentUiService.AgentUiServiceShape;
   /** Display name for the acting user, stamped onto their review comments. */
   readonly actorLabel: string | null;
   readonly systemResourceMonitor: SystemResourceMonitor.SystemResourceMonitor["Service"];
@@ -114,6 +120,7 @@ export const makeForkWsHandlers = ({
   sourceControlProfiles,
   environmentUsers,
   planReview,
+  agentUi,
   actorLabel,
   systemResourceMonitor,
   providerRateLimits,
@@ -236,6 +243,20 @@ export const makeForkWsHandlers = ({
           Effect.andThen(sessionArchive.exportContext(input.threadId)),
         ),
         { "rpc.aggregate": "session-archive" },
+      ),
+    // T3-CUSTOM(expbkt3): agent-rendered UI surfaces. Thread-scoped: the render
+    // body only goes out to someone who can already read that thread.
+    [WS_METHODS.agentUiGetRender]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.agentUiGetRender,
+        requireThreadAccess(input.threadId).pipe(
+          Effect.mapError(
+            (cause) => new AgentUiError({ operation: "get-render", message: cause.message }),
+          ),
+          Effect.andThen(agentUi.getRender({ threadId: input.threadId, renderId: input.renderId })),
+          Effect.map((render) => ({ render })),
+        ),
+        { "rpc.aggregate": "agent-ui" },
       ),
     // T3-CUSTOM(expbkt3): END
     [WS_METHODS.sourceControlProfilesList]: (_input) =>

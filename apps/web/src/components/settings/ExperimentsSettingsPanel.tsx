@@ -31,6 +31,8 @@ export function ExperimentsSettingsPanel() {
   const updateSettings = useUpdateClientSettings();
   // T3-CUSTOM(expbkt3): native plan review (moved here from the removed Beta panel).
   const nativePlanReviewEnabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  const agentUiSurfacesEnabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
 
   return (
     <SettingsPageContainer>
@@ -46,6 +48,21 @@ export function ExperimentsSettingsPanel() {
                 updateSettings({ nativePlanReviewEnabled: Boolean(checked) })
               }
               aria-label="Native plan review"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): BEGIN — agent-rendered UI surfaces in chat. */}
+        <SettingsRow
+          {...searchableSetting("agent-ui-surfaces")}
+          description="Let agents render interactive views inline in the chat: charts, diagrams, tables, forms and other small HTML documents, shown in a sandboxed box where the tool call happened. Agents reach this through the t3_show_ui tool. While off, those calls stay ordinary collapsed tool rows."
+          control={
+            <Switch
+              checked={agentUiSurfacesEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ agentUiSurfacesEnabled: Boolean(checked) })
+              }
+              aria-label="Agent views in chat"
             />
           }
         />

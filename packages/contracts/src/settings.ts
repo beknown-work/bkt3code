@@ -257,6 +257,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // T3-CUSTOM(expbkt3): native plan review. On by default; turning it off hides
   // the Preview entry points and leaves Plannotator as the only review path.
   nativePlanReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in the chat transcript. While
+  // off, a `t3_show_ui` call stays an ordinary collapsed tool row.
+  agentUiSurfacesEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1241,6 +1244,8 @@ export const ClientSettingsPatch = Schema.Struct({
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): native plan review.
   nativePlanReviewEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  agentUiSurfacesEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
