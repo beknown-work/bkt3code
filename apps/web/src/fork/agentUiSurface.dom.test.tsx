@@ -3,30 +3,37 @@ import type { ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const queryStates = vi.hoisted(
-  () =>
-    new Map<
-      string,
-      {
-        data?: { render: Record<string, unknown> };
-        isPending: boolean;
-        error?: string;
-      }
-    >(),
-);
+const testState = vi.hoisted(() => ({
+  queryCalls: [] as string[],
+  queries: new Map<
+    string,
+    {
+      data?: { render: Record<string, unknown> };
+      isPending: boolean;
+      error?: string;
+    }
+  >(),
+}));
 
+vi.mock("../hooks/useSettings", () => ({
+  useClientSettings: (selector: (settings: { agentUiSurfacesEnabled: boolean }) => unknown) =>
+    selector({ agentUiSurfacesEnabled: true }),
+}));
 vi.mock("../state/agentUi", () => ({
   agentUiEnvironment: {
-    render: ({ input }: { input: { renderId: string } }) => input,
+    render: ({ input }: { input: { renderId: string } }) => {
+      testState.queryCalls.push(input.renderId);
+      return input;
+    },
   },
 }));
 vi.mock("../state/query", () => ({
   useEnvironmentQuery: ({ renderId }: { renderId: string }) =>
-    queryStates.get(renderId) ?? { isPending: true },
+    testState.queries.get(renderId) ?? { isPending: true },
 }));
 
-import { AgentUiRenderFrame, AgentUiUrlFrame } from "./agentUiSurface";
-import { useAgentUiUrlFrameCoordinator } from "./agentUiUrlFrameCoordinator";
+import { useAgentUiExpandedStore } from "../agentUiExpandedStore";
+import { AgentUiExpandedSurface, AgentUiRenderFrame, AgentUiSurfaceRow } from "./agentUiSurface";
 
 const THREAD_REF = {
   environmentId: EnvironmentId.make("environment-fixture"),
@@ -34,11 +41,7 @@ const THREAD_REF = {
 } as const;
 const FIRST_URL = "https://fixture.example.test/board#room=alpha,safe-key-a";
 const SECOND_URL = "https://fixture.example.test/board#room=beta,safe-key-b";
-const mutations: string[] = [];
 
-// ReactDOM needs a host, but this focused lifecycle suite intentionally has no
-// browser dependency. The host records iframe attachment order so a switch can
-// prove that the old browsing context disconnected before the new one mounted.
 class TestNode {
   parentNode: TestNode | null = null;
   childNodes: TestNode[] = [];
@@ -70,7 +73,6 @@ class TestNode {
   appendChild(child: TestNode) {
     child.parentNode = this;
     this.childNodes.push(child);
-    if (child.tagName === "IFRAME") mutations.push(`attach:${child.getAttribute("src")}`);
     return child;
   }
 
@@ -79,12 +81,10 @@ class TestNode {
     const index = this.childNodes.indexOf(before);
     child.parentNode = this;
     this.childNodes.splice(index, 0, child);
-    if (child.tagName === "IFRAME") mutations.push(`attach:${child.getAttribute("src")}`);
     return child;
   }
 
   removeChild(child: TestNode) {
-    if (child.tagName === "IFRAME") mutations.push(`detach:${child.getAttribute("src")}`);
     this.childNodes.splice(this.childNodes.indexOf(child), 1);
     child.parentNode = null;
     return child;
@@ -120,7 +120,6 @@ function installTestDom() {
   const document = new TestNode("#document", null, 9);
   const window = {
     document,
-    location: { origin: "https://t3.example.test" },
     HTMLIFrameElement: TestNode,
     setTimeout: globalThis.setTimeout,
     clearTimeout: globalThis.clearTimeout,
@@ -134,21 +133,18 @@ function installTestDom() {
   return document;
 }
 
-function urlFrame(renderId: string, url: string, createdAt: string, placement = "inline") {
-  return (
-    <AgentUiUrlFrame
-      render={{ renderId, title: renderId, url, createdAt }}
-      threadRef={THREAD_REF}
-      placement={placement as "inline" | "expanded"}
-    />
-  );
-}
-
 function iframeNodes(root: TestNode): TestNode[] {
   return root.childNodes.flatMap((child) => [
     ...(child.tagName === "IFRAME" ? [child] : []),
     ...iframeNodes(child),
   ]);
+}
+
+function renderedText(root: TestNode): string {
+  return [
+    ...(root.childNodes.length === 0 && root.nodeValue !== null ? [root.nodeValue] : []),
+    ...root.childNodes.map(renderedText),
+  ].join("");
 }
 
 async function render(root: { render: (children: ReactNode) => void }, children: ReactNode) {
@@ -157,22 +153,19 @@ async function render(root: { render: (children: ReactNode) => void }, children:
   flushSync(() => undefined);
 }
 
-describe("AgentUiUrlFrame DOM lifecycle", () => {
+describe("Agent view runtime mitigation", () => {
   beforeEach(() => {
-    mutations.length = 0;
-    queryStates.clear();
-    useAgentUiUrlFrameCoordinator.getState().reset();
+    testState.queryCalls.length = 0;
+    testState.queries.clear();
+    useAgentUiExpandedStore.getState().collapse();
   });
 
   afterEach(async () => {
-    // React's development scheduler posts an Immediate after a root commits.
-    // Let it drain while the fake window still exists so parallel CI cannot
-    // observe a callback after Vitest restores the Node globals.
     await new Promise<void>((resolve) => setImmediate(resolve));
     vi.unstubAllGlobals();
   });
 
-  it("keeps exact same-origin URLs distinct and replaces the iframe on A to B to A", async () => {
+  it("ignores a persisted enabled preference and leaves only the ordinary tool row", async () => {
     const document = installTestDom();
     const { createRoot } = await import("react-dom/client");
     const container = document.createElement("div");
@@ -181,128 +174,72 @@ describe("AgentUiUrlFrame DOM lifecycle", () => {
     try {
       await render(
         root,
-        <>
-          {urlFrame("aui_alpha", FIRST_URL, "2026-08-29T10:00:00.000Z")}
-          {urlFrame("aui_beta", SECOND_URL, "2026-08-29T10:01:00.000Z")}
-        </>,
+        <AgentUiSurfaceRow
+          threadRef={THREAD_REF}
+          surface={{ renderId: "aui_alpha", kind: "url", height: 360 }}
+        >
+          <span>ordinary tool row</span>
+        </AgentUiSurfaceRow>,
       );
 
-      const [betaNode] = iframeNodes(container);
-      expect(betaNode?.getAttribute("src")).toBe(SECOND_URL);
-      expect(betaNode?.getAttribute("credentialless")).toBe("");
-      expect(betaNode?.getAttribute("sandbox")).toContain("allow-same-origin");
-
-      flushSync(() =>
-        useAgentUiUrlFrameCoordinator
-          .getState()
-          .activate("inline:environment-fixture:thread-fixture:aui_alpha"),
-      );
-      await Promise.resolve();
-      flushSync(() => undefined);
-      const [alphaNode] = iframeNodes(container);
-      expect(betaNode?.parentNode).toBeNull();
-      expect(alphaNode).not.toBe(betaNode);
-      expect(alphaNode?.getAttribute("src")).toBe(FIRST_URL);
-
-      flushSync(() =>
-        useAgentUiUrlFrameCoordinator
-          .getState()
-          .activate("inline:environment-fixture:thread-fixture:aui_beta"),
-      );
-      await Promise.resolve();
-      flushSync(() => undefined);
-      const [nextBetaNode] = iframeNodes(container);
-      expect(alphaNode?.parentNode).toBeNull();
-      expect(nextBetaNode).not.toBe(alphaNode);
-      expect(nextBetaNode).not.toBe(betaNode);
-      expect(nextBetaNode?.getAttribute("src")).toBe(SECOND_URL);
-      expect(mutations).toEqual([
-        `attach:${SECOND_URL}`,
-        `detach:${SECOND_URL}`,
-        `attach:${FIRST_URL}`,
-        `detach:${FIRST_URL}`,
-        `attach:${SECOND_URL}`,
-      ]);
-    } finally {
-      flushSync(() => root.unmount());
-    }
-  });
-
-  it("gives an expanded frame exclusive priority and restores inline after it closes", async () => {
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const container = document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-
-    try {
-      await render(
-        root,
-        <>
-          {urlFrame("aui_beta", SECOND_URL, "2026-08-29T10:01:00.000Z")}
-          {urlFrame("aui_alpha", FIRST_URL, "2026-08-29T10:00:00.000Z", "expanded")}
-        </>,
-      );
-      const [expandedNode] = iframeNodes(container);
-      expect(iframeNodes(container)).toHaveLength(1);
-      expect(expandedNode?.getAttribute("src")).toBe(FIRST_URL);
-
-      await render(root, urlFrame("aui_beta", SECOND_URL, "2026-08-29T10:01:00.000Z"));
-      const [inlineNode] = iframeNodes(container);
-      expect(expandedNode?.parentNode).toBeNull();
-      expect(iframeNodes(container)).toHaveLength(1);
-      expect(inlineNode).not.toBe(expandedNode);
-      expect(inlineNode?.getAttribute("src")).toBe(SECOND_URL);
-    } finally {
-      flushSync(() => root.unmount());
-    }
-  });
-
-  it("disconnects an expanded iframe while the replacement query is pending", async () => {
-    const document = installTestDom();
-    const { createRoot } = await import("react-dom/client");
-    const container = document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    const firstRender = {
-      renderId: "aui_alpha",
-      title: "First",
-      kind: "url",
-      url: FIRST_URL,
-      createdAt: "2026-08-29T10:00:00.000Z",
-    };
-    const secondRender = {
-      renderId: "aui_beta",
-      title: "Second",
-      kind: "url",
-      url: SECOND_URL,
-      createdAt: "2026-08-29T10:01:00.000Z",
-    };
-    queryStates.set(firstRender.renderId, { data: { render: firstRender }, isPending: false });
-    queryStates.set(secondRender.renderId, { isPending: true });
-
-    const expandedFrame = (renderId: string) => (
-      <AgentUiRenderFrame
-        key={renderId}
-        threadRef={THREAD_REF}
-        renderId={renderId}
-        placement="expanded"
-        onTitle={() => undefined}
-      />
-    );
-
-    try {
-      await render(root, expandedFrame(firstRender.renderId));
-      const [firstNode] = iframeNodes(container);
-      expect(firstNode?.getAttribute("src")).toBe(FIRST_URL);
-
-      await render(root, expandedFrame(secondRender.renderId));
-      expect(firstNode?.parentNode).toBeNull();
+      expect(renderedText(container)).toBe("ordinary tool row");
       expect(iframeNodes(container)).toHaveLength(0);
+      expect(testState.queryCalls).toEqual([]);
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
 
-      queryStates.set(secondRender.renderId, { data: { render: secondRender }, isPending: false });
-      await render(root, expandedFrame(secondRender.renderId));
-      const [secondNode] = iframeNodes(container);
-      expect(secondNode).not.toBe(firstNode);
-      expect(secondNode?.getAttribute("src")).toBe(SECOND_URL);
+  it("keeps an already-populated expanded store closed", async () => {
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const container = document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    useAgentUiExpandedStore.getState().expand({ threadRef: THREAD_REF, renderId: "aui_alpha" });
+
+    try {
+      await render(root, <AgentUiExpandedSurface />);
+      expect(renderedText(container)).toBe("");
+      expect(iframeNodes(container)).toHaveLength(0);
+      expect(testState.queryCalls).toEqual([]);
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
+
+  it("never mounts either exact same-origin room URL if the inner frame is called directly", async () => {
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const container = document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    for (const [renderId, url] of [
+      ["aui_alpha", FIRST_URL],
+      ["aui_beta", SECOND_URL],
+    ] as const) {
+      testState.queries.set(renderId, {
+        data: {
+          render: {
+            renderId,
+            title: renderId,
+            kind: "url",
+            url,
+            createdAt: "2026-08-29T10:00:00.000Z",
+          },
+        },
+        isPending: false,
+      });
+    }
+
+    try {
+      await render(root, <AgentUiRenderFrame threadRef={THREAD_REF} renderId="aui_alpha" />);
+      expect(iframeNodes(container)).toHaveLength(0);
+      expect(renderedText(container)).toContain("URL Agent views are temporarily disabled");
+
+      await render(root, <AgentUiRenderFrame threadRef={THREAD_REF} renderId="aui_beta" />);
+      expect(iframeNodes(container)).toHaveLength(0);
+      expect(renderedText(container)).toContain("URL Agent views are temporarily disabled");
+      expect(FIRST_URL).not.toBe(SECOND_URL);
+      expect(testState.queryCalls).toEqual(["aui_alpha", "aui_beta"]);
     } finally {
       flushSync(() => root.unmount());
     }
