@@ -102,6 +102,25 @@ describe("AgentUiService", () => {
     ),
   );
 
+  it.effect("preserves distinct fragments for same-origin URL renders", () =>
+    withService((service) =>
+      Effect.gen(function* () {
+        const firstUrl = "https://fixture.example.test/board?mode=collab#room=alpha,safe-key-a";
+        const secondUrl = "https://fixture.example.test/board#room=beta,safe-key-b";
+        const first = yield* service.show({ threadId, title: "First", url: firstUrl });
+        const second = yield* service.show({ threadId, title: "Second", url: secondUrl });
+
+        expect(first.renderId).not.toBe(second.renderId);
+        expect((yield* service.getRender({ threadId, renderId: first.renderId }))?.url).toBe(
+          firstUrl,
+        );
+        expect((yield* service.getRender({ threadId, renderId: second.renderId }))?.url).toBe(
+          secondUrl,
+        );
+      }),
+    ),
+  );
+
   it.effect("requires exactly one of html or url", () =>
     withService((service) =>
       Effect.gen(function* () {
