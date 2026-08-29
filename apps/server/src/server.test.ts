@@ -1683,6 +1683,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get("/");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
+      assert.equal(response.headers["content-security-policy"], "frame-ancestors 'none'");
+      assert.equal(response.headers["x-frame-options"], "DENY");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("makes the SPA fallback HTML unframeable", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-static-" });
+      yield* fileSystem.writeFileString(path.join(staticDir, "index.html"), "fallback");
+
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      const response = yield* HttpClient.get("/missing/client/route");
+      assert.equal(response.status, 200);
+      assert.include(yield* response.text, "fallback");
+      assert.equal(response.headers["content-security-policy"], "frame-ancestors 'none'");
+      assert.equal(response.headers["x-frame-options"], "DENY");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

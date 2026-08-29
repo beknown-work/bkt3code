@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveAgentUiSurface, resolveEmbedSandbox } from "./agentUiSurface";
+import { resolveAgentUiSurface, resolveEmbedPolicy, resolveEmbedSandbox } from "./agentUiSurface";
 
 describe("resolveAgentUiSurface", () => {
   it("reads a well-formed handle", () => {
@@ -51,6 +51,10 @@ describe("resolveEmbedSandbox", () => {
     // Without this, localStorage and IndexedDB throw and real apps never boot.
     expect(sandbox).toContain("allow-same-origin");
     expect(sandbox).toContain("allow-scripts");
+    expect(resolveEmbedPolicy("https://draw-canvas.dev.beknown.live/", page)).toEqual({
+      sandbox,
+      credentialless: true,
+    });
   });
 
   it("withholds allow-same-origin from a self-referential embed", () => {
@@ -58,6 +62,7 @@ describe("resolveEmbedSandbox", () => {
     // the frame could reach the signed-in session directly.
     for (const url of [page, `${page}/settings`, `${page}/?x=1#y`]) {
       expect(resolveEmbedSandbox(url, page)).not.toContain("allow-same-origin");
+      expect(resolveEmbedPolicy(url, page).credentialless).toBe(false);
     }
   });
 

@@ -29,6 +29,13 @@ export const config: VercelConfig = {
   git: {
     deploymentEnabled: false,
   },
+  // T3-CUSTOM(expbkt3): hosted shells cannot be redirect targets for agent frames.
+  headers: [
+    routes.header("/(.*)", [
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+      { key: "X-Frame-Options", value: "DENY" },
+    ]),
+  ],
   installCommand:
     "npm install -g vite-plus && vp install --ignore-scripts --filter '@t3tools/scripts...' --filter '@t3tools/web...'",
   routes: [
