@@ -39,6 +39,7 @@ const clientSettings: ClientSettings = {
   // T3-CUSTOM(expbkt3): plan mode is available by default in the fork.
   planModeAvailable: true,
   nativePlanReviewEnabled: true,
+  agentUiSurfacesEnabled: true,
   showSkillsInSlashMenu: false,
   providerModelPreferences: {},
   providerRateLimitsEnabled: true,

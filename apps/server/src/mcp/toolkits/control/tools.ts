@@ -30,6 +30,8 @@ import {
   PlannotatorManager,
   PlannotatorPlanFormat,
 } from "../../../plannotator/PlannotatorManager.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import { AgentUiService } from "../../../agentui/AgentUiService.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { ServerSettingsService } from "../../../serverSettings.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
@@ -52,6 +54,7 @@ const dependencies = [
   Crypto.Crypto,
 ];
 const plannotatorDependencies = [...dependencies, PlannotatorManager];
+const agentUiDependencies = [...dependencies, AgentUiService];
 const configurationDependencies = [...dependencies, ProviderRegistry, ServerSettingsService];
 const ownershipDependencies = [ClerkDirectory, ServerConfig];
 const projectDependencies = [
@@ -612,6 +615,43 @@ export const T3UnlinkSessionTool = mutatingTool(
 );
 // T3-CUSTOM(expbkt3): END
 
+// T3-CUSTOM(expbkt3): BEGIN — agent-rendered UI surfaces in chat.
+//
+// Named to stay clear of the provider adapters' substring classifier: anything
+// containing "create", "file", "agent" or "command" would be tagged as a file
+// change or subagent row instead of an MCP tool call.
+export const T3ShowUiTool = readonlyTool(
+  Tool.make("t3_show_ui", {
+    description:
+      "Render an interactive view inside the chat transcript: a sandboxed box the user sees inline, right where the tool call happened. Pass a self-contained HTML document in `html` (inline <style> and <script> both run, no network access as the app) or an absolute https URL in `url` to embed a page. Use it for charts, diagrams, tables, dashboards, forms, canvases, and previews — anything clearer seen than described. Each call renders one new box; call it again to show an updated view. Scripts run in a sandbox with an opaque origin, so the document cannot reach T3 Code, its cookies, or the network as the user.",
+    parameters: Schema.Struct({
+      title: described(
+        Schema.String,
+        "Short label shown on the box, e.g. 'Latency by endpoint' or 'Migration plan'.",
+      ),
+      html: Schema.optional(
+        described(
+          Schema.String,
+          "A self-contained HTML document or fragment. Inline CSS and JS are allowed and run sandboxed; external assets are not fetched. Mutually exclusive with `url`.",
+        ),
+      ),
+      url: Schema.optional(
+        described(
+          Schema.String,
+          "Absolute https:// URL to embed instead of inline HTML. Mutually exclusive with `html`.",
+        ),
+      ),
+      height: Schema.optional(
+        described(Schema.Int, "Box height in pixels, from 120 through 900. Defaults to 360."),
+      ),
+    }),
+    success: Schema.Unknown,
+    failure: T3ControlToolError,
+    dependencies: agentUiDependencies,
+  }).annotate(Tool.Title, "Show a view in chat"),
+);
+// T3-CUSTOM(expbkt3): END
+
 export const T3ControlToolkit = Toolkit.make(
   T3ListSessionsTool,
   T3GetSessionTool,
@@ -632,4 +672,6 @@ export const T3ControlToolkit = Toolkit.make(
   T3SubmitPlanTool,
   T3ListPlannotatorReviewsTool,
   T3DispatchCommandTool,
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  T3ShowUiTool,
 );

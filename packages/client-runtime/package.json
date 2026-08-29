@@ -143,6 +143,10 @@
       "types": "./src/state/planReview.ts",
       "default": "./src/state/planReview.ts"
     },
+    "./state/agentUi": {
+      "types": "./src/state/agentUi.ts",
+      "default": "./src/state/agentUi.ts"
+    },
     "./state/terminal": {
       "types": "./src/state/terminal.ts",
       "default": "./src/state/terminal.ts"

@@ -272,6 +272,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Native plan review",
     to: "/settings/experiments",
   },
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  {
+    id: "agent-ui-surfaces",
+    title: "Agent views in chat",
+    to: "/settings/experiments",
+  },
   {
     id: "archive",
     title: "Archived threads",

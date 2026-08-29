@@ -23,6 +23,16 @@ export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
+// T3-CUSTOM(expbkt3): rows that must never collapse into a "+N tool calls"
+// toggle, and never fold away with their turn.
+//
+// A spawn CTA hides a still-running fleet when folded; an agent view is worse,
+// because the view *is* the answer the agent produced, not a record that work
+// happened. Behind a toggle it may as well not have been drawn.
+export function workEntryStaysVisible(entry: WorkLogEntry): boolean {
+  return entry.agentSpawn !== undefined || entry.agentUi !== undefined;
+}
+
 export function workEntryIsVisibleInGroup(
   entry: WorkLogEntry,
   expandedToolGroupEntry = false,
@@ -615,7 +625,7 @@ function deriveTurnFolds(input: {
       // Agent-spawn CTA rows never fold: workflows outlive their launching
       // turn (dynamic spawns, background execution), and folding the CTA
       // when the turn settles makes a still-running fleet invisible.
-      if (entry.kind === "work" && entry.entry.agentSpawn !== undefined) {
+      if (entry.kind === "work" && workEntryStaysVisible(entry.entry)) {
         continue;
       }
       hiddenEntryIds.add(entry.id);
@@ -742,7 +752,7 @@ export function deriveMessagesTimelineRows(input: {
     }
     if (entry.kind === "work") {
       return (
-        entry.entry.agentSpawn === undefined &&
+        !workEntryStaysVisible(entry.entry) &&
         workLogEntryIsToolLike(entry.entry) &&
         entry.entry.toolLifecycleStatus === "inProgress"
       );
@@ -757,7 +767,7 @@ export function deriveMessagesTimelineRows(input: {
     if (
       !entryBelongsToActiveTurn(entry, index) ||
       entry.kind !== "work" ||
-      entry.entry.agentSpawn !== undefined ||
+      workEntryStaysVisible(entry.entry) ||
       entry.entry.tone === "error" ||
       !workLogEntryIsToolLike(entry.entry)
     ) {
@@ -875,7 +885,7 @@ export function deriveMessagesTimelineRows(input: {
         const onlyToolEntries = visibleGroupedEntries.every(
           (entry) =>
             workLogEntryIsToolLike(entry) &&
-            entry.agentSpawn === undefined &&
+            !workEntryStaysVisible(entry) &&
             entry.tone !== "error",
         );
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
@@ -951,12 +961,12 @@ export function deriveMessagesTimelineRows(input: {
           // (review finding: concatenating two filtered lists moved a
           // mid-group spawn row above earlier tool rows).
           const overflowCandidates = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn === undefined,
+            (entry) => !workEntryStaysVisible(entry),
           );
           const hiddenEntries = overflowCandidates.slice(0, -MAX_VISIBLE_WORK_LOG_ENTRIES);
           const hiddenIds = new Set(hiddenEntries.map((entry) => entry.id));
           const visibleEntries = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn !== undefined || !hiddenIds.has(entry.id),
+            (entry) => workEntryStaysVisible(entry) || !hiddenIds.has(entry.id),
           );
           const renderedEntries = expanded ? visibleGroupedEntries : visibleEntries;
 

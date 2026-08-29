@@ -66,6 +66,7 @@ import Migration0045 from "./Migrations/045_EnvironmentUsers.ts";
 import Migration1005 from "./Migrations/036_ProjectionThreadsPinned.ts";
 // T3-CUSTOM(expbkt3): fork migrations, numbered 1000+.
 import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
+import Migration1022 from "./Migrations/1022_AgentUiRenders.ts";
 import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
 import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.ts";
 // T3-CUSTOM(expbkt3): exact durable work items and guarded recovery audit.
@@ -223,6 +224,8 @@ const migrationEntries = [
   [1019, "AuthSessionClientConnection", Migration1019],
   [1020, "ProjectionThreadLinkedPullRequest", Migration1020],
   [1021, "ProjectionThreadsUnsettledAt", Migration1021],
+  // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+  [1022, "AgentUiRenders", Migration1022],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

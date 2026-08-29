@@ -59,7 +59,10 @@ import * as PlannotatorManager from "./plannotator/PlannotatorManager.ts";
 // T3-CUSTOM(expbkt3): native plan review.
 import * as PlanIngestListener from "./planreview/PlanIngestListener.ts";
 import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
+// T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
+import * as AgentUiServiceLayer from "./agentui/AgentUiService.ts";
 import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
+import * as AgentUiRenders from "./persistence/AgentUiRenders.ts";
 import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
 // T3-CUSTOM(expbkt3): END
 import * as PreviewManager from "./preview/Manager.ts";
@@ -871,10 +874,17 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(PlanReviewDocuments.layer),
       Layer.provideMerge(runtimeServicesWithoutPlannotatorLive),
     );
+    // T3-CUSTOM(expbkt3): agent-rendered UI surfaces. Only needs the sqlite
+    // client, so it composes beside plan review rather than under it.
+    const agentUiServicesLive = AgentUiServiceLayer.layer.pipe(
+      Layer.provide(AgentUiRenders.layer),
+      Layer.provideMerge(runtimeServicesWithoutPlannotatorLive),
+    );
     const runtimeServicesLive = Layer.mergeAll(
       PlannotatorManager.layer.pipe(Layer.provideMerge(runtimeServicesWithoutPlannotatorLive)),
       PlanIngestListener.layer.pipe(Layer.provideMerge(planReviewServicesLive)),
       planReviewServicesLive,
+      agentUiServicesLive,
     );
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
