@@ -164,7 +164,11 @@ describe("AgentUiUrlFrame DOM lifecycle", () => {
     useAgentUiUrlFrameCoordinator.getState().reset();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // React's development scheduler posts an Immediate after a root commits.
+    // Let it drain while the fake window still exists so parallel CI cannot
+    // observe a callback after Vitest restores the Node globals.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     vi.unstubAllGlobals();
   });
 
