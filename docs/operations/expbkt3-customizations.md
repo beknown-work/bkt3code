@@ -112,6 +112,12 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Agent views in chat       | `apps/server/src/agentui/`, `persistence/AgentUiRenders.ts`, migration 1022, `packages/contracts/src/agentUi.ts`, `packages/client-runtime/src/state/agentUi.ts`, `apps/web/src/fork/agentUiSurface.tsx`, `apps/web/src/state/agentUi.ts`          | `t3_show_ui` in the MCP control toolkit, fork RPC group + scopes + handlers, one `ws.ts` dep, one `server.ts` layer, marked handle passthrough in `ActivityPayloadProjection.ts`, `agentUi` field + read in `session-logic.ts`, one import and early return in `MessagesTimeline.tsx`, Experiments toggle + `settingsSearch.ts` entry     |
 | Experimental deployment   | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                                                                                                                                                          | none                                                                                                                                                                                                                                                                                                                                      |
 
+Agent views currently have an enforced runtime-off gate in
+`apps/web/src/fork/agentUiRuntime.ts`. Framed collaboration apps can decline to
+join the URL-selected room and render unrelated origin-local state instead, so
+the persisted client preference cannot enable the surface until the generic URL
+contract can render truthfully.
+
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
 markers; they are regenerated from marked route sources.
 

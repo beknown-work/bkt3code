@@ -19,6 +19,8 @@ import {
 } from "./settingsLayout";
 // T3-CUSTOM(expbkt3): native plan review (moved here from the removed Beta panel).
 import { searchableSetting } from "./settingsSearch";
+// T3-CUSTOM(expbkt3): Agent views are runtime-disabled after URL frames proved untruthful.
+import { AGENT_UI_SURFACES_RUNTIME_ENABLED } from "../../fork/agentUiRuntime";
 
 export function ExperimentsSettingsPanel() {
   const phaseGroupedSidebarEnabled = useClientSettings(
@@ -55,10 +57,11 @@ export function ExperimentsSettingsPanel() {
         {/* T3-CUSTOM(expbkt3): BEGIN — agent-rendered UI surfaces in chat. */}
         <SettingsRow
           {...searchableSetting("agent-ui-surfaces")}
-          description="Let agents render interactive views inline in the chat: charts, diagrams, tables, forms and other small HTML documents, shown in a sandboxed box where the tool call happened. Agents reach this through the t3_show_ui tool. While off, those calls stay ordinary collapsed tool rows."
+          description="Temporarily unavailable: framed URL apps can substitute origin-local state for the requested live view. t3_show_ui calls stay ordinary collapsed tool rows until Agent views can render truthfully."
           control={
             <Switch
-              checked={agentUiSurfacesEnabled}
+              checked={AGENT_UI_SURFACES_RUNTIME_ENABLED && agentUiSurfacesEnabled}
+              disabled={!AGENT_UI_SURFACES_RUNTIME_ENABLED}
               onCheckedChange={(checked) =>
                 updateSettings({ agentUiSurfacesEnabled: Boolean(checked) })
               }

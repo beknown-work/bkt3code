@@ -24,7 +24,7 @@ import { agentUiEnvironment } from "../state/agentUi";
 import { useAgentUiExpandedStore } from "../agentUiExpandedStore";
 import { useEnvironmentQuery } from "../state/query";
 import { cn } from "../lib/utils";
-import { useAgentUiUrlFrameCoordinator } from "./agentUiUrlFrameCoordinator";
+import { AGENT_UI_SURFACES_RUNTIME_ENABLED } from "./agentUiRuntime";
 
 /** The handle `ActivityPayloadProjection` keeps on an MCP tool-call payload. */
 export interface AgentUiSurfaceHandle {
@@ -71,129 +71,6 @@ function toSrcDoc(html: string): string {
   ].join("");
 }
 
-const EMBED_SANDBOX_BASE = "allow-scripts allow-forms allow-popups allow-downloads";
-
-/**
- * Sandbox for a framed URL.
- *
- * A real app needs its own origin back: without `allow-same-origin` the document
- * is opaque, so `localStorage`, IndexedDB and cookies all throw. Excalidraw and
- * anything else that persists state simply fails to boot without it.
- *
- * Pairing `allow-same-origin` with `allow-scripts` is only an escape when the
- * framed document is same-origin with *this* page — then it can reach our DOM,
- * our storage and the user's session directly. So it is withheld exactly there,
- * which leaves a self-referential embed opaque and harmless instead of handing
- * an agent arbitrary script in the signed-in app.
- */
-export function resolveEmbedSandbox(url: string, pageOrigin: string): string {
-  let origin: string;
-  try {
-    origin = new URL(url).origin;
-  } catch {
-    return EMBED_SANDBOX_BASE;
-  }
-  return origin === pageOrigin ? EMBED_SANDBOX_BASE : `${EMBED_SANDBOX_BASE} allow-same-origin`;
-}
-
-export interface AgentUiEmbedPolicy {
-  readonly sandbox: string;
-  readonly credentialless: boolean;
-}
-
-/** Cross-origin apps get an ephemeral credential shelf when the browser supports it. */
-export function resolveEmbedPolicy(url: string, pageOrigin: string): AgentUiEmbedPolicy {
-  const sandbox = resolveEmbedSandbox(url, pageOrigin);
-  return {
-    sandbox,
-    credentialless: sandbox.split(" ").includes("allow-same-origin"),
-  };
-}
-
-function resolveUrlOrigin(url: string, renderId: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    // The server rejects this shape, but a corrupt legacy row should remain
-    // locked down and must not share ownership with another bad URL.
-    return `opaque:${renderId}`;
-  }
-}
-
-const CREDENTIALLESS_IFRAME_PROPS = { credentialless: "" } as const;
-
-export const AgentUiUrlFrame = memo(function AgentUiUrlFrame(props: {
-  readonly render: {
-    readonly renderId: string;
-    readonly title: string;
-    readonly url: string;
-    readonly createdAt: string;
-  };
-  readonly threadRef: ScopedThreadRef;
-  readonly placement: "inline" | "expanded";
-}) {
-  const { render, threadRef, placement } = props;
-  const origin = useMemo(
-    () => resolveUrlOrigin(render.url, render.renderId),
-    [render.renderId, render.url],
-  );
-  const slotId = `${placement}:${threadRef.environmentId}:${threadRef.threadId}:${render.renderId}`;
-  const register = useAgentUiUrlFrameCoordinator((state) => state.register);
-  const unregister = useAgentUiUrlFrameCoordinator((state) => state.unregister);
-  const activate = useAgentUiUrlFrameCoordinator((state) => state.activate);
-  const settle = useAgentUiUrlFrameCoordinator((state) => state.settle);
-  const activeSlot = useAgentUiUrlFrameCoordinator(
-    (state) => state.activeSlotByOrigin[origin] ?? null,
-  );
-  const pendingSlot = useAgentUiUrlFrameCoordinator(
-    (state) => state.pendingSlotByOrigin[origin] ?? null,
-  );
-
-  useEffect(() => {
-    register({
-      slotId,
-      renderId: render.renderId,
-      origin,
-      createdAt: render.createdAt,
-      priority: placement,
-    });
-    return () => unregister(slotId);
-  }, [origin, placement, register, render.createdAt, render.renderId, slotId, unregister]);
-
-  // `activate` first commits an empty owner. Settling from an effect makes the
-  // requested iframe a later commit, after the previous DOM node disconnected.
-  useEffect(() => {
-    if (activeSlot === null && pendingSlot === slotId) settle(origin);
-  }, [activeSlot, origin, pendingSlot, settle, slotId]);
-
-  if (activeSlot !== slotId) {
-    return (
-      <div className="flex h-full items-center justify-center px-4 text-center">
-        <button
-          type="button"
-          className="rounded border border-border/60 px-3 py-1.5 font-medium text-secondary-label text-xs hover:bg-accent/20"
-          onClick={() => activate(slotId)}
-        >
-          Open this view
-        </button>
-      </div>
-    );
-  }
-
-  const policy = resolveEmbedPolicy(render.url, window.location.origin);
-  return (
-    <iframe
-      key={render.renderId}
-      title={render.title}
-      {...(policy.credentialless ? CREDENTIALLESS_IFRAME_PROPS : {})}
-      src={render.url}
-      className="size-full border-0 bg-white"
-      sandbox={policy.sandbox}
-      referrerPolicy="no-referrer"
-    />
-  );
-});
-
 /**
  * Fetches one render and mounts it. Shared by the inline card and the expanded
  * overlay so both agree on sandboxing, loading and failure states — the sandbox
@@ -202,7 +79,6 @@ export const AgentUiUrlFrame = memo(function AgentUiUrlFrame(props: {
 export const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
   readonly threadRef: ScopedThreadRef;
   readonly renderId: string;
-  readonly placement: "inline" | "expanded";
   readonly onTitle?: ((title: string) => void) | undefined;
 }) {
   const { environmentId, threadId } = props.threadRef;
@@ -258,16 +134,10 @@ export const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
   }
   if (render.url) {
     return (
-      <AgentUiUrlFrame
-        render={{
-          renderId: render.renderId,
-          title: render.title,
-          url: render.url,
-          createdAt: render.createdAt,
-        }}
-        threadRef={props.threadRef}
-        placement={props.placement}
-      />
+      <div className="flex h-full items-center justify-center px-4 text-center text-secondary-label text-xs">
+        URL Agent views are temporarily disabled because framed apps cannot always render the
+        requested live state reliably.
+      </div>
     );
   }
   return null;
@@ -312,7 +182,6 @@ function AgentUiSurfaceCardImpl({ threadRef, surface }: AgentUiSurfaceCardProps)
             key={surface.renderId}
             threadRef={threadRef}
             renderId={surface.renderId}
-            placement="inline"
             onTitle={setTitle}
           />
         </div>
@@ -335,7 +204,7 @@ export const AgentUiSurfaceRow = memo(function AgentUiSurfaceRow(props: {
   readonly children: ReactNode;
 }) {
   const enabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
-  if (!enabled || props.threadRef === null) {
+  if (!AGENT_UI_SURFACES_RUNTIME_ENABLED || !enabled || props.threadRef === null) {
     return props.children;
   }
   return (
@@ -361,7 +230,7 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
   const collapse = useAgentUiExpandedStore((state) => state.collapse);
   const [title, setTitle] = useState("Agent view");
 
-  const open = enabled && expanded !== null;
+  const open = AGENT_UI_SURFACES_RUNTIME_ENABLED && enabled && expanded !== null;
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -403,7 +272,6 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
           key={expanded.renderId}
           threadRef={expanded.threadRef}
           renderId={expanded.renderId}
-          placement="expanded"
           onTitle={setTitle}
         />
       </div>

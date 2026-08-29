@@ -7,7 +7,8 @@
  */
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveAgentUiSurface, resolveEmbedPolicy, resolveEmbedSandbox } from "./agentUiSurface";
+import { resolveAgentUiSurface } from "./agentUiSurface";
+import { AGENT_UI_SURFACES_RUNTIME_ENABLED } from "./agentUiRuntime";
 
 describe("resolveAgentUiSurface", () => {
   it("reads a well-formed handle", () => {
@@ -43,36 +44,8 @@ describe("resolveAgentUiSurface", () => {
   });
 });
 
-describe("resolveEmbedSandbox", () => {
-  const page = "https://bkt3.dev.beknown.live";
-
-  it("gives a cross-origin app its own origin back so storage works", () => {
-    const sandbox = resolveEmbedSandbox("https://draw-canvas.dev.beknown.live/", page);
-    // Without this, localStorage and IndexedDB throw and real apps never boot.
-    expect(sandbox).toContain("allow-same-origin");
-    expect(sandbox).toContain("allow-scripts");
-    expect(resolveEmbedPolicy("https://draw-canvas.dev.beknown.live/", page)).toEqual({
-      sandbox,
-      credentialless: true,
-    });
-  });
-
-  it("withholds allow-same-origin from a self-referential embed", () => {
-    // allow-scripts + allow-same-origin on our OWN origin is a sandbox escape:
-    // the frame could reach the signed-in session directly.
-    for (const url of [page, `${page}/settings`, `${page}/?x=1#y`]) {
-      expect(resolveEmbedSandbox(url, page)).not.toContain("allow-same-origin");
-      expect(resolveEmbedPolicy(url, page).credentialless).toBe(false);
-    }
-  });
-
-  it("treats a different port or scheme on the same host as cross-origin", () => {
-    expect(resolveEmbedSandbox("https://bkt3.dev.beknown.live:8443/", page)).toContain(
-      "allow-same-origin",
-    );
-  });
-
-  it("falls back to the locked-down sandbox for an unparseable url", () => {
-    expect(resolveEmbedSandbox("not a url", page)).not.toContain("allow-same-origin");
+describe("Agent view runtime gate", () => {
+  it("is fail-closed independently of persisted client settings", () => {
+    expect(AGENT_UI_SURFACES_RUNTIME_ENABLED).toBe(false);
   });
 });
