@@ -76,6 +76,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPriority: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): durable manual Linear tags on thread metadata. */
   threadLinearIssue: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): durable Mattermost conversation link on thread metadata. */
+  threadMattermostLink: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): server understands externalSession on thread.create
       (attach a new thread to an existing provider session). */
   threadExternalSessionAttach: Schema.optionalKey(Schema.Boolean),

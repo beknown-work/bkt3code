@@ -104,6 +104,8 @@ describe("orchestration projector", () => {
         priority: null,
         // T3-CUSTOM(expbkt3): no manual Linear tag on a new thread.
         linearIssueUrl: null,
+        // T3-CUSTOM(expbkt3): no Mattermost conversation bound to a new thread.
+        mattermostThreadUrl: null,
         // T3-CUSTOM(expbkt3): session lineage.
         parentThreadId: null,
         deletedAt: null,

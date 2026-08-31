@@ -156,6 +156,7 @@ import {
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
   resolvePhaseSidebarLinearIssue,
+  resolvePhaseSidebarMattermostLink,
   resolvePhaseSidebarProviderCode,
   resolvePhaseSidebarTraversalTarget,
   resolvePhaseSidebarWorkBadge,
@@ -236,6 +237,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { PhaseSidebarUnreadIndicator } from "./sidebar/PhaseSidebarUnreadIndicator";
 import { LinearIssueTagDialog } from "./sidebar/LinearIssueTagDialog";
+import { MattermostLinkDialog } from "./sidebar/MattermostLinkDialog";
+import { MattermostThreadBadge } from "./sidebar/MattermostThreadBadge";
 
 // T3-CUSTOM(expbkt3): Settled-tail paging — recent history is the common
 // lookup; the deep tail stays behind an explicit Show more.
@@ -870,6 +873,7 @@ interface PhaseThreadRowProps {
   readonly onSetPriority: (row: PhaseSidebarRow, priority: 0 | 1 | 2 | 3 | 4 | null) => void;
   // T3-CUSTOM(expbkt3): null clears a manually attached Linear issue.
   readonly onSetLinearIssueUrl: (row: PhaseSidebarRow, url: string | null) => void;
+  readonly onSetMattermostThreadUrl: (row: PhaseSidebarRow, url: string | null) => void;
   // T3-CUSTOM(expbkt3): re-derive the title from the conversation.
   readonly onRegenerateTitle: (row: PhaseSidebarRow) => void;
   readonly linearIssueStatus: LinearIssueStatusSummary | null;
@@ -955,6 +959,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     onUnsnooze,
     onSetPriority,
     onSetLinearIssueUrl,
+    onSetMattermostThreadUrl,
     onRegenerateTitle,
     linearIssueStatus,
     onCreateThread,
@@ -1005,6 +1010,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
+  // T3-CUSTOM(expbkt3): the Mattermost conversation following this session.
+  const mattermostLink = resolvePhaseSidebarMattermostLink(row.thread.mattermostThreadUrl);
   // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
   // state, number as the label.
   const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(vcsStatus);
@@ -1041,6 +1048,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   // the row, so the hover cluster has to stay pinned.
   const [snoozeMenuOpenRaw, setSnoozeMenuOpen] = useState(false);
   const [linearTagDialogOpen, setLinearTagDialogOpen] = useState(false);
+  const [mattermostDialogOpen, setMattermostDialogOpen] = useState(false);
   // Snooze is offered only where it can succeed: capability-gated, and never
   // on a thread that is blocked on the user (hiding a pending request would
   // defeat it).
@@ -1193,6 +1201,20 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             : []),
         ]
       : [];
+    // T3-CUSTOM(expbkt3): the Mattermost conversation following this session.
+    // "Open" comes first because the badge itself is not clickable - it lives
+    // inside the row's button, where an anchor would be invalid and would
+    // swallow row selection.
+    const mattermostItems = row.mattermostLinkSupported
+      ? [
+          ...(mattermostLink ? [{ id: "open-mattermost", label: "Open in Mattermost" }] : []),
+          {
+            id: "link-mattermost",
+            label: mattermostLink ? "Change Mattermost link\u2026" : "Link Mattermost\u2026",
+          },
+          ...(mattermostLink ? [{ id: "remove-mattermost", label: "Remove Mattermost link" }] : []),
+        ]
+      : [];
     // Session lineage. "Detach" is always offered when a parent exists —
     // nesting must never be a one-way door.
     const lineageItems = treeActions
@@ -1249,6 +1271,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         { id: "mark-unread", label: "Mark unread" },
         ...priorityItems,
         ...linearItems,
+        // T3-CUSTOM(expbkt3): Mattermost conversation link.
+        ...mattermostItems,
         // T3-CUSTOM(expbkt3): session lineage.
         ...lineageItems,
         ...settlementItems,
@@ -1297,6 +1321,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     }
     if (action === "tag-linear") setLinearTagDialogOpen(true);
     if (action === "remove-linear") onSetLinearIssueUrl(row, null);
+    // T3-CUSTOM(expbkt3): Mattermost conversation link.
+    if (action === "open-mattermost" && mattermostLink) {
+      window.open(mattermostLink.url, "_blank", "noopener,noreferrer");
+    }
+    if (action === "link-mattermost") setMattermostDialogOpen(true);
+    if (action === "remove-mattermost") onSetMattermostThreadUrl(row, null);
     if (action === "regenerate-title") onRegenerateTitle(row);
     // T3-CUSTOM(expbkt3): END
     if (action === "force-stop-agent") onForceStop(row);
@@ -1754,6 +1784,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           {ownerAvatarUserId !== null ? (
             <PhaseSidebarOwnerAvatar ownerUserId={ownerAvatarUserId} threadId={row.thread.id} />
           ) : null}
+          {/* T3-CUSTOM(expbkt3): a human is following this session from chat. */}
+          {mattermostLink ? (
+            <MattermostThreadBadge label={mattermostLink.label} threadId={row.thread.id} />
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1774,7 +1808,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           </Tooltip>
         </span>
         {/* T3-CUSTOM(expbkt3): BEGIN — hover actions overlay the row instead of reflowing metadata. */}
-        <span className={phaseSidebarRowActionsClassName(snoozeMenuOpen || linearTagDialogOpen)}>
+        <span
+          className={phaseSidebarRowActionsClassName(
+            snoozeMenuOpen || linearTagDialogOpen || mattermostDialogOpen,
+          )}
+        >
           {section === "snoozed" ? (
             row.snoozeSupported ? (
               <PhaseRowAction
@@ -1837,6 +1875,14 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         threadTitle={row.thread.title}
         onOpenChange={setLinearTagDialogOpen}
         onSave={(url) => onSetLinearIssueUrl(row, url)}
+      />
+      {/* T3-CUSTOM(expbkt3): Mattermost conversation link editor. */}
+      <MattermostLinkDialog
+        open={mattermostDialogOpen}
+        initialUrl={row.thread.mattermostThreadUrl ?? ""}
+        threadTitle={row.thread.title}
+        onOpenChange={setMattermostDialogOpen}
+        onSave={(url) => onSetMattermostThreadUrl(row, url)}
       />
     </li>
   );
@@ -2060,6 +2106,9 @@ export function PhaseGroupedSidebar() {
           snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
           prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
           linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
+          // T3-CUSTOM(expbkt3): durable Mattermost conversation link.
+          mattermostLinkSupported:
+            serverConfig?.environment.capabilities.threadMattermostLink === true,
           titleRegenerationSupported:
             serverConfig?.environment.capabilities.threadTitleRegeneration === true,
           threadBootstrapSupported:
@@ -2549,6 +2598,30 @@ export function PhaseGroupedSidebar() {
     },
     [updateThreadMetadata],
   );
+  // T3-CUSTOM(expbkt3): the Mattermost conversation a session is bound to. The
+  // bridge normally writes this when it attaches a session to a chat thread;
+  // the row menu is the manual path and the way to clear a stale link.
+  const setThreadMattermostThreadUrl = useCallback(
+    (row: PhaseSidebarRow, mattermostThreadUrl: string | null) => {
+      if ((row.thread.mattermostThreadUrl ?? null) === mattermostThreadUrl) return;
+      void updateThreadMetadata({
+        environmentId: row.thread.environmentId,
+        input: { threadId: row.thread.id, mattermostThreadUrl },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to link Mattermost conversation",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [updateThreadMetadata],
+  );
   const setThreadLinearIssueUrl = useCallback(
     (row: PhaseSidebarRow, linearIssueUrl: string | null) => {
       if ((row.thread.linearIssueUrl ?? null) === linearIssueUrl) return;
@@ -2983,6 +3056,7 @@ export function PhaseGroupedSidebar() {
         onUnsnooze={attemptUnsnooze}
         onSetPriority={setThreadPriority}
         onSetLinearIssueUrl={setThreadLinearIssueUrl}
+        onSetMattermostThreadUrl={setThreadMattermostThreadUrl}
         onRegenerateTitle={regenerateThreadTitle}
         onCreateThread={createThreadFromRow}
         linearIssueStatus={(() => {

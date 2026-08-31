@@ -159,6 +159,8 @@ export const make = Effect.gen(function* () {
       threadPriority: true,
       // T3-CUSTOM(expbkt3): durable manual Linear tags.
       threadLinearIssue: true,
+      // T3-CUSTOM(expbkt3): durable Mattermost conversation link.
+      threadMattermostLink: true,
       threadExternalSessionAttach: true,
       // T3-CUSTOM(expbkt3): high-level durable bootstrap and defaults hierarchy.
       durableThreadBootstrap: true,
