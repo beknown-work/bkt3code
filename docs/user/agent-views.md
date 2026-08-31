@@ -4,37 +4,30 @@
 > upstream-isolated extension. See the
 > [customization boundary registry](../operations/expbkt3-customizations.md).
 
-An agent can render a small interactive view directly in the conversation: a
-chart, a diagram, a table, a form, a preview. The view appears inline, in the
-place where the agent produced it, rather than as a file you have to open.
+Agent views are temporarily disabled in the experimental client. Calls to
+`t3_show_ui` remain visible as ordinary collapsed tool rows, but the client does
+not mount their documents or URL targets.
 
-Ask for something visual — "chart the request latency by endpoint", "show me the
-migration order as a diagram", "lay these options out side by side" — and the
-agent decides whether a view says it better than text.
+This is an enforced runtime safety gate. It overrides clients that previously
+persisted **Agent views in chat** as enabled.
 
 ## What a view is
 
-Each view is a box in the transcript with a title bar you can collapse. Inside
-is a document the agent wrote, rendered in a sandbox:
+Some live collaboration apps deliberately disable room bootstrap whenever they
+run inside an iframe. In that state, a room URL can display data cached for the
+app's origin instead of joining the room named by the URL. Storage partitioning
+can turn that stale content into an empty canvas, but it cannot make the framed
+app join. T3 therefore cannot truthfully render those URLs inline without a
+change owned by the embedded app or a different browser-level integration.
 
-- Its styles and scripts run, so charts, tabs and hover states work.
-- It cannot reach T3 Code, your session, your cookies, or the network as you.
-- It cannot navigate the app or read anything outside its own box.
-
-Views are a snapshot, not a live surface. When an agent shows you an updated
-version it appears as a new box further down the conversation, so scrolling back
-still shows what it produced at that point in the work.
-
-An agent can also embed a page by its `https` address instead of writing the
-document itself. Some sites refuse to be embedded and will show an empty box;
-that is the site's decision, not a fault in T3.
+Disabling the surface is the generic fail-closed behavior: T3 does not
+special-case an app or domain, rewrite URL fragments, proxy encryption keys, or
+weaken the iframe sandbox.
 
 ## Turning it off
 
-**Settings → Experiments → Agent views in chat.** While it is off, an agent that
-tries to show a view leaves an ordinary collapsed tool row instead, and nothing
-is rendered. The setting is per client, so turning it off on your laptop does not
-change what you see on your phone.
+**Settings → Experiments → Agent views in chat** shows the runtime-disabled
+state. The switch cannot re-enable the surface while this mitigation is active.
 
 ## Limits
 

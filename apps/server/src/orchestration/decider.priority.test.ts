@@ -214,4 +214,60 @@ it.layer(NodeServices.layer)("thread priority decider", (it) => {
       ).toBeNull();
     }),
   );
+
+  // T3-CUSTOM(expbkt3): the Mattermost conversation a session is bound to.
+  it.effect("sets and clears a Mattermost link through thread metadata", () =>
+    Effect.gen(function* () {
+      const linked = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-link-mattermost"),
+          threadId: ThreadId.make("thread-1"),
+          mattermostThreadUrl: "https://chat.example.com/beknown/pl/abc123",
+        },
+        readModel: makeReadModel(),
+      });
+      const linkedEvents = Array.isArray(linked) ? linked : [linked];
+      expect(
+        linkedEvents[0]?.type === "thread.meta-updated"
+          ? linkedEvents[0].payload.mattermostThreadUrl
+          : undefined,
+      ).toBe("https://chat.example.com/beknown/pl/abc123");
+
+      const cleared = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-clear-mattermost"),
+          threadId: ThreadId.make("thread-1"),
+          mattermostThreadUrl: null,
+        },
+        readModel: makeReadModel(),
+      });
+      const clearedEvents = Array.isArray(cleared) ? cleared : [cleared];
+      expect(
+        clearedEvents[0]?.type === "thread.meta-updated"
+          ? clearedEvents[0].payload.mattermostThreadUrl
+          : undefined,
+      ).toBeNull();
+    }),
+  );
+
+  it.effect("leaves the Mattermost link untouched when the command omits it", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-rename-only-mattermost"),
+          threadId: ThreadId.make("thread-1"),
+          title: "Renamed",
+        },
+        readModel: makeReadModel(),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      if (events[0]?.type === "thread.meta-updated") {
+        // undefined, not null: an omitted field must not clear a live binding.
+        expect(events[0].payload.mattermostThreadUrl).toBe(undefined);
+      }
+    }),
+  );
 });

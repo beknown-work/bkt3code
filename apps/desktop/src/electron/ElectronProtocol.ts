@@ -99,6 +99,8 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
 
   return [
     "default-src 'self'",
+    // T3-CUSTOM(expbkt3): a remote agent frame must not redirect into the desktop shell.
+    "frame-ancestors 'none'",
     `script-src ${scriptSources.join(" ")}`,
     `connect-src ${connectSources.join(" ")}`,
     `img-src 'self' ${input.scheme}: blob: data: http: https:`,
@@ -115,6 +117,8 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
 function withContentSecurityPolicy(response: Response, policy: string): Response {
   const headers = new Headers(response.headers);
   headers.set("Content-Security-Policy", policy);
+  // T3-CUSTOM(expbkt3): legacy defense in depth for custom-protocol shell responses.
+  headers.set("X-Frame-Options", "DENY");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

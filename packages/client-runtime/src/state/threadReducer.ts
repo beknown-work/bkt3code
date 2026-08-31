@@ -262,6 +262,10 @@ export function applyThreadDetailEvent(
           ...(event.payload.linearIssueUrl !== undefined
             ? { linearIssueUrl: event.payload.linearIssueUrl }
             : {}),
+          // T3-CUSTOM(expbkt3): durable Mattermost conversation link.
+          ...(event.payload.mattermostThreadUrl !== undefined
+            ? { mattermostThreadUrl: event.payload.mattermostThreadUrl }
+            : {}),
           // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
           ...(event.payload.parentThreadId !== undefined
             ? { parentThreadId: event.payload.parentThreadId }

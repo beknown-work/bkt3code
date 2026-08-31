@@ -797,6 +797,8 @@ export const OrchestrationThread = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): optional so payloads from pre-manual-tag servers decode.
   linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // T3-CUSTOM(expbkt3): optional so payloads from pre-Mattermost servers decode.
+  mattermostThreadUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage. Optional so payloads from
   // pre-lineage servers decode; null means this is a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
@@ -892,6 +894,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): durable manual Linear issue URL.
   linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // T3-CUSTOM(expbkt3): durable Mattermost conversation permalink.
+  mattermostThreadUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage (see the ThreadPriority block above).
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (see ThreadWorkSummary).
@@ -1387,6 +1391,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): manual Linear tag. undefined = unchanged, null = clear.
   linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // T3-CUSTOM(expbkt3): Mattermost conversation this session is bound to.
+  // undefined = unchanged, null = clear.
+  mattermostThreadUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage. undefined = unchanged, null = detach
   // to a root session. The decider rejects a value that would form a cycle.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
@@ -2129,6 +2136,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): manual Linear tag. undefined = unchanged, null = clear.
   linearIssueUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // T3-CUSTOM(expbkt3): Mattermost conversation this session is bound to.
+  // undefined = unchanged, null = clear.
+  mattermostThreadUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage. undefined = unchanged, null = detach.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),

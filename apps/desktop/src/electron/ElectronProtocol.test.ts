@@ -77,6 +77,11 @@ describe("ElectronProtocol", () => {
             response.headers.get("content-security-policy") ?? "",
             "font-src 'self' t3code-dev: data:",
           );
+          assert.include(
+            response.headers.get("content-security-policy") ?? "",
+            "frame-ancestors 'none'",
+          );
+          assert.equal(response.headers.get("x-frame-options"), "DENY");
         }),
       );
 
@@ -162,6 +167,11 @@ describe("ElectronProtocol", () => {
         assert.equal(yield* Effect.promise(() => responses[1].text()), "<main>client</main>");
         assert.equal(responses[0].headers.get("content-type"), "text/javascript; charset=utf-8");
         assert.include(responses[1].headers.get("content-security-policy") ?? "", "default-src");
+        assert.include(
+          responses[1].headers.get("content-security-policy") ?? "",
+          "frame-ancestors 'none'",
+        );
+        assert.equal(responses[1].headers.get("x-frame-options"), "DENY");
         assert.equal(netFetchMock.mock.calls.length, 0);
       }),
     ).pipe(Effect.provide(electronProtocolLayer)),
@@ -282,6 +292,7 @@ describe("ElectronProtocol", () => {
       "https://clerk.t3.codes",
       "https://challenges.cloudflare.com",
     ]);
+    assert.deepEqual(directives["frame-ancestors"], ["'none'"]);
     assert.deepEqual(directives["connect-src"], ["'self'", "http:", "https:", "ws:", "wss:"]);
     // A Plannotator review is framed from the environment that owns the thread,
     // which is never this renderer's origin.

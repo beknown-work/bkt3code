@@ -24,6 +24,7 @@ import { agentUiEnvironment } from "../state/agentUi";
 import { useAgentUiExpandedStore } from "../agentUiExpandedStore";
 import { useEnvironmentQuery } from "../state/query";
 import { cn } from "../lib/utils";
+import { AGENT_UI_SURFACES_RUNTIME_ENABLED } from "./agentUiRuntime";
 
 /** The handle `ActivityPayloadProjection` keeps on an MCP tool-call payload. */
 export interface AgentUiSurfaceHandle {
@@ -70,37 +71,12 @@ function toSrcDoc(html: string): string {
   ].join("");
 }
 
-const EMBED_SANDBOX_BASE = "allow-scripts allow-forms allow-popups allow-downloads";
-
-/**
- * Sandbox for a framed URL.
- *
- * A real app needs its own origin back: without `allow-same-origin` the document
- * is opaque, so `localStorage`, IndexedDB and cookies all throw. Excalidraw and
- * anything else that persists state simply fails to boot without it.
- *
- * Pairing `allow-same-origin` with `allow-scripts` is only an escape when the
- * framed document is same-origin with *this* page — then it can reach our DOM,
- * our storage and the user's session directly. So it is withheld exactly there,
- * which leaves a self-referential embed opaque and harmless instead of handing
- * an agent arbitrary script in the signed-in app.
- */
-export function resolveEmbedSandbox(url: string, pageOrigin: string): string {
-  let origin: string;
-  try {
-    origin = new URL(url).origin;
-  } catch {
-    return EMBED_SANDBOX_BASE;
-  }
-  return origin === pageOrigin ? EMBED_SANDBOX_BASE : `${EMBED_SANDBOX_BASE} allow-same-origin`;
-}
-
 /**
  * Fetches one render and mounts it. Shared by the inline card and the expanded
  * overlay so both agree on sandboxing, loading and failure states — the sandbox
  * rules in particular must never drift between the two.
  */
-const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
+export const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
   readonly threadRef: ScopedThreadRef;
   readonly renderId: string;
   readonly onTitle?: ((title: string) => void) | undefined;
@@ -158,14 +134,10 @@ const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
   }
   if (render.url) {
     return (
-      <iframe
-        key={render.renderId}
-        title={render.title}
-        src={render.url}
-        className="size-full border-0 bg-white"
-        sandbox={resolveEmbedSandbox(render.url, window.location.origin)}
-        referrerPolicy="no-referrer"
-      />
+      <div className="flex h-full items-center justify-center px-4 text-center text-secondary-label text-xs">
+        URL Agent views are temporarily disabled because framed apps cannot always render the
+        requested live state reliably.
+      </div>
     );
   }
   return null;
@@ -207,6 +179,7 @@ function AgentUiSurfaceCardImpl({ threadRef, surface }: AgentUiSurfaceCardProps)
       {collapsed ? null : (
         <div className="border-border/60 border-t" style={{ height: surface.height }}>
           <AgentUiRenderFrame
+            key={surface.renderId}
             threadRef={threadRef}
             renderId={surface.renderId}
             onTitle={setTitle}
@@ -231,7 +204,7 @@ export const AgentUiSurfaceRow = memo(function AgentUiSurfaceRow(props: {
   readonly children: ReactNode;
 }) {
   const enabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
-  if (!enabled || props.threadRef === null) {
+  if (!AGENT_UI_SURFACES_RUNTIME_ENABLED || !enabled || props.threadRef === null) {
     return props.children;
   }
   return (
@@ -257,7 +230,7 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
   const collapse = useAgentUiExpandedStore((state) => state.collapse);
   const [title, setTitle] = useState("Agent view");
 
-  const open = enabled && expanded !== null;
+  const open = AGENT_UI_SURFACES_RUNTIME_ENABLED && enabled && expanded !== null;
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -296,6 +269,7 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
       </div>
       <div className="min-h-0 flex-1">
         <AgentUiRenderFrame
+          key={expanded.renderId}
           threadRef={expanded.threadRef}
           renderId={expanded.renderId}
           onTitle={setTitle}

@@ -308,6 +308,13 @@ export const attachmentUploadRouteLayer = HttpRouter.add(
   }),
 );
 
+// T3-CUSTOM(expbkt3): the signed-in shell must never become a same-origin iframe
+// after an agent-supplied cross-origin URL redirects back to T3.
+export const T3_HTML_FRAME_HEADERS = {
+  "content-security-policy": "frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+} as const;
+
 export const staticAndDevRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -384,6 +391,8 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       return HttpServerResponse.uint8Array(indexData, {
         status: 200,
         contentType: "text/html; charset=utf-8",
+        // T3-CUSTOM(expbkt3): block redirect-based sandbox escapes on SPA fallbacks.
+        headers: T3_HTML_FRAME_HEADERS,
       });
     }
 
@@ -396,6 +405,8 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType,
+      // T3-CUSTOM(expbkt3): only HTML is frame-sensitive; assets keep their normal headers.
+      ...(contentType.startsWith("text/html") ? { headers: T3_HTML_FRAME_HEADERS } : {}),
     });
   }),
 );

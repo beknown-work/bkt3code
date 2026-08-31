@@ -928,6 +928,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.linearIssueUrl !== undefined
             ? { linearIssueUrl: command.linearIssueUrl }
             : {}),
+          // T3-CUSTOM(expbkt3): undefined leaves the Mattermost link unchanged.
+          ...(command.mattermostThreadUrl !== undefined
+            ? { mattermostThreadUrl: command.mattermostThreadUrl }
+            : {}),
           // T3-CUSTOM(expbkt3): undefined leaves lineage unchanged; null detaches.
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
