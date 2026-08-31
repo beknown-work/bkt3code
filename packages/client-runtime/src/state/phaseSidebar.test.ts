@@ -10,6 +10,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildPhaseSidebarGroups,
+  buildPhaseSidebarRows,
+  hasUnseenCompletion,
   collectDescendantThreadIds,
   DEFAULT_PHASE_SIDEBAR_SORT,
   EMPTY_PHASE_SIDEBAR_FILTERS,
@@ -24,7 +26,7 @@ import {
   summarizeSidebarSessions,
   type PhaseSidebarRow,
 } from "./phaseSidebar.ts";
-import type { EnvironmentThreadShell } from "./shell.ts";
+import type { EnvironmentProject, EnvironmentThreadShell } from "./shell.ts";
 
 // The bulk of this module's behaviour is covered by the web suite that has
 // exercised it since it lived under apps/web (it still imports it, through the
@@ -323,5 +325,143 @@ describe("unread tracking", () => {
         lastVisitedAt: now,
       }),
     ).toBe(false);
+  });
+});
+
+// T3-CUSTOM(expbkt3): row assembly moved out of apps/web so the mobile phase
+// sidebar builds identical rows. These are the fork-owned proof that the move
+// preserved behaviour, and that mobile can rely on it after an upstream merge.
+describe("buildPhaseSidebarRows", () => {
+  const project = {
+    id: projectId,
+    environmentId,
+    title: "beknown-services",
+    workspaceRoot: "/home/dev/beknown-services",
+  } as EnvironmentProject;
+
+  const buildOne = (
+    thread: EnvironmentThreadShell,
+    input: Partial<Parameters<typeof buildPhaseSidebarRows>[0]> = {},
+  ) =>
+    buildPhaseSidebarRows({
+      threads: [thread],
+      projects: [project],
+      serverConfigs: new Map(),
+      vcsStatusByThreadKey: new Map(),
+      lastVisitedAtByThreadKey: {},
+      currentUserId: null,
+      allEnvironmentShellsLive: true,
+      lastKnownPhaseByThreadKey: null,
+      ...input,
+    })[0]!;
+
+  it("labels the row with its project title", () => {
+    expect(buildOne(makeThread()).repositoryLabel).toBe("beknown-services");
+  });
+
+  it("falls back to a readable label when the project is unknown", () => {
+    const row = buildOne(makeThread(), { projects: [] });
+    expect(row.repositoryLabel).toBe("Unknown repository");
+  });
+
+  it("reports every capability as unsupported when no server config is known", () => {
+    const row = buildOne(makeThread());
+    expect(row.settlementSupported).toBe(false);
+    expect(row.snoozeSupported).toBe(false);
+    expect(row.prioritySupported).toBe(false);
+    expect(row.linearIssueSupported).toBe(false);
+    expect(row.mattermostLinkSupported).toBe(false);
+  });
+
+  it("reads capabilities from the thread's own environment config", () => {
+    const row = buildOne(makeThread(), {
+      serverConfigs: new Map([
+        [
+          environmentId,
+          {
+            environment: {
+              capabilities: { threadSettlement: true, threadMattermostLink: true },
+            },
+            providers: [],
+          },
+        ],
+      ]) as never,
+    });
+    expect(row.settlementSupported).toBe(true);
+    expect(row.mattermostLinkSupported).toBe(true);
+    expect(row.snoozeSupported).toBe(false);
+  });
+
+  it("marks ownership and assignment against the current user", () => {
+    const mine = makeThread({ ownerUserId: "user-1" as never });
+    const row = buildOne(mine, { currentUserId: "user-1" as never });
+    expect(row.isOwnedByMe).toBe(true);
+    expect(row.isAssignedToMe).toBe(true);
+  });
+
+  it("does not claim ownership when nobody is signed in", () => {
+    const row = buildOne(makeThread({ ownerUserId: "user-1" as never }));
+    expect(row.isOwnedByMe).toBe(false);
+    expect(row.isAssignedToMe).toBe(false);
+  });
+
+  // `resolvePhaseSidebarDisplayPhase` currently ignores the previous phase (its
+  // parameter is vestigial), so the display phase always follows the live one.
+  // The builder still threads the map through, so if that anti-flap behaviour is
+  // ever restored both clients get it at once.
+  it("follows the live phase regardless of the last known one", () => {
+    const thread = makeThread();
+    const threadKey = `${environmentId}:${thread.id}`;
+    for (const allEnvironmentShellsLive of [true, false]) {
+      const row = buildOne(thread, {
+        allEnvironmentShellsLive,
+        lastKnownPhaseByThreadKey: new Map([[threadKey, "implementing" as const]]),
+      });
+      expect(row.phaseId).toBe(resolvePhaseSidebarPhase(thread));
+    }
+  });
+
+  it("builds one row per thread", () => {
+    const rows = buildPhaseSidebarRows({
+      threads: [makeThread({ id: ThreadId.make("a") }), makeThread({ id: ThreadId.make("b") })],
+      projects: [project],
+      serverConfigs: new Map(),
+      vcsStatusByThreadKey: new Map(),
+      lastVisitedAtByThreadKey: {},
+      currentUserId: null,
+      allEnvironmentShellsLive: true,
+      lastKnownPhaseByThreadKey: null,
+    });
+    expect(rows.map((row) => row.thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("hasUnseenCompletion", () => {
+  it("is false when the turn never completed", () => {
+    expect(hasUnseenCompletion({ latestTurn: null, lastVisitedAt: now })).toBe(false);
+  });
+
+  it("is false when the thread was never visited", () => {
+    expect(
+      hasUnseenCompletion({ latestTurn: { completedAt: now } as never, lastVisitedAt: undefined }),
+    ).toBe(false);
+  });
+
+  it("is true when the turn finished after the last visit", () => {
+    expect(
+      hasUnseenCompletion({
+        latestTurn: { completedAt: "2026-08-31T12:00:00.000Z" } as never,
+        lastVisitedAt: "2026-08-31T11:00:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats an unparseable visit timestamp as unread", () => {
+    expect(
+      hasUnseenCompletion({
+        latestTurn: { completedAt: "2026-08-31T12:00:00.000Z" } as never,
+        lastVisitedAt: "not-a-date",
+      }),
+    ).toBe(true);
   });
 });

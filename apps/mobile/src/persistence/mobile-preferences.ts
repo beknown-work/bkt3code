@@ -48,6 +48,18 @@ export interface Preferences {
   readonly threadListV2SnoozedShelfExpanded?: boolean;
   // T3-CUSTOM(expbkt3): remember the last-used source-control profile per environment.
   readonly lastSourceControlProfileByEnvironment?: Readonly<Record<string, string>>;
+  /**
+   * T3-CUSTOM(expbkt3): opt into the experimental phase-grouped sidebar, the
+   * mobile counterpart of web's control centre. Off unless explicitly enabled,
+   * so a device keeps the stock thread list until someone asks for this.
+   */
+  readonly experimentalPhaseSidebarEnabled?: boolean;
+  /**
+   * T3-CUSTOM(expbkt3): last-visited time per scoped thread key, backing the
+   * phase sidebar's unread dot. Pruned to a cap on write, so this stays a small
+   * bounded map rather than growing with every thread ever opened.
+   */
+  readonly phaseSidebarVisitedAt?: Readonly<Record<string, string>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -105,6 +117,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     autoSettleOnMerge?: boolean;
     legacyThreadListEnabled?: boolean;
+    // T3-CUSTOM(expbkt3): experimental phase sidebar opt-in and its visit map.
+    experimentalPhaseSidebarEnabled?: boolean;
+    phaseSidebarVisitedAt?: Record<string, string>;
     planModeEnabled?: boolean;
     threadListV2SettledShelfExpanded?: boolean;
     threadListV2SnoozedShelfExpanded?: boolean;
@@ -176,6 +191,17 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
+  }
+  // T3-CUSTOM(expbkt3): experimental phase-grouped sidebar opt-in.
+  if (typeof parsed.experimentalPhaseSidebarEnabled === "boolean") {
+    preferences.experimentalPhaseSidebarEnabled = parsed.experimentalPhaseSidebarEnabled;
+  }
+  if (parsed.phaseSidebarVisitedAt !== null && typeof parsed.phaseSidebarVisitedAt === "object") {
+    const visited: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed.phaseSidebarVisitedAt)) {
+      if (typeof value === "string" && value.length > 0) visited[key] = value;
+    }
+    preferences.phaseSidebarVisitedAt = visited;
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;

@@ -28,6 +28,8 @@ import { ReviewSheet } from "./features/review/ReviewSheet";
 // T3-CUSTOM(expbkt3): native plan review screens.
 import { PlanReviewSheet } from "./features/planreview/PlanReviewSheet";
 import { PlanReviewCommentSheet } from "./features/planreview/PlanReviewCommentSheet";
+// T3-CUSTOM(expbkt3): thread member tagging.
+import { ThreadMembersSheet } from "./features/members/ThreadMembersSheet";
 import { ThreadTerminalRouteScreen } from "./features/terminal/ThreadTerminalRouteScreen";
 import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
@@ -520,6 +522,19 @@ export const RootStack = createNativeStackNavigator({
           ? { presentation: "fullScreenModal" as const }
           : FORM_SHEET_PRESENTATION_OPTIONS),
         sheetAllowedDetents: Platform.OS === "android" ? undefined : [0.55, 0.92],
+        sheetGrabberVisible: Platform.OS !== "android",
+        headerShown: false,
+      },
+    }),
+    ThreadMembers: createNativeStackScreen({
+      screen: ThreadMembersSheet,
+      linking: `${THREAD_LINKING_PREFIX}/members`,
+      options: {
+        // Same Android constraint as the other keyboard-driven sheets.
+        ...(Platform.OS === "android"
+          ? { presentation: "fullScreenModal" as const }
+          : FORM_SHEET_PRESENTATION_OPTIONS),
+        sheetAllowedDetents: Platform.OS === "android" ? undefined : [0.6, 0.95],
         sheetGrabberVisible: Platform.OS !== "android",
         headerShown: false,
       },
