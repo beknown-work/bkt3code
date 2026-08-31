@@ -54,6 +54,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at,
           priority,
           linear_issue_url,
+          mattermost_thread_url,
           parent_thread_id,
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary,
@@ -94,6 +95,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.snoozedAt},
           ${row.priority},
           ${row.linearIssueUrl ?? null},
+          ${row.mattermostThreadUrl ?? null},
           ${row.parentThreadId ?? null},
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           ${row.workSummary ?? null},
@@ -134,6 +136,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at = excluded.snoozed_at,
           priority = excluded.priority,
           linear_issue_url = excluded.linear_issue_url,
+          mattermost_thread_url = excluded.mattermost_thread_url,
           parent_thread_id = excluded.parent_thread_id,
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary = excluded.work_summary,
@@ -181,6 +184,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary AS "workSummary",
@@ -230,6 +234,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON).
           work_summary AS "workSummary",
@@ -288,6 +293,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           snoozed_at AS "snoozedAt",
           priority,
           linear_issue_url AS "linearIssueUrl",
+          mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
           work_summary AS "workSummary",
           pinned_at AS "pinnedAt",
