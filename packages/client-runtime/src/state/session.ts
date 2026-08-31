@@ -64,6 +64,45 @@ export const fetchEnvironmentSessionState = Effect.fn(
 
 // T3-CUSTOM(expbkt3): BEGIN
 /**
+ * The org user directory for one environment, via `/api/orchestration/users`.
+ *
+ * These are `UserId`s — org-level people who can own or be tagged on a thread —
+ * and deliberately not the `EnvironmentUserId`s that `users.list` returns; those
+ * are per-environment accounts and a different id space entirely. Lives here
+ * because this module already carries the prepared-connection and auth-header
+ * plumbing an environment HTTP call needs.
+ */
+export const fetchOrchestrationUsers = Effect.fn("clientRuntime.state.fetchOrchestrationUsers")(
+  function* (input: {
+    readonly prepared: PreparedConnection;
+    readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+    readonly timeoutMs?: number;
+  }) {
+    const requestUrl = environmentEndpointUrl(
+      input.prepared.httpBaseUrl,
+      "/api/orchestration/users",
+    );
+    const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
+    const headers = yield* buildEnvironmentAuthHeaders(
+      input.prepared.httpAuthorization,
+      "GET",
+      requestUrl,
+      input.signer,
+    );
+    return yield* executeEnvironmentHttpRequest(
+      requestUrl,
+      input.timeoutMs ?? DEFAULT_SESSION_STATE_TIMEOUT_MS,
+      withEnvironmentCredentials(
+        input.prepared.httpAuthorization,
+        client.orchestration.users({ headers }),
+      ),
+    );
+  },
+);
+// T3-CUSTOM(expbkt3): END
+
+// T3-CUSTOM(expbkt3): BEGIN
+/**
  * The operator id an environment session reports, or null.
  *
  * Null for an unauthenticated gate state, and for a single-user or local
@@ -171,6 +210,27 @@ export function createEnvironmentSessionAtoms<R, E>(
     ).pipe(Atom.withLabel(`environment-session-state-value:${environmentId}`)),
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN — org user directory for thread tagging.
+  const orchestrationUsersAtom = Atom.family((environmentId: EnvironmentId) =>
+    runtime
+      .atom((get) => {
+        const prepared = Option.getOrNull(get(preparedConnectionValueAtom(environmentId)));
+        if (prepared === null) {
+          return Effect.never;
+        }
+        return Effect.gen(function* () {
+          const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+          return yield* fetchOrchestrationUsers({ prepared, signer });
+        });
+      })
+      .pipe(
+        Atom.swr({ staleTime: 60_000, revalidateOnMount: true }),
+        Atom.setIdleTTL(5 * 60_000),
+        Atom.withLabel(`environment-orchestration-users:${environmentId}`),
+      ),
+  );
+  // T3-CUSTOM(expbkt3): END
+
   return {
     initialConfigAtom,
     initialConfigValueAtom,
@@ -178,5 +238,7 @@ export function createEnvironmentSessionAtoms<R, E>(
     preparedConnectionValueAtom,
     sessionStateAtom,
     sessionStateValueAtom,
+    // T3-CUSTOM(expbkt3): org user directory.
+    orchestrationUsersAtom,
   };
 }

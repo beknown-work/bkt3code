@@ -24,6 +24,7 @@ import {
   type SidebarThreadSortOrder,
   type UserId,
 } from "@t3tools/contracts";
+import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo, useState } from "react";
 import { FlatList, View } from "react-native";
 
@@ -31,6 +32,7 @@ import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import { PhaseSidebarRowView } from "./PhaseSidebarRowView";
 import { phaseSidebarSectionToneClassName } from "./phaseSidebarRowTone";
+import { buildPhaseSidebarRowActions } from "./usePhaseSidebarRowActions";
 
 /** A flattened list entry: either a lifecycle header or a thread row. */
 type PhaseSidebarListItem =
@@ -56,7 +58,8 @@ export interface PhaseSidebarListProps {
   readonly sort?: PhaseSidebarSortPreferences;
   readonly sortOrder?: SidebarThreadSortOrder;
   readonly onSelectRow: (row: PhaseSidebarRow) => void;
-  readonly onLongPressRow: (row: PhaseSidebarRow) => void;
+  /** Fired with the chosen action id from the row's long-press menu. */
+  readonly onRowAction: (row: PhaseSidebarRow, actionId: string) => void;
   readonly ListHeaderComponent?: React.ComponentProps<typeof FlatList>["ListHeaderComponent"];
 }
 
@@ -109,6 +112,18 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     return flat;
   }, [groups, isExpanded]);
 
+  const nowIso = useMemo(() => new Date().toISOString(), [props.rows]);
+  const rowActionsFor = useCallback(
+    (row: PhaseSidebarRow): MenuAction[] =>
+      buildPhaseSidebarRowActions({ row, now: nowIso }).map((action) => ({
+        id: action.id,
+        title: action.title,
+        image: action.image,
+        attributes: action.destructive === true ? { destructive: true } : undefined,
+      })),
+    [nowIso],
+  );
+
   const handleToggleExpanded = useCallback((row: PhaseSidebarRow) => {
     setCollapsedKeys((current) => {
       const key = `${row.thread.environmentId}:${row.thread.id}`;
@@ -146,8 +161,9 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
             indentDepth={item.node.depth}
             isActive={props.activeThreadKey === item.node.key}
             isExpanded={isExpanded(item.node.key)}
-            onLongPress={props.onLongPressRow}
+            actions={rowActionsFor(item.node.row)}
             onPress={props.onSelectRow}
+            onPressAction={props.onRowAction}
             onToggleExpanded={handleToggleExpanded}
             row={item.node.row}
             subtreeCount={item.node.descendantCount}

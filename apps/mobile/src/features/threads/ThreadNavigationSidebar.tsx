@@ -6,6 +6,8 @@ import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
+// T3-CUSTOM(expbkt3): the phase sidebar opens the members sheet directly.
+import { useNavigation } from "@react-navigation/native";
 import { LegendList } from "@legendapp/list/react-native";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
@@ -33,8 +35,12 @@ import { mobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 // T3-CUSTOM(expbkt3): experimental phase-grouped sidebar.
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { PHASE_SIDEBAR_PRIORITY_CHOICES } from "@t3tools/client-runtime/state/phase-sidebar";
 import { PhaseSidebarList } from "../phasesidebar/PhaseSidebarList";
+import { PhaseSidebarRateLimits } from "../phasesidebar/PhaseSidebarRateLimits";
 import { usePhaseSidebarEnabled } from "../phasesidebar/phaseSidebarEnabled";
 import {
   usePhaseSidebarRows,
@@ -184,6 +190,16 @@ function ThreadNavigationSidebarPane(
   const threadListV2Enabled = useThreadListV2Enabled();
   // T3-CUSTOM(expbkt3): BEGIN — experimental phase sidebar.
   const phaseSidebarEnabled = usePhaseSidebarEnabled();
+  const phaseSidebarNavigation = useNavigation();
+  // The two row actions useThreadListActions does not cover.
+  const updatePhaseSidebarPriority = useAtomCommand(
+    threadEnvironment.updateMetadata,
+    "phase sidebar set priority",
+  );
+  const stopPhaseSidebarExecution = useAtomCommand(
+    threadEnvironment.stopExecution,
+    "phase sidebar force stop",
+  );
   // Ownership facets resolve against the environment in focus; mobile has no
   // single primary environment, so the selected thread's is the best answer.
   const phaseSidebarViewerEnvironmentId = useMemo(
@@ -790,13 +806,73 @@ function ThreadNavigationSidebarPane(
     },
     [markPhaseSidebarThreadVisited, props.onSelectThread],
   );
-  const handlePhaseSidebarLongPress = useCallback(
-    (row: { readonly thread: EnvironmentThreadShell }) => {
-      // Row actions arrive with the context menu; selecting is the safe
-      // interim behaviour rather than a long-press that silently does nothing.
-      props.onSelectThread(row.thread);
+  const handlePhaseSidebarRowAction = useCallback(
+    (row: { readonly thread: EnvironmentThreadShell }, actionId: string) => {
+      const thread = row.thread;
+
+      if (actionId.startsWith("priority:")) {
+        const parsed = Number.parseInt(actionId.slice("priority:".length), 10);
+        const priority = PHASE_SIDEBAR_PRIORITY_CHOICES.find(
+          (choice) => choice.value === parsed,
+        )?.value;
+        if (priority === undefined) return;
+        void updatePhaseSidebarPriority({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, priority },
+        });
+        return;
+      }
+
+      switch (actionId) {
+        case "people":
+          phaseSidebarNavigation.navigate("ThreadMembers", {
+            environmentId: thread.environmentId,
+            threadId: thread.id,
+          });
+          return;
+        case "settle":
+          void settleThread(thread);
+          return;
+        case "unsettle":
+          void unsettleThread(thread);
+          return;
+        case "snooze":
+          // One day is the default the row menu offers; the thread screen has
+          // the full picker for anything else.
+          void snoozeThread(thread, new Date(Date.now() + 24 * 60 * 60_000).toISOString());
+          return;
+        case "unsnooze":
+          void unsnoozeThread(thread);
+          return;
+        case "pin":
+          void pinThread(thread);
+          return;
+        case "unpin":
+          void unpinThread(thread);
+          return;
+        case "archive":
+          archiveThread(thread);
+          return;
+        case "force-stop":
+          void stopPhaseSidebarExecution({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id },
+          });
+          return;
+      }
     },
-    [props.onSelectThread],
+    [
+      archiveThread,
+      phaseSidebarNavigation,
+      pinThread,
+      settleThread,
+      snoozeThread,
+      stopPhaseSidebarExecution,
+      unpinThread,
+      unsettleThread,
+      unsnoozeThread,
+      updatePhaseSidebarPriority,
+    ],
   );
   // T3-CUSTOM(expbkt3): END
 
@@ -1250,8 +1326,11 @@ function ThreadNavigationSidebarPane(
         {phaseSidebarEnabled ? (
           <View className="flex-1">
             <PhaseSidebarList
+              ListHeaderComponent={
+                <PhaseSidebarRateLimits environmentId={phaseSidebarViewerEnvironmentId} />
+              }
               activeThreadKey={props.selectedThreadKey}
-              onLongPressRow={handlePhaseSidebarLongPress}
+              onRowAction={handlePhaseSidebarRowAction}
               onSelectRow={handlePhaseSidebarSelect}
               rows={phaseSidebarRows}
               viewerUserId={phaseSidebarViewerUserId}
