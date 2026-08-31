@@ -36,9 +36,7 @@ const now = "2026-01-01T00:00:00.000Z";
 const environmentId = EnvironmentId.make("env-1");
 const projectId = ProjectId.make("project-1");
 
-function makeExecution(
-  overrides: Partial<ThreadExecutionSnapshot> = {},
-): ThreadExecutionSnapshot {
+function makeExecution(overrides: Partial<ThreadExecutionSnapshot> = {}): ThreadExecutionSnapshot {
   return {
     activity: "idle",
     canStop: false,

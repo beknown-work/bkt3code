@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  assertKeylessBuild,
-  parseArgs,
-  xcodeSchemeName,
-} from "./build-bk-mobile.ts";
+import { assertKeylessBuild, parseArgs, xcodeSchemeName } from "./build-bk-mobile.ts";
 import {
   bkAppVersionString,
   bkArtifactFileName,
@@ -69,9 +65,7 @@ describe("build identity", () => {
 
 describe("parseMobileAppVersion", () => {
   it("reads the version the mobile app reports to servers", () => {
-    expect(
-      parseMobileAppVersion('export const MOBILE_APP_VERSION = "1.0.4";\n'),
-    ).toBe("1.0.4");
+    expect(parseMobileAppVersion('export const MOBILE_APP_VERSION = "1.0.4";\n')).toBe("1.0.4");
   });
 
   it("fails rather than guessing when the constant moves", () => {

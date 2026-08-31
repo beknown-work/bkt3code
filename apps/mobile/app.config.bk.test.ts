@@ -125,4 +125,3 @@ describe("applyBkMobileConfig", () => {
     ).toThrow(/positive integer/);
   });
 });
-
