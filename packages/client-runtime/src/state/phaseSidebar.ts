@@ -17,7 +17,7 @@
 // not ship the ES2023 change-array-by-copy methods. Sort a copy with `.sort()`;
 // never reach for `.toSorted()`. phaseSidebar.test.ts asserts this by deleting
 // the method from Array.prototype.
-import type { UserId, VcsStatusResult } from "@t3tools/contracts";
+import type { ServerConfig, UserId, VcsStatusResult } from "@t3tools/contracts";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import { resolveChangeRequestPresentation } from "@t3tools/shared/sourceControl";
 // T3-CUSTOM(expbkt3): memorable worktree codenames.
@@ -27,6 +27,12 @@ import {
   worktreeCodenameToneIndex,
 } from "@t3tools/shared/worktreeCodename";
 
+import {
+  scopeProjectRef,
+  scopeThreadRef,
+  scopedProjectKey,
+  scopedThreadKey,
+} from "../environment/scoped.ts";
 import { deriveLogicalProjectKey } from "./projectGrouping.ts";
 import type { EnvironmentProject, EnvironmentThreadShell } from "./shell.ts";
 import {
@@ -1336,6 +1342,31 @@ export function resolveThreadVisitTimestamp(input: ThreadVisitTimestampInput): s
  * the last visit this device recorded. An unvisited thread is NOT unread —
  * otherwise a fresh install marks the entire list.
  */
+/**
+ * T3-CUSTOM(expbkt3): Whether a finished turn has not been looked at yet.
+ *
+ * Moved here from apps/web/src/components/Sidebar.logic.ts (which re-exports it)
+ * so `buildPhaseSidebarRows` can run on both clients. Deliberately NOT unified
+ * with `isThreadUnread` below: this one treats an unparseable visit timestamp as
+ * unread, and that difference is load-bearing for the row's dot.
+ */
+export function hasUnseenCompletion(
+  thread: Pick<ThreadShell, "latestTurn"> & {
+    readonly lastVisitedAt?: string | null | undefined;
+    /** Callers pass whole thread shells; extra facts are simply unread here. */
+    readonly [extra: string]: unknown;
+  },
+): boolean {
+  if (!thread.latestTurn?.completedAt) return false;
+  const completedAt = Date.parse(thread.latestTurn.completedAt);
+  if (Number.isNaN(completedAt)) return false;
+  if (!thread.lastVisitedAt) return false;
+
+  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(lastVisitedAt)) return true;
+  return completedAt > lastVisitedAt;
+}
+
 export function isThreadUnread(input: {
   readonly threadUpdatedAt: string;
   readonly latestTurnCompletedAt: string | null | undefined;
@@ -1347,4 +1378,99 @@ export function isThreadUnread(input: {
   const activityAtMs = Date.parse(resolveThreadVisitTimestamp(input));
   if (Number.isNaN(activityAtMs)) return false;
   return activityAtMs > lastVisitedAtMs;
+}
+
+/**
+ * T3-CUSTOM(expbkt3): Everything needed to turn raw thread shells into rows.
+ *
+ * `projects` and `serverConfigs` are the caller's own maps rather than derived
+ * state, because both clients already hold them; the repository key and label
+ * tables are derived here so neither client has to reproduce that stitching.
+ */
+export interface BuildPhaseSidebarRowsInput {
+  readonly threads: ReadonlyArray<ThreadShell>;
+  readonly projects: ReadonlyArray<Project>;
+  readonly serverConfigs: ReadonlyMap<string, ServerConfig>;
+  /** Keyed by `scopedThreadKey`. Absent entries simply have no VCS facts yet. */
+  readonly vcsStatusByThreadKey: ReadonlyMap<string, VcsStatusResult | null>;
+  /** Keyed by `scopedThreadKey`. */
+  readonly lastVisitedAtByThreadKey: Readonly<Record<string, string | undefined>>;
+  readonly currentUserId: UserId | null;
+  /**
+   * When false, a row falls back to its last known phase rather than flapping
+   * to a wrong one while an environment's shells are still arriving.
+   */
+  readonly allEnvironmentShellsLive: boolean;
+  /** Keyed by `scopedThreadKey`. Null when the caller keeps no history. */
+  readonly lastKnownPhaseByThreadKey: ReadonlyMap<string, PhaseSidebarPhaseId> | null;
+}
+
+/**
+ * Builds the sidebar's row model. Pure, so both the web sidebar and the mobile
+ * phase sidebar render the same lifecycle, badges and ownership facts.
+ */
+export function buildPhaseSidebarRows(
+  input: BuildPhaseSidebarRowsInput,
+): ReadonlyArray<PhaseSidebarRow> {
+  const projectByKey = new Map(
+    input.projects.map((project) => [
+      scopedProjectKey(scopeProjectRef(project.environmentId, project.id)),
+      project,
+    ]),
+  );
+  const repositoryLabels = new Map(
+    buildPhaseSidebarRepositoryOptions(input.projects).map((option) => [option.key, option.label]),
+  );
+
+  return input.threads.map((thread) => {
+    const project = projectByKey.get(
+      scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+    );
+    const repositoryKey = project
+      ? derivePhaseSidebarRepositoryKey(project)
+      : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    const serverConfig = input.serverConfigs.get(thread.environmentId);
+    const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const provider = serverConfig?.providers.find(
+      (candidate) => candidate.instanceId === instanceId,
+    );
+    const providerKind = String(provider?.driver ?? instanceId);
+    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const vcsStatus = input.vcsStatusByThreadKey.get(threadKey);
+    const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
+    const capabilities = serverConfig?.environment.capabilities;
+
+    return {
+      thread,
+      phaseId: resolvePhaseSidebarDisplayPhase(
+        currentPhase,
+        input.allEnvironmentShellsLive
+          ? null
+          : (input.lastKnownPhaseByThreadKey?.get(threadKey) ?? null),
+      ),
+      repositoryKey,
+      repositoryLabel:
+        project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
+      providerKind,
+      providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
+      isAssignedToMe:
+        input.currentUserId !== null && isThreadAssignedToUser(thread, input.currentUserId),
+      isOwnedByMe: input.currentUserId !== null && thread.ownerUserId === input.currentUserId,
+      participantUserIds: phaseSidebarThreadParticipantIds(thread),
+      attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
+      isUnreadCompletion: hasUnseenCompletion({
+        ...thread,
+        lastVisitedAt: input.lastVisitedAtByThreadKey[threadKey],
+      }),
+      settlementSupported: capabilities?.threadSettlement === true,
+      snoozeSupported: capabilities?.threadSnooze === true,
+      prioritySupported: capabilities?.threadPriority === true,
+      linearIssueSupported: capabilities?.threadLinearIssue === true,
+      mattermostLinkSupported: capabilities?.threadMattermostLink === true,
+      titleRegenerationSupported: capabilities?.threadTitleRegeneration === true,
+      threadBootstrapSupported: capabilities?.durableThreadBootstrap === true,
+      changeRequestState: vcsStatus?.pr?.state ?? null,
+      changeRequestUpdatedAt: vcsStatus?.pr?.updatedAt ?? null,
+    };
+  });
 }
