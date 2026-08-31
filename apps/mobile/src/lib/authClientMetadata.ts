@@ -3,6 +3,8 @@ import * as Device from "expo-device";
 import { Platform } from "react-native";
 // T3-CUSTOM(expbkt3): BEGIN - attach a test-safe native build identity.
 import { MOBILE_APP_VERSION } from "../../app-version";
+import { bkAppVersion } from "./bkBuildIdentity";
+import { bkBuildGitSha } from "./bkBuildManifest";
 // T3-CUSTOM(expbkt3): END
 
 export function authClientMetadata(appVersion?: string): AuthClientPresentationMetadata {
@@ -13,8 +15,10 @@ export function authClientMetadata(appVersion?: string): AuthClientPresentationM
     label: "T3 Code Mobile",
     deviceType: "mobile",
     // T3-CUSTOM(expbkt3): always expose the native version to connected servers;
-    // a caller-provided version still wins.
-    appVersion: appVersion ?? MOBILE_APP_VERSION,
+    // a caller-provided version still wins. Fork builds append their source SHA
+    // so a stale sideloaded binary is identifiable from the server's audit of
+    // `client_version` (see bkBuildIdentity.ts).
+    appVersion: appVersion ?? bkAppVersion(MOBILE_APP_VERSION, bkBuildGitSha()),
     ...(Platform.OS === "ios" ? { os: "iOS" } : Platform.OS === "android" ? { os: "Android" } : {}),
     ...(Number.isFinite(osMajorVersion) && osMajorVersion > 0 ? { osMajorVersion } : {}),
     ...(deviceModel ? { deviceModel } : {}),
