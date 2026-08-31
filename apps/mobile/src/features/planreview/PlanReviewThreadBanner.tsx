@@ -12,7 +12,7 @@ import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { useServerConfigs } from "../../state/entities";
+import { useEnvironmentServerConfig } from "../../state/entities";
 import { planReviewEnvironment } from "../../state/planReview";
 import { useEnvironmentQuery } from "../../state/query";
 import { resolveOpenPlanReviewDocument, shouldOfferPlanReview } from "./planReviewAvailability";
@@ -24,8 +24,11 @@ export function PlanReviewThreadBanner(props: {
 }) {
   const navigation = useNavigation();
   const iconTint = String(useThemeColor("--color-icon"));
-  const serverConfigs = useServerConfigs();
-  const capabilities = serverConfigs.get(props.environmentId)?.environment.capabilities;
+  // Per-environment rather than the whole configs map: this banner sits on the
+  // thread screen and should not re-render when an unrelated environment's
+  // config changes.
+  const serverConfig = useEnvironmentServerConfig(props.environmentId);
+  const capabilities = serverConfig?.environment.capabilities;
 
   // Only ask the server for documents once the two cheap gates pass; a thread
   // with no plan awaiting review should cost no RPC at all.
