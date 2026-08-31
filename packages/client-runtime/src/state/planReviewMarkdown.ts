@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off -- Client-side discussion ids are a UI concern; the wall clock only breaks collisions across reloads.
 /**
  * T3-CUSTOM(expbkt3): markdown helpers shared by every plan-review surface.
  *
