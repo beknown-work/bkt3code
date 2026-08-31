@@ -25,6 +25,9 @@ import { AdaptiveWorkspaceLayout } from "./features/layout/AdaptiveWorkspaceLayo
 import { HardwareKeyboardCommandProvider } from "./features/keyboard/HardwareKeyboardCommandProvider";
 import { ReviewCommentComposerSheet } from "./features/review/ReviewCommentComposerSheet";
 import { ReviewSheet } from "./features/review/ReviewSheet";
+// T3-CUSTOM(expbkt3): native plan review screens.
+import { PlanReviewSheet } from "./features/planreview/PlanReviewSheet";
+import { PlanReviewCommentSheet } from "./features/planreview/PlanReviewCommentSheet";
 import { ThreadTerminalRouteScreen } from "./features/terminal/ThreadTerminalRouteScreen";
 import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
@@ -498,6 +501,30 @@ export const RootStack = createNativeStackNavigator({
         sheetGrabberVisible: Platform.OS !== "android",
       },
     }),
+    // T3-CUSTOM(expbkt3): BEGIN native plan review
+    ThreadPlanReview: createNativeStackScreen({
+      screen: PlanReviewSheet,
+      linking: `${THREAD_LINKING_PREFIX}/plan-review`,
+      options: {
+        ...SOLID_HEADER_OPTIONS,
+        title: "Plan review",
+      },
+    }),
+    ThreadPlanReviewComment: createNativeStackScreen({
+      screen: PlanReviewCommentSheet,
+      linking: `${THREAD_LINKING_PREFIX}/plan-review-comment`,
+      options: {
+        // Same Android constraint as the diff-review composer: the keyboard
+        // cannot be hosted inside a formSheet there.
+        ...(Platform.OS === "android"
+          ? { presentation: "fullScreenModal" as const }
+          : FORM_SHEET_PRESENTATION_OPTIONS),
+        sheetAllowedDetents: Platform.OS === "android" ? undefined : [0.55, 0.92],
+        sheetGrabberVisible: Platform.OS !== "android",
+        headerShown: false,
+      },
+    }),
+    // T3-CUSTOM(expbkt3): END native plan review
     ThreadFiles: createNativeStackScreen({
       screen: ThreadFilesTreeScreen,
       linking: `${THREAD_LINKING_PREFIX}/files`,

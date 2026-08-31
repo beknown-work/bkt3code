@@ -143,6 +143,10 @@
       "types": "./src/state/planReview.ts",
       "default": "./src/state/planReview.ts"
     },
+    "./state/planReviewMarkdown": {
+      "types": "./src/state/planReviewMarkdown.ts",
+      "default": "./src/state/planReviewMarkdown.ts"
+    },
     "./state/agentUi": {
       "types": "./src/state/agentUi.ts",
       "default": "./src/state/agentUi.ts"

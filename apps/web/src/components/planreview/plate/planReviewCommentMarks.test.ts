@@ -26,7 +26,7 @@ import {
   stripPlanReviewCommentMarks,
   type PlanReviewNodeLike,
 } from "./planReviewCommentMarks";
-import { hasPlanReviewEditorChange } from "../planReviewMarkdown";
+import { hasPlanReviewEditorChange } from "@t3tools/client-runtime/state/planReviewMarkdown";
 
 /** A plan as Plate holds it: a heading, a paragraph, and a two-item list. */
 const PLAN_VALUE: ReadonlyArray<PlanReviewNodeLike> = [

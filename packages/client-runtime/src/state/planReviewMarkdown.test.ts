@@ -5,7 +5,7 @@ import {
   hasPlanReviewEditorChange,
   parsePlanOutline,
   resolveSubmittedPlanMarkdown,
-} from "./planReviewMarkdown";
+} from "./planReviewMarkdown.ts";
 
 const CANONICAL_PLAN = [
   "## Context",
