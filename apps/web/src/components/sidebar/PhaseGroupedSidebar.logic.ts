@@ -306,6 +306,47 @@ export function resolvePhaseSidebarLinearIssue(
 }
 
 /**
+ * T3-CUSTOM(expbkt3): the Mattermost conversation a session is bound to.
+ *
+ * Mattermost is self-hosted, so there is no canonical domain to validate
+ * against — anything that parses as an http(s) URL is accepted, and the label
+ * is derived only as far as the path reliably allows. Mattermost permalinks
+ * are `/<team>/pl/<postId>`, channels `/<team>/channels/<name>`, and DMs
+ * `/<team>/messages/@user`; anything else degrades to the host, which is still
+ * more useful in a tooltip than the raw URL.
+ */
+export interface PhaseSidebarMattermostLink {
+  /** Tooltip text, e.g. "Mattermost · #co-x-tech". */
+  readonly label: string;
+  readonly url: string;
+}
+
+export function resolvePhaseSidebarMattermostLink(
+  manualUrl?: string | null,
+): PhaseSidebarMattermostLink | null {
+  const trimmed = manualUrl?.trim();
+  if (!trimmed) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+
+  const segments = parsed.pathname.split("/").filter((segment) => segment.length > 0);
+  const kind = segments[1];
+  const name = segments[2];
+  const detail =
+    kind === "channels" && name
+      ? `#${decodeURIComponent(name)}`
+      : kind === "messages" && name
+        ? decodeURIComponent(name)
+        : parsed.host;
+  return { label: `Mattermost · ${detail}`, url: parsed.toString() };
+}
+
+/**
  * T3-CUSTOM(expbkt3): The row's change request, rendered beside the Linear tag
  * so the two trackers a session answers to read as one line: ticket, then PR.
  *
@@ -460,6 +501,8 @@ export interface PhaseSidebarRow {
   readonly prioritySupported: boolean;
   /** Same version-skew contract for manual Linear tags on thread.meta.update. */
   readonly linearIssueSupported?: boolean;
+  /** Same version-skew contract for the Mattermost link on thread.meta.update. */
+  readonly mattermostLinkSupported?: boolean;
   /** Same version-skew contract for regenerateTitle on thread.meta.update,
       which backs "Regenerate title" on the row's context menu. */
   readonly titleRegenerationSupported?: boolean;
