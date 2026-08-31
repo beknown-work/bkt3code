@@ -1,4 +1,4 @@
-import type { AuthSessionState, EnvironmentId, ServerConfig } from "@t3tools/contracts";
+import type { AuthSessionState, EnvironmentId, ServerConfig, UserId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -60,6 +60,23 @@ export const fetchEnvironmentSessionState = Effect.fn(
     withEnvironmentCredentials(input.prepared.httpAuthorization, client.auth.session({ headers })),
   );
 });
+
+/**
+ * T3-CUSTOM(expbkt3): the operator id an environment session reports, or null.
+ *
+ * Null for an unauthenticated gate state, and for a single-user or local
+ * environment whose subject is not an operator. Lives here rather than in a
+ * client so web and mobile answer "who am I" identically; web's
+ * fork/environmentOperatorIdentity re-exports it.
+ */
+export function operatorUserIdFromSessionState(
+  sessionState: AuthSessionState | null,
+): UserId | null {
+  if (sessionState === null || !sessionState.authenticated) {
+    return null;
+  }
+  return sessionState.userId ?? null;
+}
 
 export function createEnvironmentSessionAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
