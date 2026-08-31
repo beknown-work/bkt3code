@@ -117,6 +117,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingMode?: SidebarProjectGroupingMode;
     autoSettleOnMerge?: boolean;
     legacyThreadListEnabled?: boolean;
+    // T3-CUSTOM(expbkt3): experimental phase sidebar opt-in and its visit map.
     experimentalPhaseSidebarEnabled?: boolean;
     phaseSidebarVisitedAt?: Record<string, string>;
     planModeEnabled?: boolean;

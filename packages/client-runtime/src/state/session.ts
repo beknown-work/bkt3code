@@ -1,3 +1,4 @@
+// T3-CUSTOM(expbkt3): UserId for operatorUserIdFromSessionState below.
 import type { AuthSessionState, EnvironmentId, ServerConfig, UserId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -61,8 +62,9 @@ export const fetchEnvironmentSessionState = Effect.fn(
   );
 });
 
+// T3-CUSTOM(expbkt3): BEGIN
 /**
- * T3-CUSTOM(expbkt3): the operator id an environment session reports, or null.
+ * The operator id an environment session reports, or null.
  *
  * Null for an unauthenticated gate state, and for a single-user or local
  * environment whose subject is not an operator. Lives here rather than in a
@@ -77,6 +79,7 @@ export function operatorUserIdFromSessionState(
   }
   return sessionState.userId ?? null;
 }
+// T3-CUSTOM(expbkt3): END
 
 export function createEnvironmentSessionAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,

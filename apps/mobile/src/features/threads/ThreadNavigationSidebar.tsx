@@ -32,6 +32,15 @@ import { useProjects, useThreadShells } from "../../state/entities";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
+// T3-CUSTOM(expbkt3): experimental phase-grouped sidebar.
+import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { PhaseSidebarList } from "../phasesidebar/PhaseSidebarList";
+import { usePhaseSidebarEnabled } from "../phasesidebar/phaseSidebarEnabled";
+import {
+  usePhaseSidebarRows,
+  usePhaseSidebarViewerUserId,
+} from "../phasesidebar/usePhaseSidebarRows";
+import { useMarkPhaseSidebarThreadVisited } from "../phasesidebar/phaseSidebarVisitStore";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -173,6 +182,23 @@ function ThreadNavigationSidebarPane(
     regenerateThreadTitle,
   } = useThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
+  // T3-CUSTOM(expbkt3): BEGIN — experimental phase sidebar.
+  const phaseSidebarEnabled = usePhaseSidebarEnabled();
+  // Ownership facets resolve against the environment in focus; mobile has no
+  // single primary environment, so the selected thread's is the best answer.
+  const phaseSidebarViewerEnvironmentId = useMemo(
+    () =>
+      props.selectedThreadKey === null
+        ? null
+        : (parseScopedThreadKey(props.selectedThreadKey)?.environmentId ?? null),
+    [props.selectedThreadKey],
+  );
+  const phaseSidebarViewerUserId = usePhaseSidebarViewerUserId(phaseSidebarViewerEnvironmentId);
+  const phaseSidebarRows = usePhaseSidebarRows({
+    viewerEnvironmentId: phaseSidebarViewerEnvironmentId,
+  });
+  const markPhaseSidebarThreadVisited = useMarkPhaseSidebarThreadVisited();
+  // T3-CUSTOM(expbkt3): END
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
@@ -756,6 +782,24 @@ function ThreadNavigationSidebarPane(
       openSwipeableRef.current = null;
     }
   }, []);
+  // T3-CUSTOM(expbkt3): BEGIN — phase sidebar row handlers.
+  const handlePhaseSidebarSelect = useCallback(
+    (row: { readonly thread: EnvironmentThreadShell }) => {
+      markPhaseSidebarThreadVisited(`${row.thread.environmentId}:${row.thread.id}`);
+      props.onSelectThread(row.thread);
+    },
+    [markPhaseSidebarThreadVisited, props.onSelectThread],
+  );
+  const handlePhaseSidebarLongPress = useCallback(
+    (row: { readonly thread: EnvironmentThreadShell }) => {
+      // Row actions arrive with the context menu; selecting is the safe
+      // interim behaviour rather than a long-press that silently does nothing.
+      props.onSelectThread(row.thread);
+    },
+    [props.onSelectThread],
+  );
+  // T3-CUSTOM(expbkt3): END
+
   const handleSelectThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       props.onSelectThread(thread);
@@ -1200,41 +1244,57 @@ function ThreadNavigationSidebarPane(
             unstable_headerRightItems: () => nativeHeaderItems,
           }}
         />
-        <View className="flex-1">
-          <SwipeableScrollGateProvider enabled={swipeEnabled}>
-            <GestureDetector gesture={sidebarScrollGesture}>
-              <LegendList
-                data={listItems}
-                drawDistance={500}
-                estimatedItemSize={64}
-                extraData={listExtraData}
-                getItemType={(item) => item.type}
-                itemsAreEqual={sidebarItemsAreEqual}
-                keyExtractor={(item) => item.key}
-                renderItem={renderListItem}
-                automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
-                contentInsetAdjustmentBehavior={
-                  NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
-                }
-                contentContainerStyle={[
-                  styles.threadListContent,
-                  {
-                    paddingBottom: Math.max(insets.bottom, 16) + 16,
-                    paddingTop: 6,
-                  },
-                ]}
-                keyboardDismissMode="on-drag"
-                keyboardShouldPersistTaps="handled"
-                {...scrollGateHandlers}
-                recycleItems
-                scrollEventThrottle={16}
-                showsVerticalScrollIndicator={false}
-                style={styles.threadList}
-                ListEmptyComponent={listEmpty}
-              />
-            </GestureDetector>
-          </SwipeableScrollGateProvider>
-        </View>
+        {/* T3-CUSTOM(expbkt3): BEGIN — experimental phase-grouped sidebar. It
+            replaces the whole list rather than reshaping it, so the stock list
+            keeps its exact behaviour when the flag is off. */}
+        {phaseSidebarEnabled ? (
+          <View className="flex-1">
+            <PhaseSidebarList
+              activeThreadKey={props.selectedThreadKey}
+              onLongPressRow={handlePhaseSidebarLongPress}
+              onSelectRow={handlePhaseSidebarSelect}
+              rows={phaseSidebarRows}
+              viewerUserId={phaseSidebarViewerUserId}
+            />
+          </View>
+        ) : (
+          /* T3-CUSTOM(expbkt3): END */
+          <View className="flex-1">
+            <SwipeableScrollGateProvider enabled={swipeEnabled}>
+              <GestureDetector gesture={sidebarScrollGesture}>
+                <LegendList
+                  data={listItems}
+                  drawDistance={500}
+                  estimatedItemSize={64}
+                  extraData={listExtraData}
+                  getItemType={(item) => item.type}
+                  itemsAreEqual={sidebarItemsAreEqual}
+                  keyExtractor={(item) => item.key}
+                  renderItem={renderListItem}
+                  automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
+                  contentInsetAdjustmentBehavior={
+                    NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
+                  }
+                  contentContainerStyle={[
+                    styles.threadListContent,
+                    {
+                      paddingBottom: Math.max(insets.bottom, 16) + 16,
+                      paddingTop: 6,
+                    },
+                  ]}
+                  keyboardDismissMode="on-drag"
+                  keyboardShouldPersistTaps="handled"
+                  {...scrollGateHandlers}
+                  recycleItems
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  style={styles.threadList}
+                  ListEmptyComponent={listEmpty}
+                />
+              </GestureDetector>
+            </SwipeableScrollGateProvider>
+          </View>
+        )}
       </>
     );
   }
