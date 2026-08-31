@@ -18,8 +18,8 @@ import {
 import { worktreeCodenameToneIndex } from "@t3tools/shared/worktreeCodename";
 import type { UserId } from "@t3tools/contracts";
 import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
-import { memo, useCallback } from "react";
-import { Pressable, View } from "react-native";
+import { memo, useCallback, type ReactNode } from "react";
+import { Pressable, View, type LayoutChangeEvent } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
@@ -42,6 +42,17 @@ export interface PhaseSidebarRowViewProps {
   /** Mutable because MenuView's prop type is not readonly. */
   readonly actions: MenuAction[];
   readonly onPressAction: (row: PhaseSidebarRow, actionId: string) => void;
+  /** Reports this row's box so a drop can be resolved without measuring. */
+  readonly onLayoutGeometry?: (key: string, y: number, height: number, depth: number) => void;
+  readonly rowKey: string;
+  readonly isDragging?: boolean;
+  readonly isDropTarget?: boolean;
+  readonly dropRejectionLabel?: string | null;
+  /**
+   * The grab affordance, supplied by the list because it owns the gesture.
+   * Long-press is already the context menu, so dragging needs its own target.
+   */
+  readonly dragHandle?: ReactNode;
   readonly onToggleExpanded: (row: PhaseSidebarRow) => void;
 }
 
@@ -68,6 +79,13 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
   const priority = thread.priority ?? null;
 
   const handlePress = useCallback(() => props.onPress(row), [props, row]);
+  const handleLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const { y, height } = event.nativeEvent.layout;
+      props.onLayoutGeometry?.(props.rowKey, y, height, props.indentDepth);
+    },
+    [props],
+  );
   const handlePressAction = useCallback(
     (event: NativeActionEvent) => props.onPressAction(row, event.nativeEvent.event),
     [props, row],
@@ -77,7 +95,14 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
   return (
     <ControlPillMenu actions={props.actions} isAnchoredToRight onPressAction={handlePressAction}>
       <Pressable
-        className={cn("flex-row items-start gap-2 px-3 py-2", props.isActive && "bg-primary/10")}
+        className={cn(
+          "flex-row items-start gap-2 px-3 py-2",
+          props.isActive && "bg-primary/10",
+          props.isDragging === true && "opacity-40",
+          props.isDropTarget === true &&
+            (props.dropRejectionLabel === null ? "bg-emerald-500/15" : "bg-rose-500/15"),
+        )}
+        onLayout={handleLayout}
         onPress={handlePress}
         style={{ paddingLeft: 12 + props.indentDepth * INDENT_STEP }}
       >
@@ -174,6 +199,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
             <Text className="shrink-0 font-t3-mono text-[10px] uppercase text-muted-foreground">
               {providerCode}
             </Text>
+            {props.dragHandle}
           </View>
         </View>
       </Pressable>

@@ -26,6 +26,8 @@ import {
 } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo, useState } from "react";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { runOnJS } from "react-native-reanimated";
 import { FlatList, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -33,6 +35,7 @@ import { cn } from "../../lib/cn";
 import { PhaseSidebarRowView } from "./PhaseSidebarRowView";
 import { phaseSidebarSectionToneClassName } from "./phaseSidebarRowTone";
 import { buildPhaseSidebarRowActions } from "./usePhaseSidebarRowActions";
+import { usePhaseSidebarDrag } from "./usePhaseSidebarDrag";
 
 /** A flattened list entry: either a lifecycle header or a thread row. */
 type PhaseSidebarListItem =
@@ -60,6 +63,10 @@ export interface PhaseSidebarListProps {
   readonly onSelectRow: (row: PhaseSidebarRow) => void;
   /** Fired with the chosen action id from the row's long-press menu. */
   readonly onRowAction: (row: PhaseSidebarRow, actionId: string) => void;
+  /** Re-parent a thread. Null parent means 'make this a root thread'. */
+  readonly onReparentRow?: (subject: PhaseSidebarRow, parent: PhaseSidebarRow | null) => void;
+  /** Reorder a pinned thread to sit before another. */
+  readonly onReorderRow?: (subject: PhaseSidebarRow, before: PhaseSidebarRow) => void;
   readonly ListHeaderComponent?: React.ComponentProps<typeof FlatList>["ListHeaderComponent"];
 }
 
@@ -124,6 +131,52 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     [nowIso],
   );
 
+  const noopReparent = useCallback(() => {}, []);
+  const dragEnabled = props.onReparentRow !== undefined || props.onReorderRow !== undefined;
+  const dragController = usePhaseSidebarDrag({
+    rows: props.rows,
+    rowKeyFor: (row) => `${row.thread.environmentId}:${row.thread.id}`,
+    onReparent: props.onReparentRow ?? noopReparent,
+    onReorder: props.onReorderRow ?? noopReparent,
+  });
+
+  const handleRowGeometry = useCallback(
+    (key: string, y: number, height: number, depth: number) => {
+      dragController.registerGeometry(key, { y, height, depth });
+    },
+    [dragController],
+  );
+
+  // A dedicated grab handle rather than a long-press: long-press already opens
+  // the row's context menu, and a pan that activates anywhere on the row fights
+  // the list's scroll. The handle makes the intent unambiguous.
+  const dragHandleFor = useCallback(
+    (rowKey: string) => {
+      const gesture = Gesture.Pan()
+        .activateAfterLongPress(0)
+        .onStart(() => {
+          runOnJS(dragController.beginDrag)(rowKey);
+        })
+        .onUpdate((event) => {
+          runOnJS(dragController.updateDrag)(event.absoluteY);
+        })
+        .onEnd(() => {
+          runOnJS(dragController.endDrag)();
+        })
+        .onFinalize(() => {
+          runOnJS(dragController.cancelDrag)();
+        });
+      return (
+        <GestureDetector gesture={gesture}>
+          <View className="ml-1 shrink-0 px-1 py-1">
+            <Text className="font-t3-mono text-[11px] text-muted-foreground">≡</Text>
+          </View>
+        </GestureDetector>
+      );
+    },
+    [dragController],
+  );
+
   const handleToggleExpanded = useCallback((row: PhaseSidebarRow) => {
     setCollapsedKeys((current) => {
       const key = `${row.thread.environmentId}:${row.thread.id}`;
@@ -134,7 +187,7 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     });
   }, []);
 
-  return (
+  const list = (
     <FlatList
       ListHeaderComponent={props.ListHeaderComponent}
       data={items}
@@ -158,7 +211,13 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
           </View>
         ) : (
           <PhaseSidebarRowView
+            dragHandle={dragEnabled ? dragHandleFor(item.node.key) : undefined}
+            dropRejectionLabel={dragController.drag?.rejectionLabel ?? null}
             indentDepth={item.node.depth}
+            isDragging={dragController.drag?.subjectKey === item.node.key}
+            isDropTarget={dragController.drag?.intent.targetKey === item.node.key}
+            onLayoutGeometry={handleRowGeometry}
+            rowKey={item.node.key}
             isActive={props.activeThreadKey === item.node.key}
             isExpanded={isExpanded(item.node.key)}
             actions={rowActionsFor(item.node.row)}
@@ -175,4 +234,6 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
       windowSize={11}
     />
   );
+
+  return list;
 }

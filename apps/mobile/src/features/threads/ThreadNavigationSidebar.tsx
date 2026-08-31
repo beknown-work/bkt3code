@@ -192,9 +192,9 @@ function ThreadNavigationSidebarPane(
   const phaseSidebarEnabled = usePhaseSidebarEnabled();
   const phaseSidebarNavigation = useNavigation();
   // The two row actions useThreadListActions does not cover.
-  const updatePhaseSidebarPriority = useAtomCommand(
+  const updatePhaseSidebarThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
-    "phase sidebar set priority",
+    "phase sidebar update thread metadata",
   );
   const stopPhaseSidebarExecution = useAtomCommand(
     threadEnvironment.stopExecution,
@@ -806,6 +806,45 @@ function ThreadNavigationSidebarPane(
     },
     [markPhaseSidebarThreadVisited, props.onSelectThread],
   );
+  const handlePhaseSidebarReparent = useCallback(
+    (
+      subject: { readonly thread: EnvironmentThreadShell },
+      parent: { readonly thread: EnvironmentThreadShell } | null,
+    ) => {
+      // Same command web's setThreadParent uses; the drop was already validated
+      // against cycles and the depth limit before it got here.
+      void updatePhaseSidebarThreadMetadata({
+        environmentId: subject.thread.environmentId,
+        input: {
+          threadId: subject.thread.id,
+          parentThreadId: parent === null ? null : parent.thread.id,
+        },
+      });
+    },
+    [updatePhaseSidebarThreadMetadata],
+  );
+
+  const handlePhaseSidebarReorder = useCallback(
+    (
+      subject: { readonly thread: EnvironmentThreadShell },
+      before: { readonly thread: EnvironmentThreadShell },
+    ) => {
+      // `movePinnedThread` owns the correct order-key planning (and the
+      // capability check), but only moves one position at a time. Direction
+      // comes from the pin ORDER — `pinOrderKey` is the sortable key the server
+      // assigns — not from `pinnedAt`, which is when the pin happened and says
+      // nothing about position.
+      //
+      // Known limitation: one drag moves one position, so dragging a pin a long
+      // way needs repeating. Expressing an arbitrary target would mean
+      // duplicating planPinnedMove's fractional-index logic here.
+      const subjectKey = subject.thread.pinOrderKey ?? "";
+      const beforeKey = before.thread.pinOrderKey ?? "";
+      void movePinnedThread(subject.thread, subjectKey > beforeKey ? "up" : "down");
+    },
+    [movePinnedThread],
+  );
+
   const handlePhaseSidebarRowAction = useCallback(
     (row: { readonly thread: EnvironmentThreadShell }, actionId: string) => {
       const thread = row.thread;
@@ -816,7 +855,7 @@ function ThreadNavigationSidebarPane(
           (choice) => choice.value === parsed,
         )?.value;
         if (priority === undefined) return;
-        void updatePhaseSidebarPriority({
+        void updatePhaseSidebarThreadMetadata({
           environmentId: thread.environmentId,
           input: { threadId: thread.id, priority },
         });
@@ -871,7 +910,7 @@ function ThreadNavigationSidebarPane(
       unpinThread,
       unsettleThread,
       unsnoozeThread,
-      updatePhaseSidebarPriority,
+      updatePhaseSidebarThreadMetadata,
     ],
   );
   // T3-CUSTOM(expbkt3): END
@@ -1330,6 +1369,8 @@ function ThreadNavigationSidebarPane(
                 <PhaseSidebarRateLimits environmentId={phaseSidebarViewerEnvironmentId} />
               }
               activeThreadKey={props.selectedThreadKey}
+              onReorderRow={handlePhaseSidebarReorder}
+              onReparentRow={handlePhaseSidebarReparent}
               onRowAction={handlePhaseSidebarRowAction}
               onSelectRow={handlePhaseSidebarSelect}
               rows={phaseSidebarRows}
