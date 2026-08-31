@@ -39,6 +39,15 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { PHASE_SIDEBAR_PRIORITY_CHOICES } from "@t3tools/client-runtime/state/phase-sidebar";
+import {
+  DEFAULT_PHASE_SIDEBAR_SORT,
+  EMPTY_PHASE_SIDEBAR_FILTERS,
+  type PhaseSidebarFilters,
+  type PhaseSidebarSortPreferences,
+} from "@t3tools/client-runtime/state/phase-sidebar";
+import { phaseSidebarFiltersActive } from "@t3tools/client-runtime/state/phase-sidebar-tree";
+import { cn } from "../../lib/cn";
+import { PhaseSidebarFilterSheet } from "../phasesidebar/PhaseSidebarFilterSheet";
 import { PhaseSidebarList } from "../phasesidebar/PhaseSidebarList";
 import { PhaseSidebarRateLimits } from "../phasesidebar/PhaseSidebarRateLimits";
 import { usePhaseSidebarEnabled } from "../phasesidebar/phaseSidebarEnabled";
@@ -214,6 +223,13 @@ function ThreadNavigationSidebarPane(
     viewerEnvironmentId: phaseSidebarViewerEnvironmentId,
   });
   const markPhaseSidebarThreadVisited = useMarkPhaseSidebarThreadVisited();
+  const [phaseSidebarFilters, setPhaseSidebarFilters] = useState<PhaseSidebarFilters>(
+    EMPTY_PHASE_SIDEBAR_FILTERS,
+  );
+  const [phaseSidebarSort, setPhaseSidebarSort] = useState<PhaseSidebarSortPreferences>(
+    DEFAULT_PHASE_SIDEBAR_SORT,
+  );
+  const [phaseSidebarFilterOpen, setPhaseSidebarFilterOpen] = useState(false);
   // T3-CUSTOM(expbkt3): END
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const autoSettleOnMerge =
@@ -1364,9 +1380,48 @@ function ThreadNavigationSidebarPane(
             keeps its exact behaviour when the flag is off. */}
         {phaseSidebarEnabled ? (
           <View className="flex-1">
+            {phaseSidebarFilterOpen ? (
+              <View className="max-h-[60%] border-b border-border">
+                <PhaseSidebarFilterSheet
+                  filters={phaseSidebarFilters}
+                  onChangeFilters={setPhaseSidebarFilters}
+                  onChangeSort={setPhaseSidebarSort}
+                  projects={projects}
+                  rows={phaseSidebarRows}
+                  sort={phaseSidebarSort}
+                />
+              </View>
+            ) : null}
             <PhaseSidebarList
+              filters={phaseSidebarFilters}
+              sort={phaseSidebarSort}
               ListHeaderComponent={
-                <PhaseSidebarRateLimits environmentId={phaseSidebarViewerEnvironmentId} />
+                <View>
+                  <PhaseSidebarRateLimits environmentId={phaseSidebarViewerEnvironmentId} />
+                  <View className="flex-row items-center justify-between px-3 pb-1 pt-2">
+                    <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-muted-foreground">
+                      Lifecycle
+                    </Text>
+                    <Pressable
+                      className={cn(
+                        "flex-row items-center gap-1.5 rounded-lg border px-2.5 py-1",
+                        phaseSidebarFiltersActive(phaseSidebarFilters)
+                          ? "border-primary bg-primary/15"
+                          : "border-border",
+                      )}
+                      hitSlop={6}
+                      onPress={() => setPhaseSidebarFilterOpen((open) => !open)}
+                    >
+                      <SymbolView
+                        name="line.3.horizontal.decrease"
+                        size={12}
+                        tintColor={mutedColor}
+                        type="monochrome"
+                      />
+                      <Text className="text-xs text-foreground">Filter</Text>
+                    </Pressable>
+                  </View>
+                </View>
               }
               activeThreadKey={props.selectedThreadKey}
               onReorderRow={handlePhaseSidebarReorder}
