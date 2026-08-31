@@ -5,6 +5,7 @@ import {
   buildPlanReviewFeedbackPrompt,
   formatPlanReviewComment,
   locateQuotedLineRange,
+  planReviewDocumentIdFromSectionId,
   planReviewFence,
 } from "./planReview.ts";
 
@@ -383,5 +384,33 @@ describe("buildPlanReviewApprovalPrompt", () => {
     expect(prompt).toContain("PLEASE IMPLEMENT THIS APPROVED PLAN:");
     expect(prompt).toContain("3. Flip the flag");
     expect(prompt).toContain("(The full plan is repeated because this session compacted");
+  });
+});
+
+describe("planReviewDocumentIdFromSectionId", () => {
+  it("recovers the document id a plan comment carries", () => {
+    expect(planReviewDocumentIdFromSectionId("plan:doc-1")).toBe("doc-1");
+  });
+
+  it("returns null for file and diff comments", () => {
+    expect(planReviewDocumentIdFromSectionId("src/app.ts")).toBeNull();
+    expect(planReviewDocumentIdFromSectionId("")).toBeNull();
+  });
+
+  it("returns null for a plan prefix with no id", () => {
+    expect(planReviewDocumentIdFromSectionId("plan:")).toBeNull();
+    expect(planReviewDocumentIdFromSectionId("plan:   ")).toBeNull();
+  });
+
+  it("round-trips the section id formatPlanReviewComment writes", () => {
+    const block = formatPlanReviewComment("doc-42", "Auth rewrite", {
+      startIndex: 4,
+      endIndex: 4,
+      quotedText: "1. Add the migration",
+      body: "Do this first.",
+      authorLabel: null,
+    });
+    const sectionId = /sectionId="([^"]+)"/.exec(block)?.[1] ?? "";
+    expect(planReviewDocumentIdFromSectionId(sectionId)).toBe("doc-42");
   });
 });

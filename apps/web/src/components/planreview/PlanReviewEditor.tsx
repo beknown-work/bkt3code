@@ -115,7 +115,7 @@ import {
   nextPlanDiscussionId,
   normalizeQuotedText,
   resolveSubmittedPlanMarkdown,
-} from "./planReviewMarkdown";
+} from "@t3tools/client-runtime/state/planReviewMarkdown";
 import { replacePlanReviewEditorValue } from "./planReviewEditorValue";
 import { cn } from "../../lib/utils";
 

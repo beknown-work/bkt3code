@@ -12,7 +12,7 @@
  */
 import { memo } from "react";
 
-import type { PlanOutlineHeading } from "./planReviewMarkdown";
+import type { PlanOutlineHeading } from "@t3tools/client-runtime/state/planReviewMarkdown";
 import { cn } from "../../lib/utils";
 
 /** Indent per heading level, capped so a deep plan does not run out of column. */

@@ -1,21 +1,9 @@
-import type { PhaseSidebarPhaseId, PhaseSidebarSection } from "./PhaseGroupedSidebar.logic";
-
-export function isRunningSessionPhase(phaseId: PhaseSidebarPhaseId): boolean {
-  return phaseId === "planning" || phaseId === "implementing";
-}
-
-/** Running motion belongs only to live lifecycle rows, never parked history. */
-export function shouldShowRunningSessionGlint(
-  phaseId: PhaseSidebarPhaseId,
-  section: PhaseSidebarSection,
-): boolean {
-  return section === "active" && isRunningSessionPhase(phaseId);
-}
-
-/** Place one quiet boundary before running work when idle groups are also visible. */
-export function runningSessionDividerPhase(
-  phaseIds: ReadonlyArray<PhaseSidebarPhaseId>,
-): PhaseSidebarPhaseId | null {
-  if (!phaseIds.some((phaseId) => !isRunningSessionPhase(phaseId))) return null;
-  return phaseIds.find(isRunningSessionPhase) ?? null;
-}
+// T3-CUSTOM(expbkt3): moved into @t3tools/client-runtime/state/phase-sidebar.
+// Only the decision is shared — web renders the emphasis as an animated glint,
+// mobile renders it statically. Re-exported here so existing apps/web imports
+// keep working.
+export {
+  isRunningSessionPhase,
+  runningSessionDividerPhase,
+  shouldShowRunningSessionGlint,
+} from "@t3tools/client-runtime/state/phase-sidebar";

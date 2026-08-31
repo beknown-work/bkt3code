@@ -1,20 +1,7 @@
-export interface ThreadVisitTimestampInput {
-  readonly threadUpdatedAt: string;
-  readonly latestTurnCompletedAt: string | null | undefined;
-}
-
-export function resolveThreadVisitTimestamp(input: ThreadVisitTimestampInput): string {
-  const threadUpdatedAtMs = Date.parse(input.threadUpdatedAt);
-  const latestTurnCompletedAt = input.latestTurnCompletedAt;
-  const latestTurnCompletedAtMs = latestTurnCompletedAt
-    ? Date.parse(latestTurnCompletedAt)
-    : Number.NaN;
-  if (
-    latestTurnCompletedAt != null &&
-    Number.isFinite(latestTurnCompletedAtMs) &&
-    (!Number.isFinite(threadUpdatedAtMs) || latestTurnCompletedAtMs > threadUpdatedAtMs)
-  ) {
-    return latestTurnCompletedAt;
-  }
-  return input.threadUpdatedAt;
-}
+// T3-CUSTOM(expbkt3): moved into @t3tools/client-runtime/state/phase-sidebar so
+// mobile can decide "unread" the same way. Re-exported here so existing
+// apps/web imports keep working.
+export {
+  resolveThreadVisitTimestamp,
+  type ThreadVisitTimestampInput,
+} from "@t3tools/client-runtime/state/phase-sidebar";
