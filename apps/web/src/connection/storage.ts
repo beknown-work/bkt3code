@@ -40,6 +40,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+// T3-CUSTOM(expbkt3): cache bookkeeping stamps records with the current time.
 import * as Clock from "effect/Clock";
 // T3-CUSTOM(expbkt3): BEGIN — size budget for the cached thread history.
 import {

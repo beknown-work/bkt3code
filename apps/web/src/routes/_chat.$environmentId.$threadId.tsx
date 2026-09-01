@@ -1,3 +1,4 @@
+// T3-CUSTOM(expbkt3): placeholder environment id for the connection lookup below.
 import { EnvironmentId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
