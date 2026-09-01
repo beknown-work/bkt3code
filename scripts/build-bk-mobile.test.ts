@@ -6,6 +6,7 @@ import {
   bkArtifactFileName,
   bkBuildEnv,
   bkReleaseTag,
+  parseBkIosBuildNumber,
   parseMobileAppVersion,
 } from "./lib/bk-mobile.ts";
 
@@ -60,6 +61,13 @@ describe("build identity", () => {
 
   it("derives the Xcode scheme the way Expo sanitises the app name", () => {
     expect(xcodeSchemeName("BK T3 Code")).toBe("BKT3Code");
+  });
+
+  it("accepts only positive integer iOS build numbers", () => {
+    expect(parseBkIosBuildNumber(undefined)).toBeNull();
+    expect(parseBkIosBuildNumber(" 17 ")).toBe("17");
+    expect(() => parseBkIosBuildNumber("0")).toThrow(/positive integer/);
+    expect(() => parseBkIosBuildNumber("17beta")).toThrow(/positive integer/);
   });
 });
 
