@@ -5,6 +5,8 @@ import type {
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
+// T3-CUSTOM(expbkt3): the row menu opens the members sheet.
+import { useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Platform, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -67,6 +69,10 @@ function threadTimeLabel(thread: EnvironmentThreadShell): string {
 
 // Menus keep lifecycle and title regeneration together. Archive keeps its
 // own surface (thread screen / settings) rather than crowding v2 rows.
+// T3-CUSTOM(expbkt3): member tagging, on every variant so it never depends on
+// the experimental sidebar being enabled.
+const PEOPLE_MENU_ACTION: MenuAction = { id: "people", title: "People", image: "person.2" };
+
 const CARD_MENU_ACTIONS: MenuAction[] = [
   { id: "settle", title: "Settle", image: "checkmark" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
@@ -577,6 +583,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
+      PEOPLE_MENU_ACTION,
       CARD_MENU_ACTIONS[0]!,
       ...pinMenuItem,
       ...titleRegenerationMenuItems,
@@ -586,6 +593,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
+      PEOPLE_MENU_ACTION,
       SLIM_MENU_ACTIONS[0]!,
       ...(thread.pinnedAt != null ? pinMenuItem : []),
       ...titleRegenerationMenuItems,
@@ -594,15 +602,34 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [pinMenuItem, thread.pinnedAt, titleRegenerationMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
-    () => [SNOOZED_MENU_ACTIONS[0]!, ...titleRegenerationMenuItems, SNOOZED_MENU_ACTIONS[1]!],
+    () => [
+      PEOPLE_MENU_ACTION,
+      SNOOZED_MENU_ACTIONS[0]!,
+      ...titleRegenerationMenuItems,
+      SNOOZED_MENU_ACTIONS[1]!,
+    ],
     [titleRegenerationMenuItems],
   );
+  // T3-CUSTOM(expbkt3): the People action opens the members sheet.
+  const threadRowNavigation = useNavigation();
   const legacyMenuActions = useMemo<MenuAction[]>(
-    () => [LEGACY_MENU_ACTIONS[0]!, ...titleRegenerationMenuItems, LEGACY_MENU_ACTIONS[1]!],
+    () => [
+      PEOPLE_MENU_ACTION,
+      LEGACY_MENU_ACTIONS[0]!,
+      ...titleRegenerationMenuItems,
+      LEGACY_MENU_ACTIONS[1]!,
+    ],
     [titleRegenerationMenuItems],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      // T3-CUSTOM(expbkt3): member tagging.
+      if (nativeEvent.event === "people") {
+        threadRowNavigation.navigate("ThreadMembers", {
+          environmentId: thread.environmentId,
+          threadId: thread.id,
+        });
+      }
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
