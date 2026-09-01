@@ -155,6 +155,7 @@ import {
   resolvePhaseSidebarChangeRequestBadge,
   resolvePhaseSidebarDisplayPhase,
   resolvePhaseSidebarPhase,
+  buildPhaseSidebarRows,
   resolvePhaseSidebarLinearIssue,
   resolvePhaseSidebarMattermostLink,
   resolvePhaseSidebarProviderCode,
@@ -2059,74 +2060,28 @@ export function PhaseGroupedSidebar() {
     },
     [],
   );
+  // T3-CUSTOM(expbkt3): row assembly lives in client-runtime so the mobile
+  // phase sidebar builds identical rows. Only the last-known-phase ref stays
+  // here, because it is this component's own anti-flap state.
   const allRows = useMemo<ReadonlyArray<PhaseSidebarRow>>(
     () =>
-      threads.map((thread) => {
-        const project = projectByKey.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        );
-        const repositoryKey = project
-          ? derivePhaseSidebarRepositoryKey(project)
-          : scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-        const serverConfig = serverConfigs.get(thread.environmentId);
-        const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
-        const provider = serverConfig?.providers.find(
-          (candidate) => candidate.instanceId === instanceId,
-        );
-        const providerKind = String(provider?.driver ?? instanceId);
-        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        const vcsStatus = vcsStatusByThreadKey.get(threadKey);
-        const currentPhase = resolvePhaseSidebarPhase(thread, vcsStatus);
-        const isUnreadCompletion = hasUnseenCompletion({
-          ...thread,
-          lastVisitedAt: lastVisitedAtByThreadKey[threadKey],
-        });
-        return {
-          thread,
-          phaseId: resolvePhaseSidebarDisplayPhase(
-            currentPhase,
-            allEnvironmentShellsLive
-              ? null
-              : (lastKnownPhaseByThreadKeyRef.current.get(threadKey) ?? null),
-          ),
-          repositoryKey,
-          repositoryLabel:
-            project?.title ?? repositoryLabels.get(repositoryKey) ?? "Unknown repository",
-          providerKind,
-          providerName: provider?.displayName ?? thread.session?.providerName ?? String(instanceId),
-          isAssignedToMe: currentUserId !== null && isThreadAssignedToUser(thread, currentUserId),
-          // T3-CUSTOM(expbkt3): BEGIN — ownership and co-participant facets.
-          isOwnedByMe: currentUserId !== null && thread.ownerUserId === currentUserId,
-          participantUserIds: phaseSidebarThreadParticipantIds(thread),
-          // T3-CUSTOM(expbkt3): END
-          attentionPriority: resolvePhaseSidebarAttentionPriority(thread, vcsStatus),
-          isUnreadCompletion,
-          // T3-CUSTOM(expbkt3): BEGIN — lifecycle parking inputs.
-          settlementSupported: serverConfig?.environment.capabilities.threadSettlement === true,
-          snoozeSupported: serverConfig?.environment.capabilities.threadSnooze === true,
-          prioritySupported: serverConfig?.environment.capabilities.threadPriority === true,
-          linearIssueSupported: serverConfig?.environment.capabilities.threadLinearIssue === true,
-          // T3-CUSTOM(expbkt3): durable Mattermost conversation link.
-          mattermostLinkSupported:
-            serverConfig?.environment.capabilities.threadMattermostLink === true,
-          titleRegenerationSupported:
-            serverConfig?.environment.capabilities.threadTitleRegeneration === true,
-          threadBootstrapSupported:
-            serverConfig?.environment.capabilities.durableThreadBootstrap === true,
-          changeRequestState: vcsStatus?.pr?.state ?? null,
-          changeRequestUpdatedAt: vcsStatus?.pr?.updatedAt ?? null,
-          // T3-CUSTOM(expbkt3): END
-        };
+      buildPhaseSidebarRows({
+        threads,
+        projects,
+        serverConfigs,
+        vcsStatusByThreadKey,
+        lastVisitedAtByThreadKey,
+        currentUserId,
+        allEnvironmentShellsLive,
+        lastKnownPhaseByThreadKey: lastKnownPhaseByThreadKeyRef.current,
       }),
     [
-      projectByKey,
-      repositoryLabels,
+      projects,
       serverConfigs,
       threads,
       allEnvironmentShellsLive,
       currentUserId,
       lastVisitedAtByThreadKey,
-      primaryEnvironmentId,
       vcsStatusByThreadKey,
     ],
   );

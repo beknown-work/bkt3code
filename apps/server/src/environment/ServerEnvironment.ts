@@ -167,6 +167,8 @@ export const make = Effect.gen(function* () {
       threadCreationDefaults: true,
       // T3-CUSTOM(expbkt3): desired execution intent survives process restarts.
       durableExecutionRecovery: true,
+      // T3-CUSTOM(expbkt3): native plan-review documents and discussions.
+      planReview: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
     },

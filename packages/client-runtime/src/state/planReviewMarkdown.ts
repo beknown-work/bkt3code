@@ -1,10 +1,11 @@
+// @effect-diagnostics globalDate:off -- Client-side discussion ids are a UI concern; the wall clock only breaks collisions across reloads.
 /**
- * T3-CUSTOM(expbkt3): markdown helpers for the plan review editor.
+ * T3-CUSTOM(expbkt3): markdown helpers shared by every plan-review surface.
  *
  * Markdown is the canonical form: it is what the agent reads, what versions
- * store, and what diffs are computed from. The Plate value is a working cache.
- * The round trip itself lives in `PlanReviewEditor`, where the typed editor
- * instance is in scope.
+ * store, and what diffs are computed from. Each client's editor value is a
+ * working cache over it — Plate on web, plain selectable lines on mobile — so
+ * everything here is string-level and holds no editor types.
  */
 import { planReviewAnchorText } from "@t3tools/shared/planReview";
 

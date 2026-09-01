@@ -36,6 +36,8 @@ import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
+// T3-CUSTOM(expbkt3): experimental phase-grouped sidebar opt-in.
+import { usePhaseSidebarEnabled } from "../phasesidebar/phaseSidebarEnabled";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
@@ -137,6 +139,9 @@ function LocalSettingsRouteScreen() {
         </SettingsSection>
 
         <LegacySettingsSection />
+
+        {/* T3-CUSTOM(expbkt3): experimental fork features. */}
+        <ExperimentsSettingsSection />
 
         <ArchivedThreadsSettingsSection />
 
@@ -529,6 +534,9 @@ function ConfiguredSettingsRouteScreen() {
 
         <LegacySettingsSection />
 
+        {/* T3-CUSTOM(expbkt3): experimental fork features. */}
+        <ExperimentsSettingsSection />
+
         <ArchivedThreadsSettingsSection />
 
         <AppSettingsSection />
@@ -593,6 +601,30 @@ function LegacySettingsSection() {
     </View>
   );
 }
+
+// T3-CUSTOM(expbkt3): BEGIN — experimental fork features.
+function ExperimentsSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const phaseSidebarEnabled = usePhaseSidebarEnabled();
+
+  return (
+    <View className="gap-3">
+      <SettingsSection title="Experiments">
+        <SettingsSwitchRow
+          icon="square.grid.2x2"
+          label="Phase-grouped Sidebar"
+          value={phaseSidebarEnabled}
+          onValueChange={(value) => savePreferences({ experimentalPhaseSidebarEnabled: value })}
+        />
+      </SettingsSection>
+      <Text className="px-2 text-sm text-foreground-muted">
+        Groups threads by lifecycle and shows the full row lane — worktree codename, Linear tag,
+        priority and owner. Experimental; turn it off to return to the stock list.
+      </Text>
+    </View>
+  );
+}
+// T3-CUSTOM(expbkt3): END
 
 function AppSettingsSection() {
   const icon = useThemeColor("--color-icon");

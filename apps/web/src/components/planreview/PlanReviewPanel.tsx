@@ -29,7 +29,7 @@ import {
   countPlanOutlineComments,
   parsePlanOutline,
   type PlanOutlineHeading,
-} from "./planReviewMarkdown";
+} from "@t3tools/client-runtime/state/planReviewMarkdown";
 import { locateQuotedLineRange } from "@t3tools/shared/planReview";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";

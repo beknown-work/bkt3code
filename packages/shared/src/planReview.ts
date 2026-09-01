@@ -63,6 +63,19 @@ export function isPlanReviewSectionId(sectionId: string): boolean {
 }
 
 /**
+ * The plan-review document a `plan:<documentId>` section id refers to.
+ *
+ * The inverse of the section id `formatPlanReviewComment` writes. Returns null
+ * for any other section id, so a caller can treat "not a plan comment" and
+ * "malformed plan comment" the same way.
+ */
+export function planReviewDocumentIdFromSectionId(sectionId: string): string | null {
+  if (!isPlanReviewSectionId(sectionId)) return null;
+  const documentId = sectionId.slice(PLAN_REVIEW_SECTION_ID_PREFIX.length).trim();
+  return documentId.length > 0 ? documentId : null;
+}
+
+/**
  * Recovers the plan title from the synthetic `filePath` the block carries.
  *
  * `filePath` exists because the transcript card and the prompt format are shared

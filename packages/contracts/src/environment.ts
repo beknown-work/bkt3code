@@ -87,6 +87,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadCreationDefaults: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): accepted turns have durable desired-state and recovery. */
   durableExecutionRecovery: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): server exposes the native plan-review document API
+      (planReview.* and subscribePlanReview). Absent on upstream servers and on
+      fork servers from before it shipped, so clients hide the plan-review
+      surface entirely rather than probing for it. */
+  planReview: Schema.optionalKey(Schema.Boolean),
   /** Server persists a pull request reference on thread.meta.update. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   /** The update path clients should offer for this server. Absent on
