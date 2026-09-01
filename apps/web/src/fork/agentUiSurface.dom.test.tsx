@@ -94,6 +94,11 @@ class TestNode {
     return new TestNode(name, this);
   }
 
+  // The card's icons are SVG, so React reaches for the namespaced factory.
+  createElementNS(_namespace: string, name: string) {
+    return new TestNode(name, this);
+  }
+
   createTextNode(value: string) {
     const node = new TestNode("#text", this, 3);
     node.nodeValue = value;
@@ -133,6 +138,14 @@ function installTestDom() {
   return document;
 }
 
+/** HTML attribute names are case-insensitive; this fake DOM stores them verbatim. */
+function attribute(node: TestNode, name: string): string | null {
+  for (const [key, value] of node.attributes) {
+    if (key.toLowerCase() === name.toLowerCase()) return value;
+  }
+  return null;
+}
+
 function iframeNodes(root: TestNode): TestNode[] {
   return root.childNodes.flatMap((child) => [
     ...(child.tagName === "IFRAME" ? [child] : []),
@@ -165,7 +178,7 @@ describe("Agent view runtime mitigation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("ignores a persisted enabled preference and leaves only the ordinary tool row", async () => {
+  it("leaves a URL surface as the ordinary tool row even when the setting is on", async () => {
     const document = installTestDom();
     const { createRoot } = await import("react-dom/client");
     const container = document.createElement("div");
@@ -190,7 +203,50 @@ describe("Agent view runtime mitigation", () => {
     }
   });
 
-  it("keeps an already-populated expanded store closed", async () => {
+  it("mounts an agent-authored HTML surface in a scripts-only sandbox", async () => {
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const container = document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    testState.queries.set("aui_html", {
+      data: {
+        render: {
+          renderId: "aui_html",
+          title: "Option 1",
+          kind: "html",
+          html: "<p>baked</p>",
+          createdAt: "2026-08-31T18:57:27.170Z",
+        },
+      },
+      isPending: false,
+    });
+
+    try {
+      await render(
+        root,
+        <AgentUiSurfaceRow
+          threadRef={THREAD_REF}
+          surface={{ renderId: "aui_html", kind: "html", height: 360 }}
+        >
+          <span>ordinary tool row</span>
+        </AgentUiSurfaceRow>,
+      );
+
+      const frames = iframeNodes(container);
+      expect(frames).toHaveLength(1);
+      // An unmodified `allow-scripts` sandbox keeps the opaque origin, which is
+      // what makes running the agent's scripts safe.
+      expect(attribute(frames[0]!, "sandbox")).toBe("allow-scripts");
+      expect(attribute(frames[0]!, "srcdoc")).toContain("baked");
+      // The upstream row is kept, not replaced.
+      expect(renderedText(container)).toContain("ordinary tool row");
+      expect(testState.queryCalls).toContain("aui_html");
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
+
+  it("opens the expanded surface for a render the user asked to expand", async () => {
     const document = installTestDom();
     const { createRoot } = await import("react-dom/client");
     const container = document.createElement("div");
@@ -199,9 +255,8 @@ describe("Agent view runtime mitigation", () => {
 
     try {
       await render(root, <AgentUiExpandedSurface />);
-      expect(renderedText(container)).toBe("");
-      expect(iframeNodes(container)).toHaveLength(0);
-      expect(testState.queryCalls).toEqual([]);
+      expect(renderedText(container)).toContain("Loading view");
+      expect(testState.queryCalls).toEqual(["aui_alpha"]);
     } finally {
       flushSync(() => root.unmount());
     }
