@@ -1140,6 +1140,22 @@ export function HomeScreen(props: HomeScreenProps) {
       listEmpty
     );
 
+  // T3-CUSTOM(expbkt3): BEGIN — the experimental phase sidebar replaces the
+  // whole list. This MUST sit above the threadListV2Enabled return below:
+  // that flag defaults to true, so anything after it is unreachable.
+  if (phaseSidebarEnabled) {
+    return (
+      <View className="flex-1 bg-screen">
+        <PhaseSidebarPane
+          onSelectThread={props.onSelectThread}
+          selectedThreadKey={null}
+          viewerEnvironmentId={props.selectedEnvironmentId}
+        />
+      </View>
+    );
+  }
+  // T3-CUSTOM(expbkt3): END
+
   if (threadListV2Enabled) {
     return (
       <View className="flex-1 bg-screen">
@@ -1185,23 +1201,6 @@ export function HomeScreen(props: HomeScreenProps) {
       </View>
     );
   }
-
-  // T3-CUSTOM(expbkt3): BEGIN — the experimental phase sidebar replaces this
-  // list entirely when enabled. It has to be wired here as well as in
-  // ThreadNavigationSidebar: that pane only renders in split view, so on a
-  // phone (compact layout) this screen IS the thread list.
-  if (phaseSidebarEnabled) {
-    return (
-      <View className="flex-1 bg-screen">
-        <PhaseSidebarPane
-          onSelectThread={props.onSelectThread}
-          selectedThreadKey={null}
-          viewerEnvironmentId={props.selectedEnvironmentId}
-        />
-      </View>
-    );
-  }
-  // T3-CUSTOM(expbkt3): END
 
   return (
     <View className="flex-1 bg-screen">
