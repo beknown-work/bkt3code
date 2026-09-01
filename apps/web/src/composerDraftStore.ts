@@ -1499,6 +1499,10 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    // T3-CUSTOM(expbkt3): two drafts with the same parent id on different
+    // machines are different drafts; without this the store would treat a
+    // re-targeted draft as unchanged and keep the stale parent environment.
+    (left.parentEnvironmentId ?? null) === (right.parentEnvironmentId ?? null) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -2553,6 +2557,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
               (nextDraftThread.parentThreadId ?? null) === (existing.parentThreadId ?? null) &&
+              // T3-CUSTOM(expbkt3): the parent's environment is part of the identity.
+              (nextDraftThread.parentEnvironmentId ?? null) ===
+                (existing.parentEnvironmentId ?? null) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;

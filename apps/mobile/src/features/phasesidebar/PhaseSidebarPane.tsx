@@ -158,6 +158,13 @@ export function PhaseSidebarPane(props: {
         input: {
           threadId: subject.thread.id,
           parentThreadId: parent === null ? null : parent.thread.id,
+          // T3-CUSTOM(expbkt3): a drop is always within one environment (the
+          // validator rejects cross-environment targets), so the parent's
+          // environment is this thread's own. Sending null rather than omitting
+          // it matters: omitting leaves the field unchanged, which would strand
+          // a thread that used to have a parent on another machine pointing at
+          // that machine with a local thread id.
+          parentEnvironmentId: null,
         },
       });
     },

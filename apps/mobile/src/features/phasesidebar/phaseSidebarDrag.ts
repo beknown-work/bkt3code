@@ -60,7 +60,17 @@ export function validateReparent(input: {
   if (target.id === subject.id) return reject("same-thread");
   // Lineage is per environment: a thread cannot parent one on another server.
   if (target.environmentId !== subject.environmentId) return reject("cross-environment");
-  if ((subject.parentThreadId ?? null) === target.id) return reject("already-parent");
+  // T3-CUSTOM(expbkt3): compare the scoped pair — a thread whose parent is a
+  // same-id session on another machine is not already parented to this one.
+  if (
+    subject.parentThreadId != null &&
+    scopedThreadLineageKey(
+      subject.parentEnvironmentId ?? subject.environmentId,
+      subject.parentThreadId,
+    ) === scopedThreadLineageKey(target.environmentId, target.id)
+  ) {
+    return reject("already-parent");
+  }
 
   // The subject would become its own ancestor, which would orphan the subtree.
   // T3-CUSTOM(expbkt3): descendants are (environment, thread) pairs, because a

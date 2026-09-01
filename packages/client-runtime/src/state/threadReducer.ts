@@ -266,9 +266,14 @@ export function applyThreadDetailEvent(
           ...(event.payload.mattermostThreadUrl !== undefined
             ? { mattermostThreadUrl: event.payload.mattermostThreadUrl }
             : {}),
-          // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
+          // T3-CUSTOM(expbkt3): session lineage re-parent / detach. The parent's
+          // environment travels with its id, so a lineage that moved across
+          // machines renders without waiting for a refetch.
           ...(event.payload.parentThreadId !== undefined
             ? { parentThreadId: event.payload.parentThreadId }
+            : {}),
+          ...(event.payload.parentEnvironmentId !== undefined
+            ? { parentEnvironmentId: event.payload.parentEnvironmentId }
             : {}),
           ...(event.payload.linkedPullRequest !== undefined
             ? { linkedPullRequest: event.payload.linkedPullRequest }
