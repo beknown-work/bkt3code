@@ -1240,9 +1240,18 @@ export interface MoveUnderCandidate {
   readonly repositoryLabel: string;
 }
 
-function scopedKey(environmentId: string, threadId: string): string {
+/**
+ * T3-CUSTOM(expbkt3): the key lineage is matched on.
+ *
+ * Exported because a lineage can now cross environments, so every consumer of
+ * `collectDescendantThreadIds` has to speak the same (environment, thread) pair
+ * rather than a bare id.
+ */
+export function scopedThreadLineageKey(environmentId: string, threadId: string): string {
   return `${environmentId}:${threadId}`;
 }
+
+const scopedKey = scopedThreadLineageKey;
 
 /**
  * The scoped key of a thread's parent, or null for a root.

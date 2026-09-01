@@ -8,6 +8,7 @@
 // re-parents (move-under), dropping BETWEEN rows reorders a pin.
 import {
   collectDescendantThreadIds,
+  scopedThreadLineageKey,
   type PhaseSidebarRow,
 } from "@t3tools/client-runtime/state/phase-sidebar";
 import { PHASE_SIDEBAR_TREE_MAX_DEPTH } from "@t3tools/client-runtime/state/phase-sidebar-tree";
@@ -62,14 +63,20 @@ export function validateReparent(input: {
   if ((subject.parentThreadId ?? null) === target.id) return reject("already-parent");
 
   // The subject would become its own ancestor, which would orphan the subtree.
+  // T3-CUSTOM(expbkt3): descendants are (environment, thread) pairs, because a
+  // lineage can cross environments. A cross-environment drop is already
+  // rejected above, so the target shares the subject's environment here.
   const descendants = collectDescendantThreadIds(
     input.allRows.map((row) => row.thread),
     subject.id,
+    subject.environmentId,
   );
-  if (descendants.has(target.id)) return reject("own-descendant");
+  if (descendants.has(scopedThreadLineageKey(subject.environmentId, target.id))) {
+    return reject("own-descendant");
+  }
 
   // The subject's own subtree moves with it, so the deepest leaf decides.
-  const subjectSubtreeDepth = measureSubtreeDepth(input.allRows, subject.id);
+  const subjectSubtreeDepth = measureSubtreeDepth(input.allRows, subject.id, subject.environmentId);
   if (input.targetDepth + 1 + subjectSubtreeDepth > PHASE_SIDEBAR_TREE_MAX_DEPTH) {
     return reject("too-deep");
   }
@@ -81,18 +88,27 @@ export function validateReparent(input: {
 export function measureSubtreeDepth(
   rows: ReadonlyArray<PhaseSidebarRow>,
   threadId: string,
+  // T3-CUSTOM(expbkt3): lineage is keyed by (environment, thread), so the walk
+  // needs the subject's environment. Defaulted from the rows for callers that
+  // only know the id, which keeps this usable as a bare-id helper.
+  environmentId?: string,
 ): number {
   const childrenByParent = new Map<string, string[]>();
   for (const row of rows) {
     const parent = row.thread.parentThreadId ?? null;
     if (parent === null) continue;
-    const bucket = childrenByParent.get(parent);
-    if (bucket) bucket.push(row.thread.id);
-    else childrenByParent.set(parent, [row.thread.id]);
+    const parentKey = scopedThreadLineageKey(
+      row.thread.parentEnvironmentId ?? row.thread.environmentId,
+      parent,
+    );
+    const childKey = scopedThreadLineageKey(row.thread.environmentId, row.thread.id);
+    const bucket = childrenByParent.get(parentKey);
+    if (bucket) bucket.push(childKey);
+    else childrenByParent.set(parentKey, [childKey]);
   }
 
-  const walk = (id: string, seen: ReadonlySet<string>): number => {
-    const children = childrenByParent.get(id) ?? [];
+  const walk = (key: string, seen: ReadonlySet<string>): number => {
+    const children = childrenByParent.get(key) ?? [];
     let deepest = 0;
     for (const child of children) {
       // Defensive: a cycle in server data must not hang the gesture.
@@ -102,7 +118,10 @@ export function measureSubtreeDepth(
     return deepest;
   };
 
-  return walk(threadId, new Set([threadId]));
+  const rootEnvironmentId =
+    environmentId ?? rows.find((row) => row.thread.id === threadId)?.thread.environmentId ?? "";
+  const rootKey = scopedThreadLineageKey(rootEnvironmentId, threadId);
+  return walk(rootKey, new Set([rootKey]));
 }
 
 /**
