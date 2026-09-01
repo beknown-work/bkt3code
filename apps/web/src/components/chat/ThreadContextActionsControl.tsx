@@ -190,6 +190,9 @@ export function ThreadContextActionsControl({
       // "New" replaces a broken session: isolate it in a fresh worktree.
       // "Child" continues alongside the source: reuse its worktree and branch
       // so uncommitted work stays visible (or local mode when it had one).
+      // T3-CUSTOM(expbkt3): the child records which environment its parent lives
+      // on, so the operator can move the draft to a machine that is actually up
+      // — the usual reason to hand a session off — without losing the lineage.
       const workspaceOptions =
         mode === "child"
           ? shell.worktreePath
@@ -198,18 +201,21 @@ export function ThreadContextActionsControl({
                 worktreePath: shell.worktreePath,
                 branch: shell.branch ?? null,
                 parentThreadId: activeThreadId,
+                parentEnvironmentId: activeThreadEnvironmentId,
               }
             : {
                 envMode: "local" as const,
                 worktreePath: null,
                 branch: null,
                 parentThreadId: activeThreadId,
+                parentEnvironmentId: activeThreadEnvironmentId,
               }
           : {
               envMode: "worktree" as const,
               worktreePath: null,
               branch: null,
               parentThreadId: null,
+              parentEnvironmentId: null,
             };
       // T3-CUSTOM(expbkt3): the work continues elsewhere from this transcript, so
       // keep it cached past the point the operator stops opening it.

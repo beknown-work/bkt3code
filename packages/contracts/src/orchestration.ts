@@ -10,6 +10,8 @@ import {
   CheckpointRef,
   ClientSurface,
   CommandId,
+  // T3-CUSTOM(expbkt3): a parent session may live on another environment.
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -802,6 +804,9 @@ export const OrchestrationThread = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage. Optional so payloads from
   // pre-lineage servers decode; null means this is a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary. Optional so payloads
   // from pre-work-summary servers decode; absent/null means never generated.
   workSummary: Schema.optional(Schema.NullOr(ThreadWorkSummary)),
@@ -898,6 +903,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   mattermostThreadUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage (see the ThreadPriority block above).
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (see ThreadWorkSummary).
   workSummary: Schema.optional(Schema.NullOr(ThreadWorkSummary)),
   // T3-CUSTOM(expbkt3): END
@@ -1133,6 +1141,9 @@ const ThreadCreateCommand = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): session lineage. Absent/null creates a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   // T3-CUSTOM(expbkt3): attach-to-external-session. Handled as a dispatcher
   // side-effect (seeds the provider session binding); deliberately not carried
   // into the thread.created event, so the event log stays upstream-shaped.
@@ -1186,6 +1197,9 @@ export const ThreadBootstrapRequestCommand = Schema.Struct({
   priority: Schema.optional(Schema.NullOr(ThreadPriority)),
   // T3-CUSTOM(expbkt3): session lineage. Absent/null creates a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   ownerUserId: Schema.optional(UserId),
   // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
   memberUserIds: Schema.optional(Schema.Array(UserId)),
@@ -1282,6 +1296,9 @@ export const ResolvedThreadBootstrapRequest = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage, resolved at accept time. Optional so
   // resolved requests persisted before lineage shipped still decode.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   ownerUserId: Schema.optional(UserId),
   // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
   memberUserIds: Schema.optional(Schema.Array(UserId)),
@@ -1397,6 +1414,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage. undefined = unchanged, null = detach
   // to a root session. The decider rejects a value that would form a cycle.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
 }).check(
   Schema.makeFilter(
@@ -1494,6 +1514,9 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage set at creation time by the same
   // single-shot creators. Absent/null creates a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
 });
 
 const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
@@ -1522,6 +1545,9 @@ export const ThreadTurnStartBootstrap = Schema.Struct({
       priority: Schema.optional(Schema.NullOr(ThreadPriority)),
       // T3-CUSTOM(expbkt3): session lineage carried through the client outbox.
       parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+      // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+      // null means this thread's own, which is what every same-server link means.
+      parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
       ownerUserId: Schema.optional(UserId),
       // T3-CUSTOM(expbkt3): inherited session tags (see ThreadCreateCommand).
       memberUserIds: Schema.optional(Schema.Array(UserId)),
@@ -2045,6 +2071,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   // T3-CUSTOM(expbkt3): session lineage at creation time. Immutable on this
   // event; later re-parenting travels on thread.meta.updated.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   // T3-CUSTOM(expbkt3): BEGIN — tags the session is born with, beyond its
   // creator. Later tag changes travel on thread.member-added/removed.
   memberUserIds: Schema.optional(Schema.Array(UserId)),
@@ -2141,6 +2170,9 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   mattermostThreadUrl: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // T3-CUSTOM(expbkt3): session lineage. undefined = unchanged, null = detach.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment that parent id belongs to. Absent or
+  // null means this thread's own, which is what every same-server link means.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   updatedAt: IsoDateTime,
 });

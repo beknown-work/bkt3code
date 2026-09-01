@@ -29,7 +29,9 @@ export function MoveUnderSessionDialog({
   readonly threads: ReadonlyArray<ThreadShell>;
   readonly repositoryLabelFor: (thread: ThreadShell) => string;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onSelect: (parentThreadId: ThreadId) => void;
+  // T3-CUSTOM(expbkt3): a parent may live on another environment, so its id
+  // alone no longer identifies it.
+  readonly onSelect: (parent: ThreadShell) => void;
 }) {
   const [query, setQuery] = useState("");
 
@@ -50,7 +52,8 @@ export function MoveUnderSessionDialog({
           <DialogTitle>Move under session</DialogTitle>
           <DialogDescription>
             File “{subject?.title}” under another session. It will render nested beneath its parent
-            in the sidebar. Its own child sessions move with it.
+            in the sidebar. Its own child sessions move with it. The parent can live on another
+            machine, so work spread across environments still reads as one tree.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-2">
@@ -66,12 +69,12 @@ export function MoveUnderSessionDialog({
             data-testid="move-under-session-candidates"
           >
             {candidates.map((candidate) => (
-              <li key={candidate.thread.id}>
+              <li key={`${candidate.thread.environmentId}:${candidate.thread.id}`}>
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-row-hover"
                   onClick={() => {
-                    onSelect(candidate.thread.id);
+                    onSelect(candidate.thread);
                     onOpenChange(false);
                   }}
                 >

@@ -2636,11 +2636,31 @@ export function PhaseGroupedSidebar() {
   // a cycle, so the failure toast is the only handling needed here.
   const [moveUnderRow, setMoveUnderRow] = useState<PhaseSidebarRow | null>(null);
   const setThreadParent = useCallback(
-    (row: PhaseSidebarRow, parentThreadId: ThreadId | null) => {
-      if ((row.thread.parentThreadId ?? null) === parentThreadId) return;
+    (
+      row: PhaseSidebarRow,
+      parentThreadId: ThreadId | null,
+      // T3-CUSTOM(expbkt3): the environment the parent lives on. Null both for a
+      // detach and for a parent on this row's own environment, which is what
+      // every same-server link has always meant.
+      parentEnvironmentId: EnvironmentId | null = null,
+    ) => {
+      const nextParentEnvironmentId =
+        parentThreadId === null || parentEnvironmentId === row.thread.environmentId
+          ? null
+          : parentEnvironmentId;
+      if (
+        (row.thread.parentThreadId ?? null) === parentThreadId &&
+        (row.thread.parentEnvironmentId ?? null) === nextParentEnvironmentId
+      ) {
+        return;
+      }
       void updateThreadMetadata({
         environmentId: row.thread.environmentId,
-        input: { threadId: row.thread.id, parentThreadId },
+        input: {
+          threadId: row.thread.id,
+          parentThreadId,
+          parentEnvironmentId: nextParentEnvironmentId,
+        },
       }).then((result) => {
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
@@ -3294,13 +3314,16 @@ export function PhaseGroupedSidebar() {
         subject={moveUnderRow?.thread ?? null}
         threads={allRows.map((row) => row.thread)}
         repositoryLabelFor={(thread) =>
-          allRows.find((row) => row.thread.id === thread.id)?.repositoryLabel ?? ""
+          allRows.find(
+            (row) =>
+              row.thread.id === thread.id && row.thread.environmentId === thread.environmentId,
+          )?.repositoryLabel ?? ""
         }
         onOpenChange={(open) => {
           if (!open) setMoveUnderRow(null);
         }}
-        onSelect={(parentThreadId) => {
-          if (moveUnderRow) setThreadParent(moveUnderRow, parentThreadId);
+        onSelect={(parent) => {
+          if (moveUnderRow) setThreadParent(moveUnderRow, parent.id, parent.environmentId);
           setMoveUnderRow(null);
         }}
       />

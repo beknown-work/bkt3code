@@ -9,6 +9,7 @@ import {
   OrchestrationProposedPlanId,
   OrchestrationCommand as OrchestrationCommandSchema,
   ProjectId,
+  EnvironmentId,
   ThreadId,
   UserId,
   type OrchestrationCommand,
@@ -1028,14 +1029,18 @@ const handlers = {
       ThreadId.make(input.sessionId),
       "t3.control",
     );
-    // Read access is the right bar for the parent: the caller is not changing
-    // it, only pointing at it. resolveSessionId reports an inaccessible session
-    // as absent, so this leaks nothing.
-    const parentSessionId = yield* resolveSessionId(
-      operation,
-      ThreadId.make(input.parentSessionId),
-      "t3.read",
-    );
+    // A parent on another environment cannot be resolved here — this server has
+    // never spoken to that one — so the id is taken on trust and recorded as
+    // given. Clients that render the tree already handle a parent they cannot
+    // see, which is the same state as a parent whose host is offline.
+    const parentEnvironmentId = input.parentEnvironmentId ?? null;
+    // Read access is the right bar for a local parent: the caller is not
+    // changing it, only pointing at it. resolveSessionId reports an inaccessible
+    // session as absent, so this leaks nothing.
+    const parentSessionId =
+      parentEnvironmentId === null
+        ? yield* resolveSessionId(operation, ThreadId.make(input.parentSessionId), "t3.read")
+        : ThreadId.make(input.parentSessionId);
     const dispatcher = yield* OrchestrationCommandDispatcher;
     const crypto = yield* Crypto.Crypto;
     const commandId = yield* makeCommandId(crypto, operation);
@@ -1047,9 +1052,17 @@ const handlers = {
         commandId,
         threadId: sessionId,
         parentThreadId: parentSessionId,
+        parentEnvironmentId:
+          parentEnvironmentId === null ? null : EnvironmentId.make(parentEnvironmentId),
       })
       .pipe(mapControlError(operation));
-    return { linked: true, sessionId, parentSessionId, sequence: result.sequence };
+    return {
+      linked: true,
+      sessionId,
+      parentSessionId,
+      parentEnvironmentId,
+      sequence: result.sequence,
+    };
   }),
 
   t3_unlink_session: Effect.fn("T3ControlToolkit.unlinkSession")(function* (input) {
@@ -1068,6 +1081,8 @@ const handlers = {
         commandId,
         threadId: sessionId,
         parentThreadId: null,
+        // T3-CUSTOM(expbkt3): detaching clears the environment with the id.
+        parentEnvironmentId: null,
       })
       .pipe(mapControlError(operation));
     return { unlinked: true, sessionId, parentSessionId: null, sequence: result.sequence };

@@ -39,7 +39,13 @@ it("exposes link and unlink as separate verbs", () => {
 
 it("requires both ids to link and only the subject to unlink", () => {
   const link = jsonSchema("t3_link_session");
-  expect(Object.keys(link.properties ?? {}).toSorted()).toEqual(["parentSessionId", "sessionId"]);
+  // T3-CUSTOM(expbkt3): the parent's environment is optional — omitting it means
+  // "this one", which is how every same-machine link is expressed.
+  expect(Object.keys(link.properties ?? {}).toSorted()).toEqual([
+    "parentEnvironmentId",
+    "parentSessionId",
+    "sessionId",
+  ]);
   expect(link.required?.toSorted()).toEqual(["parentSessionId", "sessionId"]);
 
   const unlink = jsonSchema("t3_unlink_session");

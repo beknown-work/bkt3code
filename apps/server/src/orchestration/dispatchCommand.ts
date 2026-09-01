@@ -366,6 +366,8 @@ export const make = Effect.gen(function* () {
               priority: bootstrap.createThread.priority ?? null,
               // T3-CUSTOM(expbkt3): session lineage.
               parentThreadId: bootstrap.createThread.parentThreadId ?? null,
+              // T3-CUSTOM(expbkt3): lineage may point at another environment.
+              parentEnvironmentId: bootstrap.createThread.parentEnvironmentId ?? null,
             },
             dispatchOptions,
           );
@@ -666,6 +668,10 @@ export const make = Effect.gen(function* () {
             // field here silently orphans every agent-spawned session.
             ...(request.parentThreadId !== undefined
               ? { parentThreadId: request.parentThreadId }
+              : {}),
+            // T3-CUSTOM(expbkt3): carry the parent's environment with its id.
+            ...(request.parentEnvironmentId !== undefined
+              ? { parentEnvironmentId: request.parentEnvironmentId }
               : {}),
             ...(request.ownerUserId ? { ownerUserId: request.ownerUserId } : {}),
             createdAt: request.createdAt,

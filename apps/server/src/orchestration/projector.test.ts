@@ -108,6 +108,8 @@ describe("orchestration projector", () => {
         mattermostThreadUrl: null,
         // T3-CUSTOM(expbkt3): session lineage.
         parentThreadId: null,
+        // T3-CUSTOM(expbkt3): a parent may live on another environment.
+        parentEnvironmentId: null,
         deletedAt: null,
         messages: [],
         proposedPlans: [],

@@ -766,6 +766,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             mattermostThreadUrl: null,
             // T3-CUSTOM(expbkt3): session lineage stamped at creation.
             parentThreadId: event.payload.parentThreadId ?? null,
+            parentEnvironmentId: event.payload.parentEnvironmentId ?? null,
             // T3-CUSTOM(expbkt3): BEGIN — no work summary until one is requested.
             workSummary: null,
             // T3-CUSTOM(expbkt3): END
@@ -1049,6 +1050,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
+              : {}),
+            ...(event.payload.parentEnvironmentId !== undefined
+              ? { parentEnvironmentId: event.payload.parentEnvironmentId }
               : {}),
             ...(event.payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: event.payload.linkedPullRequest }

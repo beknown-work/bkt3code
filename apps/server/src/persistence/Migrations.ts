@@ -68,6 +68,8 @@ import Migration1005 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration1000 from "./Migrations/1000_ProjectionThreadsPriority.ts";
 import Migration1022 from "./Migrations/1022_AgentUiRenders.ts";
 import Migration1023 from "./Migrations/1023_ProjectionThreadsMattermostLink.ts";
+// T3-CUSTOM(expbkt3): a parent session may live on another environment.
+import Migration1024 from "./Migrations/1024_ProjectionThreadsParentEnvironment.ts";
 import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
 import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.ts";
 // T3-CUSTOM(expbkt3): exact durable work items and guarded recovery audit.
@@ -229,6 +231,8 @@ const migrationEntries = [
   [1022, "AgentUiRenders", Migration1022],
   // T3-CUSTOM(expbkt3): durable Mattermost conversation link on a thread.
   [1023, "ProjectionThreadsMattermostLink", Migration1023],
+  // T3-CUSTOM(expbkt3): cross-environment session lineage.
+  [1024, "ProjectionThreadsParentEnvironment", Migration1024],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

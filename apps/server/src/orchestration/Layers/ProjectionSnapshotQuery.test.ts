@@ -353,6 +353,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           mattermostThreadUrl: null,
           // T3-CUSTOM(expbkt3): session lineage.
           parentThreadId: null,
+          // T3-CUSTOM(expbkt3): a parent may live on another environment.
+          parentEnvironmentId: null,
           // T3-CUSTOM(expbkt3): no work summary was ever requested here.
           workSummary: null,
           pinnedAt: "2026-02-24T00:00:01.000Z",
@@ -507,6 +509,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           mattermostThreadUrl: null,
           // T3-CUSTOM(expbkt3): session lineage.
           parentThreadId: null,
+          // T3-CUSTOM(expbkt3): a parent may live on another environment.
+          parentEnvironmentId: null,
           // T3-CUSTOM(expbkt3): no work summary was ever requested here.
           workSummary: null,
           pinnedAt: "2026-02-24T00:00:01.000Z",
