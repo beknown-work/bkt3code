@@ -1,5 +1,3 @@
-// T3-CUSTOM(expbkt3): placeholder environment id for the connection lookup below.
-import { EnvironmentId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
@@ -17,13 +15,8 @@ import {
 } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
-// T3-CUSTOM(expbkt3): an unreachable host changes what the sync pill may claim.
-import { connectionProjectionPhase } from "@t3tools/client-runtime/connection";
-import { useEnvironmentConnectionState } from "../state/environments";
-
-// T3-CUSTOM(expbkt3): placeholder id for the connection hook when the route has
-// no thread; nothing renders from it.
-const EMPTY_ENVIRONMENT_ID = EnvironmentId.make("");
+// T3-CUSTOM(expbkt3): keep optional connection handling outside this upstream route.
+import { useThreadHostReachable } from "../fork/threadHostReachability";
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
@@ -36,15 +29,8 @@ function ChatThreadRouteView() {
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
   const serverThreadStatus = useThreadStatus(threadRef);
-  // T3-CUSTOM(expbkt3): the hook needs a stable id, and an absent route ref has
-  // no environment to ask about; the resulting state is simply never reachable.
-  const threadConnectionState = useEnvironmentConnectionState(
-    threadRef?.environmentId ?? EMPTY_ENVIRONMENT_ID,
-  );
-  const threadHostReachable =
-    threadRef === null ||
-    threadConnectionState.data === null ||
-    connectionProjectionPhase(threadConnectionState.data) !== "disconnected";
+  // T3-CUSTOM(expbkt3): an unreachable host changes what the sync pill may claim.
+  const threadHostReachable = useThreadHostReachable(threadRef?.environmentId ?? null);
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
