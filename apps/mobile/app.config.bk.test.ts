@@ -124,4 +124,19 @@ describe("applyBkMobileConfig", () => {
       applyBkMobileConfig(upstreamConfig, { ...BK_ENV, BK_ANDROID_VERSION_CODE: "nope" }),
     ).toThrow(/positive integer/);
   });
+
+  it("uses a unique iOS build number for SideStore updates", () => {
+    const config = applyBkMobileConfig(upstreamConfig, {
+      ...BK_ENV,
+      BK_IOS_BUILD_NUMBER: "42",
+    });
+    expect(config.ios?.buildNumber).toBe("42");
+
+    expect(() =>
+      applyBkMobileConfig(upstreamConfig, { ...BK_ENV, BK_IOS_BUILD_NUMBER: "4.2" }),
+    ).toThrow(/positive integer/);
+    expect(() =>
+      applyBkMobileConfig(upstreamConfig, { ...BK_ENV, BK_IOS_BUILD_NUMBER: "0" }),
+    ).toThrow(/positive integer/);
+  });
 });
