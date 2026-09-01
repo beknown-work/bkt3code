@@ -26,6 +26,7 @@ import { connectionProjectionPhase } from "@t3tools/client-runtime/connection";
 import { threadHasOlderTurns } from "@t3tools/client-runtime/state/threads";
 import {
   ClipboardCopyIcon,
+  DownloadIcon,
   FileOutputIcon,
   GitForkIcon,
   MessageSquarePlusIcon,
@@ -36,6 +37,8 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { pinThreadCacheForHandoff } from "../../connection/storage";
+// T3-CUSTOM(expbkt3): the same writer the plan export uses.
+import { downloadPlanAsTextFile } from "../../proposedPlan";
 import { useProject, useThread, useThreadShell } from "../../state/entities";
 import { useEnvironmentConnectionState } from "../../state/environments";
 import { useEnvironmentThread } from "../../state/threads";
@@ -182,6 +185,32 @@ export function ThreadContextActionsControl({
       );
     });
 
+  // T3-CUSTOM(expbkt3): BEGIN — a handoff that leaves the app entirely. The
+  // clipboard is fine for pasting into another session; a file is what survives
+  // being sent to a colleague, attached to a ticket, or kept while a machine is
+  // rebuilt — which is exactly the situation an offline handoff belongs to.
+  const saveContextToFile = () =>
+    runGuarded(async () => {
+      const digest = await fetchDigest();
+      if (digest === null) return;
+      const slug =
+        digest.title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60) || "session";
+      downloadPlanAsTextFile(`${slug}-handoff.md`, digest.markdown);
+      notifyTruncated(digest);
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Session context saved",
+          description: `${digest.messageCount} messages written to ${slug}-handoff.md.`,
+        }),
+      );
+    });
+  // T3-CUSTOM(expbkt3): END
+
   const seedThreadWithContext = (mode: "new" | "child") =>
     runGuarded(async () => {
       const digest = await fetchDigest();
@@ -257,6 +286,11 @@ export function ThreadContextActionsControl({
         <MenuItem disabled={isBusy} onClick={() => void copyContext()}>
           <ClipboardCopyIcon />
           Copy full context
+        </MenuItem>
+        {/* T3-CUSTOM(expbkt3): a handoff that outlives the app session. */}
+        <MenuItem disabled={isBusy} onClick={() => void saveContextToFile()}>
+          <DownloadIcon />
+          Save full context as file
         </MenuItem>
         <MenuItem disabled={isBusy} onClick={() => void seedThreadWithContext("new")}>
           <MessageSquarePlusIcon />

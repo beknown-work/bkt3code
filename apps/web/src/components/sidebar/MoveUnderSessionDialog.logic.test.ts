@@ -42,16 +42,20 @@ describe("collectDescendantThreadIds", () => {
       makeThread("grandchild", { parent: "child" }),
     ];
 
+    // T3-CUSTOM(expbkt3): descendants are (environment, thread) pairs, because a
+    // lineage can cross environments and a bare id is ambiguous across them.
     expect([...collectDescendantThreadIds(threads, "root")].toSorted()).toEqual([
-      "child",
-      "grandchild",
+      `${environmentId}:child`,
+      `${environmentId}:grandchild`,
     ]);
   });
 
   it("terminates on a corrupt cycle", () => {
     const threads = [makeThread("a", { parent: "b" }), makeThread("b", { parent: "a" })];
 
-    expect([...collectDescendantThreadIds(threads, "a")].toSorted()).toEqual(["b"]);
+    expect([...collectDescendantThreadIds(threads, "a")].toSorted()).toEqual([
+      `${environmentId}:b`,
+    ]);
   });
 });
 
@@ -90,12 +94,14 @@ describe("resolveMoveUnderCandidates", () => {
     expect(ids()).not.toContain("archived");
   });
 
-  it("omits threads from another environment, since lineage is environment-local", () => {
-    expect(ids()).not.toContain("elsewhere");
+  // T3-CUSTOM(expbkt3): a parent may live on another machine, so the picker
+  // offers it — spreading work across hosts is the case this exists for.
+  it("offers threads from another environment", () => {
+    expect(ids()).toContain("elsewhere");
   });
 
   it("orders the most recently touched session first", () => {
-    expect(ids()).toEqual(["eligible", "older"]);
+    expect(ids()).toEqual(["eligible", "older", "elsewhere"]);
   });
 
   it("filters by title, case-insensitively", () => {

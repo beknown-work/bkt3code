@@ -429,6 +429,47 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
 
 // T3-CUSTOM(expbkt3): BEGIN — pin a thread whose history seeded a handoff, so the
 // sweep keeps it while the work it started continues somewhere else.
+// T3-CUSTOM(expbkt3): BEGIN — read every cached thread for one environment, so a
+// search can still answer while its host is unreachable. Bounded by what this
+// device has actually opened, which is what the eviction budget also bounds.
+export function readCachedThreadsForEnvironment(
+  environmentId: EnvironmentId,
+): Promise<ReadonlyArray<OrchestrationThreadDetailSnapshot>> {
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const database = yield* Effect.acquireRelease(openDatabase(), (database) =>
+          Effect.sync(() => database.close()),
+        );
+        const raws = yield* readDatabaseValuesInRange(
+          database,
+          THREAD_STORE_NAME,
+          IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+        );
+        const snapshots: Array<OrchestrationThreadDetailSnapshot> = [];
+        for (const raw of raws) {
+          if (typeof raw !== "string") continue;
+          const decoded = yield* decodeStoredThreadSnapshot(raw).pipe(Effect.option);
+          // A record this client cannot read is skipped rather than failing the
+          // whole search: a partial answer beats no answer while a host is down.
+          if (Option.isSome(decoded) && decoded.value.environmentId === environmentId) {
+            snapshots.push(decoded.value.snapshot);
+          }
+        }
+        return snapshots as ReadonlyArray<OrchestrationThreadDetailSnapshot>;
+      }),
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not read cached threads for offline search.", {
+          environmentId,
+          error,
+        }).pipe(Effect.as([] as ReadonlyArray<OrchestrationThreadDetailSnapshot>)),
+      ),
+    ),
+  );
+}
+// T3-CUSTOM(expbkt3): END
+
 const pinThreadCacheEffect = Effect.fn("web.connectionStorage.pinThreadForHandoff")(function* (
   environmentId: EnvironmentId,
   threadId: ThreadId,

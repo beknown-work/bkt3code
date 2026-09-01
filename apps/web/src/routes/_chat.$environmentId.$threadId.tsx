@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
@@ -15,6 +16,13 @@ import {
 } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
+// T3-CUSTOM(expbkt3): an unreachable host changes what the sync pill may claim.
+import { connectionProjectionPhase } from "@t3tools/client-runtime/connection";
+import { useEnvironmentConnectionState } from "../state/environments";
+
+// T3-CUSTOM(expbkt3): placeholder id for the connection hook when the route has
+// no thread; nothing renders from it.
+const EMPTY_ENVIRONMENT_ID = EnvironmentId.make("");
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
@@ -27,6 +35,15 @@ function ChatThreadRouteView() {
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
   const serverThreadStatus = useThreadStatus(threadRef);
+  // T3-CUSTOM(expbkt3): the hook needs a stable id, and an absent route ref has
+  // no environment to ask about; the resulting state is simply never reachable.
+  const threadConnectionState = useEnvironmentConnectionState(
+    threadRef?.environmentId ?? EMPTY_ENVIRONMENT_ID,
+  );
+  const threadHostReachable =
+    threadRef === null ||
+    threadConnectionState.data === null ||
+    connectionProjectionPhase(threadConnectionState.data) !== "disconnected";
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
@@ -53,6 +70,8 @@ function ChatThreadRouteView() {
     detailExists: serverThreadDetail !== null,
     shellExists: serverThreadShell !== null,
     status: serverThreadStatus,
+    // T3-CUSTOM(expbkt3): a cached thread on an unreachable host is not syncing.
+    hostReachable: threadHostReachable,
   });
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;

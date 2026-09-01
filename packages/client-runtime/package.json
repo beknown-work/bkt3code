@@ -195,6 +195,10 @@
       "types": "./src/state/threadExecutionPresentation.ts",
       "default": "./src/state/threadExecutionPresentation.ts"
     },
+    "./state/cached-thread-search": {
+      "types": "./src/state/cachedThreadSearch.ts",
+      "default": "./src/state/cachedThreadSearch.ts"
+    },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",
       "default": "./src/state/threadSearch.ts"
