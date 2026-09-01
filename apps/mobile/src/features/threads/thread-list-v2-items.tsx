@@ -583,6 +583,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
+      // T3-CUSTOM(expbkt3): member tagging.
       PEOPLE_MENU_ACTION,
       CARD_MENU_ACTIONS[0]!,
       ...pinMenuItem,
@@ -593,6 +594,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const slimMenuActions = useMemo<MenuAction[]>(
     () => [
+      // T3-CUSTOM(expbkt3): member tagging.
       PEOPLE_MENU_ACTION,
       SLIM_MENU_ACTIONS[0]!,
       ...(thread.pinnedAt != null ? pinMenuItem : []),
@@ -603,6 +605,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
+      // T3-CUSTOM(expbkt3): member tagging.
       PEOPLE_MENU_ACTION,
       SNOOZED_MENU_ACTIONS[0]!,
       ...titleRegenerationMenuItems,
@@ -614,6 +617,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const threadRowNavigation = useNavigation();
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
+      // T3-CUSTOM(expbkt3): member tagging.
       PEOPLE_MENU_ACTION,
       LEGACY_MENU_ACTIONS[0]!,
       ...titleRegenerationMenuItems,
