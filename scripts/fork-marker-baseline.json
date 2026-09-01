@@ -1,7 +1,6 @@
 {
   "files": [
     ".env.example",
-    "apps/mobile/src/Stack.tsx",
     "apps/mobile/src/features/home/homeThreadList.ts",
     "apps/mobile/src/features/review/ReviewSheet.tsx",
     "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",

@@ -28,6 +28,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import { operatorUserIdFromSessionState } from "@t3tools/client-runtime/state/session";
+
 import { fetchSessionState } from "../environments/primary/auth";
 
 /**
@@ -35,14 +37,7 @@ import { fetchSessionState } from "../environments/primary/auth";
  * has none — an unauthenticated gate state, or a single-user/local environment
  * where the subject is not a Clerk operator.
  */
-export function operatorUserIdFromSessionState(
-  sessionState: AuthSessionState | null,
-): UserId | null {
-  if (sessionState === null || !sessionState.authenticated) {
-    return null;
-  }
-  return sessionState.userId ?? null;
-}
+export { operatorUserIdFromSessionState };
 
 /**
  * Deliberately its own atom rather than a re-export of the primary session

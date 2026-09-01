@@ -143,6 +143,10 @@
       "types": "./src/state/planReview.ts",
       "default": "./src/state/planReview.ts"
     },
+    "./state/planReviewMarkdown": {
+      "types": "./src/state/planReviewMarkdown.ts",
+      "default": "./src/state/planReviewMarkdown.ts"
+    },
     "./state/agentUi": {
       "types": "./src/state/agentUi.ts",
       "default": "./src/state/agentUi.ts"
@@ -166,6 +170,18 @@
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
+    },
+    "./state/phase-sidebar": {
+      "types": "./src/state/phaseSidebar.ts",
+      "default": "./src/state/phaseSidebar.ts"
+    },
+    "./state/phase-sidebar-tree": {
+      "types": "./src/state/phaseSidebarTree.ts",
+      "default": "./src/state/phaseSidebarTree.ts"
+    },
+    "./state/provider-rate-limits": {
+      "types": "./src/state/providerRateLimitsPresentation.ts",
+      "default": "./src/state/providerRateLimitsPresentation.ts"
     },
     "./state/thread-execution-presentation": {
       "types": "./src/state/threadExecutionPresentation.ts",
