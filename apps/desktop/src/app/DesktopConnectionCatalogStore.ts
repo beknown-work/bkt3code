@@ -402,6 +402,28 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  // T3-CUSTOM(expbkt3): BEGIN - the OS keyring can still be locked when the app
+  // launches (typically Linux), and safe storage reports unavailable until it
+  // opens. Answering "no catalog" then hides every saved connection — and the
+  // cached threads that render while a host is down — for the whole run, because
+  // the renderer reads this catalog once at startup. Wait a bounded moment for
+  // the keyring rather than reporting an empty catalog we know is wrong. Nothing
+  // waits when there is no catalog on disk: the check runs only once a document
+  // exists to decrypt.
+  const CATALOG_ENCRYPTION_WAIT_ATTEMPTS = 12;
+  const CATALOG_ENCRYPTION_WAIT_INTERVAL = "500 millis";
+
+  const awaitEncryptionAvailable = Effect.gen(function* () {
+    for (let attempt = 0; attempt < CATALOG_ENCRYPTION_WAIT_ATTEMPTS; attempt += 1) {
+      if (yield* encryptionAvailable) {
+        return true;
+      }
+      yield* Effect.sleep(CATALOG_ENCRYPTION_WAIT_INTERVAL);
+    }
+    return yield* encryptionAvailable;
+  });
+  // T3-CUSTOM(expbkt3): END
+
   const writeCatalog = Effect.fn("desktop.connectionCatalogStore.writeCatalog")(function* (
     catalog: string,
   ) {
@@ -483,7 +505,12 @@ export const make = Effect.gen(function* () {
       if (Option.isNone(document)) {
         return yield* migrateLegacyCatalog;
       }
-      if (!(yield* encryptionAvailable)) {
+      // T3-CUSTOM(expbkt3): wait for a locked keyring before reporting no catalog.
+      if (!(yield* awaitEncryptionAvailable)) {
+        yield* Effect.logWarning(
+          "Desktop secure storage is unavailable, so saved connections stay locked for this run.",
+          { catalogPath },
+        );
         return Option.none<string>();
       }
       const decrypted = yield* decodeSecretBytes(catalogPath, document.value.encryptedCatalog).pipe(

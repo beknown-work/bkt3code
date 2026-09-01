@@ -111,15 +111,18 @@ export function phaseSidebarRowKey(row: PhaseSidebarRow): string {
 }
 
 /**
- * The parent link is a bare thread id: a session can only be created by a caller
- * on the same server, so parent and child always share an environment. Scoping
- * the lookup by the child's environment is therefore both correct and the only
- * way to avoid colliding ids across connected environments.
+ * T3-CUSTOM(expbkt3): the parent link is a thread id plus the environment that
+ * id belongs to. Historically it was a bare id, because a session could only be
+ * created by a caller on the same server; a child may now name a parent on
+ * another machine, so the id alone is ambiguous across connected environments.
+ * An absent environment id means the child's own, which is what every
+ * same-server link means and what older servers keep sending.
  */
 function parentKeyOf(row: PhaseSidebarRow): string | null {
   const parentThreadId = row.thread.parentThreadId;
   if (parentThreadId == null) return null;
-  return scopedThreadKey(scopeThreadRef(row.thread.environmentId, parentThreadId));
+  const parentEnvironmentId = row.thread.parentEnvironmentId ?? row.thread.environmentId;
+  return scopedThreadKey(scopeThreadRef(parentEnvironmentId, parentThreadId));
 }
 
 interface MutableNode {

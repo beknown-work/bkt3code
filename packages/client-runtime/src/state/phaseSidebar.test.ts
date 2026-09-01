@@ -192,9 +192,11 @@ describe("move-under candidates", () => {
     const child = makeThread({ id: ThreadId.make("child"), parentThreadId: parent.id });
     const grandchild = makeThread({ id: ThreadId.make("grandchild"), parentThreadId: child.id });
 
+    // T3-CUSTOM(expbkt3): descendants are (environment, thread) pairs now that a
+    // lineage can cross environments and a bare id is ambiguous across them.
     expect([...collectDescendantThreadIds([parent, child, grandchild], parent.id)]).toEqual([
-      child.id,
-      grandchild.id,
+      `${parent.environmentId}:${child.id}`,
+      `${parent.environmentId}:${grandchild.id}`,
     ]);
 
     const candidates = resolveMoveUnderCandidates({
@@ -206,8 +208,8 @@ describe("move-under candidates", () => {
     expect(candidates).toHaveLength(0);
   });
 
-  it("never offers a thread from another environment", () => {
-    // Lineage is a bare thread id resolved within one environment.
+  // T3-CUSTOM(expbkt3): BEGIN — lineage may cross environments.
+  it("offers a thread on another environment, so work can span machines", () => {
     const subject = makeThread({ id: ThreadId.make("subject") });
     const foreign = makeThread({
       id: ThreadId.make("foreign"),
@@ -220,8 +222,51 @@ describe("move-under candidates", () => {
       query: "",
       repositoryLabelFor: () => "repo",
     });
+    expect(candidates.map((candidate) => candidate.thread.id)).toEqual([foreign.id]);
+  });
+
+  it("still refuses a descendant that reached this thread through another environment", () => {
+    const parent = makeThread({ id: ThreadId.make("parent") });
+    const remoteChild = makeThread({
+      id: ThreadId.make("remote-child"),
+      environmentId: EnvironmentId.make("env-2"),
+      parentThreadId: parent.id,
+      parentEnvironmentId: parent.environmentId,
+    });
+
+    expect([...collectDescendantThreadIds([parent, remoteChild], parent.id)]).toEqual([
+      `${remoteChild.environmentId}:${remoteChild.id}`,
+    ]);
+
+    const candidates = resolveMoveUnderCandidates({
+      threads: [parent, remoteChild],
+      subject: parent,
+      query: "",
+      repositoryLabelFor: () => "repo",
+    });
     expect(candidates).toHaveLength(0);
   });
+
+  it("does not re-offer a parent that lives on another environment", () => {
+    const remoteParent = makeThread({
+      id: ThreadId.make("remote-parent"),
+      environmentId: EnvironmentId.make("env-2"),
+    });
+    const subject = makeThread({
+      id: ThreadId.make("subject"),
+      parentThreadId: remoteParent.id,
+      parentEnvironmentId: remoteParent.environmentId,
+    });
+
+    const candidates = resolveMoveUnderCandidates({
+      threads: [subject, remoteParent],
+      subject,
+      query: "",
+      repositoryLabelFor: () => "repo",
+    });
+    expect(candidates).toHaveLength(0);
+  });
+  // T3-CUSTOM(expbkt3): END
 });
 
 describe("lifecycle counters", () => {

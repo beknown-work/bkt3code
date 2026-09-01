@@ -1,6 +1,7 @@
 // T3-CUSTOM(expbkt3): session lineage decider coverage.
 import {
   CommandId,
+  EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -123,6 +124,86 @@ it.layer(NodeServices.layer)("thread lineage decider", (it) => {
       }
     }),
   );
+
+  // T3-CUSTOM(expbkt3): BEGIN — a parent may live on another environment.
+  it.effect("records the environment a parent lives on at creation", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          ...createCommandBase,
+          commandId: CommandId.make("cmd-create-remote-child"),
+          threadId: ThreadId.make("spawned-here"),
+          parentThreadId: ThreadId.make("parent-elsewhere"),
+          parentEnvironmentId: EnvironmentId.make("environment-remote"),
+        },
+        readModel: makeReadModel(),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      if (events[0]?.type === "thread.created") {
+        expect(events[0].payload.parentThreadId).toBe("parent-elsewhere");
+        expect(events[0].payload.parentEnvironmentId).toBe("environment-remote");
+      }
+    }),
+  );
+
+  it.effect("leaves a same-environment parent's environment null", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          ...createCommandBase,
+          commandId: CommandId.make("cmd-create-local-child"),
+          threadId: ThreadId.make("spawned-local"),
+          parentThreadId: ThreadId.make("parent"),
+        },
+        readModel: makeReadModel(),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      if (events[0]?.type === "thread.created") {
+        expect(events[0].payload.parentEnvironmentId).toBe(null);
+      }
+    }),
+  );
+
+  it.effect("files a session under a parent on another environment", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-move-remote"),
+          threadId: ThreadId.make("child"),
+          parentThreadId: ThreadId.make("coordinator-elsewhere"),
+          parentEnvironmentId: EnvironmentId.make("environment-remote"),
+        },
+        readModel: makeReadModel(),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      if (events[0]?.type === "thread.meta-updated") {
+        expect(events[0].payload.parentThreadId).toBe("coordinator-elsewhere");
+        expect(events[0].payload.parentEnvironmentId).toBe("environment-remote");
+      }
+    }),
+  );
+
+  it.effect("does not read a foreign parent id as a local cycle", () =>
+    Effect.gen(function* () {
+      // "parent" is a descendant-forming id *here*; named on another
+      // environment it is a different session entirely, and the local walk
+      // must not reject it.
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-move-foreign-collision"),
+          threadId: ThreadId.make("parent"),
+          parentThreadId: ThreadId.make("child"),
+          parentEnvironmentId: EnvironmentId.make("environment-remote"),
+        },
+        readModel: makeReadModel(),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events[0]?.type).toBe("thread.meta-updated");
+    }),
+  );
+  // T3-CUSTOM(expbkt3): END
 
   it.effect("re-parents through thread.meta.update", () =>
     Effect.gen(function* () {

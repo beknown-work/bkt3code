@@ -428,6 +428,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // create: the thread does not exist yet, so it cannot be an ancestor
           // of anything.
           parentThreadId: command.parentThreadId ?? null,
+          // T3-CUSTOM(expbkt3): the environment that parent lives on, when it is
+          // not this one. Null keeps the historical "same server" meaning.
+          parentEnvironmentId: command.parentEnvironmentId ?? null,
           // T3-CUSTOM(expbkt3): BEGIN — inherited tags. The creator is tagged by
           // the projector; these are the extra people the creator is bringing,
           // defaulting to the parent session's audience.
@@ -877,8 +880,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? thread.branch
           : command.branch;
       // T3-CUSTOM(expbkt3): re-parenting must not close a lineage loop.
-      // Detaching (null) is always safe and skips the walk.
-      if (command.parentThreadId != null) {
+      // Detaching (null) is always safe and skips the walk. A parent on another
+      // environment is skipped too: its id names a thread in a graph this server
+      // has never seen, so walking it here could only ever match by coincidence.
+      // Callers normalise a parent on this environment to a null environment id,
+      // so anything named here is genuinely foreign, and the client tree carries
+      // its own depth and seen-set guards for the lineages it stitches together.
+      if (command.parentThreadId != null && command.parentEnvironmentId == null) {
         yield* requireThreadLineageAcyclic({
           readModel,
           command,
@@ -935,6 +943,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // T3-CUSTOM(expbkt3): undefined leaves lineage unchanged; null detaches.
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
+            : {}),
+          // T3-CUSTOM(expbkt3): re-parenting may also move a thread's lineage to
+          // another environment; null returns it to a same-environment parent.
+          ...(command.parentEnvironmentId !== undefined
+            ? { parentEnvironmentId: command.parentEnvironmentId }
             : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
@@ -1158,6 +1171,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 priority: bootstrapCreate.priority ?? null,
                 // T3-CUSTOM(expbkt3): session lineage carried through bootstrap.
                 parentThreadId: bootstrapCreate.parentThreadId ?? null,
+                // T3-CUSTOM(expbkt3): lineage may point at another environment.
+                parentEnvironmentId: bootstrapCreate.parentEnvironmentId ?? null,
                 // T3-CUSTOM(expbkt3): BEGIN — inherited tags carried through bootstrap.
                 memberUserIds: resolveCreatedThreadMemberUserIds({
                   threads: readModel.threads,

@@ -17,6 +17,8 @@ const row = (
   id: string,
   overrides: {
     parentThreadId?: string | null;
+    // T3-CUSTOM(expbkt3): the environment a named parent lives on.
+    parentEnvironmentId?: string | null;
     environmentId?: string;
     pinnedAt?: string | null;
   } = {},
@@ -26,6 +28,7 @@ const row = (
       id,
       environmentId: overrides.environmentId ?? "env-1",
       parentThreadId: overrides.parentThreadId ?? null,
+      parentEnvironmentId: overrides.parentEnvironmentId ?? null,
       pinnedAt: overrides.pinnedAt ?? null,
     },
   }) as PhaseSidebarRow;
@@ -75,6 +78,47 @@ describe("validateReparent", () => {
       }),
     ).toMatchObject({ allowed: false, reason: "own-descendant" });
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN — lineage is a (environment, thread) pair, so the
+  // guards must not be fooled by an id that also exists on another machine.
+  it("still refuses a descendant reached through another environment", () => {
+    const subject = row("a");
+    const remoteChild = row("b", {
+      environmentId: "env-2",
+      parentThreadId: "a",
+      parentEnvironmentId: "env-1",
+    });
+    const localGrandchild = row("c", {
+      parentThreadId: "b",
+      parentEnvironmentId: "env-2",
+    });
+
+    expect(
+      validateReparent({
+        subject,
+        target: localGrandchild,
+        allRows: [subject, remoteChild, localGrandchild],
+        targetDepth: 2,
+      }),
+    ).toMatchObject({ allowed: false, reason: "own-descendant" });
+  });
+
+  it("does not call a same-id parent on another machine the current parent", () => {
+    // "b" on env-2 is the parent; the drop target is a different session that
+    // merely shares its id, so this is a real move, not a no-op.
+    const subject = row("a", { parentThreadId: "b", parentEnvironmentId: "env-2" });
+    const localSameId = row("b");
+
+    expect(
+      validateReparent({
+        subject,
+        target: localSameId,
+        allRows: [subject, localSameId],
+        targetDepth: 0,
+      }),
+    ).toEqual({ allowed: true });
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it("refuses a drop that would exceed the maximum tree depth", () => {
     const subject = row("a");
