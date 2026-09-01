@@ -1264,6 +1264,22 @@ function ThreadNavigationSidebarPane(
     );
   }
 
+  // T3-CUSTOM(expbkt3): BEGIN — the experimental sidebar replaces this render
+  // path too. The nativeChrome branch above has its own copy; both paths render
+  // a thread list, so gating only one leaves the flag half-wired.
+  if (phaseSidebarEnabled) {
+    return (
+      <View className="flex-1" style={{ width: props.width }}>
+        <PhaseSidebarPane
+          onSelectThread={props.onSelectThread}
+          selectedThreadKey={props.selectedThreadKey}
+          viewerEnvironmentId={phaseSidebarViewerEnvironmentId}
+        />
+      </View>
+    );
+  }
+  // T3-CUSTOM(expbkt3): END
+
   return (
     <View
       testID="thread-navigation-sidebar"
