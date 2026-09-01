@@ -65,6 +65,21 @@ export function parseBkAndroidVersionCode(value: string | undefined): number | n
   return parsed;
 }
 
+/**
+ * SideStore compares the native version and build number when deciding whether
+ * an installed IPA has an update. MOBILE_APP_VERSION intentionally changes
+ * only for product releases, so every CI-built IPA also needs a monotonically
+ * increasing CFBundleVersion.
+ */
+export function parseBkIosBuildNumber(value: string | undefined): string | null {
+  if (value === undefined || value.trim() === "") return null;
+  const normalized = value.trim();
+  if (!/^[1-9]\d*$/.test(normalized)) {
+    throw new Error(`BK_IOS_BUILD_NUMBER must be a positive integer (received "${value}").`);
+  }
+  return normalized;
+}
+
 /** The environment every BK build shares. See assertBkBuildEnvironment. */
 export function bkBuildEnv(gitSha: string): Record<string, string> {
   return {

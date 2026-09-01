@@ -5,15 +5,16 @@ upstream's, built with a different identity and distributed by sideload rather
 than through the App Store or Play Store — this fork has no Expo/EAS account,
 no Apple Developer team and no store listings.
 
-|                             |                                                        |
-| --------------------------- | ------------------------------------------------------ |
-| App name                    | **BK T3 Code**                                         |
-| Bundle id / package         | `work.beknown.bkt3code.mobile`                         |
-| URL scheme                  | `t3code-bk://`                                         |
-| Version reported to servers | `<MOBILE_APP_VERSION>+bk.<sha7>`                       |
-| Android                     | release APK, signed with the fork keystore, sideloaded |
-| iOS                         | **unsigned** `.ipa`, re-signed on device by SideStore  |
-| OTA updates                 | **disabled** — every release is a fresh sideload       |
+|                             |                                                           |
+| --------------------------- | --------------------------------------------------------- |
+| App name                    | **BK T3 Code**                                            |
+| Bundle id / package         | `work.beknown.bkt3code.mobile`                            |
+| URL scheme                  | `t3code-bk://`                                            |
+| Version reported to servers | `<MOBILE_APP_VERSION>+bk.<sha7>`                          |
+| Android                     | release APK, signed with the fork keystore, sideloaded    |
+| iOS                         | **unsigned** `.ipa`, re-signed on device by SideStore     |
+| Expo OTA updates            | **disabled**                                              |
+| iOS binary updates          | SideStore AltSource; every update is re-signed/sideloaded |
 
 Identity lives in `apps/mobile/app.config.bk.ts`, which rewrites the finished
 upstream Expo config when `T3CODE_BK_MOBILE=1`. `apps/mobile/app.config.ts`
@@ -63,6 +64,29 @@ dev server, and nothing needs to be.
 1. Download the `.ipa` from the release page on your Mac.
 2. Open it with SideStore, which re-signs it using your free Apple ID.
 3. Refresh it within 7 days, which is how long a free-team signature lasts.
+
+For later builds, add the branch's update source to SideStore once:
+
+| Channel     | SideStore source URL                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `expbkmain` | `https://github.com/beknown-work/bkt3code/releases/download/bk-mobile-source-expbkmain/bk-mobile-expbkmain.json` |
+| `bkmain`    | `https://github.com/beknown-work/bkt3code/releases/download/bk-mobile-source-bkmain/bk-mobile-bkmain.json`       |
+
+In SideStore, open **Browse → Sources → +**, paste the URL, and add the source.
+The current BK T3 Code build then appears in that source, and future builds show
+an **Update** button. Keep LocalDevVPN enabled while installing, updating, or
+refreshing.
+
+This is a binary update, not an Expo OTA: SideStore downloads the new IPA,
+re-signs it with the same Apple Account and installs it over the existing app.
+iOS does not allow BK T3 Code to replace its own executable, so the final update
+action must remain in SideStore. App data is preserved because the re-signed
+bundle identity stays stable.
+
+The workflow publishes the JSON at a stable rolling-release URL only after the
+matching immutable IPA release exists. Each CI IPA receives `github.run_number`
+as its `CFBundleVersion`, allowing SideStore to detect a newer build even while
+`MOBILE_APP_VERSION` remains unchanged.
 
 Free Apple IDs cannot sign App Groups, extension targets, push notifications,
 Associated Domains or Sign in with Apple. BK iOS builds therefore reuse
@@ -164,4 +188,5 @@ T3CODE_BK_MOBILE=1 T3CODE_IOS_PERSONAL_TEAM=1 \
 native manifest version, the release tag and the base of the `client_version`
 the app reports. Bump it there and nowhere else. The Android `versionCode` comes
 from the workflow run number, so it stays monotonic without being tracked by
-hand.
+hand. The iOS `CFBundleVersion` uses that same run number so SideStore can order
+updates that share one `MOBILE_APP_VERSION`.

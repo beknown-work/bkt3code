@@ -29,6 +29,7 @@ import {
   BK_MOBILE_ICON_PATH,
   BK_MOBILE_SCHEME,
   parseBkAndroidVersionCode,
+  parseBkIosBuildNumber,
   type BkRepoEnv,
 } from "../../scripts/lib/bk-mobile.ts";
 
@@ -45,6 +46,7 @@ export function applyBkMobileConfig(config: ExpoConfig, repoEnv: BkRepoEnv): Exp
 
   const gitSha = repoEnv.BK_GIT_SHA?.trim() || null;
   const androidVersionCode = parseBkAndroidVersionCode(repoEnv.BK_ANDROID_VERSION_CODE);
+  const iosBuildNumber = parseBkIosBuildNumber(repoEnv.BK_IOS_BUILD_NUMBER);
 
   const {
     owner: _owner,
@@ -72,6 +74,7 @@ export function applyBkMobileConfig(config: ExpoConfig, repoEnv: BkRepoEnv): Exp
     updates: { enabled: false },
     ios: {
       ...ios,
+      ...(iosBuildNumber === null ? {} : { buildNumber: iosBuildNumber }),
       // `bundleIdentifier` is already the BK id: app.config.ts resolves it from
       // T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID, which assertBkBuildEnvironment
       // pins. Rewriting it here would desynchronise it from the extension
