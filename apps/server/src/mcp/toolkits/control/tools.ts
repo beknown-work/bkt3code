@@ -587,12 +587,18 @@ export const T3UpdateServerSettingsTool = mutatingTool(
 export const T3LinkSessionTool = mutatingTool(
   Tool.make("t3_link_session", {
     description:
-      "File one T3 session under another, so it renders nested beneath its parent in the sidebar. Use this to organise related work — for example, grouping sessions you fanned out across repositories under the session coordinating them. The session's own children move with it. Lineage must stay a tree: a session cannot be filed under itself or under any of its own descendants.",
+      "File one T3 session under another, so it renders nested beneath its parent in the sidebar. Use this to organise related work — for example, grouping sessions you fanned out across repositories under the session coordinating them, including sessions running on other machines. The session's own children move with it. Lineage must stay a tree: a session cannot be filed under itself or under any of its own descendants.",
     parameters: Schema.Struct({
       sessionId: described(Schema.String, "Session to move."),
       parentSessionId: described(
         Schema.String,
         "Session it should be filed under. Must not be the session itself or one of its descendants.",
+      ),
+      parentEnvironmentId: Schema.optional(
+        described(
+          Schema.String,
+          "Environment the parent session lives on. Omit when it is on this one, which is the usual case; pass it to file a session under work running on another machine.",
+        ),
       ),
     }),
     success: Schema.Unknown,

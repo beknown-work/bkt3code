@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./sessionDigest": {
+      "types": "./src/sessionDigest.ts",
+      "import": "./src/sessionDigest.ts"
+    },
     "./themePalettes": {
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"

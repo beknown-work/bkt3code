@@ -357,6 +357,8 @@ export function projectEvent(
             mattermostThreadUrl: null,
             // T3-CUSTOM(expbkt3): session lineage stamped at creation.
             parentThreadId: payload.parentThreadId ?? null,
+            // T3-CUSTOM(expbkt3): the environment that parent id belongs to.
+            parentEnvironmentId: payload.parentEnvironmentId ?? null,
             deletedAt: null,
             messages: [],
             activities: [],
@@ -537,6 +539,10 @@ export function projectEvent(
             // T3-CUSTOM(expbkt3): session lineage re-parent / detach.
             ...(payload.parentThreadId !== undefined
               ? { parentThreadId: payload.parentThreadId }
+              : {}),
+            // T3-CUSTOM(expbkt3): re-parenting may move a thread across environments.
+            ...(payload.parentEnvironmentId !== undefined
+              ? { parentEnvironmentId: payload.parentEnvironmentId }
               : {}),
             ...(payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: payload.linkedPullRequest }

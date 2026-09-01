@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   CheckpointRef,
   CommandId,
+  EnvironmentId,
   EventId,
   MessageId,
   ProjectId,
@@ -312,6 +313,50 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.modelSelection).toEqual(baseThread.modelSelection);
       }
     });
+
+    // T3-CUSTOM(expbkt3): BEGIN — a parent may live on another machine.
+    it("moves a lineage to another environment and back", () => {
+      const moved = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 5,
+        occurredAt: "2026-04-01T05:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          parentThreadId: ThreadId.make("thread-elsewhere"),
+          parentEnvironmentId: EnvironmentId.make("environment-remote"),
+          updatedAt: "2026-04-01T05:00:00.000Z",
+        },
+      });
+
+      expect(moved.kind).toBe("updated");
+      if (moved.kind !== "updated") return;
+      expect(moved.thread.parentThreadId).toBe("thread-elsewhere");
+      expect(moved.thread.parentEnvironmentId).toBe("environment-remote");
+
+      const detached = applyThreadDetailEvent(moved.thread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: "2026-04-01T06:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          parentThreadId: null,
+          parentEnvironmentId: null,
+          updatedAt: "2026-04-01T06:00:00.000Z",
+        },
+      });
+
+      expect(detached.kind).toBe("updated");
+      if (detached.kind !== "updated") return;
+      expect(detached.thread.parentThreadId).toBeNull();
+      expect(detached.thread.parentEnvironmentId).toBeNull();
+    });
+    // T3-CUSTOM(expbkt3): END
 
     it("sets and clears a linked pull request", () => {
       const linkedPullRequest = {

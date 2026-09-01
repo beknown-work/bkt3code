@@ -237,6 +237,8 @@ import {
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+// T3-CUSTOM(expbkt3): background cache deepening for offline handoffs.
+import { useThreadHistorySync } from "../hooks/useThreadHistorySync";
 // T3-CUSTOM(expbkt3): exhausted recovery actions reuse restart/stop commands.
 import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -1326,6 +1328,8 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  // T3-CUSTOM(expbkt3): deepen this thread's cached history for offline handoffs.
+  useThreadHistorySync(routeKind === "server" ? routeThreadRef : null);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -6532,10 +6536,13 @@ function ChatViewContent(props: ChatViewProps) {
       beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
       // T3-CUSTOM(expbkt3): a draft seeded from another session's context may
       // carry a parent; promotion has to create the thread as that child.
-      const draftParentThreadId = isLocalDraftThread
-        ? (useComposerDraftStore.getState().getDraftThread(composerDraftTarget)?.parentThreadId ??
-          null)
+      const draftParentThread = isLocalDraftThread
+        ? (useComposerDraftStore.getState().getDraftThread(composerDraftTarget) ?? null)
         : null;
+      const draftParentThreadId = draftParentThread?.parentThreadId ?? null;
+      // T3-CUSTOM(expbkt3): the parent may live on another machine, typically
+      // because this child was started somewhere its parent's host is not.
+      const draftParentEnvironmentId = draftParentThread?.parentEnvironmentId ?? null;
       const turnBootstrap =
         supportsDurableExecutionRecovery && (isLocalDraftThread || shouldCreateWorktree)
           ? {
@@ -6546,6 +6553,9 @@ function ChatViewContent(props: ChatViewProps) {
                 title,
                 ...(hasBootstrapOverrides ? { overrides: bootstrapOverrides } : {}),
                 ...(draftParentThreadId ? { parentThreadId: draftParentThreadId } : {}),
+                ...(draftParentThreadId && draftParentEnvironmentId
+                  ? { parentEnvironmentId: draftParentEnvironmentId }
+                  : {}),
                 sourceControlProfileId: activeSourceControlProfileId,
                 createdAt: activeThread.createdAt,
               },
@@ -6563,6 +6573,9 @@ function ChatViewContent(props: ChatViewProps) {
                         branch: activeThreadBranch,
                         worktreePath: activeThread.worktreePath,
                         ...(draftParentThreadId ? { parentThreadId: draftParentThreadId } : {}),
+                        ...(draftParentThreadId && draftParentEnvironmentId
+                          ? { parentEnvironmentId: draftParentEnvironmentId }
+                          : {}),
                         sourceControlProfileId: activeSourceControlProfileId,
                         createdAt: activeThread.createdAt,
                       },
@@ -6607,6 +6620,9 @@ function ChatViewContent(props: ChatViewProps) {
                 },
                 ...(hasBootstrapOverrides ? { overrides: bootstrapOverrides } : {}),
                 ...(draftParentThreadId ? { parentThreadId: draftParentThreadId } : {}),
+                ...(draftParentThreadId && draftParentEnvironmentId
+                  ? { parentEnvironmentId: draftParentEnvironmentId }
+                  : {}),
                 sourceControlProfileId: activeSourceControlProfileId,
                 createdAt: activeThread.createdAt,
               },
