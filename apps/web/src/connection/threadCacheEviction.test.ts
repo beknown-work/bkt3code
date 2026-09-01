@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   DEFAULT_THREAD_CACHE_PROTECTED_WINDOW_MS,
-  parentThreadIdOf,
+  cachedParentRefOf,
   selectThreadCacheEvictions,
   threadCacheKey,
   type ThreadCacheMetaRecord,
@@ -125,13 +125,24 @@ describe("selectThreadCacheEvictions", () => {
   });
 });
 
-describe("parentThreadIdOf", () => {
+describe("cachedParentRefOf", () => {
   it("finds the lineage a cached snapshot points at", () => {
-    expect(parentThreadIdOf('{"thread":{"parentThreadId":"thread-parent"}}')).toBe("thread-parent");
+    expect(cachedParentRefOf('{"thread":{"parentThreadId":"thread-parent"}}')).toEqual({
+      threadId: "thread-parent",
+      environmentId: null,
+    });
+  });
+
+  it("carries the machine a cross-environment parent lives on", () => {
+    expect(
+      cachedParentRefOf(
+        '{"thread":{"parentThreadId":"thread-parent","parentEnvironmentId":"env-remote"}}',
+      ),
+    ).toEqual({ threadId: "thread-parent", environmentId: "env-remote" });
   });
 
   it("returns null for a root thread or an unreadable snapshot", () => {
-    expect(parentThreadIdOf('{"thread":{"parentThreadId":null}}')).toBeNull();
-    expect(parentThreadIdOf("{}")).toBeNull();
+    expect(cachedParentRefOf('{"thread":{"parentThreadId":null}}')).toBeNull();
+    expect(cachedParentRefOf("{}")).toBeNull();
   });
 });

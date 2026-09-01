@@ -300,9 +300,11 @@ export const sweepThreadCache = Effect.fn("web.threadCacheEviction.sweep")(funct
       pinnedUntilEpochMs: existing?.pinnedUntilEpochMs ?? null,
       sizeChars: raw.length,
     });
-    const parentThreadId = parentThreadIdOf(raw);
-    if (parentThreadId !== null) {
-      parentKeys.add(threadCacheKey(environmentId, parentThreadId));
+    const parent = cachedParentRefOf(raw);
+    if (parent !== null) {
+      // A parent on another machine is cached under that machine's key, so the
+      // lineage is only protected if we look for it there.
+      parentKeys.add(threadCacheKey(parent.environmentId ?? environmentId, parent.threadId));
     }
   }
 
@@ -343,13 +345,26 @@ export const sweepThreadCache = Effect.fn("web.threadCacheEviction.sweep")(funct
   return plan;
 });
 
+export interface CachedParentRef {
+  readonly threadId: string;
+  /** Null when the parent is on the same environment as the cached thread. */
+  readonly environmentId: string | null;
+}
+
 /**
  * The parent this cached snapshot names, read without decoding the whole
  * snapshot — the sweep only needs to know which threads a lineage still points
  * at, and full decoding of every cached thread would be the expensive part of
  * an otherwise cheap sweep.
+ *
+ * The environment comes along because a lineage can cross machines, and a
+ * parent key built from the wrong environment protects nothing.
  */
-export function parentThreadIdOf(rawSnapshot: string): string | null {
-  const match = /"parentThreadId"\s*:\s*"([^"]+)"/.exec(rawSnapshot);
-  return match?.[1] ?? null;
+export function cachedParentRefOf(rawSnapshot: string): CachedParentRef | null {
+  const threadId = /"parentThreadId"\s*:\s*"([^"]+)"/.exec(rawSnapshot)?.[1];
+  if (threadId === undefined) {
+    return null;
+  }
+  const environmentId = /"parentEnvironmentId"\s*:\s*"([^"]+)"/.exec(rawSnapshot)?.[1] ?? null;
+  return { threadId, environmentId };
 }
