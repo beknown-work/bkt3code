@@ -35,6 +35,7 @@ import { useState } from "react";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { pinThreadCacheForHandoff } from "../../connection/storage";
 import { useProject, useThread, useThreadShell } from "../../state/entities";
 import { useEnvironmentConnectionState } from "../../state/environments";
 import { useEnvironmentThread } from "../../state/threads";
@@ -210,6 +211,9 @@ export function ThreadContextActionsControl({
               branch: null,
               parentThreadId: null,
             };
+      // T3-CUSTOM(expbkt3): the work continues elsewhere from this transcript, so
+      // keep it cached past the point the operator stops opening it.
+      void pinThreadCacheForHandoff(activeThreadEnvironmentId, activeThreadId);
       await handleNewThread(projectRef, workspaceOptions);
       const store = useComposerDraftStore.getState();
       const draftSession = store.getDraftSessionByProjectRef(projectRef);

@@ -40,10 +40,18 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Clock from "effect/Clock";
+// T3-CUSTOM(expbkt3): BEGIN — size budget for the cached thread history.
+import {
+  recordThreadOpened,
+  sweepThreadCache,
+  pinThreadForHandoff as pinThreadForHandoffInStore,
+} from "./threadCacheEviction";
+// T3-CUSTOM(expbkt3): END
 
 const DATABASE_NAME = "t3code:connection-runtime";
-// T3-CUSTOM(expbkt3): BEGIN — durable outbox object store.
-const DATABASE_VERSION = 5;
+// T3-CUSTOM(expbkt3): BEGIN — durable outbox and thread-cache bookkeeping stores.
+const DATABASE_VERSION = 6;
 const CATALOG_STORE_NAME = "catalog";
 const SHELL_STORE_NAME = "shell";
 const THREAD_STORE_NAME = "thread";
@@ -51,6 +59,11 @@ const SERVER_CONFIG_STORE_NAME = "server-config";
 const VCS_REFS_STORE_NAME = "vcs-refs";
 // T3-CUSTOM(expbkt3): persisted before dispatch, keyed by environment/account/message.
 const OUTBOX_STORE_NAME = "outbox";
+// T3-CUSTOM(expbkt3): when each cached thread was last opened and how big it is,
+// so the cache can be kept inside a budget without reading every snapshot twice.
+// Deliberately a separate store rather than a field on the snapshot: the record
+// carries no thread content, so an older client that ignores it loses nothing.
+export const THREAD_META_STORE_NAME = "thread-meta";
 // T3-CUSTOM(expbkt3): END
 const CATALOG_KEY = "document";
 const SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
@@ -164,6 +177,9 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
       // T3-CUSTOM(expbkt3): BEGIN — durable sends survive reloads and restarts.
       if (!request.result.objectStoreNames.contains(OUTBOX_STORE_NAME)) {
         request.result.createObjectStore(OUTBOX_STORE_NAME);
+      }
+      if (!request.result.objectStoreNames.contains(THREAD_META_STORE_NAME)) {
+        request.result.createObjectStore(THREAD_META_STORE_NAME);
       }
       // T3-CUSTOM(expbkt3): END
     });
@@ -411,12 +427,86 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
   return { read, update } satisfies CatalogStore;
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — pin a thread whose history seeded a handoff, so the
+// sweep keeps it while the work it started continues somewhere else.
+const pinThreadCacheEffect = Effect.fn("web.connectionStorage.pinThreadForHandoff")(function* (
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+) {
+  const database = yield* Effect.acquireRelease(openDatabase(), (database) =>
+    Effect.sync(() => database.close()),
+  );
+  yield* pinThreadForHandoffInStore({
+    database,
+    storeName: THREAD_META_STORE_NAME,
+    environmentId,
+    threadId,
+    nowEpochMs: yield* Clock.currentTimeMillis,
+  });
+});
+
+/**
+ * Called from the handoff menu, which is plain React, so this hands back a
+ * promise rather than an Effect. Failing to pin is not worth surfacing: the
+ * thread was just opened, so the recency window protects it either way.
+ */
+export function pinThreadCacheForHandoff(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+): Promise<void> {
+  return Effect.runPromise(
+    Effect.scoped(pinThreadCacheEffect(environmentId, threadId)).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not pin the handoff source thread in the local cache.", {
+          environmentId,
+          threadId,
+          error,
+        }),
+      ),
+    ),
+  );
+}
+// T3-CUSTOM(expbkt3): END
+
 export const connectionStorageLayer = Layer.effectContext(
   Effect.gen(function* () {
     const database = yield* Effect.acquireRelease(openDatabase(), (database) =>
       Effect.sync(() => database.close()),
     );
     const catalog = yield* makeCatalogStore(makeCatalogBackend(database));
+
+    // T3-CUSTOM(expbkt3): BEGIN — bring the cached thread history back inside its
+    // budget once per start. Forked, because nothing about opening the app should
+    // wait on housekeeping, and best-effort, because a failed sweep only means
+    // the cache stays large until the next one.
+    yield* Effect.forkScoped(
+      Clock.currentTimeMillis
+        .pipe(
+          Effect.flatMap((nowEpochMs) =>
+            sweepThreadCache({
+              database,
+              threadStoreName: THREAD_STORE_NAME,
+              metaStoreName: THREAD_META_STORE_NAME,
+              nowEpochMs,
+            }),
+          ),
+        )
+        .pipe(
+          Effect.flatMap((plan) =>
+            plan.evictKeys.length === 0
+              ? Effect.void
+              : Effect.logInfo("Evicted cached threads to stay inside the cache budget.", {
+                  evicted: plan.evictKeys.length,
+                  retainedChars: plan.retainedChars,
+                  overBudget: plan.overBudget,
+                }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not sweep the local thread cache.", { error }),
+          ),
+        ),
+    );
+    // T3-CUSTOM(expbkt3): END
 
     const targetStore = ConnectionTargetStore.of({
       list: catalog.read.pipe(
@@ -611,6 +701,8 @@ export const connectionStorageLayer = Layer.effectContext(
         ),
       saveThread: (environmentId, snapshot) =>
         Effect.gen(function* () {
+          // T3-CUSTOM(expbkt3): keep this thread's recency and size current, so
+          // the sweep can tell what is being worked in from what is merely old.
           const encoded = yield* encodeStoredThreadSnapshot({
             schemaVersion: 3,
             environmentId,
@@ -623,6 +715,27 @@ export const connectionStorageLayer = Layer.effectContext(
             threadCacheKey(environmentId, snapshot.thread.id),
             encoded,
           );
+          // T3-CUSTOM(expbkt3): BEGIN — a thread being written is a thread in use;
+          // record its recency and size so the sweep evicts by what is actually
+          // cold. Bookkeeping never fails a save: losing it costs one sweep's
+          // accuracy, while failing here would lose the cached thread itself.
+          yield* recordThreadOpened({
+            database,
+            storeName: THREAD_META_STORE_NAME,
+            environmentId,
+            threadId: snapshot.thread.id,
+            nowEpochMs: yield* Clock.currentTimeMillis,
+            sizeChars: encoded.length,
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not record thread cache bookkeeping.", {
+                environmentId,
+                threadId: snapshot.thread.id,
+                error,
+              }),
+            ),
+          );
+          // T3-CUSTOM(expbkt3): END
         }).pipe(
           Effect.mapError((cause) =>
             cause._tag === "ConnectionPersistenceError"

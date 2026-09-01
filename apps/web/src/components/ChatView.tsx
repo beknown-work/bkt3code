@@ -237,6 +237,8 @@ import {
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+// T3-CUSTOM(expbkt3): background cache deepening for offline handoffs.
+import { useThreadHistorySync } from "../hooks/useThreadHistorySync";
 // T3-CUSTOM(expbkt3): exhausted recovery actions reuse restart/stop commands.
 import { useReconnectThreadSession } from "../hooks/useReconnectThreadSession";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -1326,6 +1328,8 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  // T3-CUSTOM(expbkt3): deepen this thread's cached history for offline handoffs.
+  useThreadHistorySync(routeKind === "server" ? routeThreadRef : null);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,

@@ -35,6 +35,10 @@
       "types": "./src/operations/projects.ts",
       "default": "./src/operations/projects.ts"
     },
+    "./historySync": {
+      "types": "./src/historySync/index.ts",
+      "default": "./src/historySync/index.ts"
+    },
     "./handoff": {
       "types": "./src/handoff/index.ts",
       "default": "./src/handoff/index.ts"
