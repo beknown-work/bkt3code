@@ -18,15 +18,28 @@ Both are Apple Silicon (`arm64`) only, code signed, **keyless**, and published a
 
 ## How it runs
 
-Both BK desktop distributions are client-only. Electron serves the packaged web
-assets directly and connects their primary environment to the managed HTTPS
-server selected by the release branch. The app does not start or package a T3
-backend, reserve port 3773, expose a local server, or offer WSL backend controls.
+Both BK desktop distributions serve the packaged web assets directly and
+connect their **primary** environment to the managed HTTPS server selected by
+the release branch — that is where identity, the member roster and thread
+tagging live. Each build also carries the **bundled T3 backend**: Electron
+starts it on launch as a _secondary_ local environment (pool id `bk-local`,
+the same rails a WSL backend rides), listening loopback-only on the first free
+port from 3773. Local projects and threads run on this machine — including
+fully offline: with the central server unreachable, a previously paired app
+still opens and the local environment keeps working while the primary
+reconnects in the background (`apps/web/src/fork/managedOfflineGate.ts`).
 
-To run agents on a teammate's Mac, install and launch `t3` separately on that
-Mac, expose it through an appropriate HTTPS/Tailscale or SSH route, and add it
-from **Settings → Connections → Add environment**. It remains a secondary
-environment; `bkt3.dev` or `expbkt3.dev` stays primary.
+The bundled backend is single-user and keyless — no Clerk configuration ever
+reaches it, so it advertises no team capability and member surfaces stay
+hidden on local threads by design. Its state lives inside the app's own
+user-data directory. The Connections settings intentionally do not show the
+local-backend admin rows (network exposure, WSL, pairing-link management):
+those manage a _primary_ local backend, which a managed build does not have.
+
+To run agents on a teammate's Mac from elsewhere, install and launch `t3`
+separately on that Mac, expose it through an appropriate HTTPS/Tailscale or
+SSH route, and add it from **Settings → Connections → Add environment**. It
+remains a secondary environment; `bkt3.dev` or `expbkt3.dev` stays primary.
 
 Every push to `expbkmain` or `bkmain` triggers `.github/workflows/bk-desktop-release.yml` on a GitHub-hosted `macos-26` runner, which builds that branch's app and publishes it. Standard GitHub-hosted runners are free on public repositories, so this costs nothing and needs no machine of ours. Running apps poll every 4 minutes and download in the background, then raise a native notification when a build is ready. Clicking that notification **surfaces the update in the app; it does not restart** — see [Update behaviour](#update-behaviour).
 

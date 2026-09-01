@@ -1,13 +1,23 @@
 /**
- * Fork-owned runtime selection for client-only managed BK desktop builds.
+ * Fork-owned runtime selection for managed BK desktop builds.
  *
  * The build pipeline bakes the same managed-environment object into both the
  * renderer and Electron main bundles. The renderer uses it as its primary
- * connection target; Electron uses it to skip the bundled backend and serve
- * the packaged client assets directly.
+ * connection target; Electron uses it to serve the packaged client assets
+ * directly and to keep the window on the central server while the bundled
+ * backend runs as a secondary local environment.
  */
 
 declare const __T3CODE_BK_MANAGED_ENVIRONMENT__: unknown;
+
+/**
+ * Pool id of the bundled local backend. Deliberately not the pool's primary
+ * id: the renderer filters the primary out of the secondary-bootstrap list
+ * (it is same-origin in upstream desktop builds), and here the local backend
+ * is exactly a secondary. Lives in this Electron-free module so renderer-side
+ * code and tests can name it without importing the desktop runtime.
+ */
+export const BK_BUNDLED_BACKEND_ID = "bk-local";
 
 export type BkManagedChannel = "staging" | "production";
 

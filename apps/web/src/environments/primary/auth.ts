@@ -26,6 +26,7 @@ import { readManagedClerkIdentityToken } from "../../cloud/managedIdentity";
 import { APP_VERSION } from "../../branding";
 // T3-CUSTOM(expbkt3): a managed BK build pairs with a central server by token exchange.
 import { isBkManagedPrimary } from "../../fork/managedEnvironment";
+import { resolveManagedOfflineAuthGateState } from "../../fork/managedOfflineGate";
 import { clearManagedPrimaryAccessToken } from "../../fork/managedPrimaryCredential";
 import { pairManagedPrimaryEnvironment } from "../../fork/managedPrimaryPairing";
 
@@ -455,7 +456,22 @@ function isTransientBootstrapError(error: unknown): boolean {
 
 async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   const bootstrapCredential = getDesktopBootstrapCredential();
-  const currentSession = await fetchSessionState();
+  // T3-CUSTOM(expbkt3): BEGIN — a managed build must keep working offline. When
+  // the central primary is unreachable at the transport level and this device
+  // holds a still-valid pairing token, render the app instead of an error
+  // screen; the connection supervisor owns the primary's retry state, and the
+  // bundled local backend stays usable. See fork/managedOfflineGate.
+  let currentSession: AuthSessionState;
+  try {
+    currentSession = await fetchSessionState();
+  } catch (error) {
+    const offlineState = await resolveManagedOfflineAuthGateState(error);
+    if (offlineState !== null) {
+      return offlineState;
+    }
+    throw error;
+  }
+  // T3-CUSTOM(expbkt3): END
   if (currentSession.authenticated) {
     const identityToken = await readManagedClerkIdentityToken();
     if (identityToken) {

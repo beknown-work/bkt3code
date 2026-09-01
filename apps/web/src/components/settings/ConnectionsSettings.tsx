@@ -1823,8 +1823,11 @@ function CloudRemoteEnvironmentRows({
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
-  // T3-CUSTOM(expbkt3): managed BK Electron builds have a desktop shell but
-  // intentionally no desktop-local backend.
+  // T3-CUSTOM(expbkt3): this flag really means "the primary environment is the
+  // desktop's own local backend", which grants the admin surfaces below. In a
+  // managed BK build the primary is the remote central server, so it stays
+  // false even though a bundled backend runs as a *secondary* local
+  // environment (surfaced through the environments list, not managed here).
   const hasDesktopLocalBackend = desktopBridge !== undefined && !isBkManagedPrimary();
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
@@ -3190,7 +3193,9 @@ export function ConnectionsSettings() {
                 }
               />
             ) : null}
-            {/* T3-CUSTOM(expbkt3): client-only BK builds ship no local backend, so these rows are hidden. */}
+            {/* T3-CUSTOM(expbkt3): in managed BK builds these rows manage a primary
+                local backend that does not exist (the bundled backend is a
+                secondary), so they stay hidden. */}
             {hasDesktopLocalBackend ? (
               <>
                 {renderNetworkAccessRow()}

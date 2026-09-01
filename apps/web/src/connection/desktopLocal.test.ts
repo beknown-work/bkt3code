@@ -5,7 +5,8 @@ import {
 import { EnvironmentId, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-// T3-CUSTOM(expbkt3): managed desktop builds have no local backend topology.
+// T3-CUSTOM(expbkt3): managed desktop builds surface the bundled backend as an
+// ordinary secondary bootstrap; only the primary id stays filtered.
 import {
   __resetBkManagedEnvironmentForTests,
   __setBkManagedEnvironmentForTests,
@@ -85,14 +86,22 @@ describe("desktop local topology reads", () => {
     expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [secondary] });
   });
 
-  // T3-CUSTOM(expbkt3): a separately installed Mac server must be added through
-  // the remote/SSH flow; stale desktop bootstraps are never auto-registered.
-  it("ignores every local bootstrap in a managed client-only build", () => {
+  // T3-CUSTOM(expbkt3): a managed build carries the bundled backend as the
+  // "bk-local" secondary; only the pool-primary id (a client-only legacy
+  // leftover) stays filtered.
+  it("surfaces the bundled backend in a managed build while filtering the primary id", () => {
     __setBkManagedEnvironmentForTests({
       channel: "staging",
       httpBaseUrl: "https://expbkt3.dev.beknown.live",
       wsBaseUrl: "wss://expbkt3.dev.beknown.live",
     });
+    const bundled = {
+      id: "bk-local",
+      label: "Local environment",
+      httpBaseUrl: "http://127.0.0.1:3773",
+      wsBaseUrl: "ws://127.0.0.1:3773",
+      bootstrapToken: "token",
+    };
     const reader = createDesktopSecondaryBootstrapsReader(() => ({
       getLocalEnvironmentBootstraps: () => [
         {
@@ -101,10 +110,11 @@ describe("desktop local topology reads", () => {
           httpBaseUrl: "http://127.0.0.1:3773",
           wsBaseUrl: "ws://127.0.0.1:3773",
         },
+        bundled,
       ],
     }));
 
-    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [] });
+    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [bundled] });
   });
 
   it("retains the last successful snapshot only until another read succeeds", () => {
