@@ -24,7 +24,7 @@ import { agentUiEnvironment } from "../state/agentUi";
 import { useAgentUiExpandedStore } from "../agentUiExpandedStore";
 import { useEnvironmentQuery } from "../state/query";
 import { cn } from "../lib/utils";
-import { AGENT_UI_SURFACES_RUNTIME_ENABLED } from "./agentUiRuntime";
+import { isAgentUiSurfaceRenderable } from "./agentUiRuntime";
 
 /** The handle `ActivityPayloadProjection` keeps on an MCP tool-call payload. */
 export interface AgentUiSurfaceHandle {
@@ -133,6 +133,8 @@ export const AgentUiRenderFrame = memo(function AgentUiRenderFrame(props: {
     );
   }
   if (render.url) {
+    // Reached when a stored render turns out to be a URL after all — an older
+    // row, or a handle whose kind disagrees with the record.
     return (
       <div className="flex h-full items-center justify-center px-4 text-center text-secondary-label text-xs">
         URL Agent views are temporarily disabled because framed apps cannot always render the
@@ -204,7 +206,9 @@ export const AgentUiSurfaceRow = memo(function AgentUiSurfaceRow(props: {
   readonly children: ReactNode;
 }) {
   const enabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
-  if (!AGENT_UI_SURFACES_RUNTIME_ENABLED || !enabled || props.threadRef === null) {
+  // A kind T3 cannot render truthfully leaves the ordinary tool row behind
+  // rather than a box explaining itself on every call.
+  if (!enabled || props.threadRef === null || !isAgentUiSurfaceRenderable(props.surface.kind)) {
     return props.children;
   }
   return (
@@ -230,7 +234,7 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
   const collapse = useAgentUiExpandedStore((state) => state.collapse);
   const [title, setTitle] = useState("Agent view");
 
-  const open = AGENT_UI_SURFACES_RUNTIME_ENABLED && enabled && expanded !== null;
+  const open = enabled && expanded !== null;
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {

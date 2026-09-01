@@ -1,9 +1,18 @@
 /**
- * T3-CUSTOM(expbkt3): emergency gate for agent-rendered chat surfaces.
+ * T3-CUSTOM(expbkt3): scope gate for agent-rendered chat surfaces.
  *
- * URL targets can intentionally disable live behavior whenever they run in an
- * iframe, then fall back to origin-local state that is unrelated to the URL the
- * agent supplied. Until T3 has a truthful generic URL-surface contract, no
- * persisted client preference may turn Agent views back on.
+ * URL targets stay blocked. A framed collaboration app can decline to join the
+ * room named by the URL and render unrelated origin-local state instead, so T3
+ * cannot claim the box shows what the agent asked for.
+ *
+ * Agent-authored HTML has none of that problem: the document *is* what the
+ * agent produced, and it mounts from `srcDoc` in an opaque-origin sandbox that
+ * can reach neither T3 nor the network as the signed-in user. It is therefore
+ * gated by the client setting alone, the way every other experiment is.
  */
-export const AGENT_UI_SURFACES_RUNTIME_ENABLED = false;
+export type AgentUiSurfaceKind = "html" | "url";
+
+/** Whether T3 can render this kind of surface truthfully today. */
+export function isAgentUiSurfaceRenderable(kind: AgentUiSurfaceKind): boolean {
+  return kind === "html";
+}

@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveAgentUiSurface } from "./agentUiSurface";
-import { AGENT_UI_SURFACES_RUNTIME_ENABLED } from "./agentUiRuntime";
+import { isAgentUiSurfaceRenderable } from "./agentUiRuntime";
 
 describe("resolveAgentUiSurface", () => {
   it("reads a well-formed handle", () => {
@@ -45,7 +45,8 @@ describe("resolveAgentUiSurface", () => {
 });
 
 describe("Agent view runtime gate", () => {
-  it("is fail-closed independently of persisted client settings", () => {
-    expect(AGENT_UI_SURFACES_RUNTIME_ENABLED).toBe(false);
+  it("blocks URL targets while leaving agent-authored HTML renderable", () => {
+    expect(isAgentUiSurfaceRenderable("html")).toBe(true);
+    expect(isAgentUiSurfaceRenderable("url")).toBe(false);
   });
 });
