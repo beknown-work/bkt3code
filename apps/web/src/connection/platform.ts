@@ -58,6 +58,11 @@ import {
 // and the DPoP authorization a managed primary connection is prepared with.
 import { bkPrimaryRegistrationCacheKey } from "../fork/managedEnvironment";
 import { readManagedPrimaryDpopAuthorization } from "../fork/managedPrimaryConnection";
+import {
+  primaryRegistrationFallback,
+  storedPlatformRegistration,
+  writePersistedPrimaryRegistration,
+} from "../fork/platformRegistrationCache";
 // T3-CUSTOM(expbkt3): END
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
 import { isHostedStaticApp } from "../hostedPairing";
@@ -569,6 +574,16 @@ const platformConnectionSourceLayer = Layer.effect(
             const cacheEntry = { signature, registration: built.value };
             next.set(primaryCacheKey, cacheEntry);
             registrations.push(built.value);
+            writePersistedPrimaryRegistration(storedPlatformRegistration(signature, built.value));
+          } else {
+            // The host is unreachable. Install it from the last registration it
+            // resolved so its cached threads still render and the supervisor can
+            // retry in the background, instead of the environment disappearing.
+            const fallback = primaryRegistrationFallback(signature);
+            if (fallback !== null) {
+              next.set(primaryCacheKey, { signature, registration: fallback });
+              registrations.push(fallback);
+            }
           }
         }
       }
