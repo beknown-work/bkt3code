@@ -7,7 +7,6 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 // T3-CUSTOM(expbkt3): the phase sidebar opens the members sheet directly.
-import { useNavigation } from "@react-navigation/native";
 import { LegendList } from "@legendapp/list/react-native";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
@@ -34,28 +33,10 @@ import { useProjects, useThreadShells } from "../../state/entities";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
-// T3-CUSTOM(expbkt3): experimental phase-grouped sidebar.
-import { threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
+// T3-CUSTOM(expbkt3): experimental phase-grouped sidebar, shared with HomeScreen.
+import { PhaseSidebarPane } from "../phasesidebar/PhaseSidebarPane";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { PHASE_SIDEBAR_PRIORITY_CHOICES } from "@t3tools/client-runtime/state/phase-sidebar";
-import {
-  DEFAULT_PHASE_SIDEBAR_SORT,
-  EMPTY_PHASE_SIDEBAR_FILTERS,
-  type PhaseSidebarFilters,
-  type PhaseSidebarSortPreferences,
-} from "@t3tools/client-runtime/state/phase-sidebar";
-import { phaseSidebarFiltersActive } from "@t3tools/client-runtime/state/phase-sidebar-tree";
-import { cn } from "../../lib/cn";
-import { PhaseSidebarFilterSheet } from "../phasesidebar/PhaseSidebarFilterSheet";
-import { PhaseSidebarList } from "../phasesidebar/PhaseSidebarList";
-import { PhaseSidebarRateLimits } from "../phasesidebar/PhaseSidebarRateLimits";
 import { usePhaseSidebarEnabled } from "../phasesidebar/phaseSidebarEnabled";
-import {
-  usePhaseSidebarRows,
-  usePhaseSidebarViewerUserId,
-} from "../phasesidebar/usePhaseSidebarRows";
-import { useMarkPhaseSidebarThreadVisited } from "../phasesidebar/phaseSidebarVisitStore";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -197,20 +178,8 @@ function ThreadNavigationSidebarPane(
     regenerateThreadTitle,
   } = useThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
-  // T3-CUSTOM(expbkt3): BEGIN — experimental phase sidebar.
+  // T3-CUSTOM(expbkt3): the experimental phase sidebar, shared with HomeScreen.
   const phaseSidebarEnabled = usePhaseSidebarEnabled();
-  const phaseSidebarNavigation = useNavigation();
-  // The two row actions useThreadListActions does not cover.
-  const updatePhaseSidebarThreadMetadata = useAtomCommand(
-    threadEnvironment.updateMetadata,
-    "phase sidebar update thread metadata",
-  );
-  const stopPhaseSidebarExecution = useAtomCommand(
-    threadEnvironment.stopExecution,
-    "phase sidebar force stop",
-  );
-  // Ownership facets resolve against the environment in focus; mobile has no
-  // single primary environment, so the selected thread's is the best answer.
   const phaseSidebarViewerEnvironmentId = useMemo(
     () =>
       props.selectedThreadKey === null
@@ -218,19 +187,6 @@ function ThreadNavigationSidebarPane(
         : (parseScopedThreadKey(props.selectedThreadKey)?.environmentId ?? null),
     [props.selectedThreadKey],
   );
-  const phaseSidebarViewerUserId = usePhaseSidebarViewerUserId(phaseSidebarViewerEnvironmentId);
-  const phaseSidebarRows = usePhaseSidebarRows({
-    viewerEnvironmentId: phaseSidebarViewerEnvironmentId,
-  });
-  const markPhaseSidebarThreadVisited = useMarkPhaseSidebarThreadVisited();
-  const [phaseSidebarFilters, setPhaseSidebarFilters] = useState<PhaseSidebarFilters>(
-    EMPTY_PHASE_SIDEBAR_FILTERS,
-  );
-  const [phaseSidebarSort, setPhaseSidebarSort] = useState<PhaseSidebarSortPreferences>(
-    DEFAULT_PHASE_SIDEBAR_SORT,
-  );
-  const [phaseSidebarFilterOpen, setPhaseSidebarFilterOpen] = useState(false);
-  // T3-CUSTOM(expbkt3): END
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const autoSettleOnMerge =
     !AsyncResult.isSuccess(preferencesResult) ||
@@ -814,123 +770,6 @@ function ThreadNavigationSidebarPane(
       openSwipeableRef.current = null;
     }
   }, []);
-  // T3-CUSTOM(expbkt3): BEGIN — phase sidebar row handlers.
-  const handlePhaseSidebarSelect = useCallback(
-    (row: { readonly thread: EnvironmentThreadShell }) => {
-      markPhaseSidebarThreadVisited(`${row.thread.environmentId}:${row.thread.id}`);
-      props.onSelectThread(row.thread);
-    },
-    [markPhaseSidebarThreadVisited, props.onSelectThread],
-  );
-  const handlePhaseSidebarReparent = useCallback(
-    (
-      subject: { readonly thread: EnvironmentThreadShell },
-      parent: { readonly thread: EnvironmentThreadShell } | null,
-    ) => {
-      // Same command web's setThreadParent uses; the drop was already validated
-      // against cycles and the depth limit before it got here.
-      void updatePhaseSidebarThreadMetadata({
-        environmentId: subject.thread.environmentId,
-        input: {
-          threadId: subject.thread.id,
-          parentThreadId: parent === null ? null : parent.thread.id,
-        },
-      });
-    },
-    [updatePhaseSidebarThreadMetadata],
-  );
-
-  const handlePhaseSidebarReorder = useCallback(
-    (
-      subject: { readonly thread: EnvironmentThreadShell },
-      before: { readonly thread: EnvironmentThreadShell },
-    ) => {
-      // `movePinnedThread` owns the correct order-key planning (and the
-      // capability check), but only moves one position at a time. Direction
-      // comes from the pin ORDER — `pinOrderKey` is the sortable key the server
-      // assigns — not from `pinnedAt`, which is when the pin happened and says
-      // nothing about position.
-      //
-      // Known limitation: one drag moves one position, so dragging a pin a long
-      // way needs repeating. Expressing an arbitrary target would mean
-      // duplicating planPinnedMove's fractional-index logic here.
-      const subjectKey = subject.thread.pinOrderKey ?? "";
-      const beforeKey = before.thread.pinOrderKey ?? "";
-      void movePinnedThread(subject.thread, subjectKey > beforeKey ? "up" : "down");
-    },
-    [movePinnedThread],
-  );
-
-  const handlePhaseSidebarRowAction = useCallback(
-    (row: { readonly thread: EnvironmentThreadShell }, actionId: string) => {
-      const thread = row.thread;
-
-      if (actionId.startsWith("priority:")) {
-        const parsed = Number.parseInt(actionId.slice("priority:".length), 10);
-        const priority = PHASE_SIDEBAR_PRIORITY_CHOICES.find(
-          (choice) => choice.value === parsed,
-        )?.value;
-        if (priority === undefined) return;
-        void updatePhaseSidebarThreadMetadata({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id, priority },
-        });
-        return;
-      }
-
-      switch (actionId) {
-        case "people":
-          phaseSidebarNavigation.navigate("ThreadMembers", {
-            environmentId: thread.environmentId,
-            threadId: thread.id,
-          });
-          return;
-        case "settle":
-          void settleThread(thread);
-          return;
-        case "unsettle":
-          void unsettleThread(thread);
-          return;
-        case "snooze":
-          // One day is the default the row menu offers; the thread screen has
-          // the full picker for anything else.
-          void snoozeThread(thread, new Date(Date.now() + 24 * 60 * 60_000).toISOString());
-          return;
-        case "unsnooze":
-          void unsnoozeThread(thread);
-          return;
-        case "pin":
-          void pinThread(thread);
-          return;
-        case "unpin":
-          void unpinThread(thread);
-          return;
-        case "archive":
-          archiveThread(thread);
-          return;
-        case "force-stop":
-          void stopPhaseSidebarExecution({
-            environmentId: thread.environmentId,
-            input: { threadId: thread.id },
-          });
-          return;
-      }
-    },
-    [
-      archiveThread,
-      phaseSidebarNavigation,
-      pinThread,
-      settleThread,
-      snoozeThread,
-      stopPhaseSidebarExecution,
-      unpinThread,
-      unsettleThread,
-      unsnoozeThread,
-      updatePhaseSidebarThreadMetadata,
-    ],
-  );
-  // T3-CUSTOM(expbkt3): END
-
   const handleSelectThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       props.onSelectThread(thread);
@@ -1375,63 +1214,14 @@ function ThreadNavigationSidebarPane(
             unstable_headerRightItems: () => nativeHeaderItems,
           }}
         />
-        {/* T3-CUSTOM(expbkt3): BEGIN — experimental phase-grouped sidebar. It
-            replaces the whole list rather than reshaping it, so the stock list
-            keeps its exact behaviour when the flag is off. */}
+        {/* T3-CUSTOM(expbkt3): BEGIN — the experimental sidebar replaces the
+            whole list, so the stock one keeps its exact behaviour when off. */}
         {phaseSidebarEnabled ? (
-          <View className="flex-1">
-            {phaseSidebarFilterOpen ? (
-              <View className="max-h-[60%] border-b border-border">
-                <PhaseSidebarFilterSheet
-                  filters={phaseSidebarFilters}
-                  onChangeFilters={setPhaseSidebarFilters}
-                  onChangeSort={setPhaseSidebarSort}
-                  projects={projects}
-                  rows={phaseSidebarRows}
-                  sort={phaseSidebarSort}
-                />
-              </View>
-            ) : null}
-            <PhaseSidebarList
-              filters={phaseSidebarFilters}
-              sort={phaseSidebarSort}
-              ListHeaderComponent={
-                <View>
-                  <PhaseSidebarRateLimits environmentId={phaseSidebarViewerEnvironmentId} />
-                  <View className="flex-row items-center justify-between px-3 pb-1 pt-2">
-                    <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-muted-foreground">
-                      Lifecycle
-                    </Text>
-                    <Pressable
-                      className={cn(
-                        "flex-row items-center gap-1.5 rounded-lg border px-2.5 py-1",
-                        phaseSidebarFiltersActive(phaseSidebarFilters)
-                          ? "border-primary bg-primary/15"
-                          : "border-border",
-                      )}
-                      hitSlop={6}
-                      onPress={() => setPhaseSidebarFilterOpen((open) => !open)}
-                    >
-                      <SymbolView
-                        name="line.3.horizontal.decrease"
-                        size={12}
-                        tintColor={mutedColor}
-                        type="monochrome"
-                      />
-                      <Text className="text-xs text-foreground">Filter</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              }
-              activeThreadKey={props.selectedThreadKey}
-              onReorderRow={handlePhaseSidebarReorder}
-              onReparentRow={handlePhaseSidebarReparent}
-              onRowAction={handlePhaseSidebarRowAction}
-              onSelectRow={handlePhaseSidebarSelect}
-              rows={phaseSidebarRows}
-              viewerUserId={phaseSidebarViewerUserId}
-            />
-          </View>
+          <PhaseSidebarPane
+            onSelectThread={props.onSelectThread}
+            selectedThreadKey={props.selectedThreadKey}
+            viewerEnvironmentId={phaseSidebarViewerEnvironmentId}
+          />
         ) : (
           /* T3-CUSTOM(expbkt3): END */
           <View className="flex-1">
