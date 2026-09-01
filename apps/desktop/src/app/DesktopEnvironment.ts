@@ -244,8 +244,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
     serverRoot,
     backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
-    // T3-CUSTOM(expbkt3): client-only BK artifacts stage no apps/server tree.
-    clientAssetsDirectory: path.join(appRoot, "apps/web/dist"),
+    // T3-CUSTOM(expbkt3): managed BK builds serve the renderer from the client
+    // assets the server tree already carries, so nothing is staged twice.
+    clientAssetsDirectory: path.join(serverRoot, "apps/server/dist/client"),
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged
       ? path.join(resourcesPath, "app-update.yml")

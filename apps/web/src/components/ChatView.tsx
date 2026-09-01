@@ -36,6 +36,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
   ANONYMOUS_OUTBOX_IDENTITY,
+  selectThreadOutboxReplay,
   shouldRetryThreadOutboxDelivery,
   threadOutboxRetryDelayMs,
 } from "@t3tools/client-runtime/outbox";
@@ -2696,15 +2697,19 @@ function ChatViewContent(props: ChatViewProps) {
     if (isLocalSendBusy || outboxEnvironmentConnectionPhase !== "connected") {
       return;
     }
-    // Oldest first: IndexedDB iterates by messageId (a random UUID), so an
-    // unsorted pick would flush the queue in arbitrary order.
-    const queued = durableOutboxItems
-      .filter(
-        (item) =>
-          item.deliveryState !== "failed" && !outboxReplayInFlightRef.current.has(item.messageId),
-      )
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-      .at(0);
+    // T3-CUSTOM(expbkt3): the send gate above clears on the server's projection
+    // acknowledgement, which lands before the RPC reply removes the queue row.
+    // Replaying then puts a second copy of a turn that already started on the
+    // wire, and since upstream #8048 that copy fails outright — its uploaded
+    // attachment was released the moment the first copy was acknowledged.
+    const { stale, next: queued } = selectThreadOutboxReplay({
+      items: durableOutboxItems,
+      identityKey: outboxIdentityKey,
+      replayingMessageIds: outboxReplayInFlightRef.current,
+    });
+    for (const item of stale) {
+      void discardDurableOutbox(item);
+    }
     if (queued === undefined) return;
     outboxReplayInFlightRef.current.add(queued.messageId);
     void startThreadTurn({
@@ -2764,6 +2769,7 @@ function ChatViewContent(props: ChatViewProps) {
       }, threadOutboxRetryDelayMs(attempt));
     });
   }, [
+    discardDurableOutbox,
     durableOutboxItems,
     isLocalSendBusy,
     outboxEnvironmentConnectionPhase,

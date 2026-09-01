@@ -29,7 +29,6 @@ import {
 // T3-CUSTOM(expbkt3): BEGIN - fork desktop brand (bundle id, name, icon, artifact).
 import { resolveBkDesktopBrand } from "./lib/bk-desktop-brand.ts";
 import { resolveBkSigningIdentity } from "./lib/bk-desktop-signing.ts";
-import { resolveBkManagedEnvironment } from "./lib/bk-managed-environment.ts";
 // T3-CUSTOM(expbkt3): END
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
@@ -84,13 +83,6 @@ function resolveDesktopBrandOverride(
  */
 export function resolveDesktopStagePackageName(): string {
   return resolveDesktopBrandOverride()?.userDataDirName ?? "t3code";
-}
-
-/** Managed BK artifacts are Electron clients and must not contain a server. */
-export function isBkClientOnlyDesktopBuild(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): boolean {
-  return resolveBkDesktopBrand(env) !== undefined && resolveBkManagedEnvironment(env) !== undefined;
 }
 
 // T3-CUSTOM(expbkt3): END
@@ -2153,7 +2145,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 ) {
   // T3-CUSTOM(expbkt3): BEGIN - fork brand identity; undefined for upstream builds.
   const brand = resolveDesktopBrandOverride();
-  const clientOnly = isBkClientOnlyDesktopBuild();
   // T3-CUSTOM(expbkt3): END
   const buildConfig: Record<string, unknown> = {
     // T3-CUSTOM(expbkt3): BEGIN - fork bundle id, name and artifact name.
@@ -2170,12 +2161,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // smart unpack extracts native libraries, which loaders find in
     // app.asar.unpacked. Windows additionally ships the server tree as the
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
-    // T3-CUSTOM(expbkt3): BEGIN - a client-only BK build ships no backend, so it
-    // needs neither the server sidecar nor the server's extra resources.
-    extraResources: clientOnly
-      ? []
-      : [...DESKTOP_EXTRA_RESOURCES, ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : [])],
-    // T3-CUSTOM(expbkt3): END
+    extraResources: [
+      ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
+    ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
@@ -2810,11 +2799,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const electronVersion = desktopPackageJson.dependencies.electron;
-  // T3-CUSTOM(expbkt3): managed fork artifacts ship the client only.
-  const clientOnly = isBkClientOnlyDesktopBuild();
 
   const serverDependencies = serverPackageJson.dependencies;
-  if (!clientOnly && (!serverDependencies || Object.keys(serverDependencies).length === 0)) {
+  if (!serverDependencies || Object.keys(serverDependencies).length === 0) {
     return yield* new MissingServerProductionDependenciesError({
       manifestPath: "apps/server/package.json",
     });
@@ -2830,20 +2817,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }),
   });
 
-  // T3-CUSTOM(expbkt3): BEGIN - no server is packaged for a client-only build,
-  // so its production dependencies are not resolved either.
-  const resolvedServerDependencies = clientOnly
-    ? {}
-    : yield* Effect.try({
-        try: () => resolveCatalogDependencies(serverDependencies!, workspaceCatalog, "apps/server"),
-        catch: (cause) =>
-          new DesktopBuildDependencyResolutionError({
-            kind: "server-production",
-            manifestPath: "apps/server/package.json",
-            cause,
-          }),
-      });
-  // T3-CUSTOM(expbkt3): END
+  const resolvedServerDependencies = yield* Effect.try({
+    try: () => resolveCatalogDependencies(serverDependencies, workspaceCatalog, "apps/server"),
+    catch: (cause) =>
+      new DesktopBuildDependencyResolutionError({
+        kind: "server-production",
+        manifestPath: "apps/server/package.json",
+        cause,
+      }),
+  });
   const resolvedServerRuntimeExternalDependencies = selectCliRuntimeExternalDependencies(
     resolvedServerDependencies,
   );
@@ -2889,10 +2871,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const requiredBuildInputs = [
     { artifact: "desktop-dist", artifactPath: distDirs.desktopDist },
     { artifact: "desktop-resources", artifactPath: distDirs.desktopResources },
-    // T3-CUSTOM(expbkt3): a client-only build has no server dist to require.
-    ...(!clientOnly
-      ? ([{ artifact: "server-dist", artifactPath: distDirs.serverDist }] as const)
-      : []),
+    { artifact: "server-dist", artifactPath: distDirs.serverDist },
   ] as const;
   for (const input of requiredBuildInputs) {
     if (!(yield* fs.exists(input.artifactPath))) {
@@ -2979,13 +2958,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
-  // T3-CUSTOM(expbkt3): BEGIN - client-only stages the web client where the server would go.
-  if (clientOnly) {
-    yield* fs.makeDirectory(path.join(stageAppDir, "apps/web"), { recursive: true });
-  } else if (options.platform !== "win") {
+  if (options.platform !== "win") {
     yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
   }
-  // T3-CUSTOM(expbkt3): END
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
@@ -2997,25 +2972,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.verbose,
     );
   }
-  // T3-CUSTOM(expbkt3): BEGIN - stage the packaged client instead of a server.
-  if (clientOnly) {
-    yield* fs.copy(path.dirname(bundledClientEntry), path.join(stageAppDir, "apps/web/dist"));
-    yield* Effect.log("[desktop-artifact] Staged managed client without a backend server.");
-  } else {
-    // On Windows the server tree ships in the server.asar sidecar instead of
-    // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
-    if (options.platform !== "win") {
-      yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
-    }
-    yield* stageResourceMonitor({
-      repoRoot,
-      stageResourcesDir,
-      platform: options.platform,
-      arch: options.arch,
-      verbose: options.verbose,
-    });
+  // On Windows the server tree ships in the server.asar sidecar instead of
+  // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
+  if (options.platform !== "win") {
+    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
   }
-  // T3-CUSTOM(expbkt3): END
+  yield* stageResourceMonitor({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -3065,11 +3033,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // the server.asar sidecar (see stageWindowsServerSidecar). macOS adds only
   // server packages that remain external to its merged app.asar. Linux retains
   // its existing full dependency tree.
-  // T3-CUSTOM(expbkt3): BEGIN - a client-only build packages no server, so it
-  // needs neither the server's dependencies nor its native fff binaries.
-  const stageDependencies = clientOnly
-    ? { ...resolvedDesktopRuntimeDependencies }
-    : options.platform === "win"
+  const stageDependencies =
+    options.platform === "win"
       ? { ...resolvedDesktopRuntimeDependencies }
       : options.platform === "mac"
         ? resolveMacStageDependencies({
@@ -3087,7 +3052,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
               serverPackageJson.dependencies["@ff-labs/fff-node"],
             ),
           };
-  // T3-CUSTOM(expbkt3): END
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
@@ -3161,8 +3125,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // WSL is Windows-only, so only the Windows artifact carries the server
   // sidecar (which embeds the Linux node-pty prebuild); other platforms
   // ignore the prebuild input.
-  // T3-CUSTOM(expbkt3): skipped for client-only builds, which ship no backend.
-  if (options.platform === "win" && windowsServerAsarPath && !clientOnly) {
+  if (options.platform === "win" && windowsServerAsarPath) {
     yield* stageWindowsServerSidecar({
       stageRoot,
       repoRoot,

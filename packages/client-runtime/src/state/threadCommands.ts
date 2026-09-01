@@ -85,8 +85,11 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 // T3-CUSTOM(expbkt3): every client persists the exact turn before dispatch.
 import {
   ANONYMOUS_OUTBOX_IDENTITY,
+  beginThreadOutboxDelivery,
   recordThreadOutboxFailure,
+  settleThreadOutboxDelivery,
   shouldRetryThreadOutboxDelivery,
+  threadOutboxDeliveryKey,
   ThreadOutboxPersistenceError,
   type QueuedThreadMessage,
 } from "../outbox/index.ts";
@@ -171,7 +174,25 @@ const startThreadTurnDurably = Effect.fn("ThreadCommands.startThreadTurnDurably"
       }),
     ),
   );
-  const dispatched = yield* Effect.exit(dispatch);
+  // T3-CUSTOM(expbkt3): a replay loop must not send this turn again while it is
+  // on the wire, or after it lands — an uploaded attachment is released on the
+  // first acknowledgement and the duplicate would fail as "attachment not
+  // found". Settling inside `ensuring` also covers interruption.
+  const deliveryKey = threadOutboxDeliveryKey({
+    environmentId,
+    identityKey: outboxIdentityKey,
+    messageId: queuedMessage.messageId,
+  });
+  beginThreadOutboxDelivery(deliveryKey);
+  let deliveredExit = false;
+  const dispatched = yield* Effect.exit(dispatch).pipe(
+    Effect.tap((exit) =>
+      Effect.sync(() => {
+        deliveredExit = Exit.isSuccess(exit);
+      }),
+    ),
+    Effect.ensuring(Effect.sync(() => settleThreadOutboxDelivery(deliveryKey, deliveredExit))),
+  );
   if (Exit.isFailure(dispatched)) {
     const error = Cause.squash(dispatched.cause);
     const retrying = shouldRetryThreadOutboxDelivery(error);

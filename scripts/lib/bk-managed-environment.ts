@@ -3,9 +3,10 @@
  *
  * A managed BK build is one whose *primary environment* is a central Beknown
  * T3 server rather than the backend Electron bundles. The team runs its
- * sessions, projects and member directory there, so the desktop app is a
- * client-only shell for it. Local Mac work runs on a separately installed T3
- * server and is added through the normal remote/SSH environment flow.
+ * sessions, projects and member directory there. The bundled backend still
+ * ships and starts as a *secondary* local environment, so local Mac work runs
+ * on this machine — including offline — while the central server stays
+ * primary.
  *
  * The URLs are selected at *build* time (`--channel` on
  * `scripts/build-bk-desktop-dmg.ts`) and baked into the renderer bundle as
