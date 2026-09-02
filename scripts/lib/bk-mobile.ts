@@ -101,6 +101,26 @@ export function bkBuildEnv(gitSha: string): Record<string, string> {
  * `client_version`, and the only way to tell a stale sideloaded binary from a
  * current one.
  */
+/**
+ * The native marketing version (`CFBundleShortVersionString` / `versionName`)
+ * of one BK build: upstream's MOBILE_APP_VERSION plus the workflow run number
+ * as a fourth component, `1.0.4.12`.
+ *
+ * MOBILE_APP_VERSION is never bumped by the fork — it tracks upstream, so an
+ * upstream merge never conflicts on it. But SideStore decides "update
+ * available" on the marketing version, and not every SideStore release falls
+ * back to the build number when two builds share one. A fourth component that
+ * grows with every run makes each build unambiguously newer for all of them.
+ * Release tags, artifact names and the `client_version` the app reports keep
+ * the three-part base.
+ */
+export function bkMarketingVersion(
+  baseVersion: string,
+  buildNumber: string | number | null,
+): string {
+  return buildNumber === null ? baseVersion : `${baseVersion}.${buildNumber}`;
+}
+
 export function bkAppVersionString(baseVersion: string, gitSha: string): string {
   return `${baseVersion}+bk.${gitSha.slice(0, SHORT_SHA_LENGTH)}`;
 }

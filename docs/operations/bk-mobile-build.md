@@ -184,9 +184,16 @@ T3CODE_BK_MOBILE=1 T3CODE_IOS_PERSONAL_TEAM=1 \
 
 ## Version bumps
 
-`apps/mobile/app-version.ts` holds `MOBILE_APP_VERSION`, which is at once the
-native manifest version, the release tag and the base of the `client_version`
-the app reports. Bump it there and nowhere else. The Android `versionCode` comes
-from the workflow run number, so it stays monotonic without being tracked by
-hand. The iOS `CFBundleVersion` uses that same run number so SideStore can order
-updates that share one `MOBILE_APP_VERSION`.
+`apps/mobile/app-version.ts` holds `MOBILE_APP_VERSION`. The fork never bumps
+it: it tracks upstream's mobile version, so an upstream merge never conflicts on
+it. It is the release tag and the base of the `client_version` the app reports
+(`1.0.4+bk.<sha>`).
+
+The **native marketing version** of a BK build is that base plus the workflow
+run number as a fourth component — `1.0.4.12`, then `1.0.4.13` — set by
+`bkMarketingVersion` in `app.config.bk.ts` and mirrored into the SideStore
+source. SideStore decides "update available" on the marketing version and not
+every release falls back to the build number when two builds share one, so a
+version that grows with every run is what makes each build show as an update
+without anyone bumping anything by hand. The Android `versionCode` and the iOS
+`CFBundleVersion` are that same run number.
