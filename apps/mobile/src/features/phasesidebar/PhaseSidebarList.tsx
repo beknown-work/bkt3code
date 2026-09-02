@@ -5,12 +5,17 @@
 // resulting sections into a flat list a FlatList can render efficiently.
 // Rendering the tree as one flat array matters on a phone — a nested render
 // tree of hundreds of rows drops frames on scroll.
+//
+// Parked sessions (snoozed, settled) never mix with live work: they sit in
+// their own collapsed shelves under the grouped sections, as on web.
 import {
   flattenPhaseSidebarTree,
   type PhaseSidebarTreeNode,
 } from "@t3tools/client-runtime/state/phase-sidebar-tree";
 import {
   buildPhaseSidebarSections,
+  buildPhaseSidebarShelfSections,
+  isPhaseSidebarSectionCollapsed,
   phaseSidebarSectionPhase,
   togglePhaseSidebarSectionCollapsed,
   type PhaseSidebarGroupingPreferences,
@@ -18,8 +23,10 @@ import {
 } from "@t3tools/client-runtime/state/phase-sidebar-grouping";
 import {
   comparePhaseSidebarRows,
+  compactPhaseSidebarTimeLabel,
   DEFAULT_PHASE_SIDEBAR_SORT,
   EMPTY_PHASE_SIDEBAR_FILTERS,
+  partitionPhaseSidebarRows,
   resolvePhaseSidebarWorktreeView,
   type PhaseSidebarFilters,
   type PhaseSidebarRow,
@@ -27,9 +34,8 @@ import {
 } from "@t3tools/client-runtime/state/phase-sidebar";
 import {
   canSnooze,
-  effectiveSettled,
-  effectiveSnoozed,
   resolveSnoozePresets,
+  snoozeWakeLabel,
   type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -48,6 +54,7 @@ import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
+import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { PhaseSidebarRowView, type PhaseSidebarRowSwipe } from "./PhaseSidebarRowView";
@@ -57,6 +64,9 @@ import {
   phaseSidebarRowActionsToMenu,
 } from "./usePhaseSidebarRowActions";
 import { usePhaseSidebarDrag } from "./usePhaseSidebarDrag";
+
+/** Which shelf a row sits on, if any. Drives its swipe and its time label. */
+type PhaseSidebarRowShelf = "active" | "snoozed" | "settled";
 
 /** A flattened list entry: either a section header or a thread row. */
 type PhaseSidebarListItem =
@@ -70,6 +80,7 @@ type PhaseSidebarListItem =
       readonly kind: "row";
       readonly key: string;
       readonly node: PhaseSidebarTreeNode;
+      readonly shelf: PhaseSidebarRowShelf;
     };
 
 /** What the header of a custom group can do, beyond collapsing. */
@@ -107,22 +118,32 @@ export interface PhaseSidebarListProps {
   readonly contentContainerStyle?: ComponentProps<typeof FlatList>["contentContainerStyle"];
 }
 
+/**
+ * Swipe actions follow the shelf, as in the stock list: live rows settle (full
+ * swipe), snooze and archive; a snoozed row wakes; a settled row reopens.
+ */
 function resolveRowSwipe(
   row: PhaseSidebarRow,
+  shelf: PhaseSidebarRowShelf,
   now: string,
   snoozeMenu: MenuAction[],
 ): PhaseSidebarRowSwipe {
-  const thread = row.thread;
-  if (row.snoozeSupported && effectiveSnoozed(thread, { now })) {
-    return { primary: "unsnooze", snoozeMenu: null };
-  }
-  const settled =
-    row.settlementSupported && effectiveSettled(thread, { now, autoSettleAfterDays: null });
-  const snoozable = row.snoozeSupported && !settled && canSnooze(thread, { now });
+  if (shelf === "snoozed") return { primary: "unsnooze", snoozeMenu: null, archive: true };
+  if (shelf === "settled") return { primary: "unsettle", snoozeMenu: null, archive: true };
+  const snoozable = row.snoozeSupported && canSnooze(row.thread, { now });
   return {
-    primary: settled ? "unsettle" : row.settlementSupported ? "settle" : "archive",
+    primary: row.settlementSupported ? "settle" : "archive",
     snoozeMenu: snoozable ? snoozeMenu : null,
+    archive: row.settlementSupported,
   };
+}
+
+/** "2h" for live and settled rows; "Wakes 9:00 AM" for a snoozed one. */
+function resolveRowTimeLabel(row: PhaseSidebarRow, shelf: PhaseSidebarRowShelf, now: string) {
+  if (shelf === "snoozed" && row.thread.snoozedUntil != null) {
+    return snoozeWakeLabel(row.thread.snoozedUntil, { now });
+  }
+  return compactPhaseSidebarTimeLabel(relativeTime(row.thread.updatedAt));
 }
 
 export function PhaseSidebarList(props: PhaseSidebarListProps) {
@@ -151,6 +172,10 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     onScrollBeginDrag: handleScrollBeginDrag,
   });
 
+  // "Now" is fixed per row set so labels and presets stay stable across a
+  // scroll — the same cadence the stock list uses.
+  const nowIso = useMemo(() => new Date().toISOString(), [props.rows]);
+
   const worktreeView = useMemo(
     // Resolved across the whole set, not per row: codenames disambiguate against
     // each other and occupancy is a count.
@@ -158,26 +183,46 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     [props.rows],
   );
 
-  const { sections, forcedExpansionKeys } = useMemo(
+  // Mobile has no auto-settle setting of its own, so a row is settled only when
+  // the server says so, never because a timer elapsed locally.
+  const partition = useMemo(
     () =>
-      buildPhaseSidebarSections({
-        rows: props.rows,
-        filters,
-        compareSiblings: (left, right) => comparePhaseSidebarRows(left, right, sortOrder, sort),
-        grouping,
-        ...(props.projectLabelFor ? { projectLabelFor: props.projectLabelFor } : {}),
-        ...(props.environmentLabelFor ? { environmentLabelFor: props.environmentLabelFor } : {}),
+      partitionPhaseSidebarRows(props.rows, {
+        now: nowIso,
+        preciseNow: nowIso,
+        autoSettleAfterDays: null,
       }),
-    [
-      filters,
-      grouping,
-      props.environmentLabelFor,
-      props.projectLabelFor,
-      props.rows,
-      sort,
-      sortOrder,
-    ],
+    [nowIso, props.rows],
   );
+
+  const { sections, forcedExpansionKeys } = useMemo(() => {
+    const built = buildPhaseSidebarSections({
+      rows: partition.activeRows,
+      filters,
+      compareSiblings: (left, right) => comparePhaseSidebarRows(left, right, sortOrder, sort),
+      grouping,
+      ...(props.projectLabelFor ? { projectLabelFor: props.projectLabelFor } : {}),
+      ...(props.environmentLabelFor ? { environmentLabelFor: props.environmentLabelFor } : {}),
+    });
+    return {
+      sections: [
+        ...built.sections,
+        ...buildPhaseSidebarShelfSections({
+          snoozedRows: partition.snoozedRows,
+          settledRows: partition.settledRows,
+        }),
+      ],
+      forcedExpansionKeys: built.forcedExpansionKeys,
+    };
+  }, [
+    filters,
+    grouping,
+    partition,
+    props.environmentLabelFor,
+    props.projectLabelFor,
+    sort,
+    sortOrder,
+  ]);
   const collapsedSectionKeys = useMemo(
     () => new Set(grouping.collapsedSectionKeys),
     [grouping.collapsedSectionKeys],
@@ -196,19 +241,18 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
       // Lifecycle and project sections exist only because they have rows; an
       // empty custom group still renders so it can be found and filled.
       if (section.nodes.length === 0 && section.kind !== "custom") continue;
-      const collapsed = collapsedSectionKeys.has(section.key);
+      const collapsed = isPhaseSidebarSectionCollapsed(section, collapsedSectionKeys);
       flat.push({ kind: "section", key: section.key, section, collapsed });
       if (collapsed) continue;
+      const shelf: PhaseSidebarRowShelf =
+        section.id === "snoozed" ? "snoozed" : section.id === "settled" ? "settled" : "active";
       for (const node of flattenPhaseSidebarTree(section.nodes, isExpanded)) {
-        flat.push({ kind: "row", key: node.key, node });
+        flat.push({ kind: "row", key: node.key, node, shelf });
       }
     }
     return flat;
   }, [collapsedSectionKeys, isExpanded, sections]);
 
-  // Presets are relative to now, so they refresh whenever the rows do — the
-  // same cadence the stock list uses.
-  const nowIso = useMemo(() => new Date().toISOString(), [props.rows]);
   const snoozePresets = useMemo<ReadonlyArray<SnoozePreset>>(
     () => resolveSnoozePresets(new Date(nowIso)),
     [nowIso],
@@ -267,7 +311,8 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
 
   // A dedicated grab handle rather than a long-press: long-press already opens
   // the row's context menu, and a pan that activates anywhere on the row fights
-  // the list's scroll. The handle makes the intent unambiguous.
+  // the list's scroll. Only pinned rows carry one — theirs is the only order
+  // the user owns; everything else is sorted for them.
   const dragHandleFor = useCallback(
     (rowKey: string) => {
       const gesture = Gesture.Pan()
@@ -286,13 +331,18 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
         });
       return (
         <GestureDetector gesture={gesture}>
-          <View className="ml-1 shrink-0 px-1 py-1">
-            <Text className="font-t3-mono text-[11px] text-muted-foreground">≡</Text>
+          <View accessibilityLabel="Drag to reorder" className="ml-1 shrink-0 px-1 py-1">
+            <SymbolView
+              name="line.3.horizontal"
+              size={12}
+              tintColor={mutedColor}
+              type="monochrome"
+            />
           </View>
         </GestureDetector>
       );
     },
-    [dragController],
+    [dragController, mutedColor],
   );
 
   const handleToggleExpanded = useCallback((row: PhaseSidebarRow) => {
@@ -312,10 +362,9 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
   );
 
   const sectionMenuFor = useCallback(
-    (section: PhaseSidebarSection, index: number): MenuAction[] => {
+    (section: PhaseSidebarSection): MenuAction[] => {
       const customIndex = grouping.customGroups.findIndex((group) => group.id === section.id);
       const manual = grouping.groupOrder === "manual";
-      void index;
       return [
         { id: "rename", title: "Rename group", image: "pencil" },
         ...(manual
@@ -345,15 +394,16 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     [grouping.customGroups, grouping.groupOrder],
   );
 
-  const renderSectionHeader = (section: PhaseSidebarSection, collapsed: boolean, index: number) => {
+  const renderSectionHeader = (section: PhaseSidebarSection, collapsed: boolean) => {
     const phaseId = phaseSidebarSectionPhase(section);
     const { summary } = section;
+    const isShelf = section.collapsedByDefault;
     const header = (
       <Pressable
         accessibilityLabel={`${section.label}, ${section.nodes.length} session${section.nodes.length === 1 ? "" : "s"}${collapsed ? ", collapsed" : ""}`}
         accessibilityRole="button"
         accessibilityState={{ expanded: !collapsed }}
-        className="flex-row items-center gap-2 px-4 pb-1.5 pt-4"
+        className={cn("flex-row items-center gap-2 px-4 pb-1.5", isShelf ? "pt-5" : "pt-4")}
         onPress={() => handleToggleSection(section)}
       >
         <SymbolView
@@ -365,13 +415,17 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
         <Text
           className={cn(
             "font-t3-bold text-[11px] uppercase tracking-wide",
-            phaseId === null ? "text-foreground/80" : phaseSidebarSectionToneClassName(phaseId),
+            isShelf
+              ? "text-foreground-tertiary"
+              : phaseId === null
+                ? "text-foreground-secondary"
+                : phaseSidebarSectionToneClassName(phaseId),
           )}
           numberOfLines={1}
         >
           {section.label}
         </Text>
-        <Text className="min-w-0 flex-1 text-[10px] text-muted-foreground" numberOfLines={1}>
+        <Text className="min-w-0 flex-1 text-[10px] text-foreground-tertiary" numberOfLines={1}>
           {section.helperText}
         </Text>
         {collapsed && summary.attention > 0 ? (
@@ -389,7 +443,7 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
             {summary.unread}
           </Text>
         ) : null}
-        <Text className="font-t3-mono text-[10px] text-muted-foreground">
+        <Text className="font-t3-mono text-[10px] text-foreground-tertiary">
           {section.nodes.length}
         </Text>
       </Pressable>
@@ -399,7 +453,7 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     // reorder and delete, the same way a row is managed.
     return (
       <ControlPillMenu
-        actions={sectionMenuFor(section, index)}
+        actions={sectionMenuFor(section)}
         isAnchoredToRight
         onPressAction={(event: NativeActionEvent) =>
           onSectionAction(section, event.nativeEvent.event as PhaseSidebarSectionActionId)
@@ -427,12 +481,16 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         keyExtractor={(item) => item.key}
-        renderItem={({ item, index }) =>
+        renderItem={({ item }) =>
           item.kind === "section" ? (
-            renderSectionHeader(item.section, item.collapsed, index)
+            renderSectionHeader(item.section, item.collapsed)
           ) : (
             <PhaseSidebarRowView
-              dragHandle={dragEnabled ? dragHandleFor(item.node.key) : undefined}
+              dragHandle={
+                dragEnabled && item.node.row.thread.pinnedAt != null
+                  ? dragHandleFor(item.node.key)
+                  : undefined
+              }
               dropRejectionLabel={dragController.drag?.rejectionLabel ?? null}
               indentDepth={item.node.depth}
               isDragging={dragController.drag?.subjectKey === item.node.key}
@@ -442,14 +500,15 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
               isActive={props.activeThreadKey === item.node.key}
               isExpanded={isExpanded(item.node.key)}
               actions={rowActionsFor(item.node.row, item.node.key, item.node.depth)}
-              onSwipeableClose={handleSwipeableClose}
-              onSwipeableWillOpen={handleSwipeableWillOpen}
               onPress={props.onSelectRow}
               onPressAction={props.onRowAction}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
               onToggleExpanded={handleToggleExpanded}
               row={item.node.row}
               subtreeCount={item.node.descendantCount}
-              swipe={resolveRowSwipe(item.node.row, nowIso, snoozeMenu)}
+              swipe={resolveRowSwipe(item.node.row, item.shelf, nowIso, snoozeMenu)}
+              timeLabel={resolveRowTimeLabel(item.node.row, item.shelf, nowIso)}
               viewerUserId={props.viewerUserId}
               worktreeView={worktreeView}
             />

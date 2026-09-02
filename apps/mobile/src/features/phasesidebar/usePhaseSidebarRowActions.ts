@@ -18,6 +18,8 @@ import {
 
 export type PhaseSidebarRowActionId =
   | "people"
+  | "mark-unread"
+  | "mark-read"
   | "settle"
   | "unsettle"
   | "snooze"
@@ -72,6 +74,15 @@ export function buildPhaseSidebarRowActions(input: {
   const { row } = input;
   const thread = row.thread;
   const actions: PhaseSidebarRowAction[] = [{ id: "people", title: "People", image: "person.2" }];
+
+  // Read state is per device, so it is the user's to flip either way.
+  if (thread.latestTurn?.completedAt) {
+    actions.push(
+      row.isUnreadCompletion
+        ? { id: "mark-read", title: "Mark read", image: "envelope.open" }
+        : { id: "mark-unread", title: "Mark unread", image: "envelope.badge" },
+    );
+  }
 
   if (input.customGroups !== undefined) {
     actions.push({

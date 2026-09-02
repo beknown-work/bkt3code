@@ -16,6 +16,8 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
+// T3-CUSTOM(expbkt3): phase sidebar read state.
+import { useMarkPhaseSidebarThreadVisited } from "../phasesidebar/phaseSidebarVisitStore";
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
@@ -226,6 +228,16 @@ function ThreadRouteContent(
   const threadId = firstRouteParam(params.threadId);
   const routeThreadIdentity =
     environmentIdRaw !== null && threadId !== null ? `${environmentIdRaw}:${threadId}` : null;
+  // T3-CUSTOM(expbkt3): BEGIN — opening a thread by any route (list, search,
+  // notification, deep link) marks it read for the phase sidebar.
+  const markPhaseSidebarVisited = useMarkPhaseSidebarThreadVisited();
+  useEffect(() => {
+    if (routeThreadIdentity !== null) markPhaseSidebarVisited(routeThreadIdentity);
+    // Once per thread identity; the marker's own identity churns on every
+    // preference write and must not re-stamp the visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeThreadIdentity]);
+  // T3-CUSTOM(expbkt3): END
   const [inspectorSelection, setInspectorSelection] = useState<ThreadInspectorSelection | null>(
     () => (props.renderInspector ? { routeThreadIdentity, mode: "route" } : null),
   );

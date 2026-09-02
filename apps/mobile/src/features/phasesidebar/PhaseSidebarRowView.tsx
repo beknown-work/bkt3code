@@ -7,10 +7,13 @@
 //
 // Interaction matches the stock thread list exactly, because that is what a
 // thumb already knows: tap opens, hold opens the menu, swipe left reveals the
-// lifecycle action (Settle / Reopen) and Snooze, and a full swipe commits the
-// lifecycle action.
+// lifecycle action (Settle / Reopen), Snooze and Archive, and a full swipe
+// commits the lifecycle action.
+//
+// Colour classes are the mobile theme's tokens (`text-foreground-muted`,
+// `bg-subtle`, ...). Web's `text-muted-foreground` family does not exist here
+// and silently renders as black in dark mode.
 import {
-  compactPhaseSidebarTimeLabel,
   formatThreadPriority,
   phaseSidebarRowOwnerAvatarUserId,
   phaseSidebarWorktreeRowProps,
@@ -23,8 +26,8 @@ import {
 import { worktreeCodenameToneIndex } from "@t3tools/shared/worktreeCodename";
 import type { UserId } from "@t3tools/contracts";
 import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
-import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { memo, useCallback, useMemo, type ReactNode } from "react";
+import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { Pressable, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -42,6 +45,8 @@ export interface PhaseSidebarRowSwipe {
   readonly primary: "settle" | "unsettle" | "archive" | "unsnooze";
   /** Snooze presets to offer from the swipe's secondary action; null hides it. */
   readonly snoozeMenu: MenuAction[] | null;
+  /** Archive as a third button; false when the primary already IS archive. */
+  readonly archive: boolean;
 }
 
 export interface PhaseSidebarRowViewProps {
@@ -53,6 +58,8 @@ export interface PhaseSidebarRowViewProps {
   readonly isActive: boolean;
   readonly subtreeCount: number;
   readonly isExpanded: boolean;
+  /** Relative age ("2h") or, for a snoozed row, when it wakes. */
+  readonly timeLabel: string;
   readonly onPress: (row: PhaseSidebarRow) => void;
   /** Mutable because MenuView's prop type is not readonly. */
   readonly actions: MenuAction[];
@@ -68,7 +75,7 @@ export interface PhaseSidebarRowViewProps {
   readonly dropRejectionLabel?: string | null;
   /**
    * The grab affordance, supplied by the list because it owns the gesture.
-   * Long-press is already the context menu, so dragging needs its own target.
+   * Only pinned rows get one — they are the rows whose order is the user's.
    */
   readonly dragHandle?: ReactNode;
   readonly onToggleExpanded: (row: PhaseSidebarRow) => void;
@@ -95,6 +102,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
 ) {
   const { row, worktreeView, onPressAction } = props;
   const thread = row.thread;
+  const unread = row.isUnreadCompletion;
   const { width: windowWidth } = useWindowDimensions();
   const screenColor = String(useThemeColor("--color-screen"));
   const worktree = phaseSidebarWorktreeRowProps(worktreeView, thread.worktreePath);
@@ -153,7 +161,25 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
           },
     [handlePressAction, snoozeMenu, thread.title],
   );
+  const tertiaryAction = useMemo(
+    () =>
+      props.swipe.archive
+        ? {
+            accessibilityLabel: `Archive ${thread.title}`,
+            icon: "archivebox" as const,
+            label: "Archive",
+            onPress: () => onPressAction(row, "archive"),
+          }
+        : null,
+    [onPressAction, props.swipe.archive, row, thread.title],
+  );
   const handleDelete = useCallback(() => onPressAction(row, "delete"), [onPressAction, row]);
+
+  const swipeHint = [
+    primary.label.toLowerCase(),
+    ...(secondaryAction === null ? [] : ["snooze"]),
+    ...(tertiaryAction === null ? [] : ["archive"]),
+  ].join(", ");
 
   return (
     <ThreadSwipeable
@@ -166,8 +192,9 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
       onSwipeableClose={props.onSwipeableClose}
       onSwipeableWillOpen={props.onSwipeableWillOpen}
       primaryAction={primaryAction}
-      secondaryAction={secondaryAction}
       resetKey={props.rowKey}
+      secondaryAction={secondaryAction}
+      tertiaryAction={tertiaryAction}
       threadTitle={thread.title}
     >
       {(close) => (
@@ -178,12 +205,8 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
           shouldOpenOnLongPress
         >
           <Pressable
-            accessibilityHint={
-              secondaryAction === null
-                ? `Opens the thread. Swipe left to ${primary.label.toLowerCase()}.`
-                : `Opens the thread. Swipe left for ${primary.label.toLowerCase()} and snooze.`
-            }
-            accessibilityLabel={thread.title}
+            accessibilityHint={`Opens the thread. Swipe left for ${swipeHint}.`}
+            accessibilityLabel={`${thread.title}${unread ? ", unread" : ""}`}
             accessibilityRole="button"
             accessibilityState={{ selected: props.isActive }}
             className={cn(
@@ -203,23 +226,25 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
               opacity: pressed ? 0.7 : 1,
             })}
           >
+            {/* The unread dot sits in a fixed gutter, so read and unread
+                titles start at the same x and the eye can scan the column. */}
+            <View className="mt-[7px] h-2 w-2 shrink-0 items-center justify-center">
+              {unread ? <View className="h-2 w-2 rounded-full bg-sky-500" /> : null}
+            </View>
+
             {props.subtreeCount > 0 ? (
               <Pressable
                 className="mt-0.5 flex-row items-center gap-0.5"
                 hitSlop={8}
                 onPress={handleToggle}
               >
-                <Text className="font-t3-mono text-[11px] text-muted-foreground">
+                <Text className="font-t3-mono text-[11px] text-foreground-muted">
                   {props.isExpanded ? "⌄" : "›"}
                 </Text>
-                <Text className="font-t3-mono text-[11px] text-muted-foreground">
+                <Text className="font-t3-mono text-[11px] text-foreground-muted">
                   {props.subtreeCount}
                 </Text>
               </Pressable>
-            ) : null}
-
-            {row.isUnreadCompletion ? (
-              <View className="mt-2 h-2 w-2 rounded-full bg-emerald-500" />
             ) : null}
 
             <View className="min-w-0 flex-1">
@@ -227,23 +252,28 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                 <Text
                   className={cn(
                     "min-w-0 flex-1 text-[15px] leading-5",
-                    row.isUnreadCompletion
+                    unread
                       ? "font-t3-bold text-foreground"
-                      : "font-t3-medium text-foreground/90",
+                      : "font-t3-medium text-foreground-muted",
                   )}
                   numberOfLines={2}
                 >
                   {thread.title}
                 </Text>
-                <Text className="shrink-0 font-t3-mono text-[11px] text-muted-foreground">
-                  {compactPhaseSidebarTimeLabel(thread.updatedAt)}
+                <Text
+                  className={cn(
+                    "shrink-0 font-t3-mono text-[11px] tabular-nums",
+                    unread ? "text-sky-600 dark:text-sky-400" : "text-foreground-tertiary",
+                  )}
+                >
+                  {props.timeLabel}
                 </Text>
               </View>
 
               {/* The metadata lane. Order matches web so the two read the same. */}
               <View className="mt-1 flex-row items-center gap-2">
                 <Text
-                  className="shrink font-t3-mono text-[11px] text-muted-foreground"
+                  className="shrink font-t3-mono text-[11px] text-foreground-muted"
                   numberOfLines={1}
                 >
                   {row.repositoryLabel}
@@ -264,7 +294,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                 )}
                 {linearIssue === null ? null : (
                   <Text
-                    className="shrink-0 font-t3-mono text-[11px] text-muted-foreground"
+                    className="shrink-0 font-t3-mono text-[11px] text-foreground-muted"
                     numberOfLines={1}
                   >
                     {linearIssue.identifier}
@@ -295,7 +325,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                     </Text>
                   </View>
                 )}
-                <Text className="shrink-0 font-t3-mono text-[11px] uppercase text-muted-foreground">
+                <Text className="shrink-0 font-t3-mono text-[11px] uppercase text-foreground-tertiary">
                   {providerCode}
                 </Text>
                 {props.dragHandle}

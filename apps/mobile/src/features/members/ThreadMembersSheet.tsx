@@ -55,9 +55,9 @@ function MemberRow(props: {
           {threadMemberLabel(entry.user)}
         </Text>
         {entry.isOwner ? (
-          <Text className="text-[10px] uppercase text-muted-foreground">Owner</Text>
+          <Text className="text-[10px] uppercase text-foreground-muted">Owner</Text>
         ) : entry.user.email === null ? null : (
-          <Text className="text-[10px] text-muted-foreground" numberOfLines={1}>
+          <Text className="text-[10px] text-foreground-muted" numberOfLines={1}>
             {entry.user.email}
           </Text>
         )}
@@ -163,7 +163,7 @@ export function ThreadMembersSheet(props: ThreadMembersSheetProps) {
     <View className="flex-1 bg-background" style={{ paddingBottom: insets.bottom }}>
       <View className="flex-row items-center justify-between border-b border-border px-4 py-3">
         <Pressable hitSlop={8} onPress={() => navigation.goBack()}>
-          <Text className="text-base text-muted-foreground">Done</Text>
+          <Text className="text-base text-foreground-muted">Done</Text>
         </Pressable>
         <Text className="text-base font-t3-bold text-foreground">People</Text>
         <View className="w-12" />
@@ -171,7 +171,7 @@ export function ThreadMembersSheet(props: ThreadMembersSheetProps) {
 
       <TextInput
         autoCapitalize="none"
-        className="mx-4 mt-3 rounded-lg bg-muted/40 px-3 py-2 text-sm text-foreground"
+        className="mx-4 mt-3 rounded-lg bg-subtle/40 px-3 py-2 text-sm text-foreground"
         onChangeText={setQuery}
         placeholder="Search people"
         value={query}
@@ -185,7 +185,7 @@ export function ThreadMembersSheet(props: ThreadMembersSheetProps) {
             <ActivityIndicator />
           </View>
         ) : entries.length === 0 ? (
-          <Text className="px-4 py-8 text-center text-sm text-muted-foreground">
+          <Text className="px-4 py-8 text-center text-sm text-foreground-muted">
             {users.length === 0
               ? "This environment has no user directory."
               : "Nobody matches that search."}
