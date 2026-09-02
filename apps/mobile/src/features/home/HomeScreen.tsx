@@ -1147,6 +1147,15 @@ export function HomeScreen(props: HomeScreenProps) {
     return (
       <View className="flex-1 bg-screen">
         <PhaseSidebarPane
+          contentContainerStyle={{
+            paddingBottom:
+              Platform.OS === "ios"
+                ? Math.max(insets.bottom, 24) + 96 + iosBottomToolbarClearance
+                : Math.max(insets.bottom, 16) + 88,
+          }}
+          // Same inset handling as the stock list below, so the first row clears
+          // the navigation header instead of sliding under it.
+          contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
           onSelectThread={props.onSelectThread}
           selectedThreadKey={null}
           viewerEnvironmentId={props.selectedEnvironmentId}

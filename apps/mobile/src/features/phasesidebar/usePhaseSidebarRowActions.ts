@@ -9,7 +9,12 @@ import {
   PHASE_SIDEBAR_PRIORITY_CHOICES,
   type PhaseSidebarRow,
 } from "@t3tools/client-runtime/state/phase-sidebar";
-import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  effectiveSettled,
+  effectiveSnoozed,
+  type SnoozePreset,
+} from "@t3tools/client-runtime/state/thread-settled";
 
 export type PhaseSidebarRowActionId =
   | "people"
@@ -20,8 +25,14 @@ export type PhaseSidebarRowActionId =
   | "pin"
   | "unpin"
   | "archive"
+  | "delete"
   | "force-stop"
-  | `priority:${number}`;
+  | "group"
+  | "group:new"
+  | "group:none"
+  | `group:${string}`
+  | `priority:${number}`
+  | `snooze:${string}`;
 
 export interface PhaseSidebarRowAction {
   readonly id: PhaseSidebarRowActionId;
@@ -29,6 +40,10 @@ export interface PhaseSidebarRowAction {
   /** SF Symbol name; Android falls back to its own mapping. */
   readonly image: string;
   readonly destructive?: boolean;
+  /** iOS renders these as a submenu; Android as a nested sheet. */
+  readonly subactions?: ReadonlyArray<PhaseSidebarRowAction>;
+  /** Marks the row's current choice inside a submenu. */
+  readonly checked?: boolean;
 }
 
 /**
@@ -44,10 +59,47 @@ export function buildPhaseSidebarRowActions(input: {
    * only when the server says so, never because a timer elapsed locally.
    */
   readonly autoSettleAfterDays?: number | null;
+  /** Snooze presets to offer as a submenu; a bare Snooze item when absent. */
+  readonly snoozePresets?: ReadonlyArray<SnoozePreset>;
+  /**
+   * The user's custom groups. "Move to group" appears whenever any exist,
+   * whichever grouping mode is showing — placing a session is cheap, and the
+   * group is waiting when they switch to Custom.
+   */
+  readonly customGroups?: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+  readonly customGroupId?: string | null;
 }): ReadonlyArray<PhaseSidebarRowAction> {
   const { row } = input;
   const thread = row.thread;
   const actions: PhaseSidebarRowAction[] = [{ id: "people", title: "People", image: "person.2" }];
+
+  if (input.customGroups !== undefined) {
+    actions.push({
+      id: "group",
+      title: "Move to group",
+      image: "folder",
+      subactions: [
+        ...input.customGroups.map(
+          (group): PhaseSidebarRowAction => ({
+            id: `group:${group.id}`,
+            title: group.label,
+            image: "folder",
+            checked: input.customGroupId === group.id,
+          }),
+        ),
+        ...(input.customGroupId != null
+          ? [
+              {
+                id: "group:none",
+                title: "Remove from group",
+                image: "folder.badge.minus",
+              } satisfies PhaseSidebarRowAction,
+            ]
+          : []),
+        { id: "group:new", title: "New group…", image: "folder.badge.plus" },
+      ],
+    });
+  }
 
   if (row.settlementSupported) {
     const settled = effectiveSettled(thread, {
@@ -63,11 +115,25 @@ export function buildPhaseSidebarRowActions(input: {
 
   if (row.snoozeSupported) {
     const snoozed = effectiveSnoozed(thread, { now: input.now });
-    actions.push(
-      snoozed
-        ? { id: "unsnooze", title: "Wake", image: "bell" }
-        : { id: "snooze", title: "Snooze", image: "clock" },
-    );
+    if (snoozed) {
+      actions.push({ id: "unsnooze", title: "Wake", image: "bell" });
+    } else if (canSnooze(thread, { now: input.now })) {
+      const presets = input.snoozePresets ?? [];
+      actions.push(
+        presets.length === 0
+          ? { id: "snooze", title: "Snooze", image: "clock" }
+          : {
+              id: "snooze",
+              title: "Snooze",
+              image: "clock",
+              subactions: presets.map((preset) => ({
+                id: `snooze:${preset.id}`,
+                title: `${preset.label} · ${preset.whenLabel}`,
+                image: "clock",
+              })),
+            },
+      );
+    }
   }
 
   actions.push(
@@ -96,5 +162,27 @@ export function buildPhaseSidebarRowActions(input: {
   }
 
   actions.push({ id: "archive", title: "Archive", image: "archivebox", destructive: true });
+  actions.push({ id: "delete", title: "Delete", image: "trash", destructive: true });
   return actions;
+}
+
+/** MenuAction shape for `@react-native-menu/menu`, recursively. */
+export function phaseSidebarRowActionsToMenu(actions: ReadonlyArray<PhaseSidebarRowAction>): Array<{
+  id: string;
+  title: string;
+  image?: string;
+  state?: "on" | "off";
+  attributes?: { destructive?: boolean };
+  subactions?: Array<{ id: string; title: string; image?: string; state?: "on" | "off" }>;
+}> {
+  return actions.map((action) => ({
+    id: action.id,
+    title: action.title,
+    image: action.image,
+    ...(action.checked === true ? { state: "on" as const } : {}),
+    ...(action.destructive === true ? { attributes: { destructive: true } } : {}),
+    ...(action.subactions !== undefined
+      ? { subactions: phaseSidebarRowActionsToMenu(action.subactions) }
+      : {}),
+  }));
 }

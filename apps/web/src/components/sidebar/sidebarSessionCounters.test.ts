@@ -119,7 +119,7 @@ describe("sidebar session counters", () => {
         ],
         supportedSnoozeOptions,
       ),
-    ).toEqual({ nonRunning: 1, running: 1, nextSnoozeWakeAt: null });
+    ).toEqual({ nonRunning: 1, running: 1, unread: 0, nextSnoozeWakeAt: null });
   });
 
   it("excludes quiet snoozed work from the non-running count", () => {
@@ -128,7 +128,7 @@ describe("sidebar session counters", () => {
         [makeThread({ snoozedAt: "2026-07-26T11:00:00.000Z", snoozedUntil: futureWake })],
         supportedSnoozeOptions,
       ),
-    ).toEqual({ nonRunning: 0, running: 0, nextSnoozeWakeAt: futureWake });
+    ).toEqual({ nonRunning: 0, running: 0, unread: 0, nextSnoozeWakeAt: futureWake });
   });
 
   it("keeps a snoozed running agent in the running count", () => {
@@ -143,7 +143,7 @@ describe("sidebar session counters", () => {
         ],
         supportedSnoozeOptions,
       ),
-    ).toEqual({ nonRunning: 0, running: 1, nextSnoozeWakeAt: null });
+    ).toEqual({ nonRunning: 0, running: 1, unread: 0, nextSnoozeWakeAt: null });
   });
 
   it("counts snooze fields as active when the server does not support snooze", () => {
@@ -152,7 +152,7 @@ describe("sidebar session counters", () => {
         [makeThread({ snoozedAt: "2026-07-26T11:00:00.000Z", snoozedUntil: futureWake })],
         { now, snoozeSupported: () => false },
       ),
-    ).toEqual({ nonRunning: 1, running: 0, nextSnoozeWakeAt: null });
+    ).toEqual({ nonRunning: 1, running: 0, unread: 0, nextSnoozeWakeAt: null });
   });
 
   it("returns expired and invalid snoozes to the non-running count", () => {
@@ -171,7 +171,7 @@ describe("sidebar session counters", () => {
         ],
         supportedSnoozeOptions,
       ),
-    ).toEqual({ nonRunning: 2, running: 0, nextSnoozeWakeAt: null });
+    ).toEqual({ nonRunning: 2, running: 0, unread: 0, nextSnoozeWakeAt: null });
   });
 
   it("counts a snoozed thread again when it raises its hand", () => {
@@ -186,7 +186,7 @@ describe("sidebar session counters", () => {
         ],
         supportedSnoozeOptions,
       ),
-    ).toEqual({ nonRunning: 1, running: 0, nextSnoozeWakeAt: null });
+    ).toEqual({ nonRunning: 1, running: 0, unread: 0, nextSnoozeWakeAt: null });
   });
 
   it("returns the earliest wake boundary across excluded snoozes", () => {
@@ -205,6 +205,6 @@ describe("sidebar session counters", () => {
         ],
         supportedSnoozeOptions,
       ),
-    ).toEqual({ nonRunning: 0, running: 0, nextSnoozeWakeAt: futureWake });
+    ).toEqual({ nonRunning: 0, running: 0, unread: 0, nextSnoozeWakeAt: futureWake });
   });
 });

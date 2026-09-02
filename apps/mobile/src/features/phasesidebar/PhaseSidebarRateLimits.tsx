@@ -15,11 +15,12 @@ import {
   type ProviderRateLimitTone,
 } from "@t3tools/client-runtime/state/provider-rate-limits";
 import type { EnvironmentId, ProviderRateLimitsStreamSnapshot } from "@t3tools/contracts";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
+import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 
@@ -36,7 +37,10 @@ function toneBarClassName(tone: ProviderRateLimitTone): string {
   }
 }
 
-function RateLimitBar(props: { readonly row: ProviderRateLimitRowView }) {
+function RateLimitBar(props: {
+  readonly row: ProviderRateLimitRowView;
+  readonly prefix: string | null;
+}) {
   const { row } = props;
   // A provider that reports no weekly quota has nothing to draw; showing an
   // empty bar would read as "you are out".
@@ -46,8 +50,11 @@ function RateLimitBar(props: { readonly row: ProviderRateLimitRowView }) {
 
   return (
     <View className="flex-row items-center gap-1.5">
-      <Text className="w-10 shrink-0 font-t3-mono text-[9px] uppercase text-muted-foreground">
-        {row.displayName}
+      <Text
+        className="w-16 shrink-0 font-t3-mono text-[9px] uppercase text-muted-foreground"
+        numberOfLines={1}
+      >
+        {props.prefix === null ? row.displayName : `${props.prefix} ${row.displayName}`}
       </Text>
       <View className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
         <View
@@ -62,19 +69,19 @@ function RateLimitBar(props: { readonly row: ProviderRateLimitRowView }) {
   );
 }
 
-export function PhaseSidebarRateLimits(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly onPress?: () => void;
+/** One environment's bars, or nothing when it cannot report them. */
+function EnvironmentRateLimits(props: {
+  readonly environmentId: EnvironmentId;
+  /** Shown before the provider name when more than one environment reports. */
+  readonly environmentLabel: string | null;
+  readonly onVisible: (environmentId: EnvironmentId, visible: boolean) => void;
 }) {
-  const config = useAtomValue(
-    serverEnvironment.configValueAtom(props.environmentId ?? NO_ENVIRONMENT),
-  );
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   // Absent on upstream servers and on fork servers from before the stream
   // shipped, so hide rather than probe.
-  const supported =
-    props.environmentId !== null && config?.environment.capabilities.providerRateLimits === true;
+  const supported = config?.environment.capabilities.providerRateLimits === true;
   const { data } = useEnvironmentQuery<ProviderRateLimitsStreamSnapshot, unknown>(
-    supported && props.environmentId !== null
+    supported
       ? serverEnvironment.providerRateLimits({ environmentId: props.environmentId, input: {} })
       : null,
   );
@@ -85,24 +92,65 @@ export function PhaseSidebarRateLimits(props: {
       providers: config?.providers ?? [],
       entries: data.entries,
       now: Date.now(),
-    });
+    }).filter((row) => row.remainingPercent !== null);
   }, [config?.providers, data]);
 
-  const visible = rows.filter((row) => row.remainingPercent !== null);
-  if (!supported || visible.length === 0) return null;
+  const { onVisible, environmentId } = props;
+  const visible = supported && rows.length > 0;
+  useEffect(() => {
+    onVisible(environmentId, visible);
+    return () => onVisible(environmentId, false);
+  }, [environmentId, onVisible, visible]);
+
+  if (!visible) return null;
+  return (
+    <>
+      {rows.map((row) => (
+        <RateLimitBar
+          key={`${props.environmentId}:${row.providerInstanceId}`}
+          prefix={props.environmentLabel}
+          row={row}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * Bars for every connected environment. Mobile has no primary environment the
+ * way desktop does — the phone may be paired to two machines — so each one
+ * that reports quota gets its bars, prefixed by machine only when it matters.
+ */
+export function PhaseSidebarRateLimits(props: { readonly onPress?: () => void }) {
+  const { environments } = useEnvironments();
+  const [visibleById, setVisibleById] = useState<ReadonlyMap<EnvironmentId, boolean>>(
+    () => new Map(),
+  );
+  const handleVisible = useCallback((environmentId: EnvironmentId, visible: boolean) => {
+    setVisibleById((current) => {
+      if ((current.get(environmentId) ?? false) === visible) return current;
+      const next = new Map(current);
+      next.set(environmentId, visible);
+      return next;
+    });
+  }, []);
+  const visibleCount = [...visibleById.values()].filter(Boolean).length;
+  const anyVisible = visibleCount > 0;
 
   return (
     <Pressable
-      className="gap-1 px-3 py-2"
+      className={cn("gap-1", anyVisible ? "py-1" : "h-0 overflow-hidden")}
       disabled={props.onPress === undefined}
       onPress={props.onPress}
     >
-      {visible.map((row) => (
-        <RateLimitBar key={row.providerInstanceId} row={row} />
+      {environments.map((environment) => (
+        <EnvironmentRateLimits
+          environmentId={environment.environmentId}
+          environmentLabel={visibleCount > 1 ? environment.label : null}
+          key={environment.environmentId}
+          onVisible={handleVisible}
+        />
       ))}
     </Pressable>
   );
 }
-
-// Atom families are keyed; a stable placeholder avoids minting one per render.
-const NO_ENVIRONMENT = "__phase-sidebar-no-environment__" as EnvironmentId;

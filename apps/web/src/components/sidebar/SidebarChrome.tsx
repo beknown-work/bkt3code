@@ -43,6 +43,7 @@ import { SidebarProviderRateLimits } from "./SidebarProviderRateLimits";
 import { SidebarResourceMonitorPill } from "./SidebarResourceMonitorPill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { summarizeSidebarSessions } from "./sidebarSessionCounters";
+import { useUiStateStore } from "../../uiStateStore";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -97,6 +98,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   const threads = useThreadShells();
   const serverConfigs = useServerConfigs();
   const stageLabel = useEnvironmentStageLabel();
+  const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   const counts = useMemo(() => {
     void snoozeWakeTick;
@@ -104,8 +106,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       now: new Date().toISOString(),
       snoozeSupported: (thread) =>
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true,
+      lastVisitedAtByThreadKey,
     });
-  }, [serverConfigs, snoozeWakeTick, threads]);
+  }, [lastVisitedAtByThreadKey, serverConfigs, snoozeWakeTick, threads]);
   useEffect(() => {
     const nextWakeAtMs = Date.parse(counts.nextSnoozeWakeAt ?? "");
     if (!Number.isFinite(nextWakeAtMs)) return;
@@ -155,38 +158,79 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           {stageLabel}
         </span>
       </Link>
-      {/* T3-CUSTOM(expbkt3): BEGIN — compact lifecycle counters beside the wordmark. */}
+      {/* T3-CUSTOM(expbkt3): BEGIN — compact lifecycle counters beside the wordmark:
+          unread, running, unsettled. Same three, same order, on mobile. */}
       {EXPERIMENTAL_CONTROL_CENTER_ENABLED ? (
         <div className="flex shrink-0 items-center gap-1" aria-label="Session status summary">
-          <span
-            className={cn(
-              "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
-              counts.nonRunning >= 2
-                ? onBackdrop
-                  ? "border-orange-400/50 bg-orange-500/15 text-orange-400"
-                  : "border-orange-500/45 bg-orange-500/12 text-orange-600 dark:text-orange-300"
-                : onBackdrop
-                  ? "border-emerald-200/60 bg-emerald-400/30 text-white"
-                  : "border-emerald-500/35 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
-            )}
-            data-attention-state={counts.nonRunning >= 2 ? "attention" : "clear"}
-            role="status"
-            aria-label={`${counts.nonRunning} non-running session${counts.nonRunning === 1 ? "" : "s"}`}
-          >
-            {counts.nonRunning}
-          </span>
-          <span
-            className={cn(
-              "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
-              onBackdrop
-                ? "border-white/25 bg-white/12 text-white"
-                : "border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
-            )}
-            aria-label={`${counts.running} session${counts.running === 1 ? "" : "s"} running`}
-            role="status"
-          >
-            {counts.running}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn(
+                    "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+                    counts.unread > 0
+                      ? onBackdrop
+                        ? "border-sky-200/60 bg-sky-400/30 text-white"
+                        : "border-sky-500/35 bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                      : onBackdrop
+                        ? "border-white/20 bg-white/8 text-white/60"
+                        : "border-border/60 bg-muted/40 text-muted-foreground/60",
+                  )}
+                  data-testid="sidebar-count-unread"
+                  role="status"
+                  aria-label={`${counts.unread} unread session${counts.unread === 1 ? "" : "s"}`}
+                >
+                  {counts.unread}
+                </span>
+              }
+            />
+            <TooltipPopup side="bottom">Unread — finished since you last opened them</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn(
+                    "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+                    onBackdrop
+                      ? "border-white/25 bg-white/12 text-white"
+                      : "border-emerald-500/35 bg-emerald-500/12 text-emerald-600 dark:text-emerald-400",
+                  )}
+                  data-testid="sidebar-count-running"
+                  aria-label={`${counts.running} session${counts.running === 1 ? "" : "s"} running`}
+                  role="status"
+                >
+                  {counts.running}
+                </span>
+              }
+            />
+            <TooltipPopup side="bottom">Running — an agent is working</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn(
+                    "inline-flex h-7 min-w-8 items-center justify-center rounded-lg border px-1.5 text-base font-black tabular-nums",
+                    counts.nonRunning >= 2
+                      ? onBackdrop
+                        ? "border-orange-400/50 bg-orange-500/15 text-orange-400"
+                        : "border-orange-500/45 bg-orange-500/12 text-orange-600 dark:text-orange-300"
+                      : onBackdrop
+                        ? "border-emerald-200/60 bg-emerald-400/30 text-white"
+                        : "border-emerald-500/35 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+                  )}
+                  data-attention-state={counts.nonRunning >= 2 ? "attention" : "clear"}
+                  data-testid="sidebar-count-unsettled"
+                  role="status"
+                  aria-label={`${counts.nonRunning} unsettled session${counts.nonRunning === 1 ? "" : "s"} waiting on you`}
+                >
+                  {counts.nonRunning}
+                </span>
+              }
+            />
+            <TooltipPopup side="bottom">Unsettled — idle and waiting on you</TooltipPopup>
+          </Tooltip>
         </div>
       ) : null}
       {/* T3-CUSTOM(expbkt3): END */}

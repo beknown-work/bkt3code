@@ -179,6 +179,10 @@
       "types": "./src/state/phaseSidebarTree.ts",
       "default": "./src/state/phaseSidebarTree.ts"
     },
+    "./state/phase-sidebar-grouping": {
+      "types": "./src/state/phaseSidebarGrouping.ts",
+      "default": "./src/state/phaseSidebarGrouping.ts"
+    },
     "./state/provider-rate-limits": {
       "types": "./src/state/providerRateLimitsPresentation.ts",
       "default": "./src/state/providerRateLimitsPresentation.ts"

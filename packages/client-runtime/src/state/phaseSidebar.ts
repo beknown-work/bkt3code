@@ -1135,14 +1135,26 @@ export function resolvePhaseSidebarTraversalTarget(input: {
 // ---------------------------------------------------------------------------
 
 export interface SidebarSessionCounts {
+  /** Unsettled sessions with no agent working: the ones waiting on a human. */
   readonly nonRunning: number;
   readonly running: number;
+  /**
+   * Sessions whose last turn finished after the viewer last opened them.
+   * Counted across running and idle sessions alike — "have I read this" is
+   * independent of whether the agent has since started again.
+   */
+  readonly unread: number;
   readonly nextSnoozeWakeAt: string | null;
 }
 
 export interface SidebarSessionCountOptions {
   readonly now: string;
   readonly snoozeSupported: (thread: ThreadShell) => boolean;
+  /**
+   * When the viewer last opened a session, keyed by scoped thread key. Absent
+   * callers get an unread count of zero rather than a guess.
+   */
+  readonly lastVisitedAtByThreadKey?: Readonly<Record<string, string | undefined>>;
 }
 
 export function threadNeedsHumanAttention(thread: ThreadShell): boolean {
@@ -1175,11 +1187,24 @@ export function summarizeSidebarSessions(
 ): SidebarSessionCounts {
   let nonRunning = 0;
   let running = 0;
+  let unread = 0;
   let nextSnoozeWakeAt: string | null = null;
   let nextSnoozeWakeAtMs = Number.POSITIVE_INFINITY;
 
   for (const thread of threads) {
     if (thread.archivedAt !== null || thread.settledAt !== null) continue;
+    if (
+      options.lastVisitedAtByThreadKey !== undefined &&
+      hasUnseenCompletion({
+        latestTurn: thread.latestTurn,
+        lastVisitedAt:
+          options.lastVisitedAtByThreadKey[
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+          ],
+      })
+    ) {
+      unread += 1;
+    }
     if (threadIsRunning(thread)) {
       running += 1;
       continue;
@@ -1195,7 +1220,7 @@ export function summarizeSidebarSessions(
     nonRunning += 1;
   }
 
-  return { nonRunning, running, nextSnoozeWakeAt };
+  return { nonRunning, running, unread, nextSnoozeWakeAt };
 }
 
 // ---------------------------------------------------------------------------
