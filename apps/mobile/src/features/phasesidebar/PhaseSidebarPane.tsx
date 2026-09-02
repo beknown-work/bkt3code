@@ -29,7 +29,7 @@ import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settl
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Alert, FlatList, Pressable, useWindowDimensions, View } from "react-native";
+import { Alert, FlatList, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
@@ -49,6 +49,7 @@ import {
 } from "./PhaseSidebarGroupBySheet";
 import { PhaseSidebarList, type PhaseSidebarSectionActionId } from "./PhaseSidebarList";
 import { PhaseSidebarRateLimits } from "./PhaseSidebarRateLimits";
+import { PhaseSidebarSheetModal } from "./PhaseSidebarSheetModal";
 import {
   usePhaseSidebarGrouping,
   useUpdatePhaseSidebarGrouping,
@@ -100,7 +101,6 @@ export function PhaseSidebarPane(props: {
   readonly contentContainerStyle?: ComponentProps<typeof FlatList>["contentContainerStyle"];
 }) {
   const navigation = useNavigation();
-  const { height: windowHeight } = useWindowDimensions();
   const projects = useProjects();
   const { environments } = useEnvironments();
   const viewerEnvironmentId = props.viewerEnvironmentId ?? environments[0]?.environmentId ?? null;
@@ -368,33 +368,26 @@ export function PhaseSidebarPane(props: {
 
   return (
     <View className="flex-1">
-      {sheet === null ? null : (
-        // A bounded height, in points: a percentage max-height on an unsized
-        // parent collapses to nothing and shows only the border.
-        <View
-          className="border-b border-border bg-screen"
-          style={{ maxHeight: Math.round(windowHeight * 0.55) }}
-        >
-          {sheet.kind === "filter" ? (
-            <PhaseSidebarFilterSheet
-              filters={filters}
-              onChangeFilters={setFilters}
-              onChangeSort={setSort}
-              onClose={() => setSheet(null)}
-              projects={projects}
-              rows={rows}
-              sort={sort}
-            />
-          ) : (
-            <PhaseSidebarGroupBySheet
-              grouping={grouping}
-              intent={sheet.intent}
-              onChange={updateGrouping}
-              onClose={() => setSheet(null)}
-            />
-          )}
-        </View>
-      )}
+      <PhaseSidebarSheetModal onClose={() => setSheet(null)} visible={sheet !== null}>
+        {sheet?.kind === "filter" ? (
+          <PhaseSidebarFilterSheet
+            filters={filters}
+            onChangeFilters={setFilters}
+            onChangeSort={setSort}
+            onClose={() => setSheet(null)}
+            projects={projects}
+            rows={rows}
+            sort={sort}
+          />
+        ) : sheet?.kind === "group" ? (
+          <PhaseSidebarGroupBySheet
+            grouping={grouping}
+            intent={sheet.intent}
+            onChange={updateGrouping}
+            onClose={() => setSheet(null)}
+          />
+        ) : null}
+      </PhaseSidebarSheetModal>
       <PhaseSidebarList
         ListEmptyComponent={
           <View className="items-center gap-2 px-6 py-12">

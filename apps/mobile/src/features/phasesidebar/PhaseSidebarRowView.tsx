@@ -35,6 +35,7 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { cn } from "../../lib/cn";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { PhaseSidebarRowStatus } from "./PhaseSidebarRowStatus";
 import {
   phaseSidebarCheckoutToneClassName,
   phaseSidebarPriorityToneClassName,
@@ -260,6 +261,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                 >
                   {thread.title}
                 </Text>
+                <PhaseSidebarRowStatus row={row} />
                 <Text
                   className={cn(
                     "shrink-0 font-t3-mono text-[11px] tabular-nums",
