@@ -20,8 +20,11 @@ describe("createBkMobileSource", () => {
       "https://github.com/beknown-work/bkt3code/releases/download/" +
         "bk-mobile-source-expbkmain/bk-mobile-expbkmain.json",
     );
+    // The base version never moves; the run number is the fourth component so
+    // SideStore sees every build as newer than the last.
+    expect(source.apps[0]?.version).toBe("1.0.4.17");
     expect(source.apps[0]?.versions[0]).toMatchObject({
-      version: "1.0.4",
+      version: "1.0.4.17",
       buildVersion: "17",
       marketingVersion: "1.0.4+bk.a1b2c3d",
       downloadURL:

@@ -131,6 +131,13 @@ describe("applyBkMobileConfig", () => {
       BK_IOS_BUILD_NUMBER: "42",
     });
     expect(config.ios?.buildNumber).toBe("42");
+    // The run number is also the fourth component of the marketing version, so
+    // SideStore sees each build as newer without MOBILE_APP_VERSION moving.
+    const versioned = { ...upstreamConfig, version: "1.0.4" };
+    expect(applyBkMobileConfig(versioned, { ...BK_ENV, BK_IOS_BUILD_NUMBER: "42" }).version).toBe(
+      "1.0.4.42",
+    );
+    expect(applyBkMobileConfig(versioned, BK_ENV).version).toBe("1.0.4");
 
     expect(() =>
       applyBkMobileConfig(upstreamConfig, { ...BK_ENV, BK_IOS_BUILD_NUMBER: "4.2" }),
