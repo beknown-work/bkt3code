@@ -28,14 +28,20 @@ export function usePhaseSidebarGrouping(): PhaseSidebarGroupingPreferences {
 export function useUpdatePhaseSidebarGrouping(): (
   apply: (current: PhaseSidebarGroupingPreferences) => PhaseSidebarGroupingPreferences,
 ) => void {
-  const grouping = usePhaseSidebarGrouping();
+  const result = useAtomValue(mobilePreferencesAtom);
   const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
   return useCallback(
     (apply) => {
+      // Until the stored preferences have loaded, the hook above is showing
+      // defaults. Writing an edit of those defaults would overwrite every
+      // custom group the user has — so a tap that lands before the load
+      // finishes is dropped rather than applied to the wrong base.
+      if (!AsyncResult.isSuccess(result)) return;
+      const grouping = result.value.phaseSidebarGrouping ?? DEFAULT_PHASE_SIDEBAR_GROUPING;
       const next = apply(grouping);
       if (next === grouping) return;
       updatePreferences({ phaseSidebarGrouping: next });
     },
-    [grouping, updatePreferences],
+    [result, updatePreferences],
   );
 }

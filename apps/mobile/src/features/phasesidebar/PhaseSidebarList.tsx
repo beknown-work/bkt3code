@@ -38,8 +38,9 @@ import {
   type UserId,
 } from "@t3tools/contracts";
 import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
-import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { runOnJS } from "react-native-reanimated";
 import { FlatList, Pressable, View } from "react-native";
 
@@ -131,7 +132,24 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
   const { grouping, onChangeGrouping, onSectionAction } = props;
   const [collapsedKeys, setCollapsedKeys] = useState<ReadonlySet<string>>(() => new Set());
   const mutedColor = String(useThemeColor("--color-icon"));
-  const { swipeEnabled, scrollGateHandlers } = useSwipeableScrollGate();
+  // One open row at a time, as in the stock list: opening another closes the
+  // first, and starting a scroll closes whichever is open.
+  const openSwipeableRef = useRef<SwipeableMethods | null>(null);
+  const handleSwipeableWillOpen = useCallback((methods: SwipeableMethods) => {
+    if (openSwipeableRef.current !== methods) {
+      openSwipeableRef.current?.close();
+      openSwipeableRef.current = methods;
+    }
+  }, []);
+  const handleSwipeableClose = useCallback((methods: SwipeableMethods) => {
+    if (openSwipeableRef.current === methods) openSwipeableRef.current = null;
+  }, []);
+  const handleScrollBeginDrag = useCallback(() => {
+    openSwipeableRef.current?.close();
+  }, []);
+  const { swipeEnabled, scrollGateHandlers } = useSwipeableScrollGate({
+    onScrollBeginDrag: handleScrollBeginDrag,
+  });
 
   const worktreeView = useMemo(
     // Resolved across the whole set, not per row: codenames disambiguate against
@@ -216,13 +234,14 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     return map;
   }, [grouping.customGroups]);
   const rowActionsFor = useCallback(
-    (row: PhaseSidebarRow, rowKey: string): MenuAction[] =>
+    (row: PhaseSidebarRow, rowKey: string, depth: number): MenuAction[] =>
       phaseSidebarRowActionsToMenu(
         buildPhaseSidebarRowActions({
           row,
           now: nowIso,
           snoozePresets,
-          ...(customGroups.length > 0 || grouping.groupBy === "custom"
+          // A nested row is placed with its parent, so only roots can be moved.
+          ...((customGroups.length > 0 || grouping.groupBy === "custom") && depth === 0
             ? { customGroups, customGroupId: customGroupIdByThreadKey.get(rowKey) ?? null }
             : {}),
         }),
@@ -422,7 +441,9 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
               rowKey={item.node.key}
               isActive={props.activeThreadKey === item.node.key}
               isExpanded={isExpanded(item.node.key)}
-              actions={rowActionsFor(item.node.row, item.node.key)}
+              actions={rowActionsFor(item.node.row, item.node.key, item.node.depth)}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
               onPress={props.onSelectRow}
               onPressAction={props.onRowAction}
               onToggleExpanded={handleToggleExpanded}

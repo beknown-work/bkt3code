@@ -1261,22 +1261,27 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     // T3-CUSTOM(expbkt3): custom groups. Offered whenever the user has made
     // any, whichever mode is showing — placing a session is cheap, and the
     // group is waiting when they switch to Custom.
-    const groupItems = groupActions
-      ? [
-          {
-            id: "move-to-group",
-            label: "Move to group",
-            children: [
-              ...groupActions.groups.map((group) => ({
-                id: `group:${group.id}`,
-                label: customGroupId === group.id ? `${group.label} ✓` : group.label,
-              })),
-              ...(customGroupId != null ? [{ id: "group:none", label: "Remove from group" }] : []),
-              { id: "group:new", label: "New group…" },
-            ],
-          },
-        ]
-      : [];
+    // A nested row is placed with its parent, so offering to move it alone
+    // would show a tick for a group it never appears in.
+    const groupItems =
+      groupActions && treeParentKey == null
+        ? [
+            {
+              id: "move-to-group",
+              label: "Move to group",
+              children: [
+                ...groupActions.groups.map((group) => ({
+                  id: `group:${group.id}`,
+                  label: customGroupId === group.id ? `${group.label} ✓` : group.label,
+                })),
+                ...(customGroupId != null
+                  ? [{ id: "group:none", label: "Remove from group" }]
+                  : []),
+                { id: "group:new", label: "New group…" },
+              ],
+            },
+          ]
+        : [];
     // Side-by-side sessions. First in the menu because it is the one item that
     // starts work rather than tidying up after it, and because the whole point
     // is opening a second session without leaving the one you are reading.
@@ -2460,7 +2465,16 @@ export function PhaseGroupedSidebar() {
         row.thread.archivedAt === null &&
         scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)) === routeThreadKey,
     ) &&
-    !visibleRowByKey.has(routeThreadKey);
+    !visibleRowByKey.has(routeThreadKey) &&
+    // T3-CUSTOM(expbkt3): a thread folded into a collapsed section is not
+    // hidden by the filters; it is one header click away.
+    !sections.some(
+      (section) =>
+        collapsedSectionKeys.has(section.key) &&
+        flattenPhaseSidebarTree(section.nodes, () => true).some(
+          (node) => node.key === routeThreadKey,
+        ),
+    );
   const activeThread = routeRef
     ? (threads.find(
         (thread) =>
@@ -3382,7 +3396,8 @@ export function PhaseGroupedSidebar() {
             </section>
           ) : null}
           {/* T3-CUSTOM(expbkt3): END */}
-          {groups.length + snoozedRows.length + settledRows.length === 0 ? (
+          {sections.every((section) => section.nodes.length === 0) &&
+          snoozedRows.length + settledRows.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
               <FilterIcon className="size-5 text-muted-foreground/40" />
               <p className="text-xs text-muted-foreground">No threads match these filters</p>

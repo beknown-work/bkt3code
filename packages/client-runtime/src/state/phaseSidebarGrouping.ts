@@ -192,10 +192,11 @@ export function createPhaseSidebarCustomGroup(
     ...group,
     threadKeys: group.threadKeys.filter((key) => !threadKeys.includes(key)),
   }));
+  // The mode is left alone: a group made from a row while grouping by
+  // lifecycle is simply waiting when the user switches to Custom.
   return {
     preferences: {
       ...preferences,
-      groupBy: "custom",
       customGroups: [...customGroups, { id, label, threadKeys: [...new Set(threadKeys)] }],
     },
     id,

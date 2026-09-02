@@ -23,6 +23,7 @@ import {
 import { worktreeCodenameToneIndex } from "@t3tools/shared/worktreeCodename";
 import type { UserId } from "@t3tools/contracts";
 import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
+import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { memo, useCallback, useMemo, type ReactNode } from "react";
 import { Pressable, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 
@@ -57,6 +58,8 @@ export interface PhaseSidebarRowViewProps {
   readonly actions: MenuAction[];
   readonly onPressAction: (row: PhaseSidebarRow, actionId: string) => void;
   readonly swipe: PhaseSidebarRowSwipe;
+  readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
+  readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   /** Reports this row's box so a drop can be resolved without measuring. */
   readonly onLayoutGeometry?: (key: string, y: number, height: number, depth: number) => void;
   readonly rowKey: string;
@@ -160,6 +163,8 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
       fullSwipeAction="primary"
       fullSwipeWidth={windowWidth - 32}
       onDelete={handleDelete}
+      onSwipeableClose={props.onSwipeableClose}
+      onSwipeableWillOpen={props.onSwipeableWillOpen}
       primaryAction={primaryAction}
       secondaryAction={secondaryAction}
       resetKey={props.rowKey}

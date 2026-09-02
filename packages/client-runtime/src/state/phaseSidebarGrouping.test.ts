@@ -248,13 +248,13 @@ describe("buildPhaseSidebarSections", () => {
 describe("custom group operations", () => {
   const base = DEFAULT_PHASE_SIDEBAR_GROUPING;
 
-  it("creates a group, switches to custom mode, and seeds it", () => {
+  it("creates a group and seeds it without changing the mode", () => {
     const { preferences, id } = createPhaseSidebarCustomGroup(base, {
       label: "  Sprint   42  ",
       threadKeys: [key("a"), key("a")],
     });
     expect(id).not.toBeNull();
-    expect(preferences.groupBy).toBe("custom");
+    expect(preferences.groupBy).toBe(base.groupBy);
     expect(preferences.customGroups).toEqual([{ id, label: "Sprint 42", threadKeys: [key("a")] }]);
   });
 
