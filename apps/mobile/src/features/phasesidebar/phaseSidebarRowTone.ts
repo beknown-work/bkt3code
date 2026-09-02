@@ -32,7 +32,7 @@ export function phaseSidebarPriorityToneClassName(priority: number): string {
   if (priority <= 0) return "bg-orange-500 text-white";
   if (priority === 1) return "bg-amber-500 text-white";
   if (priority === 2) return "bg-amber-700/70 text-white";
-  return "bg-muted text-muted-foreground";
+  return "bg-subtle text-foreground-muted";
 }
 
 /**
@@ -67,6 +67,6 @@ const CHECKOUT_TONES: readonly string[] = [
 ];
 
 export function phaseSidebarCheckoutToneClassName(toneIndex: number | null): string {
-  if (toneIndex === null) return "text-muted-foreground";
-  return CHECKOUT_TONES[toneIndex % CHECKOUT_TONES.length] ?? "text-muted-foreground";
+  if (toneIndex === null) return "text-foreground-muted";
+  return CHECKOUT_TONES[toneIndex % CHECKOUT_TONES.length] ?? "text-foreground-muted";
 }

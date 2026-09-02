@@ -51,7 +51,7 @@ function Chip(props: {
 function Section(props: { readonly title: string; readonly children: React.ReactNode }) {
   return (
     <View className="gap-2 px-4 py-3">
-      <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-muted-foreground">
+      <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-foreground-muted">
         {props.title}
       </Text>
       {props.children}
@@ -122,7 +122,9 @@ export function PhaseSidebarGroupBySheet(props: {
   };
 
   return (
-    <ScrollView className="flex-1" keyboardShouldPersistTaps="handled">
+    // Sized by content and clamped by the parent's max height — a flex-1
+    // ScrollView inside an unsized parent renders zero pixels tall.
+    <ScrollView keyboardShouldPersistTaps="handled">
       <View className="flex-row items-center justify-between px-4 pt-3">
         <Text className="text-base font-t3-bold text-foreground">Group by</Text>
         <Pressable hitSlop={8} onPress={props.onClose}>
@@ -161,7 +163,7 @@ export function PhaseSidebarGroupBySheet(props: {
       {grouping.groupBy === "custom" || editor !== null ? (
         <Section title="Your groups">
           {grouping.customGroups.length === 0 && editor === null ? (
-            <Text className="text-xs text-muted-foreground">
+            <Text className="text-xs text-foreground-muted">
               No groups yet. Create one, then hold any session and choose “Move to group”.
             </Text>
           ) : null}
@@ -171,7 +173,7 @@ export function PhaseSidebarGroupBySheet(props: {
                 <Text className="min-w-0 flex-1 text-sm text-foreground" numberOfLines={1}>
                   {group.label}
                 </Text>
-                <Text className="font-t3-mono text-[10px] text-muted-foreground">
+                <Text className="font-t3-mono text-[10px] text-foreground-muted">
                   {group.threadKeys.length}
                 </Text>
                 {grouping.groupOrder === "manual" ? (
@@ -257,7 +259,7 @@ export function PhaseSidebarGroupBySheet(props: {
                 value={editor.label}
               />
               <Pressable hitSlop={8} onPress={() => setEditor(null)}>
-                <Text className="text-xs text-muted-foreground">Cancel</Text>
+                <Text className="text-xs text-foreground-muted">Cancel</Text>
               </Pressable>
               <Pressable
                 disabled={editor.label.trim().length === 0}

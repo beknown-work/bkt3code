@@ -24,6 +24,7 @@ import {
 } from "./phaseSidebar.ts";
 import {
   buildPhaseSidebarFilteredTree,
+  buildPhaseSidebarTree,
   groupPhaseSidebarTreeByPhase,
   phaseSidebarRowKey,
   resolvePhaseSidebarTreePhase,
@@ -336,6 +337,12 @@ export interface PhaseSidebarSection {
   readonly summary: PhaseSidebarSectionSummary;
   /** True for the custom-mode catch-all, which cannot be renamed or deleted. */
   readonly isUngrouped: boolean;
+  /**
+   * Parked shelves (snoozed, settled) start closed: out of the way, never
+   * gone. `collapsedSectionKeys` then records a toggle AWAY from this default,
+   * so one list serves both kinds of section.
+   */
+  readonly collapsedByDefault: boolean;
 }
 
 export interface PhaseSidebarSectionsResult {
@@ -435,6 +442,7 @@ export function buildPhaseSidebarSections(
           nodes: group.nodes,
           summary: summarizeNodes(group.nodes),
           isUngrouped: false,
+          collapsedByDefault: false,
         }),
       );
       return { sections, forcedExpansionKeys };
@@ -464,6 +472,7 @@ export function buildPhaseSidebarSections(
           nodes,
           summary: summarizeNodes(nodes),
           isUngrouped: false,
+          collapsedByDefault: false,
         };
       });
       // Projects have no manual order, so "manual" reads as "name".
@@ -502,6 +511,7 @@ export function buildPhaseSidebarSections(
           nodes,
           summary: summarizeNodes(nodes),
           isUngrouped: false,
+          collapsedByDefault: false,
         };
       });
       const ungrouped = nodesByGroupId.get(PHASE_SIDEBAR_UNGROUPED_ID) ?? [];
@@ -516,6 +526,7 @@ export function buildPhaseSidebarSections(
           nodes: ungrouped,
           summary: summarizeNodes(ungrouped),
           isUngrouped: true,
+          collapsedByDefault: false,
         });
       }
       const manualIndex = new Map(grouping.customGroups.map((group, index) => [group.id, index]));
@@ -529,6 +540,56 @@ export function buildPhaseSidebarSections(
       };
     }
   }
+}
+
+/** Whether a section is closed, honouring its default and the user's toggles. */
+export function isPhaseSidebarSectionCollapsed(
+  section: Pick<PhaseSidebarSection, "key" | "collapsedByDefault">,
+  collapsedSectionKeys: ReadonlySet<string>,
+): boolean {
+  return collapsedSectionKeys.has(section.key) !== section.collapsedByDefault;
+}
+
+/**
+ * The parked shelves under the grouped sections: snoozed and settled sessions,
+ * as flat lists in the order the caller partitioned them (wake time, then
+ * settle time). They exist in every grouping mode — parking is orthogonal to
+ * how live work is grouped — and start collapsed.
+ */
+export function buildPhaseSidebarShelfSections(input: {
+  readonly snoozedRows: ReadonlyArray<PhaseSidebarRow>;
+  readonly settledRows: ReadonlyArray<PhaseSidebarRow>;
+}): ReadonlyArray<PhaseSidebarSection> {
+  const keepOrder = (rows: ReadonlyArray<PhaseSidebarRow>) => {
+    const index = new Map(rows.map((row, position) => [phaseSidebarRowKey(row), position]));
+    return (left: PhaseSidebarRow, right: PhaseSidebarRow) =>
+      (index.get(phaseSidebarRowKey(left)) ?? 0) - (index.get(phaseSidebarRowKey(right)) ?? 0);
+  };
+  const shelf = (
+    id: "snoozed" | "settled",
+    label: string,
+    helperText: string,
+    rows: ReadonlyArray<PhaseSidebarRow>,
+  ): PhaseSidebarSection | null => {
+    if (rows.length === 0) return null;
+    const nodes = buildPhaseSidebarTree(rows, { compareSiblings: keepOrder(rows) });
+    return {
+      key: phaseSidebarSectionKey("lifecycle", id),
+      kind: "lifecycle",
+      id,
+      label,
+      helperText,
+      phaseId: null,
+      nodes,
+      summary: summarizeNodes(nodes),
+      isUngrouped: false,
+      collapsedByDefault: true,
+    };
+  };
+  return [
+    shelf("snoozed", "Snoozed", "Parked until they wake", input.snoozedRows),
+    shelf("settled", "Settled", "Wrapped up", input.settledRows),
+  ].filter((section): section is PhaseSidebarSection => section !== null);
 }
 
 /** Where a row's section sits in the list, for the collapsed-header phase tone. */

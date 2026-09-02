@@ -45,7 +45,7 @@ function Chip(props: {
 function Section(props: { readonly title: string; readonly children: React.ReactNode }) {
   return (
     <View className="gap-2 px-4 py-3">
-      <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-muted-foreground">
+      <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-foreground-muted">
         {props.title}
       </Text>
       <View className="flex-row flex-wrap gap-2">{props.children}</View>
@@ -60,6 +60,7 @@ export function PhaseSidebarFilterSheet(props: {
   readonly sort: PhaseSidebarSortPreferences;
   readonly onChangeFilters: (filters: PhaseSidebarFilters) => void;
   readonly onChangeSort: (sort: PhaseSidebarSortPreferences) => void;
+  readonly onClose: () => void;
 }) {
   const repositories = useMemo(
     () => buildPhaseSidebarRepositoryOptions(props.projects),
@@ -77,14 +78,24 @@ export function PhaseSidebarFilterSheet(props: {
     list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value];
 
   return (
-    <ScrollView className="flex-1">
+    // Sized by content and clamped by the parent's max height — a flex-1
+    // ScrollView inside an unsized parent renders zero pixels tall.
+    <ScrollView>
       <View className="flex-row items-center justify-between px-4 pt-3">
         <Text className="text-base font-t3-bold text-foreground">Filter</Text>
-        {phaseSidebarFiltersActive(props.filters) ? (
-          <Pressable hitSlop={8} onPress={() => props.onChangeFilters(EMPTY_PHASE_SIDEBAR_FILTERS)}>
-            <Text className="text-xs font-t3-bold text-primary">Clear all</Text>
+        <View className="flex-row items-center gap-4">
+          {phaseSidebarFiltersActive(props.filters) ? (
+            <Pressable
+              hitSlop={8}
+              onPress={() => props.onChangeFilters(EMPTY_PHASE_SIDEBAR_FILTERS)}
+            >
+              <Text className="text-xs font-t3-bold text-foreground-muted">Clear all</Text>
+            </Pressable>
+          ) : null}
+          <Pressable hitSlop={8} onPress={props.onClose}>
+            <Text className="text-xs font-t3-bold text-primary">Done</Text>
           </Pressable>
-        ) : null}
+        </View>
       </View>
 
       <Section title="Lifecycle">

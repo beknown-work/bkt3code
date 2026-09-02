@@ -29,7 +29,7 @@ import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settl
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Alert, FlatList, Pressable, View } from "react-native";
+import { Alert, FlatList, Pressable, useWindowDimensions, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
@@ -53,7 +53,10 @@ import {
   usePhaseSidebarGrouping,
   useUpdatePhaseSidebarGrouping,
 } from "./phaseSidebarGroupingStore";
-import { useMarkPhaseSidebarThreadVisited } from "./phaseSidebarVisitStore";
+import {
+  useClearPhaseSidebarThreadVisit,
+  useMarkPhaseSidebarThreadVisited,
+} from "./phaseSidebarVisitStore";
 import { usePhaseSidebarRows, usePhaseSidebarViewerUserId } from "./usePhaseSidebarRows";
 
 function HeaderButton(props: {
@@ -62,20 +65,21 @@ function HeaderButton(props: {
   readonly active: boolean;
   readonly onPress: () => void;
 }) {
-  const mutedColor = String(useThemeColor("--color-icon"));
+  const iconColor = String(useThemeColor("--color-icon"));
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected: props.active }}
       className={cn(
-        "flex-row items-center gap-1.5 rounded-lg border px-2.5 py-1",
-        props.active ? "border-primary bg-primary/15" : "border-border",
+        "h-8 flex-row items-center gap-1.5 rounded-lg border px-2.5",
+        props.active ? "border-primary bg-primary/15" : "border-border bg-subtle",
       )}
       hitSlop={6}
       onPress={props.onPress}
     >
-      <SymbolView name={props.icon} size={12} tintColor={mutedColor} type="monochrome" />
-      <Text className="text-xs text-foreground">{props.label}</Text>
+      <SymbolView name={props.icon} size={12} tintColor={iconColor} type="monochrome" />
+      <Text className="text-xs font-t3-medium text-foreground">{props.label}</Text>
+      <SymbolView name="chevron.down" size={9} tintColor={iconColor} type="monochrome" />
     </Pressable>
   );
 }
@@ -96,12 +100,14 @@ export function PhaseSidebarPane(props: {
   readonly contentContainerStyle?: ComponentProps<typeof FlatList>["contentContainerStyle"];
 }) {
   const navigation = useNavigation();
+  const { height: windowHeight } = useWindowDimensions();
   const projects = useProjects();
   const { environments } = useEnvironments();
   const viewerEnvironmentId = props.viewerEnvironmentId ?? environments[0]?.environmentId ?? null;
   const rows = usePhaseSidebarRows({ viewerEnvironmentId });
   const viewerUserId = usePhaseSidebarViewerUserId(viewerEnvironmentId);
   const markVisited = useMarkPhaseSidebarThreadVisited();
+  const clearVisit = useClearPhaseSidebarThreadVisit();
   const grouping = usePhaseSidebarGrouping();
   const updateGrouping = useUpdatePhaseSidebarGrouping();
 
@@ -207,6 +213,12 @@ export function PhaseSidebarPane(props: {
             threadId: thread.id,
           });
           return;
+        case "mark-read":
+          markVisited(threadKey);
+          return;
+        case "mark-unread":
+          clearVisit(threadKey);
+          return;
         case "settle":
           void settleThread(thread);
           return;
@@ -243,7 +255,9 @@ export function PhaseSidebarPane(props: {
     },
     [
       archiveThread,
+      clearVisit,
       confirmDeleteThread,
+      markVisited,
       navigation,
       pinThread,
       settleThread,
@@ -298,13 +312,6 @@ export function PhaseSidebarPane(props: {
         input: {
           threadId: subject.thread.id,
           parentThreadId: parent === null ? null : parent.thread.id,
-          // T3-CUSTOM(expbkt3): a drop is always within one environment (the
-          // validator rejects cross-environment targets), so the parent's
-          // environment is this thread's own. Sending null rather than omitting
-          // it matters: omitting leaves the field unchanged, which would strand
-          // a thread that used to have a parent on another machine pointing at
-          // that machine with a local thread id.
-          parentEnvironmentId: null,
         },
       });
     },
@@ -324,35 +331,36 @@ export function PhaseSidebarPane(props: {
     [movePinnedThread],
   );
 
+  // Header: the three counters left, the two controls right, on one line; the
+  // provider quota grid gets the full width beneath. Nothing fights for the
+  // right-hand third any more.
   const listHeader = useMemo(
     () => (
       <View>
         <View className="flex-row items-center justify-between gap-2 px-4 pb-1 pt-2">
           <PhaseSidebarCounters />
-          <View className="min-w-0 flex-1">
-            <PhaseSidebarRateLimits />
+          <View className="flex-row items-center gap-2">
+            <HeaderButton
+              active={sheet?.kind === "group"}
+              icon="square.grid.2x2"
+              label={PHASE_SIDEBAR_GROUP_BY_LABELS[grouping.groupBy]}
+              onPress={() =>
+                setSheet((current) =>
+                  current?.kind === "group" ? null : { kind: "group", intent: { kind: "browse" } },
+                )
+              }
+            />
+            <HeaderButton
+              active={sheet?.kind === "filter" || phaseSidebarFiltersActive(filters)}
+              icon="line.3.horizontal.decrease"
+              label="Filter"
+              onPress={() =>
+                setSheet((current) => (current?.kind === "filter" ? null : { kind: "filter" }))
+              }
+            />
           </View>
         </View>
-        <View className="flex-row items-center justify-between px-4 pb-1 pt-2">
-          <HeaderButton
-            active={sheet?.kind === "group"}
-            icon="square.grid.2x2"
-            label={PHASE_SIDEBAR_GROUP_BY_LABELS[grouping.groupBy]}
-            onPress={() =>
-              setSheet((current) =>
-                current?.kind === "group" ? null : { kind: "group", intent: { kind: "browse" } },
-              )
-            }
-          />
-          <HeaderButton
-            active={sheet?.kind === "filter" || phaseSidebarFiltersActive(filters)}
-            icon="line.3.horizontal.decrease"
-            label="Filter"
-            onPress={() =>
-              setSheet((current) => (current?.kind === "filter" ? null : { kind: "filter" }))
-            }
-          />
-        </View>
+        <PhaseSidebarRateLimits />
       </View>
     ),
     [filters, grouping.groupBy, sheet?.kind],
@@ -361,12 +369,18 @@ export function PhaseSidebarPane(props: {
   return (
     <View className="flex-1">
       {sheet === null ? null : (
-        <View className="max-h-[60%] border-b border-border">
+        // A bounded height, in points: a percentage max-height on an unsized
+        // parent collapses to nothing and shows only the border.
+        <View
+          className="border-b border-border bg-screen"
+          style={{ maxHeight: Math.round(windowHeight * 0.55) }}
+        >
           {sheet.kind === "filter" ? (
             <PhaseSidebarFilterSheet
               filters={filters}
               onChangeFilters={setFilters}
               onChangeSort={setSort}
+              onClose={() => setSheet(null)}
               projects={projects}
               rows={rows}
               sort={sort}
@@ -384,7 +398,7 @@ export function PhaseSidebarPane(props: {
       <PhaseSidebarList
         ListEmptyComponent={
           <View className="items-center gap-2 px-6 py-12">
-            <Text className="text-center text-sm text-muted-foreground">
+            <Text className="text-center text-sm text-foreground-muted">
               {phaseSidebarFiltersActive(filters)
                 ? "No sessions match these filters."
                 : "No sessions yet."}

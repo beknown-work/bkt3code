@@ -18,9 +18,11 @@ import {
 import {
   assignPhaseSidebarThreadToGroup,
   buildPhaseSidebarSections,
+  buildPhaseSidebarShelfSections,
   createPhaseSidebarCustomGroup,
   DEFAULT_PHASE_SIDEBAR_GROUPING,
   deletePhaseSidebarCustomGroup,
+  isPhaseSidebarSectionCollapsed,
   movePhaseSidebarCustomGroup,
   phaseSidebarCustomGroupIdForThread,
   phaseSidebarSectionKey,
@@ -242,6 +244,21 @@ describe("buildPhaseSidebarSections", () => {
       { ...DEFAULT_PHASE_SIDEBAR_GROUPING, groupBy: "project" },
     );
     expect(result[0]?.summary).toEqual({ running: 2, attention: 1, unread: 1 });
+  });
+});
+
+describe("buildPhaseSidebarShelfSections", () => {
+  it("builds collapsed-by-default snoozed and settled shelves in the given order", () => {
+    const shelves = buildPhaseSidebarShelfSections({
+      snoozedRows: [makeRow("b"), makeRow("a")],
+      settledRows: [],
+    });
+    expect(shelves.map((section) => section.id)).toEqual(["snoozed"]);
+    expect(shelves[0]?.collapsedByDefault).toBe(true);
+    expect(shelves[0]?.nodes.map((node) => String(node.row.thread.id))).toEqual(["b", "a"]);
+    // The toggle list records a move away from the default.
+    expect(isPhaseSidebarSectionCollapsed(shelves[0]!, new Set())).toBe(true);
+    expect(isPhaseSidebarSectionCollapsed(shelves[0]!, new Set([shelves[0]!.key]))).toBe(false);
   });
 });
 

@@ -33,10 +33,15 @@ function toneBarClassName(tone: ProviderRateLimitTone): string {
     case "healthy":
       return "bg-emerald-500";
     case "unknown":
-      return "bg-muted-foreground/40";
+      return "bg-subtle-strong";
   }
 }
 
+/**
+ * One provider's quota as a full-width row: name, bar, percent. Rows sit in a
+ * two-column grid so four providers across two machines fit in two lines and
+ * the bars get real width instead of a 48px stub.
+ */
 function RateLimitBar(props: {
   readonly row: ProviderRateLimitRowView;
   readonly prefix: string | null;
@@ -49,20 +54,20 @@ function RateLimitBar(props: {
   const clamped = Math.max(0, Math.min(100, row.remainingPercent));
 
   return (
-    <View className="flex-row items-center gap-1.5">
+    <View className="w-1/2 flex-row items-center gap-2 pr-3">
       <Text
-        className="w-16 shrink-0 font-t3-mono text-[9px] uppercase text-muted-foreground"
+        className="w-[72px] shrink-0 font-t3-mono text-[10px] uppercase text-foreground-muted"
         numberOfLines={1}
       >
         {props.prefix === null ? row.displayName : `${props.prefix} ${row.displayName}`}
       </Text>
-      <View className="h-1.5 w-12 overflow-hidden rounded-full bg-muted">
+      <View className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-subtle-strong">
         <View
           className={cn("h-full rounded-full", toneBarClassName(tone))}
           style={{ width: `${clamped}%` }}
         />
       </View>
-      <Text className="shrink-0 font-t3-mono text-[9px] text-muted-foreground">
+      <Text className="w-8 shrink-0 text-right font-t3-mono text-[10px] text-foreground-muted">
         {Math.round(clamped)}%
       </Text>
     </View>
@@ -139,7 +144,10 @@ export function PhaseSidebarRateLimits(props: { readonly onPress?: () => void })
 
   return (
     <Pressable
-      className={cn("gap-1", anyVisible ? "py-1" : "h-0 overflow-hidden")}
+      className={cn(
+        "flex-row flex-wrap gap-y-1.5 px-4",
+        anyVisible ? "pb-1 pt-2" : "h-0 overflow-hidden",
+      )}
       disabled={props.onPress === undefined}
       onPress={props.onPress}
     >

@@ -34,6 +34,35 @@ export function resolvePhaseSidebarEnabled(input: {
  * Getting this wrong either grows the blob forever or silently forgets threads
  * the user just opened, so it is tested directly.
  */
+/**
+ * Whether a row reads as unread on this device.
+ *
+ * The shared rule (`hasUnseenCompletion`) only flags a session that was opened
+ * once and has finished a turn since — a session never opened here is neither.
+ * On a phone that is the wrong default: the list is scanned for what has
+ * finished since you last looked, and a completed session you have never
+ * opened on this device is exactly that. So: unread when the shared rule says
+ * so, or when the last turn completed and this device has no visit at all.
+ */
+export function resolveMobileUnread(input: {
+  readonly sharedUnread: boolean;
+  readonly lastTurnCompletedAt: string | null | undefined;
+  readonly lastVisitedAt: string | undefined;
+}): boolean {
+  if (input.sharedUnread) return true;
+  return input.lastVisitedAt === undefined && Boolean(input.lastTurnCompletedAt);
+}
+
+/** "Mark unread": forget the visit, so the rule above flags the session again. */
+export function removeVisitTimestamp(
+  visits: Readonly<Record<string, string>>,
+  threadKey: string,
+): Readonly<Record<string, string>> {
+  if (!(threadKey in visits)) return visits;
+  const { [threadKey]: _removed, ...rest } = visits;
+  return rest;
+}
+
 export function pruneVisitTimestamps(
   visits: Readonly<Record<string, string>>,
   cap: number = PHASE_SIDEBAR_VISIT_CAP,

@@ -9,7 +9,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback } from "react";
 
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { pruneVisitTimestamps } from "./phaseSidebarPreferences";
+import { pruneVisitTimestamps, removeVisitTimestamp } from "./phaseSidebarPreferences";
 
 const EMPTY_VISITS: Readonly<Record<string, string>> = {};
 
@@ -32,6 +32,19 @@ export function useMarkPhaseSidebarThreadVisited(): (threadKey: string) => void 
           [threadKey]: new Date().toISOString(),
         }),
       });
+    },
+    [updatePreferences, visits],
+  );
+}
+
+/** "Mark unread": forgets the visit so the row flags again. */
+export function useClearPhaseSidebarThreadVisit(): (threadKey: string) => void {
+  const visits = usePhaseSidebarVisitTimestamps();
+  const updatePreferences = useAtomSet(updateMobilePreferencesAtom);
+  return useCallback(
+    (threadKey: string) => {
+      const next = removeVisitTimestamp(visits, threadKey);
+      if (next !== visits) updatePreferences({ phaseSidebarVisitedAt: next });
     },
     [updatePreferences, visits],
   );

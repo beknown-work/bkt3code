@@ -60,10 +60,10 @@ export function PhaseSidebarCounters() {
       <Counter
         label={`unread session${counts.unread === 1 ? "" : "s"}`}
         textClassName={
-          counts.unread > 0 ? "text-sky-700 dark:text-sky-300" : "text-muted-foreground/60"
+          counts.unread > 0 ? "text-sky-700 dark:text-sky-300" : "text-foreground-tertiary"
         }
         toneClassName={
-          counts.unread > 0 ? "border-sky-500/35 bg-sky-500/15" : "border-border/60 bg-muted/40"
+          counts.unread > 0 ? "border-sky-500/35 bg-sky-500/15" : "border-border/60 bg-subtle/40"
         }
         value={counts.unread}
       />
