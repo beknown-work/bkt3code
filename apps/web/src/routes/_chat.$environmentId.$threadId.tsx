@@ -15,6 +15,8 @@ import {
 } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
+// T3-CUSTOM(expbkt3): keep optional connection handling outside this upstream route.
+import { useThreadHostReachable } from "../fork/threadHostReachability";
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
@@ -27,6 +29,8 @@ function ChatThreadRouteView() {
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
   const serverThreadStatus = useThreadStatus(threadRef);
+  // T3-CUSTOM(expbkt3): an unreachable host changes what the sync pill may claim.
+  const threadHostReachable = useThreadHostReachable(threadRef?.environmentId ?? null);
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
@@ -53,6 +57,8 @@ function ChatThreadRouteView() {
     detailExists: serverThreadDetail !== null,
     shellExists: serverThreadShell !== null,
     status: serverThreadStatus,
+    // T3-CUSTOM(expbkt3): a cached thread on an unreachable host is not syncing.
+    hostReachable: threadHostReachable,
   });
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;

@@ -67,6 +67,9 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "./homeListItems";
+// T3-CUSTOM(expbkt3): experimental phase-grouped sidebar, shared with the split-view pane.
+import { PhaseSidebarPane } from "../phasesidebar/PhaseSidebarPane";
+import { usePhaseSidebarEnabled } from "../phasesidebar/phaseSidebarEnabled";
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
@@ -204,6 +207,8 @@ function HomeTopContentSpacer() {
 /* ─── Main screen ────────────────────────────────────────────────────── */
 
 export function HomeScreen(props: HomeScreenProps) {
+  // T3-CUSTOM(expbkt3): experimental phase-grouped sidebar.
+  const phaseSidebarEnabled = usePhaseSidebarEnabled();
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
@@ -1134,6 +1139,22 @@ export function HomeScreen(props: HomeScreenProps) {
     ) : (
       listEmpty
     );
+
+  // T3-CUSTOM(expbkt3): BEGIN — the experimental phase sidebar replaces the
+  // whole list. This MUST sit above the threadListV2Enabled return below:
+  // that flag defaults to true, so anything after it is unreachable.
+  if (phaseSidebarEnabled) {
+    return (
+      <View className="flex-1 bg-screen">
+        <PhaseSidebarPane
+          onSelectThread={props.onSelectThread}
+          selectedThreadKey={null}
+          viewerEnvironmentId={props.selectedEnvironmentId}
+        />
+      </View>
+    );
+  }
+  // T3-CUSTOM(expbkt3): END
 
   if (threadListV2Enabled) {
     return (

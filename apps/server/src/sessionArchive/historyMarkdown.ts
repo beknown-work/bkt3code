@@ -22,21 +22,18 @@ export interface HistoryUserPrompt {
   readonly createdAt: string;
 }
 
-export interface HistoryFileChange {
-  readonly path: string;
-  /** e.g. "M", "A", "D" — whatever the diff source reports. */
-  readonly status: string;
-}
+// T3-CUSTOM(expbkt3): the git/fence helpers and their types moved to shared so the
+// client can render an offline handoff digest with them; re-exported here because
+// this module is the server's established import site for them.
+import {
+  fencedBlock,
+  renderGitSection,
+  type HistoryFileChange,
+  type HistoryGitState,
+} from "@t3tools/shared/sessionDigest";
 
-export interface HistoryGitState {
-  readonly branch: string | null;
-  readonly baseRef: string | null;
-  readonly headSha: string | null;
-  readonly hasUncommittedChanges: boolean;
-  readonly hasUntrackedFiles: boolean;
-  readonly hasUnpushedCommits: boolean;
-  readonly changedFiles: ReadonlyArray<HistoryFileChange>;
-}
+export { fencedBlock, renderGitSection };
+export type { HistoryFileChange, HistoryGitState };
 
 export interface SessionHistoryDigestInput {
   readonly threadId: string;
@@ -64,52 +61,6 @@ const EM_DASH_FALLBACK = "—";
 function orDash(value: string | null | undefined): string {
   const trimmed = value?.trim();
   return trimmed ? trimmed : EM_DASH_FALLBACK;
-}
-
-/**
- * Fence a prompt without letting its own backticks break out.
- *
- * Prompts routinely contain fenced code, so a fixed three-backtick fence would
- * terminate early and corrupt every following section of the digest.
- */
-export function fencedBlock(text: string): string {
-  const longestRun = [...text.matchAll(/`+/g)].reduce(
-    (longest, match) => Math.max(longest, match[0].length),
-    0,
-  );
-  const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `${fence}text\n${text.trimEnd()}\n${fence}`;
-}
-
-export function renderGitSection(git: HistoryGitState | null): ReadonlyArray<string> {
-  if (git === null) {
-    return ["## Git state", "", "No git information was captured for this session.", ""];
-  }
-
-  const flags: Array<string> = [];
-  if (git.hasUncommittedChanges) flags.push("uncommitted changes");
-  if (git.hasUntrackedFiles) flags.push("untracked files");
-  if (git.hasUnpushedCommits) flags.push("unpushed commits");
-
-  const lines = [
-    "## Git state",
-    "",
-    `- **Branch:** ${orDash(git.branch)}`,
-    `- **Base ref:** ${orDash(git.baseRef)}`,
-    `- **HEAD:** ${orDash(git.headSha)}`,
-    `- **At archive time:** ${flags.length > 0 ? flags.join(", ") : "clean and pushed"}`,
-    "",
-  ];
-
-  if (git.changedFiles.length > 0) {
-    lines.push(`### Files changed (${git.changedFiles.length})`, "");
-    for (const file of git.changedFiles) {
-      lines.push(`- \`${file.status}\` ${file.path}`);
-    }
-    lines.push("");
-  }
-
-  return lines;
 }
 
 /**

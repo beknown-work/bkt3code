@@ -8,6 +8,8 @@
  */
 import {
   CommandId,
+  // T3-CUSTOM(expbkt3): a parent session may live on another environment.
+  EnvironmentId,
   IsoDateTime,
   ModelSelection,
   NonNegativeInt,
@@ -57,6 +59,9 @@ export const ProjectionThread = Schema.Struct({
   mattermostThreadUrl: Schema.optional(Schema.NullOr(Schema.String)),
   // T3-CUSTOM(expbkt3): session lineage; null means this is a root session.
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // T3-CUSTOM(expbkt3): the environment the parent id belongs to. Null means
+  // this thread's own, so every pre-existing row keeps its meaning.
+  parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
   // T3-CUSTOM(expbkt3): BEGIN — JSON-encoded ThreadWorkSummary for the bulk session
   // manager. Kept as a raw string here so the projection repository stays a
   // dumb column carrier; decoding happens in ProjectionSnapshotQuery, where a

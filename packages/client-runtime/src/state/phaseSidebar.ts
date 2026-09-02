@@ -1241,23 +1241,57 @@ export interface MoveUnderCandidate {
 }
 
 /**
+ * T3-CUSTOM(expbkt3): the key lineage is matched on.
+ *
+ * Exported because a lineage can now cross environments, so every consumer of
+ * `collectDescendantThreadIds` has to speak the same (environment, thread) pair
+ * rather than a bare id.
+ */
+export function scopedThreadLineageKey(environmentId: string, threadId: string): string {
+  return `${environmentId}:${threadId}`;
+}
+
+const scopedKey = scopedThreadLineageKey;
+
+/**
+ * The scoped key of a thread's parent, or null for a root.
+ *
+ * T3-CUSTOM(expbkt3): a parent may live on another environment, so lineage is
+ * matched on the (environment, thread) pair. An absent parent environment means
+ * the thread's own, which is what every same-server link means.
+ */
+function parentScopedKey(thread: ThreadShell): string | null {
+  const parentThreadId = thread.parentThreadId ?? null;
+  if (parentThreadId === null) return null;
+  return scopedKey(thread.parentEnvironmentId ?? thread.environmentId, parentThreadId);
+}
+
+/**
  * Every thread reachable downwards from `threadId`, excluding itself. Bounded
  * by the thread count: each id is enqueued at most once, so a corrupt cycle in
  * the projection cannot make this loop forever.
+ *
+ * T3-CUSTOM(expbkt3): walks (environment, thread) pairs, because a lineage can
+ * now cross environments and a bare id is ambiguous across them.
  */
 export function collectDescendantThreadIds(
   threads: ReadonlyArray<ThreadShell>,
   threadId: string,
+  environmentId?: string,
 ): ReadonlySet<string> {
+  const rootEnvironmentId =
+    environmentId ?? threads.find((thread) => thread.id === threadId)?.environmentId ?? "";
+  const rootKey = scopedKey(rootEnvironmentId, threadId);
   const descendants = new Set<string>();
-  const queue: string[] = [threadId];
+  const queue: string[] = [rootKey];
   while (queue.length > 0) {
     const current = queue.pop() as string;
     for (const thread of threads) {
-      if ((thread.parentThreadId ?? null) !== current) continue;
-      if (thread.id === threadId || descendants.has(thread.id)) continue;
-      descendants.add(thread.id);
-      queue.push(thread.id);
+      const key = scopedKey(thread.environmentId, thread.id);
+      if (parentScopedKey(thread) !== current) continue;
+      if (key === rootKey || descendants.has(key)) continue;
+      descendants.add(key);
+      queue.push(key);
     }
   }
   return descendants;
@@ -1268,9 +1302,13 @@ export function collectDescendantThreadIds(
  *
  * Excluded: the thread itself, its descendants (the server would reject those
  * as cycles, so offering them would only produce a confusing failure toast),
- * archived threads, its current parent (already there), and — because lineage
- * is a bare thread id resolved within one environment — anything from a
- * different environment.
+ * archived threads, and its current parent (already there).
+ *
+ * T3-CUSTOM(expbkt3): threads on other environments are now offered. A session
+ * spread across machines — a child started locally under work on a remote host
+ * — is the case this exists for, so the picker no longer hides the other half
+ * of it. Descendants are excluded across environments too, so the offer cannot
+ * propose a loop.
  */
 export function resolveMoveUnderCandidates(input: {
   readonly threads: ReadonlyArray<ThreadShell>;
@@ -1279,21 +1317,26 @@ export function resolveMoveUnderCandidates(input: {
   readonly repositoryLabelFor: (thread: ThreadShell) => string;
   readonly limit?: number;
 }): ReadonlyArray<MoveUnderCandidate> {
-  const sameEnvironment = input.threads.filter(
-    (thread) => thread.environmentId === input.subject.environmentId,
+  const blocked = collectDescendantThreadIds(
+    input.threads,
+    input.subject.id,
+    input.subject.environmentId,
   );
-  const blocked = collectDescendantThreadIds(sameEnvironment, input.subject.id);
   const needle = input.query.trim().toLowerCase();
+  const subjectKey = scopedKey(input.subject.environmentId, input.subject.id);
+  const currentParentKey = parentScopedKey(input.subject);
 
-  return sameEnvironment
-    .filter(
-      (thread) =>
-        thread.id !== input.subject.id &&
-        !blocked.has(thread.id) &&
+  return input.threads
+    .filter((thread) => {
+      const key = scopedKey(thread.environmentId, thread.id);
+      return (
+        key !== subjectKey &&
+        !blocked.has(key) &&
         thread.archivedAt === null &&
-        thread.id !== (input.subject.parentThreadId ?? null) &&
-        (needle.length === 0 || thread.title.toLowerCase().includes(needle)),
-    )
+        key !== currentParentKey &&
+        (needle.length === 0 || thread.title.toLowerCase().includes(needle))
+      );
+    })
     .sort(
       (left, right) =>
         Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||

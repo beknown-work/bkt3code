@@ -594,6 +594,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linear_issue_url AS "linearIssueUrl",
           mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
+          parent_environment_id AS "parentEnvironmentId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
@@ -683,6 +684,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linear_issue_url AS "linearIssueUrl",
           mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
+          parent_environment_id AS "parentEnvironmentId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
@@ -735,6 +737,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linear_issue_url AS "linearIssueUrl",
           mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
+          parent_environment_id AS "parentEnvironmentId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
@@ -1196,6 +1199,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linear_issue_url AS "linearIssueUrl",
           mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
+          parent_environment_id AS "parentEnvironmentId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
@@ -1269,6 +1273,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           linear_issue_url AS "linearIssueUrl",
           mattermost_thread_url AS "mattermostThreadUrl",
           parent_thread_id AS "parentThreadId",
+          parent_environment_id AS "parentEnvironmentId",
           -- T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary (JSON blob).
           work_summary AS "workSummary",
           -- T3-CUSTOM(expbkt3): END
@@ -2235,6 +2240,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 linearIssueUrl: row.linearIssueUrl ?? null,
                 mattermostThreadUrl: row.mattermostThreadUrl ?? null,
                 parentThreadId: row.parentThreadId ?? null,
+                parentEnvironmentId: row.parentEnvironmentId ?? null,
                 // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
                 workSummary: mapWorkSummary(row.workSummary),
                 // T3-CUSTOM(expbkt3): END
@@ -2556,6 +2562,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   linearIssueUrl: row.linearIssueUrl ?? null,
                   mattermostThreadUrl: row.mattermostThreadUrl ?? null,
                   parentThreadId: row.parentThreadId ?? null,
+                  parentEnvironmentId: row.parentEnvironmentId ?? null,
                   // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
                   workSummary: mapWorkSummary(row.workSummary),
                   // T3-CUSTOM(expbkt3): END
@@ -2742,6 +2749,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         linearIssueUrl: row.linearIssueUrl ?? null,
                         mattermostThreadUrl: row.mattermostThreadUrl ?? null,
                         parentThreadId: row.parentThreadId ?? null,
+                        parentEnvironmentId: row.parentEnvironmentId ?? null,
                         // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
                         workSummary: mapWorkSummary(row.workSummary),
                         // T3-CUSTOM(expbkt3): END
@@ -2934,6 +2942,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     linearIssueUrl: row.linearIssueUrl ?? null,
                     mattermostThreadUrl: row.mattermostThreadUrl ?? null,
                     parentThreadId: row.parentThreadId ?? null,
+                    parentEnvironmentId: row.parentEnvironmentId ?? null,
                     // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
                     workSummary: mapWorkSummary(row.workSummary),
                     // T3-CUSTOM(expbkt3): END
@@ -3268,6 +3277,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         linearIssueUrl: threadRow.value.linearIssueUrl ?? null,
         mattermostThreadUrl: threadRow.value.mattermostThreadUrl ?? null,
         parentThreadId: threadRow.value.parentThreadId ?? null,
+        parentEnvironmentId: threadRow.value.parentEnvironmentId ?? null,
         // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
         workSummary: mapWorkSummary(threadRow.value.workSummary),
         // T3-CUSTOM(expbkt3): END
@@ -3504,6 +3514,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         linearIssueUrl: threadRow.value.linearIssueUrl ?? null,
         mattermostThreadUrl: threadRow.value.mattermostThreadUrl ?? null,
         parentThreadId: threadRow.value.parentThreadId ?? null,
+        parentEnvironmentId: threadRow.value.parentEnvironmentId ?? null,
         // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
         workSummary: mapWorkSummary(threadRow.value.workSummary),
         // T3-CUSTOM(expbkt3): END

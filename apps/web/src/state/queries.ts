@@ -24,6 +24,11 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+// T3-CUSTOM(expbkt3): BEGIN — search this device's cache for unreachable hosts.
+import { searchCachedThreads } from "@t3tools/client-runtime/state/cached-thread-search";
+import { readCachedThreadsForEnvironment } from "../connection/storage";
+import { useEnvironments } from "./environments";
+// T3-CUSTOM(expbkt3): END
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
@@ -79,6 +84,52 @@ export function useDebouncedValue<A>(value: A, delayMs: number): A {
   return debounced;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — offline search over this device's thread cache.
+/**
+ * Matches from this device's cache, for environments whose host cannot answer a
+ * search right now.
+ *
+ * Read from IndexedDB rather than from the atoms, because the point is to find
+ * work after a restart — when nothing has been opened yet this session. Bounded
+ * by what the cache holds, and stated as such at the call site.
+ */
+function useCachedThreadSearch(
+  environmentIds: ReadonlyArray<EnvironmentId>,
+  query: string,
+): ReadonlyArray<EnvironmentThreadSearchMatch> {
+  const [matches, setMatches] = useState<ReadonlyArray<EnvironmentThreadSearchMatch>>(
+    EMPTY_THREAD_SEARCH_MATCHES,
+  );
+  const environmentKey = environmentIds.join(",");
+
+  useEffect(() => {
+    if (environmentIds.length === 0 || query.length === 0) {
+      setMatches(EMPTY_THREAD_SEARCH_MATCHES);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      environmentIds.map(async (environmentId) => {
+        const snapshots = await readCachedThreadsForEnvironment(environmentId);
+        return searchCachedThreads(
+          snapshots.map((snapshot) => snapshot.thread),
+          query,
+        ).map((match) => ({ ...match, environmentId }));
+      }),
+    ).then((perEnvironment) => {
+      if (cancelled) return;
+      setMatches(perEnvironment.flat());
+    });
+    return () => {
+      cancelled = true;
+    };
+    // environmentKey stands in for the array identity, which changes per render.
+  }, [environmentKey, query]);
+
+  return matches;
+}
+// T3-CUSTOM(expbkt3): END
+
 export function useThreadSearch(
   environmentIds: ReadonlyArray<EnvironmentId>,
   query: string,
@@ -98,8 +149,31 @@ export function useThreadSearch(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearchResultsAtom(searchKey),
   );
   const isDebouncing = canSearch && normalizedQuery !== debouncedQuery;
+  // T3-CUSTOM(expbkt3): BEGIN — cover the hosts that cannot answer. Their
+  // results come from this device's cache, and are merged behind the live ones
+  // so a reachable host's authoritative answer always leads.
+  const { presentationById } = useEnvironments();
+  const unreachableEnvironmentIds = useMemo(
+    () =>
+      environmentIds.filter((environmentId) => {
+        const environment = presentationById.get(environmentId);
+        // "connected" is the only phase whose host can answer a search; the
+        // rest are some flavour of not-there, including a retry in progress.
+        return environment !== undefined && environment.connection.phase !== "connected";
+      }),
+    [environmentIds, presentationById],
+  );
+  const cachedMatches = useCachedThreadSearch(
+    unreachableEnvironmentIds,
+    settledQuery === null || isDebouncing ? "" : settledQuery,
+  );
+  // T3-CUSTOM(expbkt3): END
   return {
-    matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
+    matches: isDebouncing
+      ? EMPTY_THREAD_SEARCH_MATCHES
+      : cachedMatches.length === 0
+        ? result.matches
+        : [...result.matches, ...cachedMatches],
     isPending: canSearch && (isDebouncing || result.isLoading),
   };
 }

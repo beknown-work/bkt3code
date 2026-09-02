@@ -221,6 +221,9 @@ const PersistedDraftThreadState = Schema.Struct({
   // can be promoted as a child of that session; the lineage must survive
   // reloads.
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  // The environment that parent lives on, once the draft has moved somewhere
+  // else. Null means the draft's own, which is what a same-machine child means.
+  parentEnvironmentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   // T3-CUSTOM(expbkt3): END
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
@@ -329,6 +332,8 @@ export interface DraftSessionState {
   // T3-CUSTOM(expbkt3): BEGIN
   /** When set, the promoted thread is created as a child of this thread. */
   parentThreadId?: ThreadId | null;
+  /** The parent's environment, when it is not the one this draft targets. */
+  parentEnvironmentId?: EnvironmentId | null;
   // T3-CUSTOM(expbkt3): END
   promotedTo?: ScopedThreadRef | null;
 }
@@ -397,6 +402,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       // T3-CUSTOM(expbkt3): BEGIN
       parentThreadId?: ThreadId | null;
+      parentEnvironmentId?: EnvironmentId | null;
       // T3-CUSTOM(expbkt3): END
     },
   ) => void;
@@ -415,6 +421,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       // T3-CUSTOM(expbkt3): BEGIN
       parentThreadId?: ThreadId | null;
+      parentEnvironmentId?: EnvironmentId | null;
       // T3-CUSTOM(expbkt3): END
     },
   ) => void;
@@ -432,6 +439,7 @@ interface ComposerDraftStoreState {
       interactionMode?: ProviderInteractionMode;
       // T3-CUSTOM(expbkt3): BEGIN
       parentThreadId?: ThreadId | null;
+      parentEnvironmentId?: EnvironmentId | null;
       // T3-CUSTOM(expbkt3): END
     },
   ) => void;
@@ -1394,6 +1402,7 @@ function createDraftThreadState(
     interactionMode?: ProviderInteractionMode;
     // T3-CUSTOM(expbkt3): BEGIN
     parentThreadId?: ThreadId | null;
+    parentEnvironmentId?: EnvironmentId | null;
     // T3-CUSTOM(expbkt3): END
   },
 ): DraftThreadState {
@@ -1421,14 +1430,26 @@ function createDraftThreadState(
     options?.startFromOrigin === undefined
       ? (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
-  // A parent in another project cannot be linked, so a project change drops it
-  // exactly like the other machine-specific context.
+  // T3-CUSTOM(expbkt3): a parent in another project — including one on another
+  // machine — can be linked now, so a project change no longer drops it. Moving
+  // a seeded draft somewhere the work can actually run, while its parent's host
+  // is unreachable, is the case this exists for. The parent's environment is
+  // materialised at the moment the draft leaves it, because "the draft's own
+  // environment" stops being the right answer from then on.
   const nextParentThreadId =
     options?.parentThreadId === undefined
-      ? projectChanged
-        ? null
-        : (existingThread?.parentThreadId ?? null)
+      ? (existingThread?.parentThreadId ?? null)
       : (options.parentThreadId ?? null);
+  const carriedParentEnvironmentId =
+    options?.parentEnvironmentId === undefined
+      ? projectChanged && existingThread !== undefined
+        ? (existingThread.parentEnvironmentId ?? existingThread.environmentId)
+        : (existingThread?.parentEnvironmentId ?? null)
+      : (options.parentEnvironmentId ?? null);
+  const nextParentEnvironmentId =
+    nextParentThreadId === null || carriedParentEnvironmentId === projectRef.environmentId
+      ? null
+      : carriedParentEnvironmentId;
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1444,6 +1465,7 @@ function createDraftThreadState(
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
     parentThreadId: nextParentThreadId,
+    parentEnvironmentId: nextParentEnvironmentId,
     promotedTo: null,
   };
 }
@@ -1477,6 +1499,10 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    // T3-CUSTOM(expbkt3): two drafts with the same parent id on different
+    // machines are different drafts; without this the store would treat a
+    // re-targeted draft as unchanged and keep the stale parent environment.
+    (left.parentEnvironmentId ?? null) === (right.parentEnvironmentId ?? null) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -2531,6 +2557,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
               (nextDraftThread.parentThreadId ?? null) === (existing.parentThreadId ?? null) &&
+              // T3-CUSTOM(expbkt3): the parent's environment is part of the identity.
+              (nextDraftThread.parentEnvironmentId ?? null) ===
+                (existing.parentEnvironmentId ?? null) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;

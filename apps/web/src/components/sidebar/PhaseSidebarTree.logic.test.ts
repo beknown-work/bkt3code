@@ -74,6 +74,9 @@ function makeRow(
   id: string,
   options: {
     readonly parent?: string | null;
+    // T3-CUSTOM(expbkt3): the environment the named parent lives on.
+    readonly parentEnvironment?: string;
+    readonly environment?: string;
     readonly phaseId?: PhaseSidebarPhaseId;
     readonly repositoryKey?: string;
     readonly archived?: boolean;
@@ -84,6 +87,12 @@ function makeRow(
   const thread = makeThread(id, {
     ...(options.parent !== undefined
       ? { parentThreadId: options.parent === null ? null : ThreadId.make(options.parent) }
+      : {}),
+    ...(options.environment !== undefined
+      ? { environmentId: EnvironmentId.make(options.environment) }
+      : {}),
+    ...(options.parentEnvironment !== undefined
+      ? { parentEnvironmentId: EnvironmentId.make(options.parentEnvironment) }
       : {}),
     ...(options.archived ? { archivedAt: now } : {}),
     ...(options.pendingApproval ? { hasPendingApprovals: true } : {}),
@@ -183,6 +192,51 @@ describe("buildPhaseSidebarTree", () => {
     expect(tree[0]?.depth).toBe(0);
     expect(tree[0]?.orphanedFrom).toEqual({ key: key("elsewhere"), title: "Settled parent" });
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN — lineage that crosses environments.
+  it("nests a session under a parent that lives on another machine", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("remote-parent", { environment: "environment-remote" }),
+        makeRow("local-child", {
+          parent: "remote-parent",
+          parentEnvironment: "environment-remote",
+        }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(tree).toHaveLength(1);
+    expect(tree[0]?.row.thread.id).toBe("remote-parent");
+    expect(tree[0]?.children).toHaveLength(1);
+    expect(tree[0]?.children[0]?.row.thread.id).toBe("local-child");
+  });
+
+  it("does not adopt a same-id thread on the wrong environment", () => {
+    // Two environments can mint the same thread id; only the named one is the
+    // parent, and the other must not swallow the child.
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("shared", { environment: "environment-local" }),
+        makeRow("child", { parent: "shared", parentEnvironment: "environment-remote" }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(tree).toHaveLength(2);
+    expect(tree.map((node) => node.row.thread.id).sort()).toEqual(["child", "shared"]);
+  });
+
+  it("still promotes a child whose remote parent is not rendering", () => {
+    const tree = buildPhaseSidebarTree(
+      [makeRow("child", { parent: "gone", parentEnvironment: "environment-remote" })],
+      { compareSiblings: byId },
+    );
+
+    expect(tree).toHaveLength(1);
+    expect(tree[0]?.depth).toBe(0);
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it("leaves no breadcrumb when the parent cannot be named at all", () => {
     const tree = buildPhaseSidebarTree([makeRow("orphan", { parent: "deleted" })], {

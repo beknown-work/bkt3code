@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+// T3-CUSTOM(expbkt3): authClientMetadata reads the Expo manifest for the fork
+// build SHA, which pulls in expo-modules-core; that reads React Native's
+// `__DEV__` global at import time and vitest does not define it.
+vi.mock("expo-constants", () => ({ default: { expoConfig: null } }));
 import { EnvironmentId } from "@t3tools/contracts";
 
 import {
