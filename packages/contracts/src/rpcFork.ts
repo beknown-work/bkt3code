@@ -44,6 +44,8 @@ import {
   PlanReviewVersionDiffResult,
 } from "./planReview.ts";
 import { ProviderRateLimitsStreamSnapshot } from "./providerRateLimits.ts";
+import { ThreadUsage, ThreadUsageInput } from "./threadUsage.ts";
+import { UsageReadError } from "./usage.ts";
 import { ServerResourceSample } from "./server.ts";
 import {
   SessionArchiveBackfillInput,
@@ -114,6 +116,8 @@ export const WS_FORK_METHODS = {
   threadContextExport: "threadContext.export",
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   agentUiGetRender: "agentUi.getRender",
+  // T3-CUSTOM(expbkt3): per-thread API-level cost.
+  threadUsageGet: "threadUsage.get",
 } as const;
 
 export const WsPersonalMcpGetProfileRpc = Rpc.make(WS_FORK_METHODS.personalMcpGetProfile, {
@@ -317,6 +321,13 @@ export const WsAgentUiGetRenderRpc = Rpc.make(WS_FORK_METHODS.agentUiGetRender, 
   error: Schema.Union([AgentUiError, EnvironmentAuthorizationError]),
 });
 
+// T3-CUSTOM(expbkt3): per-thread API-level cost, read-only.
+export const WsThreadUsageGetRpc = Rpc.make(WS_FORK_METHODS.threadUsageGet, {
+  payload: ThreadUsageInput,
+  success: ThreadUsage,
+  error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
 export const WsOrchestrationStopExecutionRpc = Rpc.make(ORCHESTRATION_WS_METHODS.stopExecution, {
   payload: OrchestrationRpcSchemas.stopExecution.input,
   success: OrchestrationRpcSchemas.stopExecution.output,
@@ -393,6 +404,7 @@ export const WsSubscribePlanReviewRpc = Rpc.make(WS_FORK_METHODS.subscribePlanRe
 });
 
 export const FORK_WS_RPCS = [
+  WsThreadUsageGetRpc,
   WsPlanReviewGetRpc,
   WsPlanReviewListRpc,
   WsPlanReviewSaveDraftRpc,

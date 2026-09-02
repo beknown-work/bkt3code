@@ -1288,6 +1288,7 @@ const makeWsRpcLayer = (
         actorLabel,
         systemResourceMonitor,
         providerRateLimits,
+        usage,
         projectionSnapshotQuery,
         orchestrationEngine,
         gitVcsDriver,

@@ -18,6 +18,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 // T3-CUSTOM(expbkt3): phase sidebar read state.
 import { useMarkPhaseSidebarThreadVisited } from "../phasesidebar/phaseSidebarVisitStore";
+// T3-CUSTOM(expbkt3): per-thread API-level cost.
+import { useThreadUsage } from "../threadusage/useThreadUsage";
 import { useEnvironmentQuery } from "../../state/query";
 import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vcs-action-state";
 import { vcsEnvironment } from "../../state/vcs";
@@ -676,13 +678,40 @@ function ThreadRouteContent(
   };
   const baseThreadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
   const baseCompactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  // T3-CUSTOM(expbkt3): BEGIN — what this session costs at API prices, as a
+  // header pill ahead of the git controls; tapping opens the breakdown sheet.
+  const threadCost = useThreadUsage(
+    environmentId,
+    threadId === null ? null : ThreadId.make(threadId),
+  );
+  const threadCostHeaderItem = useMemo<NativeHeaderItems>(
+    () =>
+      threadCost.available && environmentId !== null && threadId !== null
+        ? [
+            {
+              accessibilityLabel: `Session cost ${threadCost.label}`,
+              icon: { name: "dollarsign.circle", type: "sfSymbol" as const },
+              identifier: "thread-right-cost",
+              label: threadCost.label,
+              onPress: () =>
+                navigation.navigate("ThreadUsage", {
+                  environmentId,
+                  threadId: ThreadId.make(threadId),
+                }),
+              type: "button" as const,
+            },
+          ]
+        : [],
+    [environmentId, navigation, threadCost.available, threadCost.label, threadId],
+  );
+  // T3-CUSTOM(expbkt3): END
   const threadCenterHeaderItems = useMemo<NativeHeaderItems>(
-    () => [...baseThreadCenterHeaderItems],
-    [baseThreadCenterHeaderItems],
+    () => [...threadCostHeaderItem, ...baseThreadCenterHeaderItems],
+    [baseThreadCenterHeaderItems, threadCostHeaderItem],
   );
   const compactRightHeaderItems = useMemo<NativeHeaderItems>(
-    () => [...baseCompactRightHeaderItems],
-    [baseCompactRightHeaderItems],
+    () => [...threadCostHeaderItem, ...baseCompactRightHeaderItems],
+    [baseCompactRightHeaderItems, threadCostHeaderItem],
   );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
@@ -729,6 +758,15 @@ function ThreadRouteContent(
     if (Platform.OS !== "android") return [];
 
     const actions: AndroidHeaderAction[] = [];
+    // T3-CUSTOM(expbkt3): per-thread API-level cost.
+    if (threadCost.available && environmentId !== null && threadId !== null) {
+      actions.push({
+        accessibilityLabel: `Session cost ${threadCost.label}`,
+        icon: "dollarsign.circle",
+        onPress: () =>
+          navigation.navigate("ThreadUsage", { environmentId, threadId: ThreadId.make(threadId) }),
+      });
+    }
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -764,6 +802,11 @@ function ThreadRouteContent(
     }
     return actions;
   }, [
+    // T3-CUSTOM(expbkt3): per-thread cost pill.
+    environmentId,
+    threadId,
+    threadCost.available,
+    threadCost.label,
     fileInspector.supported,
     handleOpenFilesInspector,
     handleOpenTerminal,

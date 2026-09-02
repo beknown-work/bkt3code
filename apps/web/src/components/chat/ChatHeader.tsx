@@ -56,6 +56,8 @@ import {
 import { cn } from "~/lib/utils";
 // T3-CUSTOM(expbkt3): isolated context-handoff header action.
 import { ThreadContextActionsControl } from "./ThreadContextActionsControl";
+// T3-CUSTOM(expbkt3): per-thread API-level cost.
+import { ThreadCostControl } from "./ThreadCostControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -445,6 +447,11 @@ export const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
+        {/* T3-CUSTOM(expbkt3): what this session costs at API prices; hidden
+            for drafts and on servers without threadUsage.get. */}
+        {!draftId ? (
+          <ThreadCostControl environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
+        ) : null}
         {activeProjectName && (
           <GitActionsControl
             gitCwd={gitCwd}

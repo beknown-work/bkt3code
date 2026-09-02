@@ -23,6 +23,8 @@ import {
   PlanReviewError,
   SessionArchiveError,
   SourceControlProfileError,
+  // T3-CUSTOM(expbkt3): per-thread API-level cost.
+  UsageReadError,
   type AuthSessionId,
   type OrchestrationEvent,
   type ThreadId,
@@ -43,6 +45,8 @@ import type * as AgentUiService from "./agentui/AgentUiService.ts";
 import type * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as SystemResourceMonitor from "./observability/SystemResourceMonitor.ts";
 import type { ProviderRateLimitsShape } from "./provider/ProviderRateLimits.ts";
+// T3-CUSTOM(expbkt3): per-thread API-level cost.
+import type * as UsageService from "./usage/UsageService.ts";
 import type { ProjectionRepositoryError } from "./persistence/Errors.ts";
 import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import type * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
@@ -74,6 +78,8 @@ export interface ForkWsHandlerDeps {
   readonly actorLabel: string | null;
   readonly systemResourceMonitor: SystemResourceMonitor.SystemResourceMonitor["Service"];
   readonly providerRateLimits: ProviderRateLimitsShape;
+  // T3-CUSTOM(expbkt3): per-thread API-level cost.
+  readonly usage: UsageService.UsageService["Service"];
   readonly projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
   readonly orchestrationEngine: OrchestrationEngine.OrchestrationEngineService["Service"];
   readonly gitVcsDriver: GitVcsDriver.GitVcsDriver["Service"];
@@ -124,6 +130,7 @@ export const makeForkWsHandlers = ({
   actorLabel,
   systemResourceMonitor,
   providerRateLimits,
+  usage,
   projectionSnapshotQuery,
   orchestrationEngine,
   gitVcsDriver,
@@ -257,6 +264,47 @@ export const makeForkWsHandlers = ({
           Effect.map((render) => ({ render })),
         ),
         { "rpc.aggregate": "agent-ui" },
+      ),
+    // T3-CUSTOM(expbkt3): END
+    // T3-CUSTOM(expbkt3): BEGIN per-thread API-level cost. Thread-scoped read:
+    // the figures go only to someone who can already read that thread. The
+    // provider session behind the thread comes from the shell projection.
+    [WS_METHODS.threadUsageGet]: (input) =>
+      observeRpcEffect(
+        WS_METHODS.threadUsageGet,
+        requireThreadAccess(input.threadId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new UsageReadError({
+                reason: "scanFailed",
+                detail: cause.message,
+                cause,
+              }),
+          ),
+          Effect.andThen(
+            projectionSnapshotQuery.getShellSnapshot().pipe(
+              Effect.mapError(
+                (cause) =>
+                  new UsageReadError({
+                    reason: "scanFailed",
+                    detail: "Thread projection could not be read.",
+                    cause,
+                  }),
+              ),
+            ),
+          ),
+          Effect.flatMap((snapshot) => {
+            const thread = snapshot.threads.find((candidate) => candidate.id === input.threadId);
+            const providerThreadId = thread?.session?.providerThreadId ?? null;
+            return usage.readThreadUsage({
+              threadId: input.threadId,
+              sessionIds: providerThreadId === null ? [] : [providerThreadId],
+              sinceMs: thread === undefined ? 0 : Date.parse(thread.createdAt),
+              timeZone: input.timeZone,
+            });
+          }),
+        ),
+        { "rpc.aggregate": "usage" },
       ),
     // T3-CUSTOM(expbkt3): END
     [WS_METHODS.sourceControlProfilesList]: (_input) =>
