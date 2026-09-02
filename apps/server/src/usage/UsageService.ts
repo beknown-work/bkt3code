@@ -21,6 +21,9 @@ import {
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): per-thread cost.
+import type { ThreadId, ThreadUsage } from "@t3tools/contracts";
+import { aggregateThreadUsage } from "./threadUsage.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -90,6 +93,13 @@ export class UsageService extends Context.Service<
   UsageService,
   {
     readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    // T3-CUSTOM(expbkt3): per-thread API-level cost.
+    readonly readThreadUsage: (input: {
+      readonly threadId: ThreadId;
+      readonly sessionIds: ReadonlyArray<string>;
+      readonly sinceMs: number;
+      readonly timeZone: string;
+    }) => Effect.Effect<ThreadUsage, UsageReadError>;
   }
 >()("t3/usage/UsageService") {}
 
@@ -113,6 +123,30 @@ export const layerTest = Layer.succeed(
           knownModels: 0,
         },
         scanDurationMs: 0,
+      }),
+    // T3-CUSTOM(expbkt3): per-thread API-level cost.
+    readThreadUsage: (input) =>
+      Effect.succeed({
+        contractVersion: 1,
+        threadId: input.threadId,
+        readAt: "1970-01-01T00:00:00.000Z",
+        sessionIds: input.sessionIds,
+        totals: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+        },
+        costUsd: 0,
+        cacheSavingsUsd: 0,
+        costSource: "unpriced",
+        records: 0,
+        models: [],
+        days: [],
+        firstRecordAt: null,
+        lastRecordAt: null,
+        pricing: { status: "unavailable", source: "test", fetchedAt: null, knownModels: 0 },
       }),
   }),
 );
@@ -442,7 +476,56 @@ export const make = Effect.gen(function* () {
     } satisfies UsageSummary;
   });
 
-  return { readSummary } as const;
+  // T3-CUSTOM(expbkt3): BEGIN one thread's cost. Same scan, same cache, same
+  // rates as the summary; only the fold differs (see threadUsage.ts).
+  const readThreadUsage = Effect.fn("UsageService.readThreadUsage")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly sessionIds: ReadonlyArray<string>;
+    readonly sinceMs: number;
+    readonly timeZone: string;
+  }) {
+    yield* ensureRates();
+    yield* ensureScanCacheLoaded;
+    const dirs = yield* resolveTranscriptDirs().pipe(Effect.provideService(Path.Path, path));
+    const records: UsageRecord[] = [];
+    if (input.sessionIds.length > 0) {
+      for (const { provider, dir } of dirs) {
+        const exists = yield* fileSystem
+          .exists(dir)
+          .pipe(Effect.catchCause(() => Effect.succeed(false)));
+        if (!exists) continue;
+        const files = yield* Effect.promise(() =>
+          listTranscriptFiles(dir, input.sinceMs - MTIME_SLACK_MS),
+        );
+        for (const file of files) {
+          const parsed = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
+          for (const record of parsed) records.push(record);
+        }
+      }
+    }
+    yield* persistScanCache();
+    const readAt = yield* DateTime.now;
+    return aggregateThreadUsage({
+      threadId: input.threadId,
+      sessionIds: input.sessionIds,
+      records,
+      rates,
+      timeZone: input.timeZone,
+      readAt: DateTime.formatIso(readAt),
+      pricing: {
+        status: ratesStatus,
+        source: LITELLM_RATES_URL,
+        fetchedAt:
+          ratesFetchedAtMs === null
+            ? null
+            : DateTime.formatIso(DateTime.makeUnsafe(ratesFetchedAtMs)),
+        knownModels: rates.size,
+      },
+    });
+  });
+  // T3-CUSTOM(expbkt3): END
+
+  return { readSummary, readThreadUsage } as const;
 });
 
 export const layer = Layer.effect(UsageService, make);

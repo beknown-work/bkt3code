@@ -13,6 +13,8 @@ export * from "./provider.ts";
 export * from "./providerInstance.ts";
 export * from "./providerRuntime.ts";
 export * from "./providerRateLimits.ts";
+// T3-CUSTOM(expbkt3): per-thread API-level cost.
+export * from "./threadUsage.ts";
 export * from "./model.ts";
 export * from "./keybindings.ts";
 export * from "./server.ts";

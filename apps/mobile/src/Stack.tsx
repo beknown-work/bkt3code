@@ -30,6 +30,8 @@ import { PlanReviewSheet } from "./features/planreview/PlanReviewSheet";
 import { PlanReviewCommentSheet } from "./features/planreview/PlanReviewCommentSheet";
 // T3-CUSTOM(expbkt3): thread member tagging.
 import { ThreadMembersSheet } from "./features/members/ThreadMembersSheet";
+// T3-CUSTOM(expbkt3): per-thread API-level cost.
+import { ThreadUsageSheet } from "./features/threadusage/ThreadUsageSheet";
 import { ThreadTerminalRouteScreen } from "./features/terminal/ThreadTerminalRouteScreen";
 import { GitBranchesSheet } from "./features/threads/git/GitBranchesSheet";
 import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
@@ -531,6 +533,19 @@ export const RootStack = createNativeStackNavigator({
       linking: `${THREAD_LINKING_PREFIX}/members`,
       options: {
         // Same Android constraint as the other keyboard-driven sheets.
+        ...(Platform.OS === "android"
+          ? { presentation: "fullScreenModal" as const }
+          : FORM_SHEET_PRESENTATION_OPTIONS),
+        sheetAllowedDetents: Platform.OS === "android" ? undefined : [0.6, 0.95],
+        sheetGrabberVisible: Platform.OS !== "android",
+        headerShown: false,
+      },
+    }),
+    // T3-CUSTOM(expbkt3): per-thread API-level cost, opened from the header pill.
+    ThreadUsage: createNativeStackScreen({
+      screen: ThreadUsageSheet,
+      linking: `${THREAD_LINKING_PREFIX}/usage`,
+      options: {
         ...(Platform.OS === "android"
           ? { presentation: "fullScreenModal" as const }
           : FORM_SHEET_PRESENTATION_OPTIONS),

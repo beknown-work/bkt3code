@@ -55,4 +55,6 @@ export const FORK_RPC_REQUIRED_SCOPES = {
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces. A read of thread content,
   // and the handler additionally gates on per-thread access.
   [WS_FORK_METHODS.agentUiGetRender]: AuthOrchestrationReadScope,
+  // T3-CUSTOM(expbkt3): per-thread cost is a read of that thread's usage.
+  [WS_FORK_METHODS.threadUsageGet]: AuthOrchestrationReadScope,
 } as const;
