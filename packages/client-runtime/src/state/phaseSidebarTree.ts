@@ -380,12 +380,29 @@ export interface PhaseSidebarTreeGroupsResult {
  * survives when it matches, or when anything in its subtree matches (its
  * ancestors are carried along to keep the path renderable).
  */
-export function buildPhaseSidebarTreeGroups(input: {
+export interface PhaseSidebarFilteredTreeInput {
   readonly rows: ReadonlyArray<PhaseSidebarRow>;
   readonly filters: PhaseSidebarFilters;
   readonly compareSiblings: (left: PhaseSidebarRow, right: PhaseSidebarRow) => number;
   readonly titleForKey?: (key: string) => string | null;
-}): PhaseSidebarTreeGroupsResult {
+}
+
+export interface PhaseSidebarFilteredTree {
+  readonly tree: ReadonlyArray<PhaseSidebarTreeNode>;
+  readonly forcedExpansionKeys: ReadonlySet<string>;
+}
+
+/**
+ * Filter, then nest — the part of the pipeline every grouping mode shares.
+ *
+ * Filtering runs against the tree rather than the flat row list so a match is
+ * never hidden inside a collapsed parent that does not itself match. A row
+ * survives when it matches, or when anything in its subtree matches (its
+ * ancestors are carried along to keep the path renderable).
+ */
+export function buildPhaseSidebarFilteredTree(
+  input: PhaseSidebarFilteredTreeInput,
+): PhaseSidebarFilteredTree {
   const candidates = input.rows.filter((row) => row.thread.archivedAt === null);
   const matches = (row: PhaseSidebarRow) => matchesPhaseSidebarFilters(row, input.filters);
   const filtersActive = phaseSidebarFiltersActive(input.filters);
@@ -419,15 +436,28 @@ export function buildPhaseSidebarTreeGroups(input: {
     ...(input.titleForKey ? { titleForKey: input.titleForKey } : {}),
   });
 
-  const groups = PHASE_SIDEBAR_PHASES.flatMap((phase) => {
-    const nodes = tree.filter((node) => resolvePhaseSidebarTreePhase(node) === phase.id);
-    return nodes.length > 0 ? [{ ...phase, nodes }] : [];
-  });
-
   return {
-    groups,
+    tree,
     forcedExpansionKeys: filtersActive
       ? resolveForcedExpansionKeys(tree, matches)
       : new Set<string>(),
   };
+}
+
+/** Roots bucketed by lifecycle phase, in the canonical phase order. */
+export function groupPhaseSidebarTreeByPhase(
+  tree: ReadonlyArray<PhaseSidebarTreeNode>,
+): ReadonlyArray<PhaseSidebarTreeGroup> {
+  return PHASE_SIDEBAR_PHASES.flatMap((phase) => {
+    const nodes = tree.filter((node) => resolvePhaseSidebarTreePhase(node) === phase.id);
+    return nodes.length > 0 ? [{ ...phase, nodes }] : [];
+  });
+}
+
+/** The full pipeline for one section: filter, nest, then group the roots by phase. */
+export function buildPhaseSidebarTreeGroups(
+  input: PhaseSidebarFilteredTreeInput,
+): PhaseSidebarTreeGroupsResult {
+  const { tree, forcedExpansionKeys } = buildPhaseSidebarFilteredTree(input);
+  return { groups: groupPhaseSidebarTreeByPhase(tree), forcedExpansionKeys };
 }

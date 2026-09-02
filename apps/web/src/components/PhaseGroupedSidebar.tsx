@@ -19,6 +19,7 @@ import { deriveThreadExecutionPresentation } from "@t3tools/client-runtime/state
 import {
   ProviderDriverKind,
   type EnvironmentId,
+  type ProjectId,
   type LinearIssueStatusSummary,
   type ScopedThreadRef,
   // T3-CUSTOM(expbkt3): session lineage.
@@ -140,7 +141,6 @@ import {
   isThreadAssignedToUser,
   phaseSidebarRowOwnerAvatarUserId,
   partitionPhaseSidebarRows,
-  phaseSidebarGroupHeaderClassName,
   // T3-CUSTOM(expbkt3): Session priority badge tone.
   phaseSidebarPriorityBadgeClassName,
   phaseSidebarCanForceStopAgent,
@@ -184,13 +184,22 @@ import {
 // T3-CUSTOM(expbkt3): END
 // T3-CUSTOM(expbkt3): BEGIN — session trees.
 import {
-  buildPhaseSidebarTreeGroups,
   collectPhaseSidebarSubtreeKeys,
   flattenPhaseSidebarTree,
   phaseSidebarTreeIndent,
   type PhaseSidebarTreeNode,
 } from "./sidebar/PhaseSidebarTree.logic";
 import { usePhaseSidebarTreeStore } from "../phaseSidebarTreeStore";
+// T3-CUSTOM(expbkt3): group by lifecycle / project / custom groups.
+import {
+  buildPhaseSidebarSections,
+  phaseSidebarSectionPhase,
+  type PhaseSidebarSection as PhaseSidebarGroupSection,
+} from "@t3tools/client-runtime/state/phase-sidebar-grouping";
+import { usePhaseSidebarGroupingStore } from "../phaseSidebarGroupingStore";
+import { PhaseSidebarGroupByPopover } from "./sidebar/PhaseSidebarGroupByPopover";
+import { PhaseSidebarGroupNameDialog } from "./sidebar/PhaseSidebarGroupNameDialog";
+import { phaseSidebarSectionHeaderClassName } from "./sidebar/PhaseGroupedSidebar.logic";
 import { MoveUnderSessionDialog } from "./sidebar/MoveUnderSessionDialog";
 import { NewThreadProjectPicker } from "./sidebar/NewThreadProjectPicker";
 // T3-CUSTOM(expbkt3): "Create new thread" from a row, as a side-by-side session.
@@ -899,6 +908,19 @@ interface PhaseThreadRowProps {
   readonly treeParentKey?: string | null;
   readonly treeParentTitle?: string | null;
   // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): BEGIN — custom groups. One stable actions object plus
+  // the row's own group id, for the same memo reason as the tree props above.
+  // `groupActions` absent = no custom groups exist, so the menu shows nothing.
+  readonly groupActions?: PhaseThreadRowGroupActions;
+  readonly customGroupId?: string | null;
+  // T3-CUSTOM(expbkt3): END
+}
+
+/** T3-CUSTOM(expbkt3): "Move to group" from a row. */
+interface PhaseThreadRowGroupActions {
+  readonly groups: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+  readonly onAssign: (row: PhaseSidebarRow, groupId: string | null) => void;
+  readonly onCreateGroupWith: (row: PhaseSidebarRow) => void;
 }
 
 /**
@@ -974,6 +996,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     treeExpanded,
     treeParentKey,
     treeParentTitle,
+    groupActions,
+    customGroupId,
   } = props;
   const threadRef = scopeThreadRef(row.thread.environmentId, row.thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -1234,6 +1258,30 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             : []),
         ]
       : [];
+    // T3-CUSTOM(expbkt3): custom groups. Offered whenever the user has made
+    // any, whichever mode is showing — placing a session is cheap, and the
+    // group is waiting when they switch to Custom.
+    // A nested row is placed with its parent, so offering to move it alone
+    // would show a tick for a group it never appears in.
+    const groupItems =
+      groupActions && treeParentKey == null
+        ? [
+            {
+              id: "move-to-group",
+              label: "Move to group",
+              children: [
+                ...groupActions.groups.map((group) => ({
+                  id: `group:${group.id}`,
+                  label: customGroupId === group.id ? `${group.label} ✓` : group.label,
+                })),
+                ...(customGroupId != null
+                  ? [{ id: "group:none", label: "Remove from group" }]
+                  : []),
+                { id: "group:new", label: "New group…" },
+              ],
+            },
+          ]
+        : [];
     // Side-by-side sessions. First in the menu because it is the one item that
     // starts work rather than tidying up after it, and because the whole point
     // is opening a second session without leaving the one you are reading.
@@ -1276,6 +1324,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         ...mattermostItems,
         // T3-CUSTOM(expbkt3): session lineage.
         ...lineageItems,
+        // T3-CUSTOM(expbkt3): custom groups.
+        ...groupItems,
         ...settlementItems,
         ...snoozeItems,
         {
@@ -1347,6 +1397,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "detach-parent") treeActions?.onDetach(row);
     if (action === "expand-subtree") treeActions?.onSetSubtreeExpanded(threadKey, true);
     if (action === "collapse-subtree") treeActions?.onSetSubtreeExpanded(threadKey, false);
+    // T3-CUSTOM(expbkt3): custom groups.
+    if (action === "group:new") groupActions?.onCreateGroupWith(row);
+    else if (action === "group:none") groupActions?.onAssign(row, null);
+    else if (action?.startsWith("group:")) {
+      groupActions?.onAssign(row, action.slice("group:".length));
+    }
   };
 
   // Phones have no right button: holding the row is how the menu is reached.
@@ -2149,16 +2205,91 @@ export function PhaseGroupedSidebar() {
       )?.thread.title ?? null,
     [allRows],
   );
-  const { groups, forcedExpansionKeys } = useMemo(
+  // T3-CUSTOM(expbkt3): BEGIN — group by lifecycle, project, or custom groups.
+  const grouping = usePhaseSidebarGroupingStore((state) => state.grouping);
+  const toggleSectionCollapsed = usePhaseSidebarGroupingStore(
+    (state) => state.toggleSectionCollapsed,
+  );
+  const assignThreadToGroup = usePhaseSidebarGroupingStore((state) => state.assignThread);
+  const createCustomGroup = usePhaseSidebarGroupingStore((state) => state.createGroup);
+  const pruneGrouping = usePhaseSidebarGroupingStore((state) => state.prune);
+  const [groupNameDialogRow, setGroupNameDialogRow] = useState<PhaseSidebarRow | null>(null);
+  const projectLabelFor = useCallback(
+    (environmentId: string, projectId: string) =>
+      projectByKey.get(
+        scopedProjectKey(scopeProjectRef(environmentId as EnvironmentId, projectId as ProjectId)),
+      )?.title ?? null,
+    [projectByKey],
+  );
+  const environmentLabelFor = useCallback(
+    (environmentId: string) =>
+      environments.find((environment) => environment.environmentId === environmentId)?.label ??
+      null,
+    [environments],
+  );
+  const { sections, forcedExpansionKeys } = useMemo(
     () =>
-      buildPhaseSidebarTreeGroups({
+      buildPhaseSidebarSections({
         rows: activeRows,
         filters,
         compareSiblings: (left, right) => comparePhaseSidebarRows(left, right, sortOrder, rowSort),
         titleForKey: titleForThreadKey,
+        grouping,
+        projectLabelFor,
+        environmentLabelFor,
       }),
-    [activeRows, filters, rowSort, sortOrder, titleForThreadKey],
+    [
+      activeRows,
+      environmentLabelFor,
+      filters,
+      grouping,
+      projectLabelFor,
+      rowSort,
+      sortOrder,
+      titleForThreadKey,
+    ],
   );
+  const collapsedSectionKeys = useMemo(
+    () => new Set(grouping.collapsedSectionKeys),
+    [grouping.collapsedSectionKeys],
+  );
+  // Ghost membership: drop keys no connected environment knows, but only once
+  // every environment has reported, so an offline machine's sessions survive.
+  useEffect(() => {
+    if (!allEnvironmentShellsLive || grouping.customGroups.length === 0) return;
+    pruneGrouping(
+      new Set(
+        allRows.map((row) =>
+          scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
+        ),
+      ),
+    );
+  }, [allEnvironmentShellsLive, allRows, grouping.customGroups.length, pruneGrouping]);
+  const groupActions = useMemo<PhaseThreadRowGroupActions | undefined>(
+    () =>
+      grouping.customGroups.length === 0 && grouping.groupBy !== "custom"
+        ? undefined
+        : {
+            groups: grouping.customGroups.map((group) => ({ id: group.id, label: group.label })),
+            onAssign: (row, groupId) =>
+              assignThreadToGroup(
+                scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)),
+                groupId,
+              ),
+            onCreateGroupWith: (row) => setGroupNameDialogRow(row),
+          },
+    [assignThreadToGroup, grouping.customGroups, grouping.groupBy],
+  );
+  const customGroupIdByThreadKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const group of grouping.customGroups) {
+      for (const key of group.threadKeys) map.set(key, group.id);
+    }
+    return map;
+  }, [grouping.customGroups]);
+  /** The lifecycle groups, kept for the callers that reason about phases. */
+  const groups = sections;
+  // T3-CUSTOM(expbkt3): END
   const storedExpandedKeys = usePhaseSidebarTreeStore((state) => state.expandedKeys);
   const toggleTreeKey = usePhaseSidebarTreeStore((state) => state.toggle);
   const setTreeKeysExpanded = usePhaseSidebarTreeStore((state) => state.setExpanded);
@@ -2182,10 +2313,23 @@ export function PhaseGroupedSidebar() {
   }, [groups]);
   // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): Separate idle lifecycle groups from live agent work.
-  const runningDividerPhaseId = runningSessionDividerPhase(groups.map((group) => group.id));
+  // Only meaningful when the sections ARE lifecycle phases.
+  const runningDividerPhaseId =
+    grouping.groupBy === "lifecycle"
+      ? runningSessionDividerPhase(
+          sections.flatMap((section) => (section.phaseId === null ? [] : [section.phaseId])),
+        )
+      : null;
+  // A collapsed section's rows are not on screen, so keyboard traversal and
+  // range selection skip them too.
   const activeVisibleNodes = useMemo(
-    () => groups.flatMap((group) => flattenPhaseSidebarTree(group.nodes, isTreeKeyExpanded)),
-    [groups, isTreeKeyExpanded],
+    () =>
+      sections.flatMap((section) =>
+        collapsedSectionKeys.has(section.key)
+          ? []
+          : flattenPhaseSidebarTree(section.nodes, isTreeKeyExpanded),
+      ),
+    [collapsedSectionKeys, isTreeKeyExpanded, sections],
   );
   const activeVisibleRows = useMemo(
     () => activeVisibleNodes.map((node) => node.row),
@@ -2321,7 +2465,16 @@ export function PhaseGroupedSidebar() {
         row.thread.archivedAt === null &&
         scopedThreadKey(scopeThreadRef(row.thread.environmentId, row.thread.id)) === routeThreadKey,
     ) &&
-    !visibleRowByKey.has(routeThreadKey);
+    !visibleRowByKey.has(routeThreadKey) &&
+    // T3-CUSTOM(expbkt3): a thread folded into a collapsed section is not
+    // hidden by the filters; it is one header click away.
+    !sections.some(
+      (section) =>
+        collapsedSectionKeys.has(section.key) &&
+        flattenPhaseSidebarTree(section.nodes, () => true).some(
+          (node) => node.key === routeThreadKey,
+        ),
+    );
   const activeThread = routeRef
     ? (threads.find(
         (thread) =>
@@ -3034,6 +3187,9 @@ export function PhaseGroupedSidebar() {
         onSetMattermostThreadUrl={setThreadMattermostThreadUrl}
         onRegenerateTitle={regenerateThreadTitle}
         onCreateThread={createThreadFromRow}
+        // T3-CUSTOM(expbkt3): custom groups.
+        {...(groupActions ? { groupActions } : {})}
+        customGroupId={customGroupIdByThreadKey.get(key) ?? null}
         linearIssueStatus={(() => {
           const issue = resolvePhaseSidebarLinearIssue(
             row.thread.branch,
@@ -3148,9 +3304,8 @@ export function PhaseGroupedSidebar() {
         <SidebarEnvironmentNotices />
         <SidebarGroup className="px-2 pt-1 pb-2">
           <div className="flex items-center justify-between px-1">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-              Lifecycle
-            </span>
+            {/* T3-CUSTOM(expbkt3): the caption is the group-by control. */}
+            <PhaseSidebarGroupByPopover />
             <PhaseFilterPopover repositories={repositoryOptions} providers={providerOptions} />
           </div>
           <ActiveFilterChips repositoryLabels={repositoryLabels} providerLabels={providerLabels} />
@@ -3172,25 +3327,18 @@ export function PhaseGroupedSidebar() {
           className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
           data-testid="phase-sidebar-groups"
         >
-          {groups.map((group) => (
-            <section key={group.id} className="mb-3" data-phase-id={group.id}>
-              {/* T3-CUSTOM(expbkt3): A quiet boundary before live agent work. */}
-              {group.id === runningDividerPhaseId ? <RunningSessionDivider /> : null}
-              <header className={phaseSidebarGroupHeaderClassName(group.id)}>
-                <span className="text-[11px] font-bold uppercase tracking-[0.1em]">
-                  {group.label}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[9px] text-current/55">
-                  {group.helperText}
-                </span>
-                <span className="min-w-4 rounded-full bg-background/45 px-1.5 py-0.5 text-center text-[9px] font-semibold tabular-nums text-current/70">
-                  {group.nodes.length}
-                </span>
-              </header>
-              <ul ref={attachAutoAnimate} className="space-y-0.5">
-                {group.nodes.map((node) => renderTreeNode(node))}
-              </ul>
-            </section>
+          {sections.map((section) => (
+            <PhaseSidebarSectionBlock
+              key={section.key}
+              section={section}
+              collapsed={collapsedSectionKeys.has(section.key)}
+              showRunningDivider={
+                section.phaseId !== null && section.phaseId === runningDividerPhaseId
+              }
+              onToggleCollapsed={toggleSectionCollapsed}
+              renderTreeNode={renderTreeNode}
+              attachAutoAnimate={attachAutoAnimate}
+            />
           ))}
           {/* T3-CUSTOM(expbkt3): BEGIN — parked shelves below the lifecycle
               groups: out of the way, never gone, always undoable. */}
@@ -3268,7 +3416,8 @@ export function PhaseGroupedSidebar() {
             </section>
           ) : null}
           {/* T3-CUSTOM(expbkt3): END */}
-          {groups.length + snoozedRows.length + settledRows.length === 0 ? (
+          {sections.every((section) => section.nodes.length === 0) &&
+          snoozedRows.length + settledRows.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
               <FilterIcon className="size-5 text-muted-foreground/40" />
               <p className="text-xs text-muted-foreground">No threads match these filters</p>
@@ -3309,6 +3458,28 @@ export function PhaseGroupedSidebar() {
       />
       {/* T3-CUSTOM(expbkt3): attach-to-external-session. */}
       <AttachExternalSessionDialog open={attachSessionOpen} onOpenChange={setAttachSessionOpen} />
+      {/* T3-CUSTOM(expbkt3): custom groups — "New group…" from a row seeds it with that row. */}
+      <PhaseSidebarGroupNameDialog
+        open={groupNameDialogRow !== null}
+        mode="create"
+        initialLabel=""
+        onOpenChange={(open) => {
+          if (!open) setGroupNameDialogRow(null);
+        }}
+        onSubmit={(label) => {
+          if (groupNameDialogRow) {
+            createCustomGroup(label, [
+              scopedThreadKey(
+                scopeThreadRef(
+                  groupNameDialogRow.thread.environmentId,
+                  groupNameDialogRow.thread.id,
+                ),
+              ),
+            ]);
+          }
+          setGroupNameDialogRow(null);
+        }}
+      />
       {/* T3-CUSTOM(expbkt3): session lineage. */}
       <MoveUnderSessionDialog
         subject={moveUnderRow?.thread ?? null}
@@ -3328,6 +3499,101 @@ export function PhaseGroupedSidebar() {
         }}
       />
     </>
+  );
+}
+
+/**
+ * T3-CUSTOM(expbkt3): one section of the list — a lifecycle phase, a project,
+ * or a custom group. The header is the collapse toggle; when closed it keeps
+ * saying what it hides (running / needs input / unread) so nothing goes quiet
+ * just because it was folded away.
+ */
+function PhaseSidebarSectionBlock({
+  section,
+  collapsed,
+  showRunningDivider,
+  onToggleCollapsed,
+  renderTreeNode,
+  attachAutoAnimate,
+}: {
+  readonly section: PhaseSidebarGroupSection;
+  readonly collapsed: boolean;
+  readonly showRunningDivider: boolean;
+  readonly onToggleCollapsed: (sectionKey: string) => void;
+  readonly renderTreeNode: (node: PhaseSidebarTreeNode) => ReactNode;
+  readonly attachAutoAnimate: (element: HTMLElement | null) => void;
+}) {
+  const { summary } = section;
+  const phaseId = phaseSidebarSectionPhase(section);
+  return (
+    <section
+      className="mb-3"
+      data-phase-id={section.phaseId ?? undefined}
+      data-section-key={section.key}
+      data-testid="phase-sidebar-section"
+    >
+      {/* A quiet boundary before live agent work. */}
+      {showRunningDivider ? <RunningSessionDivider /> : null}
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        aria-label={`${section.label}, ${section.nodes.length} session${section.nodes.length === 1 ? "" : "s"}${collapsed ? ", collapsed" : ""}`}
+        onClick={() => onToggleCollapsed(section.key)}
+        className={cn(
+          phaseSidebarSectionHeaderClassName(
+            section.kind === "lifecycle" ? section.phaseId : phaseId,
+          ),
+          "w-full cursor-pointer text-left",
+        )}
+      >
+        <ChevronDownIcon
+          aria-hidden
+          className={cn("size-3 shrink-0 transition-transform", collapsed && "-rotate-90")}
+        />
+        <span className="truncate text-[11px] font-bold uppercase tracking-[0.1em]">
+          {section.label}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[9px] text-current/55">
+          {section.helperText}
+        </span>
+        {collapsed && summary.attention > 0 ? (
+          <span
+            className="rounded-full bg-red-500/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-red-700 dark:text-red-300"
+            aria-label={`${summary.attention} waiting on you`}
+          >
+            {summary.attention}
+          </span>
+        ) : null}
+        {collapsed && summary.running > 0 ? (
+          <span
+            className="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-sky-700 dark:text-sky-300"
+            aria-label={`${summary.running} running`}
+          >
+            {summary.running}
+          </span>
+        ) : null}
+        {collapsed && summary.unread > 0 ? (
+          <span
+            className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-300"
+            aria-label={`${summary.unread} unread`}
+          >
+            {summary.unread}
+          </span>
+        ) : null}
+        <span className="min-w-4 rounded-full bg-background/45 px-1.5 py-0.5 text-center text-[9px] font-semibold tabular-nums text-current/70">
+          {section.nodes.length}
+        </span>
+      </button>
+      {collapsed ? null : section.nodes.length === 0 ? (
+        <p className="px-2 py-1 text-[10px] text-muted-foreground/60">
+          Empty — use “Move to group” on a session.
+        </p>
+      ) : (
+        <ul ref={attachAutoAnimate} className="space-y-0.5">
+          {section.nodes.map((node) => renderTreeNode(node))}
+        </ul>
+      )}
+    </section>
   );
 }
 
