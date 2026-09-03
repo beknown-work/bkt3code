@@ -446,6 +446,36 @@ credentials only when the overlay carries a source-control identity of its own,
 so machine-identity mode keeps its own `GH_TOKEN` while still carrying the
 markers.
 
+## Open-in-app targets and the managed-primary remote-open fix
+
+Two related seams around upstream's "Open in <editor>" picker.
+
+**Managed primary is not this machine.** Upstream's `resolveRemoteOpenState`
+(`apps/web/src/remoteOpen.ts`) treats a desktop renderer's primary environment as
+local unconditionally, because an upstream desktop build hosts its own primary
+backend. A managed BK build points its primary at the central bkt3/expbkt3
+server, so that assumption launched an editor _on the server_ and nothing opened
+on the viewer's machine. `apps/web/src/fork/remoteOpenManaged.ts` holds the
+corrected predicate and the hook passes it through at one marked line. The
+bundled local backend still resolves to local-exec through upstream's own
+`local:` connection-id check, so no separate handling is needed for it.
+
+**Upstream #8305 is backported.** The login account on each advertised host
+(`RemoteOpenTarget.username`, `HostProcessUsername`, `buildRemoteOpenUrl`'s
+`user@host`) is upstream PR #8305, applied verbatim under markers so the merge
+that brings it in is a no-op. Do not "fix" it independently — if the PR lands
+upstream, drop the markers and keep upstream's version.
+
+**User-defined targets.** Obsidian, a file manager, and arbitrary apps have no
+upstream analogue and cannot reach another machine the way Remote-SSH editors
+can, so `ClientSettings.openTargets` pairs a URL template with remote-to-local
+path mappings, resolved client-side in `apps/web/src/fork/openTargets.ts`. Host
+scoping on a mapping is what lets one client serve several servers whose paths
+differ. The desktop fires these through a dedicated
+`desktop:bk-open-target` channel (`apps/desktop/src/ipc/methods/bkOpenTarget.ts`)
+rather than widening `ElectronShell`'s allowlist, which upstream deliberately
+narrowed in #7697 and which every transcript link also passes through.
+
 ## Upstream merge workflow
 
 1. Fetch and merge `upstream/main` into `expbkmain` — the long-lived staging

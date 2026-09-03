@@ -10,6 +10,7 @@
 - [Customize a project icon](./user/project-settings.md)
 - [Mobile appearance](./user/mobile-appearance.md)
 - [Remote access](./user/remote-access.md)
+- [Opening a worktree in another app](./user/open-in-app.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [User management](./user/user-management.md)
 - [Source control integrations](./user/source-control.md)

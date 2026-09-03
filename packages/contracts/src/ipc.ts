@@ -1130,6 +1130,11 @@ export interface DesktopBridge {
    * builds lack it; callers fall back to VS Code only.
    */
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
+  // T3-CUSTOM(expbkt3): BEGIN - fire a user-defined "Open in…" target URL
+  // (Obsidian, a file manager, any installed app). Optional: older desktop
+  // builds lack it, and callers disable the menu items rather than guess.
+  openForkTarget?: (url: string) => Promise<boolean>;
+  // T3-CUSTOM(expbkt3): END
   onMenuAction: (listener: (action: string) => void) => () => void;
   /**
    * Hold-to-quit hint pushes: "down" when the quit shortcut is first pressed,

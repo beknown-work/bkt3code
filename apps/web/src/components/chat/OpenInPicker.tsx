@@ -19,6 +19,8 @@ import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Group, GroupSeparator } from "../ui/group";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "../ui/menu";
+// T3-CUSTOM(expbkt3): the user's own "Open in…" targets (Obsidian, Finder, custom apps).
+import { OpenTargetsMenuItems } from "../../fork/OpenTargetsMenuItems";
 import {
   AntigravityIcon,
   CursorIcon,
@@ -213,6 +215,8 @@ export const OpenInPicker = memo(function OpenInPicker({
         const url = buildRemoteOpenUrl({
           editor,
           host: remote.host.host,
+          // T3-CUSTOM(expbkt3): username is a backport of upstream #8305.
+          ...(remote.host.username === undefined ? {} : { username: remote.host.username }),
           absolutePath: openInCwd,
         });
         if (url === undefined) return;
@@ -324,6 +328,13 @@ export const OpenInPicker = memo(function OpenInPicker({
               )}
             </>
           )}
+          {/* T3-CUSTOM(expbkt3): user-defined targets, outside the branch above
+              so they remain reachable when no editor deep link is possible. */}
+          <OpenTargetsMenuItems
+            environmentLabel={environmentLabel}
+            openInCwd={openInCwd}
+            remote={remote}
+          />
         </MenuPopup>
       </Menu>
     </Group>

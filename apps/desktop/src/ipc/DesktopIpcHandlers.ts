@@ -44,6 +44,8 @@ import {
   setTheme,
   showContextMenu,
 } from "./methods/window.ts";
+// T3-CUSTOM(expbkt3): user-defined "Open in…" targets.
+import { openForkTarget } from "./methods/bkOpenTarget.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -89,6 +91,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
   yield* ipc.handle(probeRemoteEditors);
+  // T3-CUSTOM(expbkt3): user-defined "Open in…" targets.
+  yield* ipc.handle(openForkTarget);
   yield* ipc.handle(getUpdateState);
   yield* ipc.handle(setUpdateChannel);
   yield* ipc.handle(downloadUpdate);
