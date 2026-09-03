@@ -71,6 +71,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the read-only provider subscription-usage stream. */
   providerRateLimits: Schema.optionalKey(Schema.Boolean),
+  /** T3-CUSTOM(expbkt3): server answers threadUsage.get (per-thread API cost). */
+  threadUsage: Schema.optionalKey(Schema.Boolean),
   /** T3-CUSTOM(expbkt3): server understands priority on thread.create and
       thread.meta.update. Same version-skew contract as threadSnooze. */
   threadPriority: Schema.optionalKey(Schema.Boolean),

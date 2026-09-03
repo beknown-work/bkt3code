@@ -294,10 +294,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     // T3-CUSTOM(expbkt3): END
 
     const sweep = Effect.gen(function* () {
+      // T3-CUSTOM(expbkt3): every phase is timed. The sweep shares the event
+      // loop with every client connection, so a slow phase is an outage, and
+      // an outage that leaves no number in the journal is a mystery
+      // (2026-09-03: unindexed event queries froze bkt3 for minutes per sweep).
+      const sweepStartedMs = yield* Clock.currentTimeMillis;
       yield* sweepOrphanedTurns;
+      const orphanedTurnsDoneMs = yield* Clock.currentTimeMillis;
       // T3-CUSTOM(expbkt3): OS orphan pass runs after the turn pass, so a
       // session settled above is already absent from the live bindings.
       yield* sweepOrphanProcesses;
+      const orphanProcessesDoneMs = yield* Clock.currentTimeMillis;
 
       const bindings = yield* directory.listBindings();
       const now = yield* Clock.currentTimeMillis;
@@ -403,12 +410,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         }
       }
 
-      if (reapedCount > 0) {
-        yield* Effect.logInfo("provider.session.reaper.sweep-complete", {
-          reapedCount,
-          totalBindings: bindings.length,
-        });
-      }
+      // T3-CUSTOM(expbkt3): logged on every sweep, not only when something
+      // was reaped, so the phase durations are always in the journal.
+      const sweepDoneMs = yield* Clock.currentTimeMillis;
+      yield* Effect.logInfo("provider.session.reaper.sweep-complete", {
+        reapedCount,
+        totalBindings: bindings.length,
+        durationMs: sweepDoneMs - sweepStartedMs,
+        orphanedTurnsMs: orphanedTurnsDoneMs - sweepStartedMs,
+        orphanProcessesMs: orphanProcessesDoneMs - orphanedTurnsDoneMs,
+        bindingsMs: sweepDoneMs - orphanProcessesDoneMs,
+      });
     });
 
     const start: ProviderSessionReaperShape["start"] = () =>

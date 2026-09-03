@@ -17,48 +17,111 @@ import {
   type PhaseSidebarRow,
   type PhaseSidebarSortPreferences,
 } from "@t3tools/client-runtime/state/phase-sidebar";
+import {
+  assignPhaseSidebarThreadToGroup,
+  deletePhaseSidebarCustomGroup,
+  movePhaseSidebarCustomGroup,
+  PHASE_SIDEBAR_GROUP_BY_LABELS,
+  type PhaseSidebarSection,
+} from "@t3tools/client-runtime/state/phase-sidebar-grouping";
 import { phaseSidebarFiltersActive } from "@t3tools/client-runtime/state/phase-sidebar-tree";
+import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { useCallback, useState } from "react";
-import { Pressable, View } from "react-native";
+import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import { Alert, FlatList, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadListActions } from "../home/useThreadListActions";
+import { resolveThreadListV2SnoozeMenuSelection } from "../threads/threadListV2";
+import { PhaseSidebarCounters } from "./PhaseSidebarCounters";
 import { PhaseSidebarFilterSheet } from "./PhaseSidebarFilterSheet";
-import { PhaseSidebarList } from "./PhaseSidebarList";
+import {
+  PhaseSidebarGroupBySheet,
+  type PhaseSidebarGroupBySheetIntent,
+} from "./PhaseSidebarGroupBySheet";
+import { PhaseSidebarList, type PhaseSidebarSectionActionId } from "./PhaseSidebarList";
 import { PhaseSidebarRateLimits } from "./PhaseSidebarRateLimits";
-import { useMarkPhaseSidebarThreadVisited } from "./phaseSidebarVisitStore";
+import { PhaseSidebarSheetModal } from "./PhaseSidebarSheetModal";
+import {
+  usePhaseSidebarGrouping,
+  useUpdatePhaseSidebarGrouping,
+} from "./phaseSidebarGroupingStore";
+import {
+  useClearPhaseSidebarThreadVisit,
+  useMarkPhaseSidebarThreadVisited,
+} from "./phaseSidebarVisitStore";
 import { usePhaseSidebarRows, usePhaseSidebarViewerUserId } from "./usePhaseSidebarRows";
 
-/** A day, the single snooze the row menu offers; the thread screen has a picker. */
-const ROW_MENU_SNOOZE_MS = 24 * 60 * 60_000;
+function HeaderButton(props: {
+  readonly icon: ComponentProps<typeof SymbolView>["name"];
+  readonly label: string;
+  readonly active: boolean;
+  readonly onPress: () => void;
+}) {
+  const iconColor = String(useThemeColor("--color-icon"));
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: props.active }}
+      className={cn(
+        "h-8 flex-row items-center gap-1.5 rounded-lg border px-2.5",
+        props.active ? "border-primary bg-primary/15" : "border-border bg-subtle",
+      )}
+      hitSlop={6}
+      onPress={props.onPress}
+    >
+      <SymbolView name={props.icon} size={12} tintColor={iconColor} type="monochrome" />
+      <Text className="text-xs font-t3-medium text-foreground">{props.label}</Text>
+      <SymbolView name="chevron.down" size={9} tintColor={iconColor} type="monochrome" />
+    </Pressable>
+  );
+}
 
 export function PhaseSidebarPane(props: {
-  /** Whose operator identity the ownership facets resolve against. */
+  /**
+   * Whose operator identity the ownership facets resolve against. Null falls
+   * back to the first connected environment, so "started by me" still means
+   * something when the phone is showing every environment at once.
+   */
   readonly viewerEnvironmentId: EnvironmentId | null;
   readonly selectedThreadKey: string | null;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
+  /** Passed straight to the list so each host can clear its own chrome. */
+  readonly contentInsetAdjustmentBehavior?: ComponentProps<
+    typeof FlatList
+  >["contentInsetAdjustmentBehavior"];
+  readonly contentContainerStyle?: ComponentProps<typeof FlatList>["contentContainerStyle"];
 }) {
   const navigation = useNavigation();
-  const mutedColor = String(useThemeColor("--color-icon"));
   const projects = useProjects();
-  const rows = usePhaseSidebarRows({ viewerEnvironmentId: props.viewerEnvironmentId });
-  const viewerUserId = usePhaseSidebarViewerUserId(props.viewerEnvironmentId);
+  const { environments } = useEnvironments();
+  const viewerEnvironmentId = props.viewerEnvironmentId ?? environments[0]?.environmentId ?? null;
+  const rows = usePhaseSidebarRows({ viewerEnvironmentId });
+  const viewerUserId = usePhaseSidebarViewerUserId(viewerEnvironmentId);
   const markVisited = useMarkPhaseSidebarThreadVisited();
+  const clearVisit = useClearPhaseSidebarThreadVisit();
+  const grouping = usePhaseSidebarGrouping();
+  const updateGrouping = useUpdatePhaseSidebarGrouping();
 
   const [filters, setFilters] = useState<PhaseSidebarFilters>(EMPTY_PHASE_SIDEBAR_FILTERS);
   const [sort, setSort] = useState<PhaseSidebarSortPreferences>(DEFAULT_PHASE_SIDEBAR_SORT);
-  const [filterOpen, setFilterOpen] = useState(false);
+  const [sheet, setSheet] = useState<
+    | { readonly kind: "filter" }
+    | { readonly kind: "group"; readonly intent: PhaseSidebarGroupBySheetIntent }
+    | null
+  >(null);
 
   const {
     archiveThread,
+    confirmDeleteThread,
     settleThread,
     snoozeThread,
     unsnoozeThread,
@@ -74,6 +137,20 @@ export function PhaseSidebarPane(props: {
   );
   const stopExecution = useAtomCommand(threadEnvironment.stopExecution, "phase sidebar force stop");
 
+  const projectLabelFor = useCallback(
+    (environmentId: string, projectId: string) =>
+      projects.find(
+        (project) => project.environmentId === environmentId && project.id === projectId,
+      )?.title ?? null,
+    [projects],
+  );
+  const environmentLabelFor = useCallback(
+    (environmentId: string) =>
+      environments.find((environment) => environment.environmentId === environmentId)?.label ??
+      null,
+    [environments],
+  );
+
   const handleSelect = useCallback(
     (row: PhaseSidebarRow) => {
       markVisited(`${row.thread.environmentId}:${row.thread.id}`);
@@ -85,6 +162,7 @@ export function PhaseSidebarPane(props: {
   const handleRowAction = useCallback(
     (row: PhaseSidebarRow, actionId: string) => {
       const thread = row.thread;
+      const threadKey = `${thread.environmentId}:${thread.id}`;
 
       if (actionId.startsWith("priority:")) {
         const parsed = Number.parseInt(actionId.slice("priority:".length), 10);
@@ -98,6 +176,35 @@ export function PhaseSidebarPane(props: {
         });
         return;
       }
+      if (actionId.startsWith("snooze:")) {
+        const selection = resolveThreadListV2SnoozeMenuSelection({
+          event: actionId,
+          displayedPresets: resolveSnoozePresets(new Date()),
+          now: new Date(),
+        });
+        if (selection._tag === "selected") {
+          void snoozeThread(thread, selection.preset.snoozedUntil);
+        } else if (selection._tag === "expired") {
+          Alert.alert(
+            "Could not snooze thread",
+            "That snooze time has passed. Choose another time.",
+          );
+        }
+        return;
+      }
+      if (actionId === "group:new") {
+        setSheet({ kind: "group", intent: { kind: "create", seedThreadKey: threadKey } });
+        return;
+      }
+      if (actionId === "group:none") {
+        updateGrouping((current) => assignPhaseSidebarThreadToGroup(current, threadKey, null));
+        return;
+      }
+      if (actionId.startsWith("group:")) {
+        const groupId = actionId.slice("group:".length);
+        updateGrouping((current) => assignPhaseSidebarThreadToGroup(current, threadKey, groupId));
+        return;
+      }
 
       switch (actionId) {
         case "people":
@@ -106,6 +213,12 @@ export function PhaseSidebarPane(props: {
             threadId: thread.id,
           });
           return;
+        case "mark-read":
+          markVisited(threadKey);
+          return;
+        case "mark-unread":
+          clearVisit(threadKey);
+          return;
         case "settle":
           void settleThread(thread);
           return;
@@ -113,7 +226,9 @@ export function PhaseSidebarPane(props: {
           void unsettleThread(thread);
           return;
         case "snooze":
-          void snoozeThread(thread, new Date(Date.now() + ROW_MENU_SNOOZE_MS).toISOString());
+          // The bare item only appears when no presets were offered; an hour
+          // is the shortest preset the stock list has.
+          void snoozeThread(thread, new Date(Date.now() + 60 * 60_000).toISOString());
           return;
         case "unsnooze":
           void unsnoozeThread(thread);
@@ -127,6 +242,9 @@ export function PhaseSidebarPane(props: {
         case "archive":
           archiveThread(thread);
           return;
+        case "delete":
+          confirmDeleteThread(thread);
+          return;
         case "force-stop":
           void stopExecution({
             environmentId: thread.environmentId,
@@ -137,6 +255,9 @@ export function PhaseSidebarPane(props: {
     },
     [
       archiveThread,
+      clearVisit,
+      confirmDeleteThread,
+      markVisited,
       navigation,
       pinThread,
       settleThread,
@@ -145,8 +266,41 @@ export function PhaseSidebarPane(props: {
       unpinThread,
       unsettleThread,
       unsnoozeThread,
+      updateGrouping,
       updateThreadMetadata,
     ],
+  );
+
+  const handleSectionAction = useCallback(
+    (section: PhaseSidebarSection, actionId: PhaseSidebarSectionActionId) => {
+      switch (actionId) {
+        case "rename":
+          setSheet({ kind: "group", intent: { kind: "rename", groupId: section.id } });
+          return;
+        case "move-up":
+          updateGrouping((current) => movePhaseSidebarCustomGroup(current, section.id, "up"));
+          return;
+        case "move-down":
+          updateGrouping((current) => movePhaseSidebarCustomGroup(current, section.id, "down"));
+          return;
+        case "delete":
+          Alert.alert(
+            "Delete group?",
+            `“${section.label}” will be removed. Its sessions go back to Ungrouped; nothing is deleted.`,
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: () =>
+                  updateGrouping((current) => deletePhaseSidebarCustomGroup(current, section.id)),
+              },
+            ],
+          );
+          return;
+      }
+    },
+    [updateGrouping],
   );
 
   const handleReparent = useCallback(
@@ -158,13 +312,6 @@ export function PhaseSidebarPane(props: {
         input: {
           threadId: subject.thread.id,
           parentThreadId: parent === null ? null : parent.thread.id,
-          // T3-CUSTOM(expbkt3): a drop is always within one environment (the
-          // validator rejects cross-environment targets), so the parent's
-          // environment is this thread's own. Sending null rather than omitting
-          // it matters: omitting leaves the field unchanged, which would strand
-          // a thread that used to have a parent on another machine pointing at
-          // that machine with a local thread id.
-          parentEnvironmentId: null,
         },
       });
     },
@@ -184,55 +331,87 @@ export function PhaseSidebarPane(props: {
     [movePinnedThread],
   );
 
+  // Header: the three counters left, the two controls right, on one line; the
+  // provider quota grid gets the full width beneath. Nothing fights for the
+  // right-hand third any more.
+  const listHeader = useMemo(
+    () => (
+      <View>
+        <View className="flex-row items-center justify-between gap-2 px-4 pb-1 pt-2">
+          <PhaseSidebarCounters />
+          <View className="flex-row items-center gap-2">
+            <HeaderButton
+              active={sheet?.kind === "group"}
+              icon="square.grid.2x2"
+              label={PHASE_SIDEBAR_GROUP_BY_LABELS[grouping.groupBy]}
+              onPress={() =>
+                setSheet((current) =>
+                  current?.kind === "group" ? null : { kind: "group", intent: { kind: "browse" } },
+                )
+              }
+            />
+            <HeaderButton
+              active={sheet?.kind === "filter" || phaseSidebarFiltersActive(filters)}
+              icon="line.3.horizontal.decrease"
+              label="Filter"
+              onPress={() =>
+                setSheet((current) => (current?.kind === "filter" ? null : { kind: "filter" }))
+              }
+            />
+          </View>
+        </View>
+        <PhaseSidebarRateLimits />
+      </View>
+    ),
+    [filters, grouping.groupBy, sheet?.kind],
+  );
+
   return (
     <View className="flex-1">
-      {filterOpen ? (
-        <View className="max-h-[60%] border-b border-border">
+      <PhaseSidebarSheetModal onClose={() => setSheet(null)} visible={sheet !== null}>
+        {sheet?.kind === "filter" ? (
           <PhaseSidebarFilterSheet
             filters={filters}
             onChangeFilters={setFilters}
             onChangeSort={setSort}
+            onClose={() => setSheet(null)}
             projects={projects}
             rows={rows}
             sort={sort}
           />
-        </View>
-      ) : null}
+        ) : sheet?.kind === "group" ? (
+          <PhaseSidebarGroupBySheet
+            grouping={grouping}
+            intent={sheet.intent}
+            onChange={updateGrouping}
+            onClose={() => setSheet(null)}
+          />
+        ) : null}
+      </PhaseSidebarSheetModal>
       <PhaseSidebarList
-        ListHeaderComponent={
-          <View>
-            <PhaseSidebarRateLimits environmentId={props.viewerEnvironmentId} />
-            <View className="flex-row items-center justify-between px-3 pb-1 pt-2">
-              <Text className="text-[11px] font-t3-bold uppercase tracking-wide text-muted-foreground">
-                Lifecycle
-              </Text>
-              <Pressable
-                className={cn(
-                  "flex-row items-center gap-1.5 rounded-lg border px-2.5 py-1",
-                  phaseSidebarFiltersActive(filters)
-                    ? "border-primary bg-primary/15"
-                    : "border-border",
-                )}
-                hitSlop={6}
-                onPress={() => setFilterOpen((open) => !open)}
-              >
-                <SymbolView
-                  name="line.3.horizontal.decrease"
-                  size={12}
-                  tintColor={mutedColor}
-                  type="monochrome"
-                />
-                <Text className="text-xs text-foreground">Filter</Text>
-              </Pressable>
-            </View>
+        ListEmptyComponent={
+          <View className="items-center gap-2 px-6 py-12">
+            <Text className="text-center text-sm text-foreground-muted">
+              {phaseSidebarFiltersActive(filters)
+                ? "No sessions match these filters."
+                : "No sessions yet."}
+            </Text>
           </View>
         }
+        ListHeaderComponent={listHeader}
         activeThreadKey={props.selectedThreadKey}
+        contentContainerStyle={props.contentContainerStyle}
+        contentInsetAdjustmentBehavior={props.contentInsetAdjustmentBehavior}
+        environmentLabelFor={environmentLabelFor}
         filters={filters}
+        grouping={grouping}
+        onChangeGrouping={updateGrouping}
         onReorderRow={handleReorder}
         onReparentRow={handleReparent}
         onRowAction={handleRowAction}
+        onSectionAction={handleSectionAction}
         onSelectRow={handleSelect}
+        projectLabelFor={projectLabelFor}
         rows={rows}
         sort={sort}
         viewerUserId={viewerUserId}

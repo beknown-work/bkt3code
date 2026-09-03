@@ -14,6 +14,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
+  bkMarketingVersion,
   bkArtifactFileName,
   bkReleaseTag,
   BK_MOBILE_APP_NAME,
@@ -84,7 +85,9 @@ export function createBkMobileSource(input: BkMobileSourceInput) {
         tintColor: "#000000",
         category: "developer",
         // Keep the legacy single-version fields for older SideStore releases.
-        version: input.version,
+        // `version` is the IPA's marketing version, base plus run number, so it
+        // matches what SideStore reads back from the installed bundle.
+        version: bkMarketingVersion(input.version, input.buildNumber),
         versionDate: input.date,
         versionDescription: description,
         downloadURL,
@@ -101,7 +104,7 @@ export function createBkMobileSource(input: BkMobileSourceInput) {
         },
         versions: [
           {
-            version: input.version,
+            version: bkMarketingVersion(input.version, input.buildNumber),
             buildVersion: input.buildNumber,
             marketingVersion: `${input.version}+bk.${shortSha}`,
             date: input.date,

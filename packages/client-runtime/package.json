@@ -159,6 +159,10 @@
       "types": "./src/state/agentUi.ts",
       "default": "./src/state/agentUi.ts"
     },
+    "./state/threadUsage": {
+      "types": "./src/state/threadUsage.ts",
+      "default": "./src/state/threadUsage.ts"
+    },
     "./state/terminal": {
       "types": "./src/state/terminal.ts",
       "default": "./src/state/terminal.ts"
@@ -186,6 +190,10 @@
     "./state/phase-sidebar-tree": {
       "types": "./src/state/phaseSidebarTree.ts",
       "default": "./src/state/phaseSidebarTree.ts"
+    },
+    "./state/phase-sidebar-grouping": {
+      "types": "./src/state/phaseSidebarGrouping.ts",
+      "default": "./src/state/phaseSidebarGrouping.ts"
     },
     "./state/provider-rate-limits": {
       "types": "./src/state/providerRateLimitsPresentation.ts",

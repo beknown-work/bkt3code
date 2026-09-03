@@ -33,7 +33,7 @@ describe("buildPhaseSidebarRowActions", () => {
   });
 
   it("offers only People, pin and archive against a server with no lifecycle support", () => {
-    expect(ids(row())).toEqual(["people", "pin", "archive"]);
+    expect(ids(row())).toEqual(["people", "pin", "archive", "delete"]);
   });
 
   it("offers Settle when supported, and Reopen once settled", () => {
@@ -79,10 +79,41 @@ describe("buildPhaseSidebarRowActions", () => {
       row: row({ thread: { session: { status: "running" } } as never }),
       now: NOW,
     });
-    expect(actions.at(-1)?.id).toBe("archive");
+    expect(actions.at(-1)?.id).toBe("delete");
     expect(actions.filter((action) => action.destructive === true).map((a) => a.id)).toEqual([
       "force-stop",
       "archive",
+      "delete",
     ]);
+  });
+
+  it("offers Move to group as a submenu only when custom groups are passed", () => {
+    expect(ids(row())).not.toContain("group");
+    const actions = buildPhaseSidebarRowActions({
+      row: row(),
+      now: NOW,
+      customGroups: [{ id: "a", label: "Alpha" }],
+      customGroupId: "a",
+    });
+    const group = actions.find((action) => action.id === "group");
+    expect(group?.subactions?.map((action) => action.id)).toEqual([
+      "group:a",
+      "group:none",
+      "group:new",
+    ]);
+    expect(group?.subactions?.[0]?.checked).toBe(true);
+  });
+
+  it("offers snooze presets as a submenu when given", () => {
+    const actions = buildPhaseSidebarRowActions({
+      row: row({ snoozeSupported: true }),
+      now: NOW,
+      snoozePresets: [
+        { id: "hour", label: "In 1 hour", whenLabel: "1:00 PM", snoozedUntil: NOW },
+      ] as never,
+    });
+    expect(actions.find((action) => action.id === "snooze")?.subactions?.[0]?.id).toBe(
+      "snooze:hour",
+    );
   });
 });

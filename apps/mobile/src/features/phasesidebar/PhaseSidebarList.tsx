@@ -2,56 +2,89 @@
 //
 // Grouping, nesting, filtering and sorting are all decided by client-runtime, so
 // this component owns exactly two things: expansion state, and turning the
-// resulting tree into a flat list a FlatList can render efficiently. Rendering
-// the tree as one flat array matters on a phone — a nested render tree of
-// hundreds of rows drops frames on scroll.
+// resulting sections into a flat list a FlatList can render efficiently.
+// Rendering the tree as one flat array matters on a phone — a nested render
+// tree of hundreds of rows drops frames on scroll.
+//
+// Parked sessions (snoozed, settled) never mix with live work: they sit in
+// their own collapsed shelves under the grouped sections, as on web.
 import {
-  buildPhaseSidebarTreeGroups,
   flattenPhaseSidebarTree,
   type PhaseSidebarTreeNode,
 } from "@t3tools/client-runtime/state/phase-sidebar-tree";
 import {
+  buildPhaseSidebarSections,
+  buildPhaseSidebarShelfSections,
+  isPhaseSidebarSectionCollapsed,
+  phaseSidebarSectionPhase,
+  togglePhaseSidebarSectionCollapsed,
+  type PhaseSidebarGroupingPreferences,
+  type PhaseSidebarSection,
+} from "@t3tools/client-runtime/state/phase-sidebar-grouping";
+import {
   comparePhaseSidebarRows,
+  compactPhaseSidebarTimeLabel,
   DEFAULT_PHASE_SIDEBAR_SORT,
   EMPTY_PHASE_SIDEBAR_FILTERS,
+  partitionPhaseSidebarRows,
   resolvePhaseSidebarWorktreeView,
   type PhaseSidebarFilters,
   type PhaseSidebarRow,
   type PhaseSidebarSortPreferences,
 } from "@t3tools/client-runtime/state/phase-sidebar";
 import {
+  canSnooze,
+  resolveSnoozePresets,
+  snoozeWakeLabel,
+  type SnoozePreset,
+} from "@t3tools/client-runtime/state/thread-settled";
+import {
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   type SidebarThreadSortOrder,
   type UserId,
 } from "@t3tools/contracts";
-import type { MenuAction } from "@react-native-menu/menu";
-import { useCallback, useMemo, useState } from "react";
+import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
+import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { runOnJS } from "react-native-reanimated";
-import { FlatList, View } from "react-native";
+import { FlatList, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
+import { ControlPillMenu } from "../../components/ControlPill";
+import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { PhaseSidebarRowView } from "./PhaseSidebarRowView";
+import { relativeTime } from "../../lib/time";
+import { useThemeColor } from "../../lib/useThemeColor";
+import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
+import { PhaseSidebarRowView, type PhaseSidebarRowSwipe } from "./PhaseSidebarRowView";
 import { phaseSidebarSectionToneClassName } from "./phaseSidebarRowTone";
-import { buildPhaseSidebarRowActions } from "./usePhaseSidebarRowActions";
+import {
+  buildPhaseSidebarRowActions,
+  phaseSidebarRowActionsToMenu,
+} from "./usePhaseSidebarRowActions";
 import { usePhaseSidebarDrag } from "./usePhaseSidebarDrag";
 
-/** A flattened list entry: either a lifecycle header or a thread row. */
+/** Which shelf a row sits on, if any. Drives its swipe and its time label. */
+type PhaseSidebarRowShelf = "active" | "snoozed" | "settled";
+
+/** A flattened list entry: either a section header or a thread row. */
 type PhaseSidebarListItem =
   | {
       readonly kind: "section";
       readonly key: string;
-      readonly phaseId: PhaseSidebarRow["phaseId"];
-      readonly label: string;
-      readonly helperText: string;
-      readonly count: number;
+      readonly section: PhaseSidebarSection;
+      readonly collapsed: boolean;
     }
   | {
       readonly kind: "row";
       readonly key: string;
       readonly node: PhaseSidebarTreeNode;
+      readonly shelf: PhaseSidebarRowShelf;
     };
+
+/** What the header of a custom group can do, beyond collapsing. */
+export type PhaseSidebarSectionActionId = "rename" | "delete" | "move-up" | "move-down";
 
 export interface PhaseSidebarListProps {
   readonly rows: ReadonlyArray<PhaseSidebarRow>;
@@ -60,21 +93,88 @@ export interface PhaseSidebarListProps {
   readonly filters?: PhaseSidebarFilters;
   readonly sort?: PhaseSidebarSortPreferences;
   readonly sortOrder?: SidebarThreadSortOrder;
+  readonly grouping: PhaseSidebarGroupingPreferences;
+  readonly onChangeGrouping: (
+    apply: (current: PhaseSidebarGroupingPreferences) => PhaseSidebarGroupingPreferences,
+  ) => void;
+  readonly projectLabelFor?: (environmentId: string, projectId: string) => string | null;
+  readonly environmentLabelFor?: (environmentId: string) => string | null;
   readonly onSelectRow: (row: PhaseSidebarRow) => void;
-  /** Fired with the chosen action id from the row's long-press menu. */
+  /** Fired with the chosen action id from the row's long-press menu or swipe. */
   readonly onRowAction: (row: PhaseSidebarRow, actionId: string) => void;
+  readonly onSectionAction: (
+    section: PhaseSidebarSection,
+    actionId: PhaseSidebarSectionActionId,
+  ) => void;
   /** Re-parent a thread. Null parent means 'make this a root thread'. */
   readonly onReparentRow?: (subject: PhaseSidebarRow, parent: PhaseSidebarRow | null) => void;
   /** Reorder a pinned thread to sit before another. */
   readonly onReorderRow?: (subject: PhaseSidebarRow, before: PhaseSidebarRow) => void;
-  readonly ListHeaderComponent?: React.ComponentProps<typeof FlatList>["ListHeaderComponent"];
+  readonly ListHeaderComponent?: ComponentProps<typeof FlatList>["ListHeaderComponent"];
+  readonly ListEmptyComponent?: ComponentProps<typeof FlatList>["ListEmptyComponent"];
+  readonly contentInsetAdjustmentBehavior?: ComponentProps<
+    typeof FlatList
+  >["contentInsetAdjustmentBehavior"];
+  readonly contentContainerStyle?: ComponentProps<typeof FlatList>["contentContainerStyle"];
+}
+
+/**
+ * Swipe actions follow the shelf, as in the stock list: live rows settle (full
+ * swipe), snooze and archive; a snoozed row wakes; a settled row reopens.
+ */
+function resolveRowSwipe(
+  row: PhaseSidebarRow,
+  shelf: PhaseSidebarRowShelf,
+  now: string,
+  snoozeMenu: MenuAction[],
+): PhaseSidebarRowSwipe {
+  if (shelf === "snoozed") return { primary: "unsnooze", snoozeMenu: null, archive: true };
+  if (shelf === "settled") return { primary: "unsettle", snoozeMenu: null, archive: true };
+  const snoozable = row.snoozeSupported && canSnooze(row.thread, { now });
+  return {
+    primary: row.settlementSupported ? "settle" : "archive",
+    snoozeMenu: snoozable ? snoozeMenu : null,
+    archive: row.settlementSupported,
+  };
+}
+
+/** "2h" for live and settled rows; "Wakes 9:00 AM" for a snoozed one. */
+function resolveRowTimeLabel(row: PhaseSidebarRow, shelf: PhaseSidebarRowShelf, now: string) {
+  if (shelf === "snoozed" && row.thread.snoozedUntil != null) {
+    return snoozeWakeLabel(row.thread.snoozedUntil, { now });
+  }
+  return compactPhaseSidebarTimeLabel(relativeTime(row.thread.updatedAt));
 }
 
 export function PhaseSidebarList(props: PhaseSidebarListProps) {
   const filters = props.filters ?? EMPTY_PHASE_SIDEBAR_FILTERS;
   const sort = props.sort ?? DEFAULT_PHASE_SIDEBAR_SORT;
   const sortOrder = props.sortOrder ?? DEFAULT_SIDEBAR_THREAD_SORT_ORDER;
+  const { grouping, onChangeGrouping, onSectionAction } = props;
   const [collapsedKeys, setCollapsedKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const mutedColor = String(useThemeColor("--color-icon"));
+  // One open row at a time, as in the stock list: opening another closes the
+  // first, and starting a scroll closes whichever is open.
+  const openSwipeableRef = useRef<SwipeableMethods | null>(null);
+  const handleSwipeableWillOpen = useCallback((methods: SwipeableMethods) => {
+    if (openSwipeableRef.current !== methods) {
+      openSwipeableRef.current?.close();
+      openSwipeableRef.current = methods;
+    }
+  }, []);
+  const handleSwipeableClose = useCallback((methods: SwipeableMethods) => {
+    if (openSwipeableRef.current === methods) openSwipeableRef.current = null;
+  }, []);
+  const handleScrollBeginDrag = useCallback(() => {
+    openSwipeableRef.current?.close();
+  }, []);
+  const { swipeEnabled, scrollGateHandlers } = useSwipeableScrollGate({
+    onScrollBeginDrag: handleScrollBeginDrag,
+  });
+
+  // "Now" is fixed per row set so labels and presets stay stable across a
+  // scroll — the same cadence the stock list uses.
+  const nowIso = useMemo(() => new Date().toISOString(), [props.rows]);
 
   const worktreeView = useMemo(
     // Resolved across the whole set, not per row: codenames disambiguate against
@@ -83,14 +183,49 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     [props.rows],
   );
 
-  const { groups, forcedExpansionKeys } = useMemo(
+  // Mobile has no auto-settle setting of its own, so a row is settled only when
+  // the server says so, never because a timer elapsed locally.
+  const partition = useMemo(
     () =>
-      buildPhaseSidebarTreeGroups({
-        rows: props.rows,
-        filters,
-        compareSiblings: (left, right) => comparePhaseSidebarRows(left, right, sortOrder, sort),
+      partitionPhaseSidebarRows(props.rows, {
+        now: nowIso,
+        preciseNow: nowIso,
+        autoSettleAfterDays: null,
       }),
-    [filters, props.rows, sort, sortOrder],
+    [nowIso, props.rows],
+  );
+
+  const { sections, forcedExpansionKeys } = useMemo(() => {
+    const built = buildPhaseSidebarSections({
+      rows: partition.activeRows,
+      filters,
+      compareSiblings: (left, right) => comparePhaseSidebarRows(left, right, sortOrder, sort),
+      grouping,
+      ...(props.projectLabelFor ? { projectLabelFor: props.projectLabelFor } : {}),
+      ...(props.environmentLabelFor ? { environmentLabelFor: props.environmentLabelFor } : {}),
+    });
+    return {
+      sections: [
+        ...built.sections,
+        ...buildPhaseSidebarShelfSections({
+          snoozedRows: partition.snoozedRows,
+          settledRows: partition.settledRows,
+        }),
+      ],
+      forcedExpansionKeys: built.forcedExpansionKeys,
+    };
+  }, [
+    filters,
+    grouping,
+    partition,
+    props.environmentLabelFor,
+    props.projectLabelFor,
+    sort,
+    sortOrder,
+  ]);
+  const collapsedSectionKeys = useMemo(
+    () => new Set(grouping.collapsedSectionKeys),
+    [grouping.collapsedSectionKeys],
   );
 
   // Parents default to open, so a session tree is visible without hunting. A
@@ -102,33 +237,60 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
 
   const items = useMemo<ReadonlyArray<PhaseSidebarListItem>>(() => {
     const flat: PhaseSidebarListItem[] = [];
-    for (const group of groups) {
-      if (group.nodes.length === 0) continue;
-      flat.push({
-        kind: "section",
-        key: `section:${group.id}`,
-        phaseId: group.id,
-        label: group.label,
-        helperText: group.helperText,
-        count: group.nodes.length,
-      });
-      for (const node of flattenPhaseSidebarTree(group.nodes, isExpanded)) {
-        flat.push({ kind: "row", key: node.key, node });
+    for (const section of sections) {
+      // Lifecycle and project sections exist only because they have rows; an
+      // empty custom group still renders so it can be found and filled.
+      if (section.nodes.length === 0 && section.kind !== "custom") continue;
+      const collapsed = isPhaseSidebarSectionCollapsed(section, collapsedSectionKeys);
+      flat.push({ kind: "section", key: section.key, section, collapsed });
+      if (collapsed) continue;
+      const shelf: PhaseSidebarRowShelf =
+        section.id === "snoozed" ? "snoozed" : section.id === "settled" ? "settled" : "active";
+      for (const node of flattenPhaseSidebarTree(section.nodes, isExpanded)) {
+        flat.push({ kind: "row", key: node.key, node, shelf });
       }
     }
     return flat;
-  }, [groups, isExpanded]);
+  }, [collapsedSectionKeys, isExpanded, sections]);
 
-  const nowIso = useMemo(() => new Date().toISOString(), [props.rows]);
-  const rowActionsFor = useCallback(
-    (row: PhaseSidebarRow): MenuAction[] =>
-      buildPhaseSidebarRowActions({ row, now: nowIso }).map((action) => ({
-        id: action.id,
-        title: action.title,
-        image: action.image,
-        attributes: action.destructive === true ? { destructive: true } : undefined,
-      })),
+  const snoozePresets = useMemo<ReadonlyArray<SnoozePreset>>(
+    () => resolveSnoozePresets(new Date(nowIso)),
     [nowIso],
+  );
+  const snoozeMenu = useMemo<MenuAction[]>(
+    () =>
+      snoozePresets.map((preset) => ({
+        id: `snooze:${preset.id}`,
+        title: preset.label,
+        subtitle: preset.whenLabel,
+      })),
+    [snoozePresets],
+  );
+  const customGroups = useMemo(
+    () => grouping.customGroups.map((group) => ({ id: group.id, label: group.label })),
+    [grouping.customGroups],
+  );
+  const customGroupIdByThreadKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const group of grouping.customGroups) {
+      for (const key of group.threadKeys) map.set(key, group.id);
+    }
+    return map;
+  }, [grouping.customGroups]);
+  const rowActionsFor = useCallback(
+    (row: PhaseSidebarRow, rowKey: string, depth: number): MenuAction[] =>
+      phaseSidebarRowActionsToMenu(
+        buildPhaseSidebarRowActions({
+          row,
+          now: nowIso,
+          snoozePresets,
+          // A nested row is placed with its parent, so only roots can be moved.
+          ...((customGroups.length > 0 || grouping.groupBy === "custom") && depth === 0
+            ? { customGroups, customGroupId: customGroupIdByThreadKey.get(rowKey) ?? null }
+            : {}),
+        }),
+      ) as MenuAction[],
+    [customGroupIdByThreadKey, customGroups, grouping.groupBy, nowIso, snoozePresets],
   );
 
   const noopReparent = useCallback(() => {}, []);
@@ -149,7 +311,8 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
 
   // A dedicated grab handle rather than a long-press: long-press already opens
   // the row's context menu, and a pan that activates anywhere on the row fights
-  // the list's scroll. The handle makes the intent unambiguous.
+  // the list's scroll. Only pinned rows carry one — theirs is the only order
+  // the user owns; everything else is sorted for them.
   const dragHandleFor = useCallback(
     (rowKey: string) => {
       const gesture = Gesture.Pan()
@@ -168,13 +331,18 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
         });
       return (
         <GestureDetector gesture={gesture}>
-          <View className="ml-1 shrink-0 px-1 py-1">
-            <Text className="font-t3-mono text-[11px] text-muted-foreground">≡</Text>
+          <View accessibilityLabel="Drag to reorder" className="ml-1 shrink-0 px-1 py-1">
+            <SymbolView
+              name="line.3.horizontal"
+              size={12}
+              tintColor={mutedColor}
+              type="monochrome"
+            />
           </View>
         </GestureDetector>
       );
     },
-    [dragController],
+    [dragController, mutedColor],
   );
 
   const handleToggleExpanded = useCallback((row: PhaseSidebarRow) => {
@@ -187,53 +355,170 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     });
   }, []);
 
-  const list = (
-    <FlatList
-      ListHeaderComponent={props.ListHeaderComponent}
-      data={items}
-      initialNumToRender={24}
-      keyExtractor={(item) => item.key}
-      renderItem={({ item }) =>
-        item.kind === "section" ? (
-          <View className="flex-row items-center gap-2 px-3 pb-1 pt-3">
-            <Text
-              className={cn(
-                "font-t3-bold text-[11px] uppercase tracking-wide",
-                phaseSidebarSectionToneClassName(item.phaseId),
-              )}
-            >
-              {item.label}
-            </Text>
-            <Text className="min-w-0 flex-1 text-[10px] text-muted-foreground" numberOfLines={1}>
-              {item.helperText}
-            </Text>
-            <Text className="font-t3-mono text-[10px] text-muted-foreground">{item.count}</Text>
-          </View>
-        ) : (
-          <PhaseSidebarRowView
-            dragHandle={dragEnabled ? dragHandleFor(item.node.key) : undefined}
-            dropRejectionLabel={dragController.drag?.rejectionLabel ?? null}
-            indentDepth={item.node.depth}
-            isDragging={dragController.drag?.subjectKey === item.node.key}
-            isDropTarget={dragController.drag?.intent.targetKey === item.node.key}
-            onLayoutGeometry={handleRowGeometry}
-            rowKey={item.node.key}
-            isActive={props.activeThreadKey === item.node.key}
-            isExpanded={isExpanded(item.node.key)}
-            actions={rowActionsFor(item.node.row)}
-            onPress={props.onSelectRow}
-            onPressAction={props.onRowAction}
-            onToggleExpanded={handleToggleExpanded}
-            row={item.node.row}
-            subtreeCount={item.node.descendantCount}
-            viewerUserId={props.viewerUserId}
-            worktreeView={worktreeView}
-          />
-        )
-      }
-      windowSize={11}
-    />
+  const handleToggleSection = useCallback(
+    (section: PhaseSidebarSection) =>
+      onChangeGrouping((current) => togglePhaseSidebarSectionCollapsed(current, section.key)),
+    [onChangeGrouping],
   );
 
-  return list;
+  const sectionMenuFor = useCallback(
+    (section: PhaseSidebarSection): MenuAction[] => {
+      const customIndex = grouping.customGroups.findIndex((group) => group.id === section.id);
+      const manual = grouping.groupOrder === "manual";
+      return [
+        { id: "rename", title: "Rename group", image: "pencil" },
+        ...(manual
+          ? [
+              {
+                id: "move-up",
+                title: "Move up",
+                image: "arrow.up",
+                attributes: { disabled: customIndex <= 0 },
+              },
+              {
+                id: "move-down",
+                title: "Move down",
+                image: "arrow.down",
+                attributes: { disabled: customIndex >= grouping.customGroups.length - 1 },
+              },
+            ]
+          : []),
+        {
+          id: "delete",
+          title: "Delete group",
+          image: "trash",
+          attributes: { destructive: true },
+        },
+      ];
+    },
+    [grouping.customGroups, grouping.groupOrder],
+  );
+
+  const renderSectionHeader = (section: PhaseSidebarSection, collapsed: boolean) => {
+    const phaseId = phaseSidebarSectionPhase(section);
+    const { summary } = section;
+    const isShelf = section.collapsedByDefault;
+    const header = (
+      <Pressable
+        accessibilityLabel={`${section.label}, ${section.nodes.length} session${section.nodes.length === 1 ? "" : "s"}${collapsed ? ", collapsed" : ""}`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: !collapsed }}
+        className={cn("flex-row items-center gap-2 px-4 pb-1.5", isShelf ? "pt-5" : "pt-4")}
+        onPress={() => handleToggleSection(section)}
+      >
+        <SymbolView
+          name={collapsed ? "chevron.right" : "chevron.down"}
+          size={10}
+          tintColor={mutedColor}
+          type="monochrome"
+        />
+        <Text
+          className={cn(
+            "font-t3-bold text-[11px] uppercase tracking-wide",
+            isShelf
+              ? "text-foreground-tertiary"
+              : phaseId === null
+                ? "text-foreground-secondary"
+                : phaseSidebarSectionToneClassName(phaseId),
+          )}
+          numberOfLines={1}
+        >
+          {section.label}
+        </Text>
+        <Text className="min-w-0 flex-1 text-[10px] text-foreground-tertiary" numberOfLines={1}>
+          {section.helperText}
+        </Text>
+        {collapsed && summary.attention > 0 ? (
+          <Text className="rounded-full bg-rose-500/15 px-1.5 font-t3-mono text-[10px] text-rose-700 dark:text-rose-300">
+            {summary.attention}
+          </Text>
+        ) : null}
+        {collapsed && summary.running > 0 ? (
+          <Text className="rounded-full bg-sky-500/15 px-1.5 font-t3-mono text-[10px] text-sky-700 dark:text-sky-300">
+            {summary.running}
+          </Text>
+        ) : null}
+        {collapsed && summary.unread > 0 ? (
+          <Text className="rounded-full bg-emerald-500/15 px-1.5 font-t3-mono text-[10px] text-emerald-700 dark:text-emerald-300">
+            {summary.unread}
+          </Text>
+        ) : null}
+        <Text className="font-t3-mono text-[10px] text-foreground-tertiary">
+          {section.nodes.length}
+        </Text>
+      </Pressable>
+    );
+    if (section.kind !== "custom" || section.isUngrouped) return header;
+    // A custom group's header is also where it is managed: hold for rename,
+    // reorder and delete, the same way a row is managed.
+    return (
+      <ControlPillMenu
+        actions={sectionMenuFor(section)}
+        isAnchoredToRight
+        onPressAction={(event: NativeActionEvent) =>
+          onSectionAction(section, event.nativeEvent.event as PhaseSidebarSectionActionId)
+        }
+        shouldOpenOnLongPress
+        title={section.label}
+      >
+        {header}
+      </ControlPillMenu>
+    );
+  };
+
+  return (
+    <SwipeableScrollGateProvider enabled={swipeEnabled}>
+      <FlatList
+        ListEmptyComponent={props.ListEmptyComponent}
+        ListHeaderComponent={props.ListHeaderComponent}
+        automaticallyAdjustsScrollIndicatorInsets={
+          props.contentInsetAdjustmentBehavior === "automatic"
+        }
+        contentContainerStyle={props.contentContainerStyle}
+        contentInsetAdjustmentBehavior={props.contentInsetAdjustmentBehavior ?? "never"}
+        data={items}
+        initialNumToRender={24}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) =>
+          item.kind === "section" ? (
+            renderSectionHeader(item.section, item.collapsed)
+          ) : (
+            <PhaseSidebarRowView
+              dragHandle={
+                dragEnabled && item.node.row.thread.pinnedAt != null
+                  ? dragHandleFor(item.node.key)
+                  : undefined
+              }
+              dropRejectionLabel={dragController.drag?.rejectionLabel ?? null}
+              indentDepth={item.node.depth}
+              isDragging={dragController.drag?.subjectKey === item.node.key}
+              isDropTarget={dragController.drag?.intent.targetKey === item.node.key}
+              onLayoutGeometry={handleRowGeometry}
+              rowKey={item.node.key}
+              isActive={props.activeThreadKey === item.node.key}
+              isExpanded={isExpanded(item.node.key)}
+              actions={rowActionsFor(item.node.row, item.node.key, item.node.depth)}
+              onPress={props.onSelectRow}
+              onPressAction={props.onRowAction}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
+              onToggleExpanded={handleToggleExpanded}
+              row={item.node.row}
+              subtreeCount={item.node.descendantCount}
+              swipe={resolveRowSwipe(item.node.row, item.shelf, nowIso, snoozeMenu)}
+              timeLabel={resolveRowTimeLabel(item.node.row, item.shelf, nowIso)}
+              viewerUserId={props.viewerUserId}
+              worktreeView={worktreeView}
+            />
+          )
+        }
+        showsVerticalScrollIndicator={false}
+        {...scrollGateHandlers}
+        scrollEventThrottle={16}
+        windowSize={11}
+      />
+    </SwipeableScrollGateProvider>
+  );
 }

@@ -28,6 +28,7 @@ import {
   BK_MOBILE_DEFAULT_SERVER,
   BK_MOBILE_ICON_PATH,
   BK_MOBILE_SCHEME,
+  bkMarketingVersion,
   parseBkAndroidVersionCode,
   parseBkIosBuildNumber,
   type BkRepoEnv,
@@ -67,6 +68,12 @@ export function applyBkMobileConfig(config: ExpoConfig, repoEnv: BkRepoEnv): Exp
   return {
     ...rest,
     name: BK_MOBILE_APP_NAME,
+    // `1.0.4.<run>`: upstream's version stays untouched, every build is newer
+    // than the last for SideStore. Either platform's run number will do — the
+    // workflow hands each job the same one.
+    ...(config.version === undefined
+      ? {}
+      : { version: bkMarketingVersion(config.version, iosBuildNumber ?? androidVersionCode) }),
     scheme: BK_MOBILE_SCHEME,
     icon: BK_MOBILE_ICON_PATH,
     // No EAS project, so no OTA channel to check. Leaving this enabled would

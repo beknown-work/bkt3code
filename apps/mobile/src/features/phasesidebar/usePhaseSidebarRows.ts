@@ -17,6 +17,7 @@ import { useMemo, useRef } from "react";
 
 import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import { environmentSession } from "../../state/session";
+import { resolveMobileUnread } from "./phaseSidebarPreferences";
 import { usePhaseSidebarVisitTimestamps } from "./phaseSidebarVisitStore";
 
 /**
@@ -74,6 +75,14 @@ export function usePhaseSidebarRows(input: {
         currentUserId,
         allEnvironmentShellsLive: true,
         lastKnownPhaseByThreadKey: lastKnownPhaseByThreadKey.current,
+      }).map((row) => {
+        // The phone's stricter read/unread rule; see resolveMobileUnread.
+        const unread = resolveMobileUnread({
+          sharedUnread: row.isUnreadCompletion,
+          lastTurnCompletedAt: row.thread.latestTurn?.completedAt,
+          lastVisitedAt: visitTimestamps[`${row.thread.environmentId}:${row.thread.id}`],
+        });
+        return unread === row.isUnreadCompletion ? row : { ...row, isUnreadCompletion: unread };
       }),
     [currentUserId, projects, serverConfigs, threads, visitTimestamps],
   );

@@ -6,6 +6,11 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type { SidebarProjectGroupingMode } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): phase sidebar grouping is shaped and sanitized by client-runtime.
+import {
+  sanitizePhaseSidebarGrouping,
+  type PhaseSidebarGroupingPreferences,
+} from "@t3tools/client-runtime/state/phase-sidebar-grouping";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 
 import * as MobileDatabase from "./mobile-database";
@@ -60,6 +65,12 @@ export interface Preferences {
    * bounded map rather than growing with every thread ever opened.
    */
   readonly phaseSidebarVisitedAt?: Readonly<Record<string, string>>;
+  /**
+   * T3-CUSTOM(expbkt3): how the phase sidebar is sectioned (lifecycle /
+   * project / custom groups), the user's custom groups, and which sections are
+   * collapsed. Sanitized by client-runtime so web and mobile read one shape.
+   */
+  readonly phaseSidebarGrouping?: PhaseSidebarGroupingPreferences;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -120,6 +131,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     // T3-CUSTOM(expbkt3): experimental phase sidebar opt-in and its visit map.
     experimentalPhaseSidebarEnabled?: boolean;
     phaseSidebarVisitedAt?: Record<string, string>;
+    phaseSidebarGrouping?: PhaseSidebarGroupingPreferences;
     planModeEnabled?: boolean;
     threadListV2SettledShelfExpanded?: boolean;
     threadListV2SnoozedShelfExpanded?: boolean;
@@ -202,6 +214,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
       if (typeof value === "string" && value.length > 0) visited[key] = value;
     }
     preferences.phaseSidebarVisitedAt = visited;
+  }
+  if (parsed.phaseSidebarGrouping !== undefined) {
+    preferences.phaseSidebarGrouping = sanitizePhaseSidebarGrouping(parsed.phaseSidebarGrouping);
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;

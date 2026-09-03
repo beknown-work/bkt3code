@@ -53,6 +53,13 @@ export interface RunningSessionRow {
  * Every thread still marked running/starting, with the newest event on its
  * stream (the closest thing to "when did this turn last make progress") and the
  * active turn's start time.
+ *
+ * The newest event is the highest `sequence` on the stream, looked up through
+ * the store's (aggregate_kind, stream_id, sequence) index. Every filter on
+ * `orchestration_events` must name `aggregate_kind`: without it no index
+ * applies and SQLite scans the whole table, synchronously, on the event loop.
+ * On bkt3's multi-GB database that scan froze the server for minutes on every
+ * sweep (2026-09-03, clients saw "did not respond during connection setup").
  */
 export const listRunningSessionRows = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -65,9 +72,12 @@ export const listRunningSessionRows = Effect.gen(function* () {
       s.updated_at AS "updatedAt",
       s.active_turn_id AS "activeTurnId",
       (
-        SELECT MAX(e.occurred_at)
+        SELECT e.occurred_at
         FROM orchestration_events e
-        WHERE e.stream_id = s.thread_id
+        WHERE e.aggregate_kind = 'thread'
+          AND e.stream_id = s.thread_id
+        ORDER BY e.sequence DESC
+        LIMIT 1
       ) AS "lastActivityAt",
       tr.started_at AS "turnStartedAt"
     FROM projection_thread_sessions s
@@ -181,14 +191,20 @@ export const interruptRunningSession = (input: {
  * When the thread last recorded any event. `lastSeenAt` on the provider
  * binding only moves on runtime operations (start, sendTurn), so it cannot
  * tell a streaming agent from a dead one; the event stream can.
+ *
+ * Index-served like `listRunningSessionRows`: see the note there before
+ * changing the WHERE clause.
  */
 export const latestThreadEventAt = (threadId: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const rows = yield* sql<{ readonly lastActivityAt: string | null }>`
-      SELECT MAX(occurred_at) AS "lastActivityAt"
+      SELECT occurred_at AS "lastActivityAt"
       FROM orchestration_events
-      WHERE stream_id = ${threadId}
+      WHERE aggregate_kind = 'thread'
+        AND stream_id = ${threadId}
+      ORDER BY sequence DESC
+      LIMIT 1
     `;
     return rows[0]?.lastActivityAt ?? null;
   });

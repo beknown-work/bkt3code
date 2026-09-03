@@ -155,6 +155,8 @@ export const make = Effect.gen(function* () {
       threadTitleRegeneration: true,
       threadPullRequestLinking: true,
       providerRateLimits: true,
+      // T3-CUSTOM(expbkt3): per-thread API-level cost.
+      threadUsage: true,
       // T3-CUSTOM(expbkt3)
       threadPriority: true,
       // T3-CUSTOM(expbkt3): durable manual Linear tags.

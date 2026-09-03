@@ -64,6 +64,19 @@ export function phaseSidebarGroupHeaderClassName(phaseId: PhaseSidebarPhaseId): 
 }
 
 /**
+ * T3-CUSTOM(expbkt3): header for any section. Lifecycle sections keep their
+ * phase tone; project and custom sections are neutral, borrowing a phase tone
+ * only while collapsed and hiding something urgent (the caller passes it).
+ */
+export function phaseSidebarSectionHeaderClassName(phaseId: PhaseSidebarPhaseId | null): string {
+  if (phaseId !== null) return phaseSidebarGroupHeaderClassName(phaseId);
+  return cn(
+    "mb-1.5 flex min-h-7 items-center gap-2 rounded-md border px-2 py-1 shadow-[inset_0_1px_0_rgb(255_255_255/0.025)]",
+    "border-border/60 bg-muted/40 text-foreground/80",
+  );
+}
+
+/**
  * Keep the routed thread visually distinct from multi-selected rows. The
  * persistent right-edge accent is rendered by PhaseThreadRow; these surfaces
  * provide enough contrast for the active row to remain obvious in both themes.

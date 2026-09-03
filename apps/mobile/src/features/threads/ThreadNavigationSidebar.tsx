@@ -1218,6 +1218,8 @@ function ThreadNavigationSidebarPane(
             whole list, so the stock one keeps its exact behaviour when off. */}
         {phaseSidebarEnabled ? (
           <PhaseSidebarPane
+            contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 16 }}
+            contentInsetAdjustmentBehavior={NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"}
             onSelectThread={props.onSelectThread}
             selectedThreadKey={props.selectedThreadKey}
             viewerEnvironmentId={phaseSidebarViewerEnvironmentId}
@@ -1271,6 +1273,7 @@ function ThreadNavigationSidebarPane(
     return (
       <View className="flex-1" style={{ width: props.width }}>
         <PhaseSidebarPane
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 16 }}
           onSelectThread={props.onSelectThread}
           selectedThreadKey={props.selectedThreadKey}
           viewerEnvironmentId={phaseSidebarViewerEnvironmentId}

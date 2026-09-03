@@ -1,7 +1,12 @@
 // T3-CUSTOM(expbkt3): fork-owned coverage for the sidebar's pure preference logic.
 import { describe, expect, it } from "@effect/vitest";
 
-import { pruneVisitTimestamps, resolvePhaseSidebarEnabled } from "./phaseSidebarPreferences";
+import {
+  pruneVisitTimestamps,
+  removeVisitTimestamp,
+  resolveMobileUnread,
+  resolvePhaseSidebarEnabled,
+} from "./phaseSidebarPreferences";
 
 const at = (hour: number) => `2026-08-31T${String(hour).padStart(2, "0")}:00:00.000Z`;
 
@@ -43,5 +48,48 @@ describe("resolvePhaseSidebarEnabled", () => {
   it("is on only when explicitly enabled", () => {
     expect(resolvePhaseSidebarEnabled({ preference: true, preferencesLoaded: true })).toBe(true);
     expect(resolvePhaseSidebarEnabled({ preference: false, preferencesLoaded: true })).toBe(false);
+  });
+});
+
+describe("resolveMobileUnread", () => {
+  it("flags a completed session this device has never opened", () => {
+    expect(
+      resolveMobileUnread({
+        sharedUnread: false,
+        lastTurnCompletedAt: "2026-09-02T10:00:00.000Z",
+        lastVisitedAt: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a visited session read unless the shared rule disagrees", () => {
+    expect(
+      resolveMobileUnread({
+        sharedUnread: false,
+        lastTurnCompletedAt: "2026-09-02T10:00:00.000Z",
+        lastVisitedAt: "2026-09-02T11:00:00.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      resolveMobileUnread({ sharedUnread: true, lastTurnCompletedAt: null, lastVisitedAt: "x" }),
+    ).toBe(true);
+  });
+
+  it("never flags a session with no completed turn", () => {
+    expect(
+      resolveMobileUnread({
+        sharedUnread: false,
+        lastTurnCompletedAt: null,
+        lastVisitedAt: undefined,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("removeVisitTimestamp", () => {
+  it("drops the key and leaves the rest", () => {
+    expect(removeVisitTimestamp({ a: "1", b: "2" }, "a")).toEqual({ b: "2" });
+    const visits = { a: "1" };
+    expect(removeVisitTimestamp(visits, "zzz")).toBe(visits);
   });
 });

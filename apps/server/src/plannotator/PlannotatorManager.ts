@@ -11,6 +11,7 @@ import {
   type OrchestrationCommand,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { plannotatorProxyPath } from "@t3tools/shared/plannotator";
 import * as NodeOS from "node:os";
 import * as Clock from "effect/Clock";
@@ -33,6 +34,7 @@ import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
+import { supportsProcessTreeInspection, terminateProcessTree } from "../provider/processTree.ts";
 import { OrchestrationCommandDispatcher } from "../orchestration/dispatchCommand.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -396,11 +398,19 @@ export const make = Effect.gen(function* () {
     return next;
   });
 
+  // The `plannotator` binary starts its own `opencode serve` child. Killing only
+  // the captured parent reparented that ~350 MB grandchild to init on every lease
+  // expiry, and the provider reaper had to hunt it down minutes later. Signal the
+  // whole descendant tree first (children before parent, SIGTERM then SIGKILL,
+  // verified against /proc), then let the spawner close its own handle.
   const stopHandle = (token: string) =>
     Effect.gen(function* () {
       const handle = handles.get(token);
       if (!handle) return;
       handles.delete(token);
+      if (supportsProcessTreeInspection(yield* HostProcessPlatform)) {
+        yield* terminateProcessTree({ rootPid: Number(handle.pid), gracePeriodMillis: 2_000 });
+      }
       yield* handle.kill({ forceKillAfter: "2 seconds" }).pipe(Effect.ignore);
     });
 
