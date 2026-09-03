@@ -21,6 +21,8 @@ const clientSettings: ClientSettings = {
   confirmQuit: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
+  // T3-CUSTOM(expbkt3): user-defined "Open in…" targets.
+  openTargets: [],
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   environmentIdentificationMode: "artwork",

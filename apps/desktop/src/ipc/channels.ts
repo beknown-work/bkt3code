@@ -5,6 +5,10 @@ export const SET_THEME_CHANNEL = "desktop:set-theme";
 export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
+// T3-CUSTOM(expbkt3): user-defined "Open in…" targets (Obsidian, Finder,
+// custom apps). Separate from OPEN_EXTERNAL_CHANNEL, whose allowlist is
+// deliberately narrow: http(s) plus VS Code's remote deep-link shape only.
+export const OPEN_FORK_TARGET_CHANNEL = "desktop:bk-open-target";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const QUIT_SHORTCUT_CHANNEL = "desktop:quit-shortcut";
 export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";

@@ -153,6 +153,52 @@ export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 export const DEFAULT_BROWSER_VIEWPORT: PreviewViewportSetting = FILL_PREVIEW_VIEWPORT;
 export const DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW = true;
 
+/**
+ * T3-CUSTOM(expbkt3): BEGIN — user-defined "Open in…" targets.
+ *
+ * Upstream's picker only knows editors it can find on a PATH, and only those
+ * with VS Code's Remote-SSH deep-link machinery work against a remote
+ * environment. That leaves out apps we actually want on a worktree: Obsidian,
+ * the file manager on a *remote* host, and anything else a user installs.
+ *
+ * A target is a URL template plus, for remote environments, the path
+ * translation needed to point it at a path that exists on THIS machine.
+ * Everything is resolved client-side, so the same setting serves the browser,
+ * the desktop app, a local bundled backend, and any number of remote hosts.
+ */
+
+/**
+ * Rewrites a path on the environment host into a path on the viewer's machine
+ * (a Syncthing mirror, an sshfs mount, a shared home). `host` scopes the rule
+ * to one environment host so several machines can use the same prefix for
+ * different local directories; omitted, it applies to every host.
+ */
+export const OpenTargetPathMapping = Schema.Struct({
+  remotePrefix: TrimmedNonEmptyString,
+  localPrefix: TrimmedNonEmptyString,
+  host: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type OpenTargetPathMapping = typeof OpenTargetPathMapping.Type;
+
+/**
+ * `template` is a URL with `{path}`, `{host}` and `{user}` placeholders;
+ * `{path}` receives the (possibly mapped) absolute path, percent-encoded per
+ * segment. `requiresMappingWhenRemote` marks templates whose path must be
+ * local to the viewer — Obsidian and a file manager cannot reach another
+ * machine — so the client can disable them instead of opening a dead link.
+ */
+export const OpenTarget = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  template: TrimmedNonEmptyString,
+  pathMappings: Schema.Array(OpenTargetPathMapping).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  requiresMappingWhenRemote: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type OpenTarget = typeof OpenTarget.Type;
+// T3-CUSTOM(expbkt3): END
+
 export const ClientSettingsSchema = Schema.Struct({
   appearanceContrast: AppearanceContrast.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_APPEARANCE_CONTRAST)),
@@ -180,6 +226,9 @@ export const ClientSettingsSchema = Schema.Struct({
   confirmQuit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // T3-CUSTOM(expbkt3): user-defined "Open in…" targets (Obsidian, Finder,
+  // custom apps). Empty by default, so upstream behaviour is untouched.
+  openTargets: Schema.Array(OpenTarget).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -1256,6 +1305,8 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
+  // T3-CUSTOM(expbkt3): user-defined "Open in…" targets.
+  openTargets: Schema.optionalKey(Schema.Array(OpenTarget)),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
