@@ -37,6 +37,7 @@ import { cn } from "../../lib/cn";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
+import { useEnvironmentAppearances } from "../environments/useEnvironmentAppearance";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadListActions } from "../home/useThreadListActions";
@@ -144,11 +145,24 @@ export function PhaseSidebarPane(props: {
       )?.title ?? null,
     [projects],
   );
+  // Nicknames win over connection labels here, as they do on web: this is the
+  // one place on the phone where sessions from several machines mix.
+  const environmentAppearances = useEnvironmentAppearances();
   const environmentLabelFor = useCallback(
-    (environmentId: string) =>
-      environments.find((environment) => environment.environmentId === environmentId)?.label ??
-      null,
-    [environments],
+    (environmentId: string) => environmentAppearances.get(environmentId)?.name ?? null,
+    [environmentAppearances],
+  );
+  const environmentAppearanceFor = useCallback(
+    (environmentId: string) => environmentAppearances.get(environmentId) ?? null,
+    [environmentAppearances],
+  );
+  const openEnvironmentAppearance = useCallback(
+    (environmentId: EnvironmentId) => {
+      // The sheet is a Modal; a formSheet pushed underneath it would be hidden.
+      setSheet(null);
+      navigation.navigate("EnvironmentAppearance", { environmentId });
+    },
+    [navigation],
   );
 
   const handleSelect = useCallback(
@@ -381,10 +395,12 @@ export function PhaseSidebarPane(props: {
           />
         ) : sheet?.kind === "group" ? (
           <PhaseSidebarGroupBySheet
+            environments={environmentAppearances}
             grouping={grouping}
             intent={sheet.intent}
             onChange={updateGrouping}
             onClose={() => setSheet(null)}
+            onOpenEnvironment={openEnvironmentAppearance}
           />
         ) : null}
       </PhaseSidebarSheetModal>
@@ -402,6 +418,7 @@ export function PhaseSidebarPane(props: {
         activeThreadKey={props.selectedThreadKey}
         contentContainerStyle={props.contentContainerStyle}
         contentInsetAdjustmentBehavior={props.contentInsetAdjustmentBehavior}
+        environmentAppearanceFor={environmentAppearanceFor}
         environmentLabelFor={environmentLabelFor}
         filters={filters}
         grouping={grouping}
