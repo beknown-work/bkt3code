@@ -191,6 +191,10 @@
       "types": "./src/state/phaseSidebarTree.ts",
       "default": "./src/state/phaseSidebarTree.ts"
     },
+    "./state/environment-appearance": {
+      "types": "./src/state/environmentAppearance.ts",
+      "default": "./src/state/environmentAppearance.ts"
+    },
     "./state/phase-sidebar-grouping": {
       "types": "./src/state/phaseSidebarGrouping.ts",
       "default": "./src/state/phaseSidebarGrouping.ts"

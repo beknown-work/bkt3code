@@ -63,7 +63,7 @@ export function PlanReviewThreadBanner(props: {
 
   return (
     <Pressable
-      className="mx-3 mt-2 flex-row items-center gap-3 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2.5"
+      className="mx-4 mb-3 flex-row items-center gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3"
       onPress={handleOpen}
     >
       <SymbolView name="list.bullet.rectangle" size={16} tintColor={iconTint} type="monochrome" />

@@ -146,6 +146,8 @@ import {
   useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+// T3-CUSTOM(expbkt3): user-defined "Open in…" targets (Obsidian, Finder, custom apps).
+import { OpenTargetsSettingsSection } from "./fork/OpenTargetsSettingsSection";
 // T3-CUSTOM(expbkt3): BEGIN — archived-session worktree reclaim.
 import { SessionArchiveReclaimSection } from "./SessionArchiveReclaimSection";
 // T3-CUSTOM(expbkt3): END
@@ -2679,6 +2681,9 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      {/* T3-CUSTOM(expbkt3): user-defined "Open in…" targets. */}
+      <OpenTargetsSettingsSection />
 
       <LegacyFeaturesSection />
     </SettingsPageContainer>

@@ -44,7 +44,6 @@ import { useKnownTerminalSessions } from "../../state/use-terminal-session";
 import { useSelectedThreadDetailState } from "../../state/use-thread-detail";
 import { useThreadSelection } from "../../state/use-thread-selection";
 // T3-CUSTOM(expbkt3): plan review entry point.
-import { PlanReviewThreadBanner } from "../planreview/PlanReviewThreadBanner";
 import { GitActionProgressOverlay } from "./GitActionProgressOverlay";
 import {
   buildTerminalMenuSessions,
@@ -854,13 +853,6 @@ function ThreadRouteContent(
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
 
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
-
-      {/* T3-CUSTOM(expbkt3): plan review entry point; renders null when N/A. */}
-      <PlanReviewThreadBanner
-        environmentId={selectedThread.environmentId}
-        hasActionableProposedPlan={selectedThread.hasActionableProposedPlan}
-        threadId={selectedThread.id}
-      />
 
       <View className="flex-1 bg-screen">
         <ThreadDetailScreen

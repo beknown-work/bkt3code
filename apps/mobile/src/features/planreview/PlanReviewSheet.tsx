@@ -59,7 +59,7 @@ function PlanReviewLine(props: {
       )}
       onPress={handlePress}
     >
-      <Text className="w-8 shrink-0 pt-0.5 text-right font-t3-mono text-[10px] text-muted-foreground">
+      <Text className="w-8 shrink-0 pt-0.5 text-right font-t3-mono text-[10px] text-foreground-muted">
         {row.lineIndex + 1}
       </Text>
       <Text className="ml-2 flex-1 font-t3-mono text-xs leading-relaxed text-foreground">
@@ -146,7 +146,7 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
 
   if (initial.isPending && view === null) {
     return (
-      <View className="flex-1 items-center justify-center bg-background">
+      <View className="flex-1 items-center justify-center bg-screen">
         <ActivityIndicator />
       </View>
     );
@@ -154,8 +154,8 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
 
   if (view === null) {
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-background px-8">
-        <Text className="text-center text-sm text-muted-foreground">
+      <View className="flex-1 items-center justify-center gap-3 bg-screen px-8">
+        <Text className="text-center text-sm text-foreground-muted">
           {initial.error ?? "This plan is no longer available."}
         </Text>
         <Pressable hitSlop={8} onPress={initial.refresh}>
@@ -169,7 +169,7 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
   const isSubmitting = pendingDecision !== null;
 
   return (
-    <View className="flex-1 bg-background">
+    <View className="flex-1 bg-screen">
       <FlatList
         ListFooterComponent={
           <PlanReviewDiscussionList
@@ -183,13 +183,13 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
             <Text className="text-base font-t3-bold text-foreground">
               {snapshot?.document.title ?? "Plan"}
             </Text>
-            <Text className="mt-0.5 text-xs text-muted-foreground">
+            <Text className="mt-0.5 text-xs text-foreground-muted">
               Revision {view.currentVersion?.revision ?? 0}
               {view.unresolvedCount > 0
                 ? ` · ${view.unresolvedCount} open comment${view.unresolvedCount === 1 ? "" : "s"}`
                 : ""}
             </Text>
-            <Text className="mt-2 text-xs text-muted-foreground">
+            <Text className="mt-2 text-xs text-foreground-muted">
               Tap a line to select it, tap another to extend, then comment.
             </Text>
           </View>
@@ -223,7 +223,7 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
       {selection === null ? (
         isDecided ? null : (
           <View
-            className="absolute inset-x-0 flex-row gap-3 border-t border-border bg-background px-4 pt-3"
+            className="absolute inset-x-0 flex-row gap-3 border-t border-border bg-screen px-4 pt-3"
             style={{ bottom: 0, paddingBottom: insets.bottom + 12 }}
           >
             <Pressable
@@ -252,10 +252,10 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
         )
       ) : (
         <View
-          className="absolute inset-x-0 flex-row items-center gap-3 border-t border-border bg-background px-4 pt-3"
+          className="absolute inset-x-0 flex-row items-center gap-3 border-t border-border bg-screen px-4 pt-3"
           style={{ bottom: 0, paddingBottom: insets.bottom + 12 }}
         >
-          <Text className="flex-1 text-sm text-muted-foreground">
+          <Text className="flex-1 text-sm text-foreground-muted">
             {formatPlanReviewSelectionLabel(selection)}
           </Text>
           <Pressable
@@ -285,11 +285,11 @@ function PlanReviewDiscussionList(props: {
 
   return (
     <View className="mt-4 border-t border-border pt-4">
-      <Text className="px-4 text-xs font-t3-bold uppercase text-muted-foreground">Comments</Text>
+      <Text className="px-4 text-xs font-t3-bold uppercase text-foreground-muted">Comments</Text>
       {props.threads.map((thread) => (
         <View className="mt-3 px-4" key={thread.discussion.discussionId}>
           <View className="flex-row items-center gap-2">
-            <Text className="text-xs text-muted-foreground">
+            <Text className="text-xs text-foreground-muted">
               {thread.startIndex === null
                 ? "Anchor no longer in the plan"
                 : `Line ${thread.startIndex + 1}${
@@ -299,11 +299,11 @@ function PlanReviewDiscussionList(props: {
                   }`}
             </Text>
             {thread.discussion.isResolved ? (
-              <Text className="text-xs text-muted-foreground">· resolved</Text>
+              <Text className="text-xs text-foreground-muted">· resolved</Text>
             ) : null}
           </View>
-          <View className="mt-1 rounded-md bg-muted/40 px-3 py-2">
-            <Text className="font-t3-mono text-[11px] text-muted-foreground" numberOfLines={2}>
+          <View className="mt-1 rounded-md bg-subtle px-3 py-2">
+            <Text className="font-t3-mono text-[11px] text-foreground-muted" numberOfLines={2}>
               {thread.discussion.quotedText}
             </Text>
           </View>

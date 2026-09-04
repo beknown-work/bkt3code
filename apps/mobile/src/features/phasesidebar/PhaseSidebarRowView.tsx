@@ -35,6 +35,8 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { cn } from "../../lib/cn";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { EnvironmentBadge } from "../environments/EnvironmentBadge";
+import type { MobileEnvironmentAppearance } from "../environments/environmentAppearance";
 import { PhaseSidebarRowStatus } from "./PhaseSidebarRowStatus";
 import {
   phaseSidebarCheckoutToneClassName,
@@ -55,6 +57,12 @@ export interface PhaseSidebarRowViewProps {
   /** Whose avatar to omit: the row shows only *other* people's. */
   readonly viewerUserId: UserId | null;
   readonly worktreeView: PhaseSidebarWorktreeView;
+  /**
+   * Which machine this session runs on. The list supplies it only when the rows
+   * on screen span more than one environment, so a single-remote phone stays
+   * uncluttered.
+   */
+  readonly environmentAppearance?: MobileEnvironmentAppearance | null;
   readonly indentDepth: number;
   readonly isActive: boolean;
   readonly subtreeCount: number;
@@ -207,7 +215,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
         >
           <Pressable
             accessibilityHint={`Opens the thread. Swipe left for ${swipeHint}.`}
-            accessibilityLabel={`${thread.title}${unread ? ", unread" : ""}`}
+            accessibilityLabel={`${thread.title}${unread ? ", unread" : ""}${props.environmentAppearance ? `, on ${props.environmentAppearance.name}` : ""}`}
             accessibilityRole="button"
             accessibilityState={{ selected: props.isActive }}
             className={cn(
@@ -274,6 +282,9 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
 
               {/* The metadata lane. Order matches web so the two read the same. */}
               <View className="mt-1 flex-row items-center gap-2">
+                {props.environmentAppearance ? (
+                  <EnvironmentBadge appearance={props.environmentAppearance} variant="glyph" />
+                ) : null}
                 <Text
                   className="shrink font-t3-mono text-[11px] text-foreground-muted"
                   numberOfLines={1}

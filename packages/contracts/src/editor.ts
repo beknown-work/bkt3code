@@ -102,6 +102,8 @@ export const remoteSchemeForEditor = (id: EditorId): string | undefined => {
 export const buildRemoteOpenUrl = (input: {
   readonly editor: EditorId;
   readonly host: string;
+  // T3-CUSTOM(expbkt3): `username` is a backport of upstream #8305.
+  readonly username?: string;
   readonly absolutePath: string;
 }): string | undefined => {
   const scheme = remoteSchemeForEditor(input.editor);
@@ -112,7 +114,12 @@ export const buildRemoteOpenUrl = (input: {
   const posixPath = input.absolutePath.replaceAll("\\", "/");
   const rootedPath = posixPath.startsWith("/") ? posixPath : `/${posixPath}`;
   const encodedPath = rootedPath.split("/").map(encodeURIComponent).join("/");
-  return `${scheme}://vscode-remote/ssh-remote+${encodeURIComponent(input.host)}${encodedPath}`;
+  // T3-CUSTOM(expbkt3): BEGIN - backport of upstream #8305. Without the login
+  // account, Remote-SSH connects as the *viewer's* username, which is wrong on
+  // every host whose account differs from the Mac's.
+  const destination = input.username === undefined ? input.host : `${input.username}@${input.host}`;
+  return `${scheme}://vscode-remote/ssh-remote+${encodeURIComponent(destination)}${encodedPath}`;
+  // T3-CUSTOM(expbkt3): END
 };
 
 /**
@@ -127,6 +134,11 @@ export type RemoteOpenTargetKind = typeof RemoteOpenTargetKind.Type;
 export const RemoteOpenTarget = Schema.Struct({
   kind: RemoteOpenTargetKind,
   host: TrimmedNonEmptyString,
+  // T3-CUSTOM(expbkt3): BEGIN - backport of upstream #8305. Login account on
+  // the environment host. Optional for compatibility with servers that
+  // advertised only a hostname.
+  username: Schema.optionalKey(TrimmedNonEmptyString),
+  // T3-CUSTOM(expbkt3): END
 });
 export type RemoteOpenTarget = typeof RemoteOpenTarget.Type;
 
