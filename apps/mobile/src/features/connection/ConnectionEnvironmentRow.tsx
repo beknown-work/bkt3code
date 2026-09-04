@@ -14,6 +14,8 @@ import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+// T3-CUSTOM(expbkt3): per-environment appearance entry point.
+import { EnvironmentAppearanceButton } from "../environments/EnvironmentAppearanceButton";
 
 function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
   return connectionStatusText({
@@ -168,6 +170,8 @@ export function ConnectionEnvironmentRow(props: {
             </>
           )}
 
+          {/* T3-CUSTOM(expbkt3): nickname, icon and colour for this environment. */}
+          <EnvironmentAppearanceButton environmentId={props.environment.environmentId} />
           <View className="flex-row justify-end gap-2">
             {props.environment.isRelayManaged ? null : (
               <Pressable

@@ -79,12 +79,12 @@ export function PlanReviewCommentSheet(props: PlanReviewCommentSheetProps) {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
-      className="flex-1 bg-background"
+      className="flex-1 bg-screen"
     >
       <View className="flex-1" style={{ paddingBottom: insets.bottom }}>
         <View className="flex-row items-center justify-between border-b border-border px-4 py-3">
           <Pressable hitSlop={8} onPress={dismiss}>
-            <Text className="text-base text-muted-foreground">Cancel</Text>
+            <Text className="text-base text-foreground-muted">Cancel</Text>
           </Pressable>
           <Text className="text-base font-t3-bold text-foreground">Comment</Text>
           <Pressable disabled={!canSubmit} hitSlop={8} onPress={handleSubmit}>
@@ -94,7 +94,7 @@ export function PlanReviewCommentSheet(props: PlanReviewCommentSheetProps) {
               <Text
                 className={cn(
                   "text-base font-t3-bold",
-                  canSubmit ? "text-primary" : "text-muted-foreground",
+                  canSubmit ? "text-primary" : "text-foreground-muted",
                 )}
               >
                 Save
@@ -106,17 +106,17 @@ export function PlanReviewCommentSheet(props: PlanReviewCommentSheetProps) {
         <ScrollView className="flex-1" keyboardShouldPersistTaps="handled">
           {selection === null ? (
             <View className="px-4 py-6">
-              <Text className="text-sm text-muted-foreground">
+              <Text className="text-sm text-foreground-muted">
                 The selection was lost. Go back and pick the lines again.
               </Text>
             </View>
           ) : (
             <>
               <View className="border-b border-border px-4 py-3">
-                <Text className="text-xs font-t3-bold uppercase text-muted-foreground">
+                <Text className="text-xs font-t3-bold uppercase text-foreground-muted">
                   {formatPlanReviewSelectionLabel(selection)}
                 </Text>
-                <View className="mt-2 rounded-md bg-muted/40 px-3 py-2">
+                <View className="mt-2 rounded-md bg-subtle px-3 py-2">
                   {quoteLines.slice(0, QUOTE_PREVIEW_MAX_LINES).map((line, index) => (
                     <Text
                       className="font-t3-mono text-xs leading-relaxed text-foreground"
@@ -129,7 +129,7 @@ export function PlanReviewCommentSheet(props: PlanReviewCommentSheetProps) {
                     </Text>
                   ))}
                   {quoteLines.length > QUOTE_PREVIEW_MAX_LINES ? (
-                    <Text className="mt-1 text-xs text-muted-foreground">
+                    <Text className="mt-1 text-xs text-foreground-muted">
                       +{quoteLines.length - QUOTE_PREVIEW_MAX_LINES} more lines
                     </Text>
                   ) : null}

@@ -71,6 +71,8 @@ import type {
   ThreadFeedEntry,
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+// T3-CUSTOM(expbkt3): plan review entry point, shown beside the other pending cards.
+import { PlanReviewThreadBanner } from "../planreview/PlanReviewThreadBanner";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
   derivePendingUserInputMaxHeight,
@@ -765,6 +767,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   </View>
                 </View>
               ) : null}
+              {/* T3-CUSTOM(expbkt3): plan ready → review. Lives with the pending
+                  cards so it sits above the composer, not under the glass header. */}
+              <PlanReviewThreadBanner
+                environmentId={props.environmentId}
+                hasActionableProposedPlan={props.selectedThread.hasActionableProposedPlan}
+                threadId={props.selectedThread.id}
+              />
               {props.activePendingApproval || props.activePendingUserInput ? (
                 <Animated.View
                   className="shrink-0 gap-3 px-4 pb-3"

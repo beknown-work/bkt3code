@@ -43,11 +43,29 @@ import {
   ZapIcon,
 } from "lucide-react";
 
-export interface EnvironmentAppearance {
-  readonly nickname?: string;
-  readonly iconId?: string;
-  readonly colorId?: string;
-}
+import {
+  defaultEnvironmentColorId,
+  defaultEnvironmentIconId,
+  ENVIRONMENT_COLOR_OPTIONS,
+  ENVIRONMENT_ICON_DESCRIPTORS,
+  resolveEnvironmentIdentity,
+  sanitizeEnvironmentAppearance,
+  type EnvironmentAppearance,
+  type EnvironmentColorOption,
+  type ResolvedEnvironmentIdentity,
+} from "@t3tools/client-runtime/state/environment-appearance";
+
+// The catalogue, the derived fallback and the sanitizer live in client-runtime so
+// the phone and the browser agree on what an environment looks like. This module
+// adds the Lucide glyph for each icon id and keeps the web-facing names.
+export {
+  defaultEnvironmentColorId,
+  defaultEnvironmentIconId,
+  ENVIRONMENT_COLOR_OPTIONS,
+  sanitizeEnvironmentAppearance,
+  type EnvironmentAppearance,
+  type EnvironmentColorOption,
+};
 
 export interface EnvironmentIconOption {
   readonly id: string;
@@ -55,95 +73,32 @@ export interface EnvironmentIconOption {
   readonly Icon: LucideIcon;
 }
 
-export interface EnvironmentColorOption {
-  readonly id: string;
-  readonly label: string;
-  /** Foreground for the glyph and the accent dot. */
-  readonly value: string;
-}
+const LUCIDE_ICON_BY_ID: Readonly<Record<string, LucideIcon>> = {
+  server: ServerIcon,
+  laptop: LaptopIcon,
+  cloud: CloudIcon,
+  home: HouseIcon,
+  cpu: CpuIcon,
+  container: ContainerIcon,
+  database: DatabaseIcon,
+  flask: FlaskConicalIcon,
+  rocket: RocketIcon,
+  globe: GlobeIcon,
+  terminal: TerminalIcon,
+  code: CodeIcon,
+  wrench: WrenchIcon,
+  zap: ZapIcon,
+  box: BoxIcon,
+};
 
-export const ENVIRONMENT_ICON_OPTIONS: ReadonlyArray<EnvironmentIconOption> = [
-  { id: "server", label: "Server", Icon: ServerIcon },
-  { id: "laptop", label: "Laptop", Icon: LaptopIcon },
-  { id: "cloud", label: "Cloud", Icon: CloudIcon },
-  { id: "home", label: "Home", Icon: HouseIcon },
-  { id: "cpu", label: "CPU", Icon: CpuIcon },
-  { id: "container", label: "Container", Icon: ContainerIcon },
-  { id: "database", label: "Database", Icon: DatabaseIcon },
-  { id: "flask", label: "Lab", Icon: FlaskConicalIcon },
-  { id: "rocket", label: "Rocket", Icon: RocketIcon },
-  { id: "globe", label: "Globe", Icon: GlobeIcon },
-  { id: "terminal", label: "Terminal", Icon: TerminalIcon },
-  { id: "code", label: "Code", Icon: CodeIcon },
-  { id: "wrench", label: "Tools", Icon: WrenchIcon },
-  { id: "zap", label: "Zap", Icon: ZapIcon },
-  { id: "box", label: "Box", Icon: BoxIcon },
-];
+export const ENVIRONMENT_ICON_OPTIONS: ReadonlyArray<EnvironmentIconOption> =
+  ENVIRONMENT_ICON_DESCRIPTORS.map((descriptor) => ({
+    ...descriptor,
+    Icon: LUCIDE_ICON_BY_ID[descriptor.id] ?? ServerIcon,
+  }));
 
-/**
- * Hues spaced far enough apart to stay separable at badge size, and mid-lightness
- * so the same value carries on both light and dark surfaces without a second set.
- */
-export const ENVIRONMENT_COLOR_OPTIONS: ReadonlyArray<EnvironmentColorOption> = [
-  { id: "blue", label: "Blue", value: "#3b82f6" },
-  { id: "violet", label: "Violet", value: "#8b5cf6" },
-  { id: "pink", label: "Pink", value: "#ec4899" },
-  { id: "red", label: "Red", value: "#ef4444" },
-  { id: "orange", label: "Orange", value: "#f97316" },
-  { id: "amber", label: "Amber", value: "#f59e0b" },
-  { id: "lime", label: "Lime", value: "#84cc16" },
-  { id: "emerald", label: "Emerald", value: "#10b981" },
-  { id: "teal", label: "Teal", value: "#14b8a6" },
-  { id: "cyan", label: "Cyan", value: "#06b6d4" },
-  { id: "indigo", label: "Indigo", value: "#6366f1" },
-  { id: "slate", label: "Slate", value: "#94a3b8" },
-];
-
-export interface ResolvedEnvironmentAppearance {
-  readonly name: string;
-  readonly iconId: string;
+export interface ResolvedEnvironmentAppearance extends ResolvedEnvironmentIdentity {
   readonly Icon: LucideIcon;
-  readonly colorId: string;
-  readonly color: string;
-  /** True when the operator picked this, rather than it being derived from the id. */
-  readonly customized: boolean;
-}
-
-/** FNV-1a: stable across reloads and machines, which a string hash must be here. */
-function hashString(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash >>> 0;
-}
-
-export function defaultEnvironmentColorId(environmentId: string): string {
-  const option =
-    ENVIRONMENT_COLOR_OPTIONS[hashString(environmentId) % ENVIRONMENT_COLOR_OPTIONS.length];
-  return option?.id ?? "slate";
-}
-
-export function defaultEnvironmentIconId(environmentId: string): string {
-  // Offset the hash so an id does not land on the same index in both catalogs,
-  // which would correlate icon and colour across every environment.
-  const option =
-    ENVIRONMENT_ICON_OPTIONS[hashString(`${environmentId}:icon`) % ENVIRONMENT_ICON_OPTIONS.length];
-  return option?.id ?? "server";
-}
-
-function findIcon(iconId: string): EnvironmentIconOption {
-  return (
-    ENVIRONMENT_ICON_OPTIONS.find((option) => option.id === iconId) ?? ENVIRONMENT_ICON_OPTIONS[0]!
-  );
-}
-
-function findColor(colorId: string): EnvironmentColorOption {
-  return (
-    ENVIRONMENT_COLOR_OPTIONS.find((option) => option.id === colorId) ??
-    ENVIRONMENT_COLOR_OPTIONS[ENVIRONMENT_COLOR_OPTIONS.length - 1]!
-  );
 }
 
 /**
@@ -156,25 +111,8 @@ export function resolveEnvironmentAppearance(input: {
   readonly label: string;
   readonly appearance?: EnvironmentAppearance | undefined;
 }): ResolvedEnvironmentAppearance {
-  const stored = input.appearance;
-  const nickname = stored?.nickname?.trim();
-  const iconId = stored?.iconId ?? defaultEnvironmentIconId(input.environmentId);
-  const colorId = stored?.colorId ?? defaultEnvironmentColorId(input.environmentId);
-  const icon = findIcon(iconId);
-  const color = findColor(colorId);
-
-  return {
-    name: nickname && nickname.length > 0 ? nickname : input.label,
-    iconId: icon.id,
-    Icon: icon.Icon,
-    colorId: color.id,
-    color: color.value,
-    customized:
-      stored !== undefined &&
-      ((nickname !== undefined && nickname.length > 0) ||
-        stored.iconId !== undefined ||
-        stored.colorId !== undefined),
-  };
+  const identity = resolveEnvironmentIdentity(input);
+  return { ...identity, Icon: LUCIDE_ICON_BY_ID[identity.iconId] ?? ServerIcon };
 }
 
 /** A translucent fill derived from the accent, so one palette drives both. */
@@ -184,26 +122,4 @@ export function environmentAccentSurface(color: string): string {
 
 export function environmentAccentBorder(color: string): string {
   return `color-mix(in srgb, ${color} 40%, transparent)`;
-}
-
-export function sanitizeEnvironmentAppearance(value: unknown): EnvironmentAppearance | null {
-  if (typeof value !== "object" || value === null) return null;
-  const record = value as Record<string, unknown>;
-  const nickname = typeof record.nickname === "string" ? record.nickname.trim() : undefined;
-  const iconId =
-    typeof record.iconId === "string" &&
-    ENVIRONMENT_ICON_OPTIONS.some((option) => option.id === record.iconId)
-      ? record.iconId
-      : undefined;
-  const colorId =
-    typeof record.colorId === "string" &&
-    ENVIRONMENT_COLOR_OPTIONS.some((option) => option.id === record.colorId)
-      ? record.colorId
-      : undefined;
-  if (!nickname && !iconId && !colorId) return null;
-  return {
-    ...(nickname ? { nickname } : {}),
-    ...(iconId ? { iconId } : {}),
-    ...(colorId ? { colorId } : {}),
-  };
 }

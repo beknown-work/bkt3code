@@ -11,6 +11,11 @@ import {
   sanitizePhaseSidebarGrouping,
   type PhaseSidebarGroupingPreferences,
 } from "@t3tools/client-runtime/state/phase-sidebar-grouping";
+// T3-CUSTOM(expbkt3): per-environment appearance overrides.
+import {
+  sanitizeEnvironmentAppearanceMap,
+  type EnvironmentAppearance,
+} from "@t3tools/client-runtime/state/environment-appearance";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 
 import * as MobileDatabase from "./mobile-database";
@@ -71,6 +76,12 @@ export interface Preferences {
    * collapsed. Sanitized by client-runtime so web and mobile read one shape.
    */
   readonly phaseSidebarGrouping?: PhaseSidebarGroupingPreferences;
+  /**
+   * T3-CUSTOM(expbkt3): per-environment nickname, icon and colour, keyed by
+   * environment id. Same shape web keeps in localStorage; sanitized by
+   * client-runtime so unknown icon or colour ids fall back to the derived look.
+   */
+  readonly environmentAppearanceByEnvironmentId?: Readonly<Record<string, EnvironmentAppearance>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -132,6 +143,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     experimentalPhaseSidebarEnabled?: boolean;
     phaseSidebarVisitedAt?: Record<string, string>;
     phaseSidebarGrouping?: PhaseSidebarGroupingPreferences;
+    environmentAppearanceByEnvironmentId?: Readonly<Record<string, EnvironmentAppearance>>;
     planModeEnabled?: boolean;
     threadListV2SettledShelfExpanded?: boolean;
     threadListV2SnoozedShelfExpanded?: boolean;
@@ -217,6 +229,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (parsed.phaseSidebarGrouping !== undefined) {
     preferences.phaseSidebarGrouping = sanitizePhaseSidebarGrouping(parsed.phaseSidebarGrouping);
+  }
+  if (parsed.environmentAppearanceByEnvironmentId !== undefined) {
+    preferences.environmentAppearanceByEnvironmentId = sanitizeEnvironmentAppearanceMap(
+      parsed.environmentAppearanceByEnvironmentId,
+    );
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;

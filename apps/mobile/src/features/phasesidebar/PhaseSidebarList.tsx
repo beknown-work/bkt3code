@@ -58,6 +58,7 @@ import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { PhaseSidebarRowView, type PhaseSidebarRowSwipe } from "./PhaseSidebarRowView";
+import type { MobileEnvironmentAppearance } from "../environments/environmentAppearance";
 import { phaseSidebarSectionToneClassName } from "./phaseSidebarRowTone";
 import {
   buildPhaseSidebarRowActions,
@@ -99,6 +100,8 @@ export interface PhaseSidebarListProps {
   ) => void;
   readonly projectLabelFor?: (environmentId: string, projectId: string) => string | null;
   readonly environmentLabelFor?: (environmentId: string) => string | null;
+  /** Resolved identity per environment; rows show it only when several mix. */
+  readonly environmentAppearanceFor?: (environmentId: string) => MobileEnvironmentAppearance | null;
   readonly onSelectRow: (row: PhaseSidebarRow) => void;
   /** Fired with the chosen action id from the row's long-press menu or swipe. */
   readonly onRowAction: (row: PhaseSidebarRow, actionId: string) => void;
@@ -394,6 +397,16 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
     [grouping.customGroups, grouping.groupOrder],
   );
 
+  // Only mark rows with their machine when the sessions on screen actually span
+  // more than one environment; a second remote with nothing in view is not a
+  // reason to badge every row.
+  const spansEnvironments = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of props.rows) ids.add(row.thread.environmentId);
+    return ids.size > 1;
+  }, [props.rows]);
+  const environmentAppearanceFor = props.environmentAppearanceFor;
+
   const renderSectionHeader = (section: PhaseSidebarSection, collapsed: boolean) => {
     const phaseId = phaseSidebarSectionPhase(section);
     const { summary } = section;
@@ -505,6 +518,11 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
               onToggleExpanded={handleToggleExpanded}
+              environmentAppearance={
+                spansEnvironments && environmentAppearanceFor
+                  ? environmentAppearanceFor(item.node.row.thread.environmentId)
+                  : null
+              }
               row={item.node.row}
               subtreeCount={item.node.descendantCount}
               swipe={resolveRowSwipe(item.node.row, item.shelf, nowIso, snoozeMenu)}

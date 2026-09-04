@@ -5,7 +5,8 @@ import type {
 import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
-import { RotateCw } from "lucide-react";
+// T3-CUSTOM(expbkt3): collapse-all needs a second glyph.
+import { ChevronsDownUp, RotateCw } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -70,6 +71,29 @@ function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }
     </Tooltip>
   );
 }
+
+// T3-CUSTOM(expbkt3): BEGIN — fold every directory back to the root level.
+function CollapseAllButton(props: { onCollapseAll: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Collapse all folders"
+            onClick={props.onCollapseAll}
+          />
+        }
+      >
+        <ChevronsDownUp />
+      </TooltipTrigger>
+      <TooltipPopup>Collapse all folders</TooltipPopup>
+    </Tooltip>
+  );
+}
+// T3-CUSTOM(expbkt3): END
 
 function FileSearchField(props: {
   ariaLabel: string;
@@ -260,6 +284,16 @@ export default function FileBrowserPanel({
     entriesQuery.refresh();
     onRefreshSelectedFile?.();
   };
+  // T3-CUSTOM(expbkt3): BEGIN — collapse every directory, deepest first so a
+  // parent never re-expands a child the loop already folded.
+  const handleCollapseAll = () => {
+    const directories = treePaths.filter((path) => path.endsWith("/"));
+    for (const path of [...directories].sort((a, b) => b.length - a.length)) {
+      const item = model.getItem(path);
+      if (item && "collapse" in item) item.collapse();
+    }
+  };
+  // T3-CUSTOM(expbkt3): END
 
   useEffect(() => {
     if (previousTreePathsRef.current === treePaths) return;
@@ -361,6 +395,8 @@ export default function FileBrowserPanel({
         data-surface-subheader
       >
         <RefreshFilesButton isPending={entriesQuery.isPending} onRefresh={handleRefresh} />
+        {/* T3-CUSTOM(expbkt3): collapse all folders. */}
+        <CollapseAllButton onCollapseAll={handleCollapseAll} />
         <FileSearchField
           name="project-files-search"
           ariaLabel={`Search ${projectName} files`}
