@@ -346,7 +346,10 @@ describe("resolveInitialServerAuthGateState", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(testApi.calls.browserSession).toEqual([{ credential: "retry-token" }]);
+      // T3-CUSTOM(expbkt3): the hosted client identifies itself during bootstrap.
+      expect(testApi.calls.browserSession).toEqual([
+        { credential: "retry-token", client_version: APP_VERSION },
+      ]);
       expect(testApi.calls.session).toBe(1);
       expect(settled).toBe(false);
 
@@ -377,7 +380,10 @@ describe("resolveInitialServerAuthGateState", () => {
       await vi.advanceTimersByTimeAsync(2_000);
 
       await expect(failure).resolves.toBeInstanceOf(PrimaryEnvironmentAuthSessionTimeoutError);
-      expect(testApi.calls.browserSession).toEqual([{ credential: "retry-token" }]);
+      // T3-CUSTOM(expbkt3): the hosted client identifies itself during bootstrap.
+      expect(testApi.calls.browserSession).toEqual([
+        { credential: "retry-token", client_version: APP_VERSION },
+      ]);
       expect(testApi.calls.session).toBeGreaterThan(1);
     } finally {
       vi.useRealTimers();
