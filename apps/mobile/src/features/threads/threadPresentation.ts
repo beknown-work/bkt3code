@@ -43,8 +43,8 @@ export function resolveThreadStatus(
     return {
       kind: "checking",
       label: "Checking agent status",
-      pillClassName: "bg-slate-500/10 dark:bg-slate-400/10",
-      textClassName: "text-slate-600 dark:text-slate-300",
+      pillClassName: "bg-subtle",
+      textClassName: "text-foreground-muted",
       iconColor: "#8e8e93",
       iconBackground: "rgba(142,142,147,0.22)",
       pulse: true,

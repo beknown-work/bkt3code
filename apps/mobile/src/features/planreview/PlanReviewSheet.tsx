@@ -70,7 +70,7 @@ function PlanReviewLine(props: {
         {row.text.length > 0 ? row.text : " "}
       </Text>
       {row.discussionIds.length > 0 ? (
-        <Text className="ml-2 pt-0.5 font-t3-mono text-[10px] text-amber-600 dark:text-amber-400">
+        <Text className="ml-2 pt-0.5 font-t3-mono text-[10px] text-adaptive-amber-700-400">
           {row.discussionIds.length}
         </Text>
       ) : null}

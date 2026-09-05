@@ -97,7 +97,6 @@ export function PhaseSidebarGroupBySheet(props: {
       setEditor(group ? { kind: "rename", groupId: group.id, label: group.label } : null);
     }
     // Only when the intent changes: editing must not reset on every prefs write.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intent]);
 
   const orders: ReadonlyArray<PhaseSidebarGroupOrder> =

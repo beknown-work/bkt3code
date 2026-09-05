@@ -282,9 +282,9 @@ function CatchupSummaryCard(props: {
       return null;
     }
     return (
-      <View className="mt-2.5 flex-row items-center gap-2 rounded-[18px] border border-neutral-200 bg-neutral-100/80 p-3 dark:border-white/6 dark:bg-neutral-900/80">
+      <View className="mt-2.5 flex-row items-center gap-2 rounded-[18px] border border-adaptive-neutral-200-white-a6 bg-adaptive-neutral-100-900 p-3">
         <ActivityIndicator size="small" />
-        <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
+        <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-sky-700-300">
           Writing catch-up…
         </Text>
       </View>
@@ -297,16 +297,14 @@ function CatchupSummaryCard(props: {
   }
 
   return (
-    <View className="mt-2.5 gap-1 rounded-[18px] border border-neutral-200 bg-neutral-100/80 p-3 dark:border-white/6 dark:bg-neutral-900/80">
-      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
+    <View className="mt-2.5 gap-1 rounded-[18px] border border-adaptive-neutral-200-white-a6 bg-adaptive-neutral-100-900 p-3">
+      <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-sky-700-300">
         Catch-up
       </Text>
       {/* No numberOfLines cap: the note is already capped at three lines
           server-side, and clamping again truncated the last line whenever it
           wrapped on a narrow screen. */}
-      <Text className="font-sans text-sm leading-normal text-neutral-700 dark:text-neutral-300">
-        {summary}
-      </Text>
+      <Text className="font-sans text-sm leading-normal text-foreground-secondary">{summary}</Text>
     </View>
   );
 }

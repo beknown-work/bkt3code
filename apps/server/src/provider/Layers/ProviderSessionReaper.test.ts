@@ -437,7 +437,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
-    await Effect.runPromise(drainFibers);
+    await runtime!.runPromise(drainFibers);
 
     expect(harness.terminateSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
@@ -924,7 +924,7 @@ describe("ProviderSessionReaper", () => {
   it("interrupts for real, then settles, a live turn that has been silent past the cap", async () => {
     const threadId = ThreadId.make("thread-reaper-silent");
     const turnId = TurnId.make("turn-reaper-silent");
-    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const nowMs = Date.now();
     const threeHoursAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000));
     const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const dispatched: Array<{ readonly type: string }> = [];
@@ -991,7 +991,7 @@ describe("ProviderSessionReaper", () => {
   it("leaves a live turn alone while it is still emitting events, however old it is", async () => {
     const threadId = ThreadId.make("thread-reaper-busy");
     const turnId = TurnId.make("turn-reaper-busy");
-    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const nowMs = Date.now();
     const threeHoursAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000));
     const oneMinuteAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 60 * 1000));
     const dispatched: Array<{ readonly type: string }> = [];
@@ -1025,7 +1025,7 @@ describe("ProviderSessionReaper", () => {
     });
 
     await startReaper();
-    await Effect.runPromise(Effect.sleep("200 millis"));
+    await runtime!.runPromise(Effect.sleep("200 millis"));
 
     expect(dispatched).toEqual([]);
     expect(harness.terminateSession).not.toHaveBeenCalled();
@@ -1090,11 +1090,11 @@ describe("ProviderSessionReaper", () => {
         runtimePayload: null,
       }),
     );
-    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const nowMs = await runtime!.runPromise(Clock.currentTimeMillis);
     await seedThreadEvent(threadId, DateTime.formatIso(DateTime.makeUnsafe(nowMs - 30_000)));
 
     await startReaper();
-    await Effect.runPromise(Effect.sleep("200 millis"));
+    await runtime!.runPromise(Effect.sleep("200 millis"));
 
     expect(harness.terminateSession).not.toHaveBeenCalled();
   });
@@ -1144,7 +1144,7 @@ describe("ProviderSessionReaper", () => {
         runtimePayload: null,
       }),
     );
-    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const nowMs = await runtime!.runPromise(Clock.currentTimeMillis);
     await seedThreadEvent(
       threadId,
       DateTime.formatIso(DateTime.makeUnsafe(nowMs - 2 * 60 * 60 * 1000)),

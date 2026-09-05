@@ -442,17 +442,17 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
           {section.helperText}
         </Text>
         {collapsed && summary.attention > 0 ? (
-          <Text className="rounded-full bg-rose-500/15 px-1.5 font-t3-mono text-[10px] text-rose-700 dark:text-rose-300">
+          <Text className="rounded-full bg-adaptive-rose-500-a12-a16 px-1.5 font-t3-mono text-[10px] text-adaptive-rose-700-300">
             {summary.attention}
           </Text>
         ) : null}
         {collapsed && summary.running > 0 ? (
-          <Text className="rounded-full bg-sky-500/15 px-1.5 font-t3-mono text-[10px] text-sky-700 dark:text-sky-300">
+          <Text className="rounded-full bg-adaptive-sky-500-a12-a16 px-1.5 font-t3-mono text-[10px] text-adaptive-sky-700-300">
             {summary.running}
           </Text>
         ) : null}
         {collapsed && summary.unread > 0 ? (
-          <Text className="rounded-full bg-emerald-500/15 px-1.5 font-t3-mono text-[10px] text-emerald-700 dark:text-emerald-300">
+          <Text className="rounded-full bg-adaptive-emerald-500-a12-a16 px-1.5 font-t3-mono text-[10px] text-adaptive-emerald-700-300">
             {summary.unread}
           </Text>
         ) : null}

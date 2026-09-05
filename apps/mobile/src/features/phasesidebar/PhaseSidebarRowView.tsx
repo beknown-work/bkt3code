@@ -364,7 +364,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                 <Text
                   className={cn(
                     "shrink-0 font-t3-mono text-[11px] tabular-nums",
-                    unread ? "text-sky-600 dark:text-sky-400" : "text-foreground-tertiary",
+                    unread ? "text-adaptive-sky-600-400" : "text-foreground-tertiary",
                   )}
                 >
                   {props.timeLabel}
@@ -405,7 +405,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                   </Text>
                 )}
                 {mattermost === null ? null : (
-                  <Text className="shrink-0 font-t3-mono text-[11px] text-sky-600 dark:text-sky-300">
+                  <Text className="shrink-0 font-t3-mono text-[11px] text-adaptive-sky-700-300">
                     mm
                   </Text>
                 )}

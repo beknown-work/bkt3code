@@ -814,8 +814,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               />
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
                 {durableExecutionPresentation.needsAttention ? (
-                  <View className="mx-4 mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
-                    <Text className="text-sm font-t3-medium text-red-700 dark:text-red-300">
+                  <View className="mx-4 mb-3 rounded-xl border border-danger-border bg-danger px-4 py-3">
+                    <Text className="text-sm font-t3-medium text-danger-foreground">
                       Recovery failed
                     </Text>
                     <Text className="mt-1 text-xs text-foreground-muted">
@@ -825,10 +825,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     <View className="mt-3 flex-row gap-3">
                       <Pressable
                         accessibilityRole="button"
-                        className="rounded-lg bg-red-600 px-3 py-2"
+                        className="rounded-lg border border-danger-border bg-danger px-3 py-2"
                         onPress={props.onRetryRecovery}
                       >
-                        <Text className="text-xs font-t3-medium text-white">Retry</Text>
+                        <Text className="text-xs font-t3-medium text-danger-foreground">Retry</Text>
                       </Pressable>
                       <Pressable
                         accessibilityRole="button"
@@ -841,8 +841,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   </View>
                 ) : null}
                 {!durableExecutionPresentation.needsAttention && props.failedOutboxDetail ? (
-                  <View className="mx-4 mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
-                    <Text className="text-sm font-t3-medium text-red-700 dark:text-red-300">
+                  <View className="mx-4 mb-3 rounded-xl border border-danger-border bg-danger px-4 py-3">
+                    <Text className="text-sm font-t3-medium text-danger-foreground">
                       Message was not accepted
                     </Text>
                     <Text className="mt-1 text-xs text-foreground-muted">
@@ -851,10 +851,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     <View className="mt-3 flex-row gap-3">
                       <Pressable
                         accessibilityRole="button"
-                        className="rounded-lg bg-red-600 px-3 py-2"
+                        className="rounded-lg border border-danger-border bg-danger px-3 py-2"
                         onPress={props.onRetryFailedOutbox}
                       >
-                        <Text className="text-xs font-t3-medium text-white">Retry</Text>
+                        <Text className="text-xs font-t3-medium text-danger-foreground">Retry</Text>
                       </Pressable>
                       <Pressable
                         accessibilityRole="button"

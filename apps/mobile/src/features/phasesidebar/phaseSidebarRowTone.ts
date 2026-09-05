@@ -12,15 +12,15 @@ import type { ChangeRequestStateLike } from "@t3tools/client-runtime/state/threa
 export function phaseSidebarSectionToneClassName(phaseId: PhaseSidebarPhaseId): string {
   switch (phaseId) {
     case "needs_input":
-      return "text-amber-600 dark:text-amber-300";
+      return "text-adaptive-amber-700-300";
     case "plan_ready":
-      return "text-violet-700 dark:text-violet-300";
+      return "text-adaptive-violet-700-300";
     case "ready":
-      return "text-emerald-700 dark:text-emerald-300";
+      return "text-adaptive-emerald-700-300";
     case "planning":
-      return "text-indigo-700 dark:text-indigo-300";
+      return "text-adaptive-indigo-700-300";
     case "implementing":
-      return "text-sky-700 dark:text-sky-300";
+      return "text-adaptive-sky-700-300";
   }
 }
 
@@ -42,28 +42,28 @@ export function phaseSidebarPriorityToneClassName(priority: number): string {
 export function phaseSidebarChangeRequestToneClassName(state: ChangeRequestStateLike): string {
   switch (state) {
     case "merged":
-      return "text-violet-600 dark:text-violet-300";
+      return "text-adaptive-violet-600-400";
     case "closed":
-      return "text-rose-600 dark:text-rose-300";
+      return "text-adaptive-rose-600-400";
     default:
-      return "text-emerald-600 dark:text-emerald-300";
+      return "text-adaptive-emerald-600-400";
   }
 }
 
 /** Worktree codename tint. Mirrors web's static tone table, same 12 hues. */
 const CHECKOUT_TONES: readonly string[] = [
-  "text-rose-600 dark:text-rose-300/90",
-  "text-orange-600 dark:text-orange-300/90",
-  "text-amber-600 dark:text-amber-300/90",
-  "text-lime-600 dark:text-lime-300/90",
-  "text-emerald-600 dark:text-emerald-300/90",
-  "text-teal-600 dark:text-teal-300/90",
-  "text-cyan-600 dark:text-cyan-300/90",
-  "text-sky-600 dark:text-sky-300/90",
-  "text-indigo-600 dark:text-indigo-300/90",
-  "text-violet-600 dark:text-violet-300/90",
-  "text-fuchsia-600 dark:text-fuchsia-300/90",
-  "text-pink-600 dark:text-pink-300/90",
+  "text-adaptive-rose-600-400/90",
+  "text-adaptive-amber-700-300/90",
+  "text-adaptive-amber-700-300/90",
+  "text-adaptive-emerald-700-300/90",
+  "text-adaptive-emerald-600-400/90",
+  "text-adaptive-sky-700-300/90",
+  "text-adaptive-sky-600-400/90",
+  "text-adaptive-sky-600-400/90",
+  "text-adaptive-indigo-600-300/90",
+  "text-adaptive-violet-600-400/90",
+  "text-adaptive-violet-600-400/90",
+  "text-adaptive-rose-600-400/90",
 ];
 
 export function phaseSidebarCheckoutToneClassName(toneIndex: number | null): string {

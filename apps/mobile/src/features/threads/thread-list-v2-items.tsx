@@ -254,7 +254,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
         <Text
           className={
             pendingTask.message.deliveryState === "failed"
-              ? "text-xs text-red-700 dark:text-red-300"
+              ? "text-xs text-adaptive-red-700-300"
               : "text-xs text-foreground-tertiary"
           }
         >
@@ -448,8 +448,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ? {
         label: durablePresentation.label,
         className: durablePresentation.needsAttention
-          ? "text-red-700 dark:text-red-300"
-          : "text-sky-600 dark:text-sky-400",
+          ? "text-adaptive-red-700-300"
+          : "text-adaptive-sky-600-400",
       }
     : STATUS_LABEL_BY_STATUS[status];
   // T3-CUSTOM(expbkt3): END

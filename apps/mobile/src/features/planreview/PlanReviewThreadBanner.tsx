@@ -63,15 +63,15 @@ export function PlanReviewThreadBanner(props: {
 
   return (
     <Pressable
-      className="mx-4 mb-3 flex-row items-center gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3"
+      className="mx-4 mb-3 flex-row items-center gap-3 rounded-xl border border-adaptive-violet-500-a12-a16 bg-adaptive-violet-500-a12-a16 px-4 py-3"
       onPress={handleOpen}
     >
       <SymbolView name="list.bullet.rectangle" size={16} tintColor={iconTint} type="monochrome" />
       <View className="flex-1">
-        <Text className="text-sm font-t3-bold text-violet-700 dark:text-violet-300">
+        <Text className="text-sm font-t3-bold text-adaptive-violet-700-300">
           Plan ready for review
         </Text>
-        <Text className="text-xs text-violet-700/80 dark:text-violet-300/80" numberOfLines={1}>
+        <Text className="text-xs text-adaptive-violet-700-300/80" numberOfLines={1}>
           {document.title}
         </Text>
       </View>

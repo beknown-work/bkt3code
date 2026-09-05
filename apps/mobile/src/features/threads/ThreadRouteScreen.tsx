@@ -237,7 +237,6 @@ function ThreadRouteContent(
     if (routeThreadIdentity !== null) markPhaseSidebarVisited(routeThreadIdentity);
     // Once per thread identity; the marker's own identity churns on every
     // preference write and must not re-stamp the visit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeThreadIdentity]);
   // T3-CUSTOM(expbkt3): END
   const [inspectorSelection, setInspectorSelection] = useState<ThreadInspectorSelection | null>(

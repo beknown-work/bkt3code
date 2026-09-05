@@ -69,31 +69,29 @@ export function PhaseSidebarCounters(props: { readonly rows: ReadonlyArray<Phase
     <View accessibilityLabel="Session status summary" className="flex-row items-center gap-1">
       <Counter
         label="unread"
-        textClassName={
-          counts.unread > 0 ? "text-sky-700 dark:text-sky-300" : "text-foreground-tertiary"
-        }
+        textClassName={counts.unread > 0 ? "text-adaptive-sky-700-300" : "text-foreground-tertiary"}
         toneClassName={
-          counts.unread > 0 ? "border-sky-500/35 bg-sky-500/15" : "border-border/60 bg-subtle/40"
+          counts.unread > 0
+            ? "border-adaptive-sky-500-a12-a16 bg-adaptive-sky-500-a12-a16"
+            : "border-border/60 bg-subtle/40"
         }
         value={counts.unread}
       />
       <Counter
         label="running"
-        textClassName="text-emerald-600 dark:text-emerald-400"
-        toneClassName="border-emerald-500/35 bg-emerald-500/12"
+        textClassName="text-adaptive-emerald-600-400"
+        toneClassName="border-adaptive-emerald-500-a12-a16 bg-adaptive-emerald-500-a12-a16"
         value={counts.running}
       />
       <Counter
         label="waiting"
         textClassName={
-          counts.nonRunning >= 2
-            ? "text-orange-600 dark:text-orange-300"
-            : "text-emerald-700 dark:text-emerald-300"
+          counts.nonRunning >= 2 ? "text-adaptive-amber-700-300" : "text-adaptive-emerald-700-300"
         }
         toneClassName={
           counts.nonRunning >= 2
-            ? "border-orange-500/45 bg-orange-500/12"
-            : "border-emerald-500/35 bg-emerald-500/20"
+            ? "border-adaptive-amber-500-a12-a16 bg-adaptive-amber-500-a12-a16"
+            : "border-adaptive-emerald-500-a12-a16 bg-adaptive-emerald-500-a12-a16"
         }
         value={counts.nonRunning}
       />

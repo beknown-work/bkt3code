@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { applyBkSigning } = require("./withBkAndroidReleaseSigning.cjs") as {
   applyBkSigning: (contents: string) => string;
 };

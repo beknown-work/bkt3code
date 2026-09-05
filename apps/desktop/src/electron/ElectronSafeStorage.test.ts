@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import { beforeEach, vi } from "vite-plus/test";
 
 const {
@@ -72,19 +73,18 @@ describe("ElectronSafeStorage", () => {
           }),
       );
       const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
-      const pending = Effect.runPromise(safeStorage.decryptString(new Uint8Array([1])));
-      let settled = false;
-      void pending.then(() => {
-        settled = true;
-      });
-      yield* Effect.promise(() => Promise.resolve());
-      assert.isFalse(settled);
+      const pending = yield* safeStorage
+        .decryptString(new Uint8Array([1]))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      assert.isUndefined(yield* Effect.sync(() => pending.pollUnsafe()));
+      assert.isTrue(release !== undefined);
       release({ result: "plaintext", shouldReEncrypt: false });
-      assert.equal(yield* Effect.promise(() => pending), "plaintext");
+      assert.equal(yield* Fiber.join(pending), "plaintext");
 
       decryptStringAsyncMock.mockRejectedValueOnce(new Error("keychain unavailable"));
       const error = yield* safeStorage.decryptString(new Uint8Array([2])).pipe(Effect.flip);
       assert.instanceOf(error, ElectronSafeStorage.ElectronSafeStorageDecryptError);
-    }).pipe(Effect.provide(ElectronSafeStorage.layer)),
+    }).pipe(Effect.provide(ElectronSafeStorage.layer), Effect.scoped),
   );
 });
