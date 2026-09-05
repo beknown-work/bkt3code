@@ -424,13 +424,13 @@ export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): Hea
   );
 }
 
+// T3-CUSTOM(expbkt3): BEGIN compact headers retain Git utilities in their contextual menu.
 /** Compact thread headers preserve the session title and put utilities in Git's menu. */
 export function useThreadGitCompactHeaderItems(props: ThreadGitControlsProps): HeaderItems {
-  // T3-CUSTOM(expbkt3): BEGIN compact headers retain Git utilities in their contextual menu.
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(() => [actionItems.git] as HeaderItems, [actionItems]);
-  // T3-CUSTOM(expbkt3): END compact headers retain Git utilities in their contextual menu.
 }
+// T3-CUSTOM(expbkt3): END compact headers retain Git utilities in their contextual menu.
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {
   const actionItems = useThreadGitHeaderActionItems(props);
