@@ -49,6 +49,8 @@ import {
   Rows3Icon,
   // T3-CUSTOM(expbkt3): END
   SearchIcon,
+  // T3-CUSTOM(expbkt3): unsent composer text mirrors the stock sidebar pen.
+  SquarePenIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -66,6 +68,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../env";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
+import { useComposerDraftStore, useThreadHasUnsentDraft } from "../composerDraftStore";
 import { useClientSettings } from "../hooks/useSettings";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -84,6 +87,7 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform, newThreadId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
+import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { usePhaseSidebarFilterStore } from "../phaseSidebarFilterStore";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import {
@@ -124,6 +128,8 @@ import {
   hasUnseenCompletion,
   isTrailingDoubleClick,
   shouldClearThreadSelectionOnMouseDown,
+  useRetainedValue,
+  useSidebarRowSubscriptionLease,
 } from "./Sidebar.logic";
 import {
   resolveSnoozePresets,
@@ -280,27 +286,6 @@ interface ProviderOption {
 
 function SidebarThreadDetailPrewarmer({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
-  return null;
-}
-
-function ThreadWorkflowProbe({
-  thread,
-  project,
-  onStatus,
-}: {
-  readonly thread: PhaseSidebarRow["thread"];
-  readonly project: Project | null;
-  readonly onStatus: (threadKey: string, status: VcsStatusResult | null) => void;
-}) {
-  const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-  const cwd = thread.worktreePath ?? project?.workspaceRoot ?? null;
-  const result = useEnvironmentQuery(
-    thread.branch !== null && cwd !== null
-      ? vcsEnvironment.status({ environmentId: thread.environmentId, input: { cwd } })
-      : null,
-  );
-
-  useEffect(() => onStatus(threadKey, result.data), [onStatus, result.data, threadKey]);
   return null;
 }
 
@@ -857,6 +842,13 @@ interface PhaseThreadRowProps {
   // environment; a single-environment sidebar stays exactly as it was.
   readonly environmentAppearance?: ResolvedEnvironmentAppearance | undefined;
   readonly vcsStatus: VcsStatusResult | null;
+  // T3-CUSTOM(expbkt3): VCS queries lease the actual visible row instead of
+  // keeping subscriptions alive for collapsed and offscreen sessions.
+  readonly onWorkflowStatus: (threadKey: string, status: VcsStatusResult | null) => void;
+  // T3-CUSTOM(expbkt3): mirror the stock sidebar's reversible pin action.
+  readonly pinningSupported: boolean;
+  readonly onPin: (row: PhaseSidebarRow) => void;
+  readonly onUnpin: (row: PhaseSidebarRow) => void;
   // T3-CUSTOM(expbkt3): BEGIN — worktree codename, flattened to primitives so
   // this memo'd row still compares by value.
   readonly worktreeCodename: string | null;
@@ -960,6 +952,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     // T3-CUSTOM(expbkt3): present only in a multi-environment sidebar.
     environmentAppearance,
     vcsStatus,
+    onWorkflowStatus,
+    pinningSupported,
+    onPin,
+    onUnpin,
     // T3-CUSTOM(expbkt3): worktree codename.
     worktreeCodename,
     worktreeSharedCount,
@@ -1036,6 +1032,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const setAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
+  // T3-CUSTOM(expbkt3): preserve the stock sidebar's unsent-draft signal and
+  // discard action when the lifecycle sidebar is selected.
+  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !active;
+  const clearComposerContent = useComposerDraftStore((state) => state.clearComposerContent);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
   // T3-CUSTOM(expbkt3): the Mattermost conversation following this session.
   const mattermostLink = resolvePhaseSidebarMattermostLink(row.thread.mattermostThreadUrl);
@@ -1051,6 +1051,23 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         : null,
   });
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
+  const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(active);
+  const workflowStatus = useEnvironmentQuery(
+    leaseLiveStatus && row.thread.branch !== null && workspacePath !== null
+      ? vcsEnvironment.status({
+          environmentId: row.thread.environmentId,
+          input: { cwd: workspacePath },
+        })
+      : null,
+  );
+  const visibleWorkflowStatus = useRetainedValue(
+    `${row.thread.environmentId}\u0000${workspacePath ?? ""}`,
+    workflowStatus.data,
+  );
+  useEffect(
+    () => onWorkflowStatus(threadKey, visibleWorkflowStatus),
+    [onWorkflowStatus, threadKey, visibleWorkflowStatus],
+  );
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
   // T3-CUSTOM(expbkt3): BEGIN — session tree derivations. Subtree state only
@@ -1217,6 +1234,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           },
         ]
       : [];
+    // T3-CUSTOM(expbkt3): pins are durable metadata, so the phase view must
+    // provide the same reversible action as the stock sidebar.
+    const pinItems = pinningSupported
+      ? [
+          {
+            id: row.thread.pinnedAt == null ? "pin" : "unpin",
+            label: row.thread.pinnedAt == null ? "Pin thread" : "Unpin thread",
+          },
+        ]
+      : [];
+    const draftItems = hasUnsentDraft ? [{ id: "discard-draft", label: "Discard draft" }] : [];
     const linearItems = row.linearIssueSupported
       ? [
           {
@@ -1320,6 +1348,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         // title from the conversation has to be something you can ask for.
         ...titleRegenerationItems,
         { id: "mark-unread", label: "Mark unread" },
+        ...draftItems,
+        ...pinItems,
         ...priorityItems,
         ...linearItems,
         // T3-CUSTOM(expbkt3): Mattermost conversation link.
@@ -1355,6 +1385,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     );
     if (action === "rename") onStartRename(row);
     if (action === "mark-unread") markThreadUnread(threadKey, row.thread.latestTurn?.completedAt);
+    if (action === "discard-draft") {
+      releaseComposerDraftUploads(threadRef);
+      clearComposerContent(threadRef);
+    }
+    if (action === "pin") onPin(row);
+    if (action === "unpin") onUnpin(row);
     // T3-CUSTOM(expbkt3): BEGIN
     if (action === "new-thread:same-worktree") onCreateThread(row, "same-worktree");
     if (action === "new-thread:new-worktree") onCreateThread(row, "new-worktree");
@@ -1425,6 +1461,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         : {})}
     >
       <button
+        ref={rowRef}
         type="button"
         className={phaseSidebarRowClassName(active, selected, needsUserInput)}
         aria-current={active ? "page" : undefined}
@@ -1534,6 +1571,12 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                     : "font-normal text-muted-foreground/75 group-hover/phase-row:text-foreground",
               )}
             >
+              {hasUnsentDraft ? (
+                <SquarePenIcon
+                  aria-label="Unsent draft"
+                  className="mr-1 inline size-3 shrink-0 text-amber-600 dark:text-amber-300"
+                />
+              ) : null}
               {row.thread.title}
             </span>
           )}
@@ -1967,6 +2010,8 @@ export function PhaseGroupedSidebar() {
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
+    pinThread,
+    confirmAndUnpinThread,
   } = useThreadActions();
   const reconnectThreadSession = useReconnectThreadSession();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -2089,6 +2134,20 @@ export function PhaseGroupedSidebar() {
       return next;
     });
   }, []);
+  // T3-CUSTOM(expbkt3): context-menu pinning in the lifecycle sidebar uses
+  // the same confirmations and mutation path as the stock sidebar.
+  const attemptPin = useCallback(
+    (row: PhaseSidebarRow) => {
+      void pinThread(scopeThreadRef(row.thread.environmentId, row.thread.id));
+    },
+    [pinThread],
+  );
+  const attemptUnpin = useCallback(
+    (row: PhaseSidebarRow) => {
+      void confirmAndUnpinThread(scopeThreadRef(row.thread.environmentId, row.thread.id));
+    },
+    [confirmAndUnpinThread],
+  );
   const recordLinearIssueStatuses = useCallback(
     (
       environmentId: EnvironmentId,
@@ -3167,6 +3226,12 @@ export function PhaseGroupedSidebar() {
           ? { environmentAppearance: environmentAppearances.get(row.thread.environmentId) }
           : {})}
         vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
+        onWorkflowStatus={recordWorkflowStatus}
+        pinningSupported={
+          serverConfigs.get(row.thread.environmentId)?.environment.capabilities.threadPinning === true
+        }
+        onPin={attemptPin}
+        onUnpin={attemptUnpin}
         {...phaseSidebarWorktreeRowProps(worktreeView, row.thread.worktreePath)}
         active={routeThreadKey === key}
         orderedThreadKeys={visibleThreadKeys}
@@ -3247,21 +3312,6 @@ export function PhaseGroupedSidebar() {
 
   return (
     <>
-      {threads.map((thread) => {
-        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        const project =
-          projectByKey.get(
-            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-          ) ?? null;
-        return (
-          <ThreadWorkflowProbe
-            key={`workflow:${key}`}
-            thread={thread}
-            project={project}
-            onStatus={recordWorkflowStatus}
-          />
-        );
-      })}
       {linearIssueStatusRequests.map(({ environmentId, identifiers }) => (
         <LinearIssueStatusProbe
           key={`linear:${environmentId}:${identifiers.join(",")}`}

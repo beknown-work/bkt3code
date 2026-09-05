@@ -62,28 +62,42 @@ export class ElectronSafeStorage extends Context.Service<
     readonly decryptString: (
       value: Uint8Array,
     ) => Effect.Effect<string, ElectronSafeStorageDecryptError>;
+    /** Preserves Electron's key-rotation signal for stores that can rewrite ciphertext. */
+    readonly decryptStringWithMetadata: (
+      value: Uint8Array,
+    ) => Effect.Effect<
+      { readonly value: string; readonly shouldReEncrypt: boolean },
+      ElectronSafeStorageDecryptError
+    >;
     readonly selectedStorageBackend: Effect.Effect<Option.Option<string>>;
   }
 >()("@t3tools/desktop/electron/ElectronSafeStorage") {}
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
+  const decryptStringWithMetadata = (value: Uint8Array) =>
+    Effect.tryPromise({
+      try: () => Electron.safeStorage.decryptStringAsync(Buffer.from(value)),
+      catch: (cause) => new ElectronSafeStorageDecryptError({ cause }),
+    }).pipe(
+      Effect.map(({ result, shouldReEncrypt }) => ({ value: result, shouldReEncrypt })),
+    );
 
   return ElectronSafeStorage.of({
-    isEncryptionAvailable: Effect.try({
-      try: () => Electron.safeStorage.isEncryptionAvailable(),
+    // T3-CUSTOM(expbkt3): Electron 43 provides async Keychain access. Catalog
+    // reads occur on startup IPC, so do not park the main process on macOS.
+    isEncryptionAvailable: Effect.tryPromise({
+      try: () => Electron.safeStorage.isAsyncEncryptionAvailable(),
       catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),
     }),
     encryptString: (value) =>
-      Effect.try({
-        try: () => Electron.safeStorage.encryptString(value),
+      Effect.tryPromise({
+        try: () => Electron.safeStorage.encryptStringAsync(value),
         catch: (cause) => new ElectronSafeStorageEncryptError({ cause }),
       }),
+    decryptStringWithMetadata,
     decryptString: (value) =>
-      Effect.try({
-        try: () => Electron.safeStorage.decryptString(Buffer.from(value)),
-        catch: (cause) => new ElectronSafeStorageDecryptError({ cause }),
-      }),
+      decryptStringWithMetadata(value).pipe(Effect.map(({ value: decrypted }) => decrypted)),
     selectedStorageBackend: Effect.sync(() => {
       if (platform !== "linux") {
         return Option.none();

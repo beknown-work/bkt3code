@@ -1155,6 +1155,66 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  // T3-CUSTOM(expbkt3): local-only repositories must not invoke the provider registry.
+  it.effect("status keeps local Git details without a provider lookup when the repository has no remotes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+
+      const { manager, ghCalls } = yield* makeManager();
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status).toMatchObject({
+        isRepo: true,
+        hasPrimaryRemote: false,
+        isDefaultRef: true,
+        refName: "main",
+        hasWorkingTreeChanges: false,
+        pr: null,
+      });
+      expect(ghCalls).toHaveLength(0);
+    }),
+  );
+
+  it.effect("status retains a learned PR when the final remote is removed without another provider lookup", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/remote-removed"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/remote-removed"]);
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off - fake gh emits CLI JSON.
+            JSON.stringify([
+              {
+                number: 217,
+                title: "Learned before remote removal",
+                url: "https://github.com/pingdotgg/t3code/pull/217",
+                baseRefName: "main",
+                headRefName: "feature/remote-removed",
+              },
+            ]),
+          ],
+        },
+      });
+
+      expect((yield* manager.remoteStatus({ cwd: repoDir }))?.pr?.number).toBe(217);
+      const callsBeforeRemoval = ghCalls.length;
+      yield* runGit(repoDir, ["remote", "remove", "origin"]);
+
+      const local = yield* manager.localStatus({ cwd: repoDir });
+      const remote = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+
+      expect(local).toMatchObject({ isRepo: true, hasPrimaryRemote: false });
+      expect(remote?.pr?.number).toBe(217);
+      expect(ghCalls).toHaveLength(callsBeforeRemoval);
+    }),
+  );
+
   it.effect("branch PR lookup returns null when the repository has no remotes", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -1945,6 +2005,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
       yield* runGit(repoDir, ["checkout", "-b", "feature/status-merged-pr"]);
+      // T3-CUSTOM(expbkt3): PR assertions require a publishable repository context.
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/status-merged-pr"]);
 
       const { manager } = yield* makeManager({
         ghScenario: {
@@ -2258,6 +2322,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
       yield* runGit(repoDir, ["checkout", "-b", "feature/status-open-over-merged"]);
+      // T3-CUSTOM(expbkt3): PR assertions require a publishable repository context.
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/status-open-over-merged"]);
 
       const { manager } = yield* makeManager({
         ghScenario: {

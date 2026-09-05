@@ -51,6 +51,27 @@ function makeSafeStorageLayer(input: {
   readonly encryptError?: unknown;
   readonly decryptError?: unknown;
 }) {
+  const decryptString: ElectronSafeStorage.ElectronSafeStorage["Service"]["decryptString"] = (
+    value,
+  ) => {
+    if (input.decryptError !== undefined) {
+      return Effect.fail(
+        new ElectronSafeStorage.ElectronSafeStorageDecryptError({
+          cause: input.decryptError,
+        }),
+      );
+    }
+
+    const decoded = textDecoder.decode(value);
+    if (!decoded.startsWith("enc:")) {
+      return Effect.fail(
+        new ElectronSafeStorage.ElectronSafeStorageDecryptError({
+          cause: new Error("invalid secret"),
+        }),
+      );
+    }
+    return Effect.succeed(decoded.slice("enc:".length));
+  };
   return Layer.succeed(ElectronSafeStorage.ElectronSafeStorage, {
     isEncryptionAvailable:
       input.availabilityError === undefined
@@ -68,25 +89,11 @@ function makeSafeStorageLayer(input: {
               cause: input.encryptError,
             }),
           ),
-    decryptString: (value) => {
-      if (input.decryptError !== undefined) {
-        return Effect.fail(
-          new ElectronSafeStorage.ElectronSafeStorageDecryptError({
-            cause: input.decryptError,
-          }),
-        );
-      }
-
-      const decoded = textDecoder.decode(value);
-      if (!decoded.startsWith("enc:")) {
-        return Effect.fail(
-          new ElectronSafeStorage.ElectronSafeStorageDecryptError({
-            cause: new Error("invalid secret"),
-          }),
-        );
-      }
-      return Effect.succeed(decoded.slice("enc:".length));
-    },
+    decryptString,
+    decryptStringWithMetadata: (value) =>
+      decryptString(value).pipe(
+        Effect.map((decrypted) => ({ value: decrypted, shouldReEncrypt: false })),
+      ),
     selectedStorageBackend: Effect.succeed(Option.none()),
   } satisfies ElectronSafeStorage.ElectronSafeStorage["Service"]);
 }

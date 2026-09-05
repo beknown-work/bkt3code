@@ -171,7 +171,8 @@ export function NewThreadProjectOptionList({
           <ProjectFavicon
             environmentId={option.defaultHost.environmentId}
             cwd={option.defaultHost.workspaceRoot}
-                    projectName={option.title}
+            projectName={option.title}
+            projectIcon={option.defaultHost.project.projectIcon}
           />
           <span className="min-w-0 flex-1 truncate">{option.title}</span>
           {option.requiresHostChoice ? (
@@ -225,7 +226,12 @@ export function NewThreadHostList({
             {appearance ? (
               <EnvironmentBadgeView appearance={appearance} variant="icon" title={host.label} />
             ) : (
-              <ProjectFavicon environmentId={host.environmentId} cwd={host.workspaceRoot} projectName={option.title} />
+              <ProjectFavicon
+                environmentId={host.environmentId}
+                cwd={host.workspaceRoot}
+                projectName={option.title}
+                projectIcon={host.project.projectIcon}
+              />
             )}
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate">{host.label}</span>

@@ -19,13 +19,18 @@ const remoteEnvironmentId = EnvironmentId.make("environment-remote");
 
 function makeProject(
   id: string,
-  options: { readonly title?: string; readonly environment?: EnvironmentId } = {},
+  options: {
+    readonly title?: string;
+    readonly environment?: EnvironmentId;
+    readonly projectIcon?: Project["projectIcon"];
+  } = {},
 ): Project {
   return {
     id: ProjectId.make(id),
     environmentId: options.environment ?? localEnvironmentId,
     title: options.title ?? id,
     workspaceRoot: `/home/ubuntu/repos/${id}`,
+    projectIcon: options.projectIcon,
   } as unknown as Project;
 }
 
@@ -71,6 +76,17 @@ describe("NewThreadProjectOptionList", () => {
 
     expect(markup).toContain("dev-server-1");
     expect(markup).not.toContain("hosts");
+  });
+
+  it("renders the saved project icon override", () => {
+    const markup = renderOptions([
+      makeProject("hermes", {
+        title: "hermes",
+        projectIcon: { kind: "emoji", emoji: "🛰️" },
+      }),
+    ]);
+
+    expect(markup).toContain("🛰️");
   });
 
   it("keeps distinct nicknames as separate rows", () => {

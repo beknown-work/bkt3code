@@ -1075,21 +1075,22 @@ export const make = Effect.gen(function* () {
         ...(remoteName.length > 0 ? { remoteName } : {}),
       };
       return Effect.gen(function* () {
+        // T3-CUSTOM(expbkt3): preserve the no-remote lookup decision in the PR cache.
         const { headContext, lookup } = yield* resolveLookupHeadContext(cwd, details);
         if (!lookup) {
-          return { latest: null, headContext };
+          return { latest: null, headContext, skipReason: null };
         }
         // Only skip when the branch is untracked as well: anything carrying an
         // upstream keeps the old behaviour.
-        if (
-          details.localBranchExists &&
-          details.upstreamRef === null &&
-          (yield* isUnpublishedBranch(cwd, headContext))
-        ) {
-          return { latest: null, headContext };
+        const skipReason =
+          details.localBranchExists && details.upstreamRef === null
+            ? yield* isUnpublishedBranch(cwd, headContext)
+            : null;
+        if (skipReason !== null) {
+          return { latest: null, headContext, skipReason };
         }
         const latest = yield* findLatestPrForHeadContext(cwd, headContext);
-        return { latest, headContext };
+        return { latest, headContext, skipReason: null };
       });
     },
     {
@@ -1186,8 +1187,21 @@ export const make = Effect.gen(function* () {
       }
     }
     return yield* Cache.get(prLookupCache, cacheKey).pipe(
-      Effect.map(({ latest, headContext }) => {
-        if (!latest) return { pr: null, headContext };
+      // T3-CUSTOM(expbkt3): a remote removed after a successful lookup keeps its last PR badge.
+      Effect.map(({ latest, headContext, skipReason }) => {
+        if (!latest)
+          return {
+            pr:
+              skipReason === "no-remote"
+                ? resolveLastKnownPr(branchKey, {
+                  upstreamRef: details.upstreamRef,
+                  headBranch: headContext.headBranch,
+                  remoteName: headContext.remoteName,
+                  headRemoteUrlKey: headContext.headRemoteUrlKey,
+                  })
+                : null,
+            headContext,
+          };
         // On the default branch, only surface open PRs.
         // Merged/closed matches are usually reverse-merge history, not the thread's PR context.
         if (details.isDefaultBranch && latest.state !== "open") {
@@ -1518,16 +1532,33 @@ export const make = Effect.gen(function* () {
    * when a merged change request's remote branch is deleted. Together they
    * distinguish branches known to have reached a host from genuinely local
    * branches. The ref glob spans every remote so a fork branch still counts. A
-   * repository that tracks no remotes at all cannot answer the question,
-   * because then every branch looks unpublished; it, and any failed probe,
-   * keeps the lookup.
+   * T3-CUSTOM(expbkt3): A repository with no remotes at all is also unpublished by definition.
+   * Skip its provider lookup while preserving its local status result.
    */
   const isUnpublishedBranch = Effect.fn("isUnpublishedBranch")(function* (
     cwd: string,
     headContext: Pick<BranchHeadContext, "headBranch" | "localBranch">,
   ) {
     if (headContext.headBranch.length === 0) {
-      return false;
+      return null;
+    }
+    const remoteResult = yield* gitCore
+      .execute({
+        operation: "GitManager.isUnpublishedBranch.remotes",
+        cwd,
+        args: ["remote"],
+        timeoutMs: 5_000,
+      })
+      .pipe(Effect.option);
+    if (Option.isNone(remoteResult)) {
+      return null;
+    }
+    const remoteNames = remoteResult.value
+      .stdout.split("\n")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+    if (remoteNames.length === 0) {
+      return "no-remote" as const;
     }
     const matchesRef = (pattern: string) =>
       gitCore
@@ -1548,15 +1579,15 @@ export const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
       if (configuredRemote !== null && configuredMerge !== null) {
-        return false;
+        return null;
       }
 
       const [tracksAnyRemote, tracksThisBranch] = yield* Effect.all(
         [matchesRef("refs/remotes"), matchesRef(`refs/remotes/*/${headContext.headBranch}`)],
         { concurrency: "unbounded" },
       );
-      return tracksAnyRemote && !tracksThisBranch;
-    }).pipe(Effect.orElseSucceed(() => false));
+      return tracksAnyRemote && !tracksThisBranch ? ("unpublished" as const) : null;
+    }).pipe(Effect.orElseSucceed(() => null));
   });
 
   const findOpenPr = Effect.fn("findOpenPr")(function* (
