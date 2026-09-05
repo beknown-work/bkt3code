@@ -117,6 +117,7 @@ const makeHarness = Effect.fn("ServerUsageTest.makeHarness")(function* (
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
+    notifySessionSuspect: () => Effect.void,
   });
   const environments = EnvironmentRegistry.of({
     run: (_environmentId, effect) =>

@@ -1,11 +1,13 @@
+// T3-CUSTOM(expbkt3): read managed credential expiry through Effect's clock.
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { FetchHttpClient, type HttpClient, type HttpMethod } from "effect/unstable/http";
 
 import type { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
-import type { PreparedConnection, PreparedHttpAuthorization } from "../connection/model.ts";
 // T3-CUSTOM(expbkt3): managed primary credentials belong to the operator, not T3 Connect.
+import type { PreparedConnection, PreparedHttpAuthorization } from "../connection/model.ts";
 import { PrimaryEnvironmentAuth } from "../platform/capabilities.ts";
 import type { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
@@ -106,6 +108,7 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
   return yield* Effect.gen(function* () {
     let rejectedAccessToken: string | undefined;
     for (;;) {
+      // T3-CUSTOM(expbkt3): refresh managed credentials on each request attempt.
       let authorization = input.prepared.httpAuthorization;
       if (authorization?._tag === "Dpop") {
         // T3-CUSTOM(expbkt3): reread the managed primary credential without crossing
@@ -127,9 +130,11 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
                 }),
             ),
           );
+          // T3-CUSTOM(expbkt3): use the runtime clock to preserve expiry timing in Effect.
+          const now = yield* Clock.currentTimeMillis;
           if (
             Option.isNone(current) ||
-            current.value.expiresAtEpochMs <= Date.now() ||
+            current.value.expiresAtEpochMs <= now ||
             current.value.accessToken === rejectedAccessToken
           ) {
             return yield* new RemoteEnvironmentAuthFetchError({

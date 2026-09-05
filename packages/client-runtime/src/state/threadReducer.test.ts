@@ -639,6 +639,7 @@ describe("applyThreadDetailEvent", () => {
           startedAt: "2026-04-01T06:59:00.000Z",
           completedAt: null,
           assistantMessageId: MessageId.make("msg-2"),
+          durationMs: null,
         },
         messages: [
           {
@@ -647,6 +648,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Hello",
             turnId: TurnId.make("turn-1"),
             streaming: true,
+            sentByUserId: null,
             createdAt: "2026-04-01T06:00:00.000Z",
             updatedAt: "2026-04-01T06:00:00.000Z",
           },
@@ -711,6 +713,7 @@ describe("applyThreadDetailEvent", () => {
           startedAt: "2026-04-01T06:59:00.000Z",
           completedAt: null,
           assistantMessageId: null,
+          durationMs: null,
         },
         checkpoints: [
           {
@@ -1263,6 +1266,7 @@ describe("applyThreadDetailEvent", () => {
                     startedAt: "2026-04-01T11:00:00.000Z",
                     completedAt: "2026-04-01T12:00:00.000Z",
                     assistantMessageId: null,
+                    durationMs: null,
                   },
           },
           {
@@ -1412,6 +1416,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Imported prompt",
             turnId: null,
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-03-01T00:00:00.000Z",
             updatedAt: "2026-03-01T00:00:00.000Z",
           },
@@ -1421,6 +1426,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Imported answer",
             turnId: null,
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-03-01T00:01:00.000Z",
             updatedAt: "2026-03-01T00:01:00.000Z",
           },
@@ -1430,6 +1436,7 @@ describe("applyThreadDetailEvent", () => {
             text: "New work",
             turnId: null,
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-04-01T01:00:00.000Z",
             updatedAt: "2026-04-01T01:00:00.000Z",
           },
@@ -1465,6 +1472,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Earlier",
             turnId: null,
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-04-01T10:30:00.000+02:00",
             updatedAt: "2026-04-01T10:30:00.000+02:00",
           },
@@ -1474,6 +1482,7 @@ describe("applyThreadDetailEvent", () => {
             text: "Later",
             turnId: null,
             streaming: false,
+            sentByUserId: null,
             createdAt: "2026-04-01T09:00:00.000Z",
             updatedAt: "2026-04-01T09:00:00.000Z",
           },

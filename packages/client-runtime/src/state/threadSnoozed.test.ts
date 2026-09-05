@@ -233,6 +233,7 @@ describe("hasQueuedTurnStart", () => {
         startedAt: null,
         completedAt: null,
         assistantMessageId: null,
+        durationMs: null,
       },
     });
     const failed = makeQueuedTurnShell({

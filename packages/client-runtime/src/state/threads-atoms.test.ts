@@ -59,6 +59,7 @@ const THREAD: OrchestrationThread = {
   interactionMode: "default",
   branch: "main",
   worktreePath: null,
+  sourceControlProfileId: null,
   latestTurn: null,
   createdAt: "2026-04-01T00:00:00.000Z",
   updatedAt: "2026-04-01T00:00:00.000Z",
@@ -71,6 +72,11 @@ const THREAD: OrchestrationThread = {
   activities: [],
   checkpoints: [],
   session: null,
+  ownerUserId: null,
+  memberUserIds: [],
+  rollingSummary: null,
+  turnSummaries: [],
+  execution: null,
 };
 const SNAPSHOT: OrchestrationThreadDetailSnapshot = { snapshotSequence: 7, thread: THREAD };
 
@@ -155,6 +161,7 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
+    notifySessionSuspect: () => Effect.void,
   });
   const environmentRegistry = EnvironmentRegistry.of({
     entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(

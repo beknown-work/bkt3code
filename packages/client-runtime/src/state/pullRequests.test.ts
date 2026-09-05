@@ -92,6 +92,7 @@ it.effect("refreshes pull request activity after a comment is updated", () =>
         connect: Effect.void,
         disconnect: Effect.void,
         retryNow: Effect.void,
+        notifySessionSuspect: () => Effect.void,
       } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
       const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
         run: (_environmentId, effect) =>

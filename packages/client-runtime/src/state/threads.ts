@@ -342,7 +342,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* Ref.set(paginationSupported, false);
     yield* SubscriptionRef.update(state, (current) => ({
       ...current,
-      data: Option.map(current.data, (thread) => ({ ...thread, execution: null })),
+      // T3-CUSTOM(expbkt3): retain the thread reference when no execution overlay needs clearing.
+      data: Option.map(current.data, (thread) =>
+        thread.execution === null ? thread : { ...thread, execution: null },
+      ),
       status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
     }));
   });
@@ -351,7 +354,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       Effect.andThen(
         SubscriptionRef.update(state, (current) => ({
           ...current,
-          data: Option.map(current.data, (thread) => ({ ...thread, execution: null })),
+          // T3-CUSTOM(expbkt3): retain the thread reference when no execution overlay needs clearing.
+          data: Option.map(current.data, (thread) =>
+            thread.execution === null ? thread : { ...thread, execution: null },
+          ),
           status:
             current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
           error: Option.some(formatThreadError(cause)),
