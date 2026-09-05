@@ -200,7 +200,7 @@ it.layer(NodeServices.layer)("restart sweep decider contract", (it) => {
         },
         readModel: makeReadModel(openOnly),
       }).pipe(Effect.flip);
-      expect(blocked._tag).toBe("OrchestrationCommandInvariantError");
+      expect(blocked._tag).toBe("OrchestrationThreadSettleBlockedError");
 
       const swept = makeThread({
         activities: [

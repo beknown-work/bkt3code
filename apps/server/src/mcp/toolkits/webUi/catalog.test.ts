@@ -37,8 +37,9 @@ const invocation = (
 });
 
 it("generates one unique virtual tool and complete schemas for every web RPC", () => {
-  expect(WEB_UI_VIRTUAL_TOOL_COUNT).toBe(139);
-  expect(WEB_UI_STREAM_TOOL_COUNT).toBe(20);
+  // T3-CUSTOM(expbkt3): the generated catalog follows the current authenticated RPC group.
+  expect(WEB_UI_VIRTUAL_TOOL_COUNT).toBe(157);
+  expect(WEB_UI_STREAM_TOOL_COUNT).toBe(23);
   expect(WEB_UI_VIRTUAL_TOOL_COUNT).toBe(WsRpcGroup.requests.size);
   expect(new Set(WEB_UI_VIRTUAL_TOOLS.map((tool) => tool.name)).size).toBe(
     WEB_UI_VIRTUAL_TOOL_COUNT,

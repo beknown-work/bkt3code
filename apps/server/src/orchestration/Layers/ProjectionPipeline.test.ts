@@ -3233,7 +3233,8 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           {
             latestUserMessageAt: "2026-03-01T08:00:02.000Z",
             pendingApprovalCount: 1,
-            pendingUserInputCount: 1,
+            // A full refresh removes the request attached to the already-completed turn.
+            pendingUserInputCount: 0,
             hasActionableProposedPlan: 1,
           },
         ]);
@@ -3806,8 +3807,31 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
         const sql = yield* SqlClient.SqlClient;
         const threadId = ThreadId.make("thread-compaction-correlation");
 
-        for (const [index, messageId] of ["compact-request", "new-message"].entries()) {
+        for (const [index, messageId] of ["compact-request"].entries()) {
           const createdAt = `2026-02-26T15:00:0${index}.000Z`;
+          // The durable intent accepts the same message the atomic command persisted.
+          yield* eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.make(`evt-compaction-message-${index}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: createdAt,
+            commandId: CommandId.make(`cmd-compaction-message-${index}`),
+            causationEventId: null,
+            correlationId: CorrelationId.make(`cmd-compaction-message-${index}`),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make(messageId),
+              role: "user",
+              text: messageId === "compact-request" ? "/compact" : "start new-message",
+              attachments: [],
+              turnId: null,
+              streaming: false,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          });
           yield* eventStore.append({
             type: "thread.turn-start-requested",
             eventId: EventId.make(`evt-compaction-pending-${index}`),
@@ -3822,16 +3846,97 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
               threadId,
               messageId: MessageId.make(messageId),
               runtimeMode: "full-access",
+              isCompaction: messageId === "compact-request",
               createdAt,
             },
           });
         }
         yield* eventStore.append({
           type: "thread.activity-appended",
-          eventId: EventId.make("evt-compaction-stale"),
+          eventId: EventId.make("evt-compaction-completed"),
           aggregateKind: "thread",
           aggregateId: threadId,
           occurredAt: "2026-02-26T15:00:02.000Z",
+          commandId: CommandId.make("cmd-compaction-completed"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-compaction-completed"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.make("activity-compaction-completed"),
+              tone: "info",
+              kind: "context-compaction",
+              summary: "Context compacted",
+              payload: { requestId: "compact-request" },
+              turnId: null,
+              createdAt: "2026-02-26T15:00:02.000Z",
+            },
+          },
+        });
+        yield* projectionPipeline.bootstrap;
+
+        const readPendingRows = () => sql<{ readonly messageId: string }>`
+          SELECT pending_message_id AS "messageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND state = 'pending'
+        `;
+        assert.deepEqual(yield* readPendingRows(), []);
+
+        const newMessageAt = "2026-02-26T15:00:03.000Z";
+        const newMessage = yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-compaction-message-new"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: newMessageAt,
+          commandId: CommandId.make("cmd-compaction-message-new"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-compaction-message-new"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("new-message"),
+            role: "user",
+            text: "start new-message",
+            attachments: [],
+            turnId: null,
+            streaming: false,
+            createdAt: newMessageAt,
+            updatedAt: newMessageAt,
+          },
+        });
+        yield* projectionPipeline.projectEvent(newMessage);
+        const newRequest = yield* eventStore.append({
+          type: "thread.turn-start-requested",
+          eventId: EventId.make("evt-compaction-pending-new"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: newMessageAt,
+          commandId: CommandId.make("cmd-compaction-pending-new"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-compaction-pending-new"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("new-message"),
+            runtimeMode: "full-access",
+            isCompaction: false,
+            createdAt: newMessageAt,
+          },
+        });
+        yield* projectionPipeline.projectEvent(newRequest);
+        assert.deepEqual(yield* readPendingRows(), [{ messageId: "new-message" }]);
+
+        const staleAt = "2026-02-26T15:00:04.000Z";
+        const staleActivity = yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.make("evt-compaction-stale"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: staleAt,
           commandId: CommandId.make("cmd-compaction-stale"),
           causationEventId: null,
           correlationId: CorrelationId.make("cmd-compaction-stale"),
@@ -3845,20 +3950,12 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
               summary: "Context compacted",
               payload: { requestId: "compact-request" },
               turnId: null,
-              createdAt: "2026-02-26T15:00:02.000Z",
+              createdAt: staleAt,
             },
           },
         });
-        yield* projectionPipeline.bootstrap;
-
-        const pendingRows = yield* sql<{ readonly messageId: string }>`
-          SELECT pending_message_id AS "messageId"
-          FROM projection_turns
-          WHERE thread_id = ${threadId}
-            AND turn_id IS NULL
-            AND state = 'pending'
-        `;
-        assert.deepEqual(pendingRows, [{ messageId: "new-message" }]);
+        yield* projectionPipeline.projectEvent(staleActivity);
+        assert.deepEqual(yield* readPendingRows(), [{ messageId: "new-message" }]);
       }),
     );
   },

@@ -281,28 +281,33 @@ describe("AcpSessionRuntime", () => {
       const runtime = yield* AcpSessionRuntime.make(mockRuntimeOptions);
       yield* runtime.start();
       yield* runtime.notify("_test/exit", {});
-      const events = yield* runtime.getEvents().pipe(Stream.take(1), Stream.runCollect);
-      const event = events[0];
-      expect(event).toMatchObject({ _tag: "ConnectionTerminated", error: { code: 19 } });
-      if (event?._tag !== "ConnectionTerminated") return;
-      expect(
-        yield* runtime
-          .prompt({
-            prompt: [{ type: "text", text: "must not run" }],
-          })
-          .pipe(Effect.flip),
-      ).toBe(event.error);
-      expect(yield* runtime.start().pipe(Effect.flip)).toBe(event.error);
-      expect(yield* runtime.initialize().pipe(Effect.flip)).toBe(event.error);
+      // T3-CUSTOM(expbkt3): an idle child exit is reported alongside transport termination.
+      const events = yield* runtime.getEvents().pipe(Stream.take(2), Stream.runCollect);
+      const exited = events.find((event) => event._tag === "Exited");
+      expect(exited).toMatchObject({ _tag: "Exited", exitCode: 19 });
+      const terminated = events.find((event) => event._tag === "ConnectionTerminated");
+      expect(terminated).toMatchObject({
+        _tag: "ConnectionTerminated",
+        error: { code: 19 },
+      });
+      if (terminated?._tag !== "ConnectionTerminated") return;
+      const error = yield* runtime
+        .prompt({
+          prompt: [{ type: "text", text: "must not run" }],
+        })
+        .pipe(Effect.flip);
+      expect(error).toBe(terminated.error);
+      expect(yield* runtime.start().pipe(Effect.flip)).toBe(terminated.error);
+      expect(yield* runtime.initialize().pipe(Effect.flip)).toBe(terminated.error);
       expect(
         yield* runtime.request("_test/environment", {}).pipe(
           Effect.match({
-            onFailure: (error) => error,
+            onFailure: (requestError) => requestError,
             onSuccess: () => undefined,
           }),
         ),
-      ).toBe(event.error);
-      expect(yield* runtime.notify("_test/exit", {}).pipe(Effect.flip)).toBe(event.error);
+      ).toBe(terminated.error);
+      expect(yield* runtime.notify("_test/exit", {}).pipe(Effect.flip)).toBe(terminated.error);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

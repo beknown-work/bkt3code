@@ -2727,9 +2727,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
           assert.strictEqual(status.status, "ready");
           // The home is resolved through the host Path before it reaches the env.
+          // T3-CUSTOM(expbkt3): Claude status checks run both version and auth probes.
+          const resolvedClaudeConfigDir = (yield* Path.Path).resolve(claudeConfigDir);
           assert.deepStrictEqual(
             recorded.commands.map((command) => command.env?.CLAUDE_CONFIG_DIR),
-            [(yield* Path.Path).resolve(claudeConfigDir)],
+            [resolvedClaudeConfigDir, resolvedClaudeConfigDir],
           );
         }).pipe(Effect.provide(recorded.layer));
       });

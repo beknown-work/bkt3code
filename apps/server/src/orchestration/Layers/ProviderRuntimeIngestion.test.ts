@@ -476,7 +476,8 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread?.session).toMatchObject({
       status: "interrupted",
       activeTurnId: null,
-      lastError: null,
+      // Preserve the provider’s abort reason for an interrupted session.
+      lastError: "Interrupted by user.",
     });
     expect(thread?.latestTurn).toMatchObject({
       turnId,

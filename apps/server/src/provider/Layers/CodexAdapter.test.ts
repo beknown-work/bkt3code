@@ -334,6 +334,8 @@ validationLayer("CodexAdapterLive validation", (it) => {
         sessionModelSwitch: "in-session",
         activeTurnInput: "steer",
         durableResume: "supported",
+        // T3-CUSTOM(expbkt3): Codex supports continuing a turn without a new prompt.
+        promptlessTurnContinuation: true,
       });
     }),
   );
