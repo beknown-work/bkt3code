@@ -3,11 +3,13 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -2055,7 +2057,14 @@ const makeWsRpcLayer = (
                       ),
                     );
 
-              const domainLiveStream = orchestrationEngine.streamDomainEvents.pipe(
+              // T3-CUSTOM(expbkt3): Acquire the domain subscription before reading the replay or
+              // snapshot. Keep its lifetime separate from the RPC scope so an
+              // overflowing producer also releases its PubSub subscriber.
+              const domainSubscriptionScope = yield* Scope.make("sequential");
+              yield* Effect.addFinalizer((exit) => Scope.close(domainSubscriptionScope, exit));
+              const domainLiveStream = (yield* orchestrationEngine.subscribeDomainEvents.pipe(
+                Scope.provide(domainSubscriptionScope),
+              )).pipe(
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
@@ -2066,13 +2075,20 @@ const makeWsRpcLayer = (
                 Stream.filter((execution) => execution.threadId === input.threadId),
                 Stream.map((execution) => ({ kind: "execution" as const, execution })),
               );
-              const liveStream = Stream.merge(domainLiveStream, executionLiveStream);
-
               // Attach live delivery before reading either replay or snapshot state.
               // Otherwise an event published while the snapshot is loading is lost.
               const liveBuffer = yield* makeThreadLiveEventCoalescer();
               yield* Effect.forkScoped(
-                liveStream.pipe(
+                domainLiveStream.pipe(
+                  Stream.runForEachArray(liveBuffer.offerAll),
+                  Effect.raceFirst(liveBuffer.failed),
+                  Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
+                  Effect.ensuring(Scope.close(domainSubscriptionScope, Exit.void)),
+                ),
+                { startImmediately: true },
+              );
+              yield* Effect.forkScoped(
+                executionLiveStream.pipe(
                   Stream.runForEachArray(liveBuffer.offerAll),
                   Effect.raceFirst(liveBuffer.failed),
                   Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
@@ -2081,6 +2097,10 @@ const makeWsRpcLayer = (
               );
               const bufferedLiveStream = liveBuffer.stream;
               let replayOnMissingSnapshot: typeof bufferedLiveStream | undefined;
+              // T3-CUSTOM(expbkt3): do not emit an execution frame for a replay
+              // that proves the thread was deleted while its snapshot is absent.
+              const replayHasTerminalEvent = yield* Ref.make(false);
+              let replayTooLarge = false;
 
               // When the client already loaded the snapshot over HTTP it passes
               // that snapshot's sequence, and we resume the live subscription by
@@ -2123,14 +2143,22 @@ const makeWsRpcLayer = (
                               }),
                           ),
                         );
-                if (
+                const replayFitsBudget =
                   replayStats !== null &&
                   replayStats.eventCount <= THREAD_RESUME_MAX_EVENTS &&
-                  replayStats.payloadBytes <= ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES
-                ) {
+                  replayStats.payloadBytes <= ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES;
+                replayTooLarge = replayStats !== null && !replayFitsBudget;
+                if (replayFitsBudget) {
                   const catchUpStream = orchestrationEngine
                     .readThreadEvents({ ...range, limit: THREAD_RESUME_MAX_EVENTS })
                     .pipe(
+                      Stream.tap((event) =>
+                        event.type === "thread.deleted" || event.type === "thread.archived"
+                          ? Ref.set(replayHasTerminalEvent, true)
+                          : event.type === "thread.created" || event.type === "thread.unarchived"
+                            ? Ref.set(replayHasTerminalEvent, false)
+                            : Effect.void,
+                      ),
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.map((event) => ({
                         kind: "event" as const,
@@ -2160,12 +2188,20 @@ const makeWsRpcLayer = (
                       // "Running". Emit the current execution once.
                       Stream.concat(
                         catchUpStream,
-                        Stream.fromEffect(
-                          executionSupervisor.getSnapshot(input.threadId).pipe(
-                            Effect.map((execution) => ({
-                              kind: "execution" as const,
-                              execution,
-                            })),
+                        Stream.unwrap(
+                          Ref.get(replayHasTerminalEvent).pipe(
+                            Effect.map((hasTerminalEvent) =>
+                              hasTerminalEvent
+                                ? Stream.empty
+                                : Stream.fromEffect(
+                                    executionSupervisor.getSnapshot(input.threadId).pipe(
+                                      Effect.map((execution) => ({
+                                        kind: "execution" as const,
+                                        execution,
+                                      })),
+                                    ),
+                                  ),
+                            ),
                           ),
                         ),
                       ),
@@ -2207,6 +2243,12 @@ const makeWsRpcLayer = (
                 // snapshot that cannot exist. Oversized ranges still fail.
                 if (replayOnMissingSnapshot !== undefined) {
                   return replayOnMissingSnapshot;
+                }
+                if (replayTooLarge) {
+                  return yield* new OrchestrationGetSnapshotError({
+                    message: `Thread ${input.threadId} was not found`,
+                    cause: input.threadId,
+                  });
                 }
                 return Stream.make(yield* missingThreadSubscriptions.mark(input));
               }

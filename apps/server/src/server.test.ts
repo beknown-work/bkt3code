@@ -73,6 +73,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
@@ -1135,6 +1136,9 @@ const buildAppUnderTest = (options?: {
               }),
             dispatch: () => Effect.succeed({ sequence: 0 }),
             streamDomainEvents: Stream.empty,
+            subscribeDomainEvents: Effect.succeed(
+              options?.layers?.orchestrationEngine?.streamDomainEvents ?? Stream.empty,
+            ),
             latestSequence: Effect.succeed(0),
             ...options?.layers?.orchestrationEngine,
           }),
@@ -1418,6 +1422,7 @@ const withFirstWsAckHeld = (
   wsUrl: string,
   held: Deferred.Deferred<void>,
   release: Deferred.Deferred<void>,
+  isArmed: () => boolean = () => true,
 ) => {
   let holdNextAck = true;
   return Layer.effect(RpcClient.Protocol)(
@@ -1426,7 +1431,7 @@ const withFirstWsAckHeld = (
         ...protocol,
         send: (clientId, request, transferables) => {
           const send = protocol.send(clientId, request, transferables);
-          if (request._tag !== "Ack" || !holdNextAck) {
+          if (request._tag !== "Ack" || !holdNextAck || !isArmed()) {
             return send;
           }
           holdNextAck = false;
@@ -8860,7 +8865,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
-            streamDomainEvents: Stream.fromPubSub(liveEvents),
+            subscribeDomainEvents: PubSub.subscribe(liveEvents).pipe(
+              Effect.map(Stream.fromSubscription),
+            ),
           },
           projectionSnapshotQuery: {
             getThreadDetailSnapshot: () =>
@@ -9252,11 +9259,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const detached = yield* Deferred.make<void>();
         const ackHeld = yield* Deferred.make<void>();
         const releaseAck = yield* Deferred.make<void>();
+        const initialExecutionReceived = yield* Deferred.make<void>();
         const firstApplied = yield* Deferred.make<void>();
         const replayStarted = yield* Deferred.make<void>();
         const replayCalls: Array<{ afterSequence: number; headSequence: number }> = [];
         let headSequence = 0;
         let snapshotCalls = 0;
+        let holdAck = false;
         const message = (sequence: number, text: string) =>
           ({
             sequence,
@@ -9291,13 +9300,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           layers: {
             orchestrationEngine: {
               latestSequence: Effect.sync(() => headSequence),
-              streamDomainEvents: Stream.unwrap(
-                Effect.gen(function* () {
-                  const subscription = yield* PubSub.subscribe(liveEvents);
-                  yield* Deferred.succeed(attached, undefined);
-                  return Stream.fromSubscription(subscription);
-                }),
-              ).pipe(Stream.ensuring(Deferred.succeed(detached, undefined))),
+              subscribeDomainEvents: Effect.gen(function* () {
+                // Register before PubSub.subscribe: Scope finalizers run LIFO, so
+                // this receipt proves the subscription has already unsubscribed.
+                const scope = yield* Scope.Scope;
+                yield* Scope.addFinalizer(scope, Deferred.succeed(detached, undefined));
+                const subscription = yield* PubSub.subscribe(liveEvents);
+                yield* Deferred.succeed(attached, undefined);
+                return Stream.fromSubscription(subscription);
+              }),
               readThreadEvents: ({ fromSequenceExclusive, toSequenceInclusive }) => {
                 replayCalls.push({
                   afterSequence: fromSequenceExclusive,
@@ -9348,6 +9359,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 afterSequence: cursor,
               }).pipe(
                 Stream.tap((item) => {
+                  if (item.kind === "execution") {
+                    holdAck = true;
+                    return Deferred.succeed(initialExecutionReceived, undefined);
+                  }
                   if (item.kind !== "event") return Effect.void;
                   cursor = item.event.sequence;
                   received.push(cursor);
@@ -9359,6 +9374,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               );
               yield* Deferred.await(attached);
               yield* Deferred.await(replayStarted);
+              yield* Deferred.await(initialExecutionReceived);
               headSequence = 1;
               yield* PubSub.publish(liveEvents, events[0]!);
               yield* Deferred.await(ackHeld);
@@ -9369,6 +9385,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               // This must finish while the server is still waiting for the first
               // batch's ACK. A failed output queue alone would leave PubSub live.
               yield* Deferred.await(detached);
+              // The detached producer must also release the eager PubSub
+              // subscription while the client still holds the blocked ACK.
+              yield* PubSub.publish(liveEvents, message(5, "after-detach"));
               assert.equal(yield* PubSub.size(liveEvents), 0);
               assert.deepEqual(received, [1]);
               yield* Deferred.succeed(releaseAck, undefined);
@@ -9386,7 +9405,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               );
               assert.deepEqual(
                 recovered.map((item) => (item.kind === "event" ? item.event.sequence : item.kind)),
-                [2, 3, 4, "synchronized"],
+                [2, 3, 4, "execution", "synchronized"],
               );
               const first = recovered[0];
               assertTrue(first?.kind === "event" && first.event.type === "thread.message-sent");
@@ -9403,7 +9422,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               assert.equal(snapshotCalls, 0);
             }),
           ),
-          Effect.provide(withFirstWsAckHeld(wsUrl, ackHeld, releaseAck)),
+          Effect.provide(withFirstWsAckHeld(wsUrl, ackHeld, releaseAck, () => holdAck)),
         );
       }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -9592,7 +9611,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.deepEqual(
         items.map((item) => (item.kind === "event" ? item.event.sequence : item.kind)),
-        [99_999, "synchronized"],
+        [99_999, "execution", "synchronized"],
       );
       const first = items[0];
       assertTrue(first?.kind === "event" && first.event.type === "thread.activity-appended");
@@ -9801,7 +9820,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           orchestrationEngine: {
             latestSequence: Effect.sync(() => headSequence),
-            streamDomainEvents: Stream.fromPubSub(liveEvents),
+            subscribeDomainEvents: PubSub.subscribe(liveEvents).pipe(
+              Effect.map(Stream.fromSubscription),
+            ),
             getThreadReplayStats: () =>
               Effect.sync(() => {
                 headSequence = 100;

@@ -1461,7 +1461,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
           threadId,
-          cwd: "/tmp/project-concurrent-starts",
+          cwd: fixtureCwd("project-concurrent-starts"),
           runtimeMode: "full-access",
         });
 
@@ -1488,7 +1488,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         threadId,
-        cwd: "/tmp/project-concurrent-recovery",
+        cwd: fixtureCwd("project-concurrent-recovery"),
         runtimeMode: "full-access",
       });
       yield* routing.codex.stopSession(threadId);
@@ -1533,7 +1533,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         threadId,
-        cwd: "/tmp/project",
+        cwd: fixtureCwd("project"),
         runtimeMode: "full-access",
       });
 
@@ -1565,7 +1565,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: ProviderDriverKind.make("codex"),
           providerInstanceId: codexInstanceId,
           threadId,
-          cwd: "/tmp/project",
+          cwd: fixtureCwd("project"),
           runtimeMode: "full-access",
         })
         .pipe(Effect.forkChild({ startImmediately: true }));
@@ -1589,7 +1589,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         status: "ready",
         runtimeMode: "full-access",
         threadId,
-        cwd: "/tmp/project",
+        cwd: fixtureCwd("project"),
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
@@ -1626,7 +1626,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
           threadId,
-          cwd: "/tmp/project-start-replacement-terminate",
+          cwd: fixtureCwd("project-start-replacement-terminate"),
           runtimeMode: "full-access",
         })
         .pipe(Effect.forkChild({ startImmediately: true }));
@@ -1637,7 +1637,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: CLAUDE_AGENT_DRIVER,
           providerInstanceId: claudeAgentInstanceId,
           threadId,
-          cwd: "/tmp/project-start-replacement-terminate",
+          cwd: fixtureCwd("project-start-replacement-terminate"),
           runtimeMode: "full-access",
         })
         .pipe(Effect.forkChild({ startImmediately: true }));
@@ -1654,7 +1654,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         status: "ready",
         runtimeMode: "full-access",
         threadId,
-        cwd: "/tmp/project-start-replacement-terminate",
+        cwd: fixtureCwd("project-start-replacement-terminate"),
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
@@ -1681,7 +1681,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         threadId,
-        cwd: "/tmp/project-unverified-termination",
+        cwd: fixtureCwd("project-unverified-termination"),
         runtimeMode: "full-access",
       });
       const terminateSpy = vi
@@ -1710,7 +1710,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         threadId,
-        cwd: "/tmp/project-termination-already-exited",
+        cwd: fixtureCwd("project-termination-already-exited"),
         runtimeMode: "full-access",
       });
       yield* routing.codex.stopSession(threadId);
@@ -1743,7 +1743,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: ProviderDriverKind.make("codex"),
           providerInstanceId: codexInstanceId,
           threadId,
-          cwd: "/tmp/project",
+          cwd: fixtureCwd("project"),
           runtimeMode: "full-access",
         },
         { environment },
@@ -1766,7 +1766,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: ProviderDriverKind.make("codex"),
           providerInstanceId: codexInstanceId,
           threadId,
-          cwd: "/tmp/project",
+          cwd: fixtureCwd("project"),
           runtimeMode: "full-access",
         },
         { environment },
@@ -2593,7 +2593,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: codexInstanceId,
         threadId,
-        cwd: "/tmp/project-provider-replacement-unverified",
+        cwd: fixtureCwd("project-provider-replacement-unverified"),
         runtimeMode: "full-access",
       });
       routing.claude.startSession.mockClear();
@@ -2608,7 +2608,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           provider: CLAUDE_AGENT_DRIVER,
           providerInstanceId: claudeAgentInstanceId,
           threadId,
-          cwd: "/tmp/project-provider-replacement-unverified",
+          cwd: fixtureCwd("project-provider-replacement-unverified"),
           runtimeMode: "full-access",
         }),
       );
