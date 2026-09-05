@@ -1110,6 +1110,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
+          // T3-CUSTOM(expbkt3): transmit command classification to the
+          // independent execution-supervisor subscriber before it can admit
+          // a /compact request as a provider turn.
+          isCompaction: command.message.text.trim().toLowerCase() === "/compact",
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),

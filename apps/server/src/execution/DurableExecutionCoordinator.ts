@@ -96,6 +96,18 @@ export interface DurableExecutionDispatchResult {
   readonly providerTurnId: string | null;
   readonly providerInstanceId: string | null;
   readonly adoptedExecutionId?: string;
+  /** The provider turn was associated with this accepted same-turn steer. */
+  readonly associationAcknowledged?: boolean;
+  /**
+   * The provider accepted a same-turn steer, but persisting its visible
+   * association failed. The coordinator records this before releasing the
+   * claim so a retry can deliver only the association command.
+   */
+  readonly associationPending?: {
+    readonly providerTurnId: string;
+    readonly providerInstanceId: string | null;
+    readonly adoptedExecutionId: string;
+  };
   readonly deferred?: boolean;
   readonly completed?: boolean;
   /** A native prompt command completed without creating a provider turn. */
@@ -129,6 +141,7 @@ export interface DurableExecutionCoordinatorOptions {
   }) => Effect.Effect<DurableExecutionDispatchResult, DurableExecutionDispatchError, Scope.Scope>;
   /** T3-CUSTOM(expbkt3): publish desired-state transitions to connected clients. */
   readonly onTransition?: (input: {
+    readonly intent: DurableExecutionIntent;
     readonly workItemId: string;
     readonly threadId: DurableExecutionIntent["threadId"];
   }) => Effect.Effect<void>;
@@ -156,14 +169,20 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     const now = options.now ?? (() => Effect.map(DateTime.now, DateTime.formatIso));
     const safetyPollIntervalMs = options.safetyPollIntervalMs ?? DEFAULT_SAFETY_POLL_INTERVAL_MS;
     const notifyTransition = (intent: DurableExecutionIntent) =>
-      options.onTransition?.({ workItemId: intent.workItemId, threadId: intent.threadId }) ??
+      options.onTransition?.({ intent, workItemId: intent.workItemId, threadId: intent.threadId }) ??
       Effect.void;
 
     const runClaimed = Effect.fn("DurableExecutionCoordinator.runClaimed")(function* (
       claimed: DurableExecutionIntent,
     ) {
       return yield* Effect.gen(function* () {
-        const recovery = claimed.phase === "recovering";
+        // A pending same-turn association is stored in retry-wait and claim()
+        // normalizes that phase to recovering. It has already delivered the
+        // provider input, so keep it on the original dispatch path where the
+        // reactor retries only the association command.
+        const recovery =
+          claimed.phase === "recovering" &&
+          claimed.lastFailureType !== "turn-association-pending";
         const activeIntent = recovery
           ? yield* repository.beginRecoveryAttempt({
               workItemId: claimed.workItemId,
@@ -305,6 +324,18 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
             });
             return;
           }
+          if (result.associationPending !== undefined) {
+            yield* repository.markAssociationPending({
+              workItemId: intent.workItemId,
+              owner: options.ownerId,
+              generation: intent.claimGeneration,
+              providerTurnId: result.associationPending.providerTurnId,
+              providerInstanceId: result.associationPending.providerInstanceId,
+              adoptedExecutionId: result.associationPending.adoptedExecutionId,
+              at: yield* now(),
+            });
+            return;
+          }
           if (result.completed === true && (result.providerTurnId !== null || result.handledCommand === true)) {
             const reconciled = yield* repository.markCompletedFromHistory({
               workItemId: intent.workItemId,
@@ -346,6 +377,7 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
             providerTurnId: result.providerTurnId,
             providerInstanceId: result.providerInstanceId,
             adoptedExecutionId: result.adoptedExecutionId ?? intent.workItemId,
+            terminalAssociation: result.associationAcknowledged === true,
             at: yield* now(),
           });
           if (acknowledged && recovery && options.onRecoveryActivity) {

@@ -1876,6 +1876,18 @@ const ThreadSessionSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// T3-CUSTOM(expbkt3): durable same-turn steering confirms message association
+// without asserting a stale session lifecycle state.
+const ThreadTurnAdoptCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.adopt"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedActiveTurnId: TurnId,
+  providerTurnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   type: Schema.Literal("thread.message.assistant.delta"),
   commandId: CommandId,
@@ -2048,6 +2060,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSourceControlProfileSetCommand,
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
+  ThreadTurnAdoptCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadHistoryImportCommand,
@@ -2108,6 +2121,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.session-stop-requested",
   "thread.session-restart-requested",
   "thread.session-set",
+  // T3-CUSTOM(expbkt3): durable same-turn steer acknowledgement.
+  "thread.turn-adopted",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.catchup-summary-requested",
@@ -2336,6 +2351,11 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  // T3-CUSTOM(expbkt3): a context compaction is a handled command, not a
+  // provider execution, so supervisor subscribers must not admit it.
+  isCompaction: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -2392,6 +2412,16 @@ export const ThreadSessionRestartRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+});
+
+// T3-CUSTOM(expbkt3): association-only acknowledgement for a provider steer
+// which retained the active provider turn.
+export const ThreadTurnAdoptedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  expectedActiveTurnId: TurnId,
+  providerTurnId: TurnId,
+  adoptedAt: IsoDateTime,
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
@@ -2734,6 +2764,12 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
     payload: ThreadSessionSetPayload,
+  }),
+  // T3-CUSTOM(expbkt3): durable same-turn steer acknowledgement.
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-adopted"),
+    payload: ThreadTurnAdoptedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

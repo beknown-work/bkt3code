@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { PersistenceSqlError } from "../persistence/Errors.ts";
@@ -394,6 +395,214 @@ layer("DurableExecutionCoordinator", (it) => {
         "command-steer-2",
         "command-steer-3",
       ]);
+    }),
+  );
+
+  it.effect("retries an accepted steer association after restart without resending the provider turn", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("association-retry", 35, "association");
+      yield* acceptEvent(repository, event);
+      const sendTurnCalls = yield* Ref.make(0);
+      const associationAttempts = yield* Ref.make(0);
+      const associationFailures = yield* Ref.make(1);
+      const dispatch = ({ intent }: { readonly intent: import("./DurableExecutionIntentRepository.ts").DurableExecutionIntent }) =>
+        Effect.gen(function* () {
+          if (intent.lastFailureType === "turn-association-pending") {
+            yield* Ref.update(associationAttempts, (count) => count + 1);
+            if ((yield* Ref.getAndUpdate(associationFailures, (remaining) => Math.max(0, remaining - 1))) > 0) {
+              return yield* new DurableExecutionDispatchError({
+                failureType: "association-persistence-interrupted",
+                detail: "association persistence interrupted",
+                retryable: true,
+              });
+            }
+            return {
+              providerTurnId: "provider-active",
+              providerInstanceId: "codex",
+              adoptedExecutionId: "active-execution",
+              completed: true,
+            };
+          }
+          yield* Ref.update(sendTurnCalls, (count) => count + 1);
+          return {
+            providerTurnId: "provider-active",
+            providerInstanceId: "codex",
+            adoptedExecutionId: "active-execution",
+            associationPending: {
+              providerTurnId: "provider-active",
+              providerInstanceId: "codex",
+              adoptedExecutionId: "active-execution",
+            },
+          };
+        });
+      const firstCoordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "association-owner-a",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: dispatch,
+        recover: () => Effect.die("accepted steer must not enter guarded recovery"),
+      });
+      yield* firstCoordinator.run(event.commandId);
+      const pending = yield* repository.getByWorkItemId({ workItemId: event.commandId });
+      assert.isTrue(Option.isSome(pending));
+      if (Option.isNone(pending)) return;
+      assert.strictEqual(pending.value.phase, "retry-wait");
+      assert.strictEqual(pending.value.lastFailureType, "turn-association-pending");
+      assert.strictEqual(pending.value.providerTurnId, "provider-active");
+
+      // A restart can happen after the accepted-association row is claimed and
+      // marked starting. Reconciliation must retain the marker so the next
+      // authority adopts the known provider turn instead of sending it again.
+      const inFlightClaim = yield* repository.claim({
+        workItemId: event.commandId,
+        owner: "association-owner-crashed",
+        now: event.occurredAt,
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      });
+      assert.isTrue(Option.isSome(inFlightClaim));
+      if (Option.isNone(inFlightClaim)) return;
+      assert.isTrue(
+        yield* repository.markProviderStarting({
+          workItemId: event.commandId,
+          owner: "association-owner-crashed",
+          generation: inFlightClaim.value.claimGeneration,
+          at: event.occurredAt,
+        }),
+      );
+      yield* repository.reconcileStartup({ at: "2026-01-01T00:00:01.000Z" });
+      const preservedAfterRestart = yield* repository.getByWorkItemId({
+        workItemId: event.commandId,
+      });
+      assert.isTrue(Option.isSome(preservedAfterRestart));
+      if (Option.isNone(preservedAfterRestart)) return;
+      assert.strictEqual(preservedAfterRestart.value.phase, "retry-wait");
+      assert.strictEqual(preservedAfterRestart.value.lastFailureType, "turn-association-pending");
+      assert.strictEqual(preservedAfterRestart.value.claimOwner, null);
+
+      const restartedCoordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "association-owner-b",
+        now: () => Effect.succeed("2026-01-01T00:00:01.000Z"),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: dispatch,
+        recover: () => Effect.die("accepted steer must not enter guarded recovery"),
+      });
+      yield* restartedCoordinator.run(event.commandId);
+      const stillPending = yield* repository.getByWorkItemId({ workItemId: event.commandId });
+      assert.isTrue(Option.isSome(stillPending));
+      if (Option.isNone(stillPending)) return;
+      assert.strictEqual(stillPending.value.lastFailureType, "turn-association-pending");
+      yield* restartedCoordinator.run(event.commandId);
+      const completed = yield* repository.getByWorkItemId({ workItemId: event.commandId });
+      assert.isTrue(Option.isSome(completed));
+      if (Option.isNone(completed)) return;
+      assert.strictEqual(completed.value.desiredState, "stopped");
+      assert.strictEqual(completed.value.phase, "running");
+      assert.strictEqual(completed.value.lastFailureType, null);
+      assert.strictEqual(completed.value.adoptedExecutionId, "active-execution");
+      assert.strictEqual(yield* Ref.get(sendTurnCalls), 1);
+      assert.strictEqual(yield* Ref.get(associationAttempts), 2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("retains an accepted association marker when stop races its acknowledgement", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("association-stop", 36, "association-stop");
+      yield* acceptEvent(repository, event);
+      const claim = yield* repository.claim({
+        workItemId: event.commandId,
+        owner: "association-stop-owner",
+        now: event.occurredAt,
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      });
+      assert.isTrue(Option.isSome(claim));
+      if (Option.isNone(claim)) return;
+      assert.isTrue(
+        yield* repository.markAssociationPending({
+          workItemId: event.commandId,
+          owner: "association-stop-owner",
+          generation: claim.value.claimGeneration,
+          providerTurnId: "provider-stop",
+          providerInstanceId: "codex",
+          adoptedExecutionId: "execution-stop",
+          at: event.occurredAt,
+        }),
+      );
+      yield* repository.stopThread({
+        threadId: event.payload.threadId,
+        reason: "user-stop",
+        at: "2026-01-01T00:00:01.000Z",
+      });
+      const retained = yield* repository.getByWorkItemId({ workItemId: event.commandId });
+      assert.isTrue(Option.isSome(retained));
+      if (Option.isNone(retained)) return;
+      assert.strictEqual(retained.value.desiredState, "running");
+      assert.strictEqual(retained.value.phase, "retry-wait");
+      assert.isTrue(retained.value.runnable);
+      assert.strictEqual(retained.value.lastFailureType, "turn-association-pending");
+      assert.strictEqual(retained.value.providerTurnId, "provider-stop");
+    }),
+  );
+
+  it.effect("settles another running intent while retaining a terminal association marker", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const markerEvent = makeSequentialAcceptedEvent("association-terminal", 936, "shared-terminal");
+      const originalEvent = makeSequentialAcceptedEvent("original-terminal", 37, "shared-terminal");
+      yield* acceptEvent(repository, markerEvent);
+      yield* sql`
+        INSERT INTO projection_thread_execution_intents (
+          work_item_id, thread_id, message_id, command_id, request_event_sequence,
+          message_text, attachments_json, desired_state, phase, delivery_certainty,
+          runnable, adopted_execution_id, recovery_attempts, maximum_recovery_attempts,
+          claim_generation, accepted_at, updated_at
+        ) VALUES (
+          ${originalEvent.commandId}, ${originalEvent.payload.threadId}, ${originalEvent.payload.messageId},
+          ${originalEvent.commandId}, NULL, 'original', '[]', 'running', 'running',
+          'provider-acknowledged', 1, ${originalEvent.commandId}, 0, 10, 0,
+          ${originalEvent.occurredAt}, ${originalEvent.occurredAt}
+        )
+      `;
+      const markerClaim = yield* repository.claim({
+        workItemId: markerEvent.commandId,
+        owner: "association-terminal-owner",
+        now: markerEvent.occurredAt,
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      });
+      assert.isTrue(Option.isSome(markerClaim));
+      if (Option.isNone(markerClaim)) return;
+      yield* repository.markAssociationPending({
+        workItemId: markerEvent.commandId,
+        owner: "association-terminal-owner",
+        generation: markerClaim.value.claimGeneration,
+        providerTurnId: "provider-terminal",
+        providerInstanceId: "codex",
+        adoptedExecutionId: "execution-terminal",
+        at: markerEvent.occurredAt,
+      });
+      // The projection can contain an older live intent while the marker is
+      // waiting for adoption; model that committed state directly.
+      yield* sql`
+        UPDATE projection_thread_execution_intents
+        SET phase = 'running', runnable = 1, delivery_certainty = 'provider-acknowledged'
+        WHERE work_item_id = ${originalEvent.commandId}
+      `;
+      yield* repository.observeSession({
+        threadId: markerEvent.payload.threadId,
+        status: "ready",
+        providerTurnId: null,
+        error: null,
+        at: "2026-01-01T00:00:01.000Z",
+      });
+      const intents = yield* repository.listByThreadId({ threadId: markerEvent.payload.threadId });
+      const marker = intents.find((intent) => intent.workItemId === markerEvent.commandId);
+      const original = intents.find((intent) => intent.workItemId === originalEvent.commandId);
+      assert.strictEqual(marker?.lastFailureType, "turn-association-pending");
+      assert.strictEqual(marker?.desiredState, "running");
+      assert.strictEqual(original?.desiredState, "stopped");
+      assert.strictEqual(original?.deliveryCertainty, "completed");
     }),
   );
 

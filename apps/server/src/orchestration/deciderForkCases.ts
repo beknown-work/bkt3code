@@ -38,6 +38,7 @@ const FORK_COMMAND_TYPES = [
   "project.owner.transfer",
   "thread.source-control-profile.set",
   "thread.session.restart",
+  "thread.turn.adopt",
   "thread.catchup-summary.request",
   "thread.catchup-summary.update",
   "thread.work-summary.request",
@@ -323,6 +324,29 @@ export const decideForkOrchestrationCommand = Effect.fn("decideForkOrchestration
           payload: {
             threadId: command.threadId,
             createdAt: command.createdAt,
+          },
+        };
+      }
+      case "thread.turn.adopt": {
+        yield* requireThread({
+          readModel,
+          command,
+          threadId: command.threadId,
+        });
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.turn-adopted",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.messageId,
+            expectedActiveTurnId: command.expectedActiveTurnId,
+            providerTurnId: command.providerTurnId,
+            adoptedAt: command.createdAt,
           },
         };
       }

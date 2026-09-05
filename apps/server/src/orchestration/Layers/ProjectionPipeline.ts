@@ -1612,6 +1612,43 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        // T3-CUSTOM(expbkt3): same-turn steer acknowledgements delete only the
+        // matching placeholder. A current live session must name that exact
+        // turn; a completed/stopped session may also clear its own placeholder
+        // without reviving terminal session state.
+        case "thread.turn-adopted": {
+          const session = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const isCurrentLiveTurn =
+            Option.isSome(session) &&
+            session.value.status === "running" &&
+            session.value.activeTurnId === event.payload.expectedActiveTurnId &&
+            event.payload.providerTurnId === event.payload.expectedActiveTurnId;
+            const isTerminalSession =
+            Option.isSome(session) &&
+            (session.value.status === "ready" ||
+              session.value.status === "stopped" ||
+              session.value.status === "error" ||
+              session.value.status === "interrupted");
+          if (!isCurrentLiveTurn && !isTerminalSession) {
+            return;
+          }
+          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (
+            Option.isNone(pendingTurnStart) ||
+            pendingTurnStart.value.messageId !== event.payload.messageId
+          ) {
+            return;
+          }
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+        }
+
         case "thread.activity-appended": {
           if (event.payload.activity.kind === "context-compaction") {
             const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId(

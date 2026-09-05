@@ -29,6 +29,7 @@ import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -274,10 +275,17 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly unreadableHistory?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
+    readonly associationDispatchFailures?: number;
+    readonly holdAssociationDispatch?: {
+      readonly started: Deferred.Deferred<void>;
+      readonly release: Deferred.Deferred<void>;
+      readonly armed: { value: boolean };
+    };
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly serverActivation?: Effect.Effect<void>;
     readonly beforeReadySessionDispatch?: () => Effect.Effect<void>;
     readonly compactThreadEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
+    readonly inspectSessionEffect?: ProviderServiceShape["inspectSession"];
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly startSessionEffect?: (
@@ -478,7 +486,7 @@ describe("ProviderCommandReactor", () => {
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       compactThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
-      inspectSession: () => Effect.succeed(null),
+      inspectSession: input?.inspectSessionEffect ?? (() => Effect.succeed(null)),
       requestTurnInterrupt: () => unsupported(),
       terminateSession: () => unsupported(),
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
@@ -542,6 +550,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(SqlitePersistenceMemory),
     );
     let titleRegenerationCompletionDispatchAttempts = 0;
+    let associationDispatchAttempts = 0;
     const reactorOrchestrationLayer = Layer.effect(
       OrchestrationEngineService,
       Effect.gen(function* () {
@@ -553,6 +562,21 @@ describe("ProviderCommandReactor", () => {
           // T3-CUSTOM(expbkt3): forward dispatch options; actorUserId rides on
           // them and the fork's credential-handoff behaviour depends on it.
           dispatch: (command, options) => {
+            if (command.type === "thread.turn.adopt") {
+              associationDispatchAttempts += 1;
+              if (associationDispatchAttempts <= (input?.associationDispatchFailures ?? 0)) {
+                return Effect.die(new Error("Injected turn association persistence failure"));
+              }
+              const hold = input?.holdAssociationDispatch;
+              if (hold !== undefined && hold.armed.value) {
+                return Effect.gen(function* () {
+                  const dispatchFiber = yield* engine.dispatch(command, options).pipe(Effect.forkChild);
+                  yield* Deferred.succeed(hold.started, undefined);
+                  yield* Deferred.await(hold.release);
+                  return yield* Fiber.join(dispatchFiber);
+                });
+              }
+            }
             if (command.type === "thread.title.regeneration.complete") {
               titleRegenerationCompletionDispatchAttempts += 1;
               if (
@@ -765,8 +789,8 @@ describe("ProviderCommandReactor", () => {
       nativeCompletion,
       readDurableIntent: (workItemId: string) => runtime!.runPromise(Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const rows = yield* sql<{ readonly deliveryCertainty: string; readonly desiredState: string; readonly phase: string; readonly providerTurnId: string | null }>`
-          SELECT delivery_certainty AS "deliveryCertainty", desired_state AS "desiredState", phase, provider_turn_id AS "providerTurnId"
+        const rows = yield* sql<{ readonly deliveryCertainty: string; readonly desiredState: string; readonly runnable: number; readonly phase: string; readonly providerTurnId: string | null; readonly lastFailureType: string | null }>`
+          SELECT delivery_certainty AS "deliveryCertainty", desired_state AS "desiredState", runnable, phase, provider_turn_id AS "providerTurnId", last_failure_type AS "lastFailureType"
           FROM projection_thread_execution_intents WHERE work_item_id = ${workItemId}`;
         return rows[0];
       })),
@@ -794,6 +818,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       compactThread,
+      associationDispatchAttempts: () => associationDispatchAttempts,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
@@ -1262,6 +1287,412 @@ describe("ProviderCommandReactor", () => {
       });
       yield* Effect.promise(() => harness.drain());
       expect(harness.compactThread).not.toHaveBeenCalled();
+    }),
+  );
+
+  effectIt.effect.each([
+    { label: "a ready provider", state: "ready" as const, activeProviderTurnId: null, compact: true },
+    {
+      label: "a genuinely busy provider",
+      state: "running" as const,
+      activeProviderTurnId: asTurnId("provider-live-turn"),
+      compact: false,
+    },
+  ])("uses the shared provider inspection when admitting /compact after a retained execution snapshot", ({
+    state,
+    activeProviderTurnId,
+    compact,
+  }) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-1");
+      const now = "2026-01-01T00:00:00.000Z";
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          durableNativeCommands: true,
+          inspectSessionEffect: () =>
+            Effect.succeed({
+              threadId,
+              generation: 1,
+              state,
+              activeProviderTurnId,
+              runtimeAlive: true,
+            }),
+        }),
+      );
+      yield* Effect.promise(() => harness.seedNativeConversation());
+
+      // The supervisor retains the prior active execution while the shared
+      // projection has already observed the provider become ready. This is
+      // the production race the compact admission guard must reconcile.
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(`cmd-session-${state}`),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("stale-projected-turn"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      yield* dispatchNativeCommand(harness, "/compact");
+      yield* Deferred.await(harness.nativeCompletion);
+      yield* Effect.promise(() => harness.drain());
+
+      expect(harness.compactThread).toHaveBeenCalledTimes(compact ? 1 : 0);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      const model = yield* Effect.promise(() => harness.readModel());
+      const thread = model.threads.find((entry) => entry.id === threadId);
+      if (compact) {
+        expect(thread?.session?.status).toBe("ready");
+      } else {
+        expect(thread?.activities).toContainEqual(
+          expect.objectContaining({
+            kind: "provider.turn.start.failed",
+            summary: "Context compaction failed",
+          }),
+        );
+      }
+    }),
+  );
+
+  effectIt.effect("durably retries same-turn association persistence without resending the steer", () =>
+    Effect.gen(function* () {
+      const fallbackSupervisor = yield* ThreadExecutionSupervisor;
+      const associationDispatchStarted = yield* Deferred.make<void>();
+      const releaseAssociationDispatch = yield* Deferred.make<void>();
+      const associationDispatchGate = { value: false };
+      const baseSnapshot = yield* fallbackSupervisor.getSnapshot(ThreadId.make("thread-1"));
+      const liveSnapshot = {
+        ...baseSnapshot,
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          ...baseSnapshot.providerSession,
+          state: "ready" as const,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          generation: 1,
+        },
+        turn: {
+          executionId: "existing-execution",
+          providerTurnId: asTurnId("turn-1"),
+          state: "running" as const,
+          startedAt: baseSnapshot.observedAt,
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          durableNativeCommands: true,
+          associationDispatchFailures: 2,
+          holdAssociationDispatch: {
+            started: associationDispatchStarted,
+            release: releaseAssociationDispatch,
+            armed: associationDispatchGate,
+          },
+          executionSupervisor: {
+            ...fallbackSupervisor,
+            getSnapshot: () => Effect.succeed(liveSnapshot),
+          },
+        }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* Effect.promise(() => harness.seedNativeConversation());
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-live-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      const turnStartFiber = yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-steer-association-retry"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-steer-association-retry"),
+          role: "user",
+          text: "steer exactly once",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }).pipe(Effect.forkChild);
+
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const intent = await harness.readDurableIntent("cmd-steer-association-retry");
+          return intent?.lastFailureType === "turn-association-pending";
+        }),
+      );
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([
+        { threadId: "thread-1" },
+      ]);
+      associationDispatchGate.value = true;
+      // Hold adoption after it has read the running projection. A terminal
+      // observation arriving during that await must be fenced at acknowledgement.
+      yield* Deferred.await(associationDispatchStarted);
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-steer-ack"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      yield* Deferred.succeed(releaseAssociationDispatch, undefined);
+      yield* Fiber.join(turnStartFiber);
+
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const intent = await harness.readDurableIntent("cmd-steer-association-retry");
+          return intent?.desiredState === "stopped" && intent.runnable === 0 && intent.deliveryCertainty === "completed";
+        }),
+      );
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([]);
+      expect(yield* Effect.promise(() => harness.readDurableIntent("cmd-steer-association-retry"))).toMatchObject({
+        desiredState: "stopped",
+        runnable: 0,
+        phase: "running",
+        providerTurnId: "turn-1",
+        deliveryCertainty: "completed",
+      });
+      const terminalThread = yield* harness.snapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.map(Option.getOrThrow));
+      expect(terminalThread.session?.status).toBe("ready");
+      expect(terminalThread.session?.activeTurnId).toBeNull();
+    }),
+  );
+
+  effectIt.effect.each([
+    { label: "ready", status: "ready" as const },
+    { label: "interrupted", status: "interrupted" as const },
+  ])("fences first same-turn adoption when $label arrives during acknowledgement", ({ status }) =>
+    Effect.gen(function* () {
+      const fallbackSupervisor = yield* ThreadExecutionSupervisor;
+      const associationDispatchStarted = yield* Deferred.make<void>();
+      const releaseAssociationDispatch = yield* Deferred.make<void>();
+      const baseSnapshot = yield* fallbackSupervisor.getSnapshot(ThreadId.make("thread-1"));
+      const liveSnapshot = {
+        ...baseSnapshot,
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          ...baseSnapshot.providerSession,
+          state: "ready" as const,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          generation: 1,
+        },
+        turn: {
+          executionId: "first-success-execution",
+          providerTurnId: asTurnId("turn-1"),
+          state: "running" as const,
+          startedAt: baseSnapshot.observedAt,
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          durableNativeCommands: true,
+          holdAssociationDispatch: {
+            started: associationDispatchStarted,
+            release: releaseAssociationDispatch,
+            armed: { value: true },
+          },
+          executionSupervisor: {
+            ...fallbackSupervisor,
+            getSnapshot: () => Effect.succeed(liveSnapshot),
+          },
+        }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* Effect.promise(() => harness.seedNativeConversation());
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(`cmd-session-first-success-${status}`),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-1"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      const turnStartFiber = yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`cmd-first-success-${status}`),
+        threadId,
+        message: {
+          messageId: asMessageId(`message-first-success-${status}`),
+          role: "user",
+          text: `first success ${status}`,
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }).pipe(Effect.forkChild);
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      yield* Deferred.await(associationDispatchStarted);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(`cmd-session-first-success-terminal-${status}`),
+        threadId,
+        session: {
+          threadId,
+          status,
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: status === "interrupted" ? "provider interrupted" : null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      yield* Deferred.succeed(releaseAssociationDispatch, undefined);
+      yield* Fiber.join(turnStartFiber);
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const intent = await harness.readDurableIntent(`cmd-first-success-${status}`);
+          return intent?.desiredState === "stopped" && intent.runnable === 0 && intent.deliveryCertainty === "completed";
+        }),
+      );
+      expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([]);
+      expect(yield* Effect.promise(() => harness.readDurableIntent(`cmd-first-success-${status}`))).toMatchObject({
+        desiredState: "stopped",
+        runnable: 0,
+        deliveryCertainty: "completed",
+      });
+      const terminalThread = yield* harness.snapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.map(Option.getOrThrow));
+      expect(terminalThread.session?.status).toBe(status);
+      expect(terminalThread.session?.activeTurnId).toBeNull();
+    }),
+  );
+
+  effectIt.effect("keeps a distinct provider turn as ordinary acknowledgement", () =>
+    Effect.gen(function* () {
+      const fallbackSupervisor = yield* ThreadExecutionSupervisor;
+      const baseSnapshot = yield* fallbackSupervisor.getSnapshot(ThreadId.make("thread-1"));
+      const liveSnapshot = {
+        ...baseSnapshot,
+        activity: "active" as const,
+        canStop: true,
+        providerSession: {
+          ...baseSnapshot.providerSession,
+          state: "ready" as const,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          generation: 1,
+        },
+        turn: {
+          executionId: "preceding-execution",
+          providerTurnId: asTurnId("turn-existing"),
+          state: "running" as const,
+          startedAt: baseSnapshot.observedAt,
+          stopRequestedAt: null,
+          completedAt: null,
+          lastError: null,
+        },
+      };
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          durableNativeCommands: true,
+          executionSupervisor: {
+            ...fallbackSupervisor,
+            getSnapshot: () => Effect.succeed(liveSnapshot),
+          },
+        }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* Effect.promise(() => harness.seedNativeConversation());
+      // The projected session already observed the preceding turn become ready,
+      // while the supervisor still reports that turn as active.
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-distinct-turn-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-distinct-provider-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-distinct-provider-turn"),
+          role: "user",
+          text: "start a distinct provider turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const intent = await harness.readDurableIntent("cmd-distinct-provider-turn");
+          return intent?.deliveryCertainty === "provider-acknowledged";
+        }),
+      );
+
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.associationDispatchAttempts()).toBe(0);
+      expect(yield* Effect.promise(() => harness.readDurableIntent("cmd-distinct-provider-turn"))).toMatchObject({
+        desiredState: "running",
+        runnable: 1,
+        deliveryCertainty: "provider-acknowledged",
+        providerTurnId: "turn-1",
+      });
     }),
   );
 

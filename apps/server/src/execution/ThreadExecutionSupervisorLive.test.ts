@@ -254,6 +254,40 @@ layer("ThreadExecutionSupervisor", (it) => {
     }),
   );
 
+  // T3-CUSTOM(expbkt3): a classified compact command must not let the real
+  // subscriber overwrite an already-ready compatibility session as running.
+  it.effect("does not admit a classified compact event through the real subscriber", () =>
+    Effect.gen(function* () {
+      const delivered = yield* Deferred.make<void>();
+      const compactEvent = {
+        ...startEvent("classified-compact"),
+        sequence: 11,
+        payload: { ...startEvent("classified-compact").payload, isCompaction: true },
+      };
+      const providerService = { inspectSession: () => Effect.succeed(null), streamEvents: Stream.empty } as unknown as ProviderServiceShape;
+      const orchestration = {
+        readEvents: () => Stream.empty, readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"), subscribeDomainEvents: Effect.succeed(Stream.empty),
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.concat(Stream.make(compactEvent), Stream.fromEffect(Deferred.succeed(delivered, undefined)).pipe(Stream.drain)),
+        latestSequence: Effect.succeed(11),
+      } satisfies OrchestrationEngineService["Service"];
+      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        Layer.provide(SessionRecoveryStateLayer), Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)), Layer.provide(NodeServices.layer),
+      );
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const supervisor = yield* ThreadExecutionSupervisor;
+        yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, updated_at) VALUES (${threadId}, 'ready', ${createdAt})`;
+        yield* Deferred.await(delivered);
+        assert.strictEqual((yield* supervisor.getSnapshot(threadId)).activity, "idle");
+        const rows = yield* sql<{ readonly status: string }>`SELECT status FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
+        assert.strictEqual(rows[0]?.status, "ready");
+      }).pipe(Effect.provide(supervisorLayer));
+    }),
+  );
+
   it.effect("installs ownership before spawn, fences stale stops, and deduplicates stops", () =>
     Effect.gen(function* () {
       const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>({ replay: 1 });

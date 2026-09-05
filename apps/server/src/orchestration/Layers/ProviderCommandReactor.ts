@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   type OrchestrationThreadShell,
@@ -211,6 +212,8 @@ const isCompactCommandMessage = (message: ThreadTitleMessage): boolean =>
   message.role === "user" &&
   (message.attachments?.length ?? 0) === 0 &&
   message.text.trim().toLowerCase() === "/compact";
+const isCompactCommandText = (text: string | null | undefined): boolean =>
+  text?.trim().toLowerCase() === "/compact";
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -1628,13 +1631,6 @@ const make = Effect.gen(function* () {
       return;
     }
     const executionId = String(event.commandId ?? event.eventId);
-    const preparedExecution = yield* recovery === undefined
-      ? executionSupervisor.prepareExecution(event)
-      : executionSupervisor.recoverExecution(event);
-    if (preparedExecution.turn?.executionId !== executionId) {
-      return;
-    }
-
     const thread = yield* resolveThreadDetail(event.payload.threadId);
     if (!thread) {
       return;
@@ -1651,6 +1647,19 @@ const make = Effect.gen(function* () {
         requestId: event.payload.messageId,
       });
       return;
+    }
+    const isCompactCommand = isCompactCommandMessage(message);
+    // T3-CUSTOM(expbkt3): compaction never creates a provider turn, so it must
+    // check the pre-existing session before admission can dual-write itself as
+    // running. Releasing the handled sequence below suppresses the subscriber's
+    // later generic admission of this same durable request.
+    if (!isCompactCommand) {
+      const preparedExecution = yield* recovery === undefined
+        ? executionSupervisor.prepareExecution(event)
+        : executionSupervisor.recoverExecution(event);
+      if (preparedExecution.turn?.executionId !== executionId) {
+        return;
+      }
     }
     const appendTurnStartFailure = (summary: string, detail: string) =>
       appendProviderFailureActivity({
@@ -1705,7 +1714,6 @@ const make = Effect.gen(function* () {
     // recovery path (branch check, decideWorktreeRecovery, activity events), so the
     // guarantee holds without running the recovery twice per turn.
 
-    const isCompactCommand = isCompactCommandMessage(message);
     const userMessageCount = thread.messages.filter((entry) => entry.role === "user" && !isCompactCommandMessage(entry)).length;
     const nonCompactUserMessageCount = userMessageCount;
     const isFirstUserMessageTurn = userMessageCount === 1;
@@ -1856,10 +1864,26 @@ const make = Effect.gen(function* () {
       return { handledCommand: true, turnId: null } as const;
       }
       const latestThread = yield* resolveThreadShell(event.payload.threadId);
+      const projectedBusy =
+        latestThread?.session?.status === "starting" || latestThread?.session?.status === "running";
+      // T3-CUSTOM(expbkt3): a retained execution snapshot can compatibility-write
+      // `running` after the provider already became ready. Only a confirmed live
+      // ready runtime without a turn overrides that stale projection; unknown
+      // inspection remains safely busy.
+      const confirmedIdleProvider = projectedBusy
+        ? yield* providerService.inspectSession(event.payload.threadId).pipe(
+            Effect.map((inspection) =>
+              inspection !== null &&
+              inspection.runtimeAlive &&
+              inspection.state === "ready" &&
+              inspection.activeProviderTurnId === null,
+            ),
+            Effect.catch(() => Effect.succeed(false)),
+          )
+        : false;
       if (
         compactingThreadIds.has(event.payload.threadId) ||
-        latestThread?.session?.status === "starting" ||
-        latestThread?.session?.status === "running"
+        (projectedBusy && !confirmedIdleProvider)
       ) {
         yield* appendTurnStartFailure(
           "Context compaction failed",
@@ -2805,6 +2829,23 @@ const make = Effect.gen(function* () {
     });
   };
 
+  const dispatchTurnAdoption = (input: {
+    readonly intent: import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent;
+    readonly expectedActiveTurnId: TurnId;
+    readonly providerTurnId: TurnId;
+  }) =>
+    Effect.gen(function* () {
+      return yield* orchestrationEngine.dispatch({
+        type: "thread.turn.adopt",
+        commandId: CommandId.make(`server:provider-turn-adopt:${input.intent.workItemId}`),
+        threadId: input.intent.threadId,
+        messageId: MessageId.make(input.intent.messageId),
+        expectedActiveTurnId: input.expectedActiveTurnId,
+        providerTurnId: input.providerTurnId,
+        createdAt: yield* Effect.map(DateTime.now, DateTime.formatIso),
+      });
+    });
+
   const dispatchDurableOriginal = Effect.fn("dispatchDurableOriginal")(function* (input: {
     readonly intent: import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent;
     readonly event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>;
@@ -2817,13 +2858,94 @@ const make = Effect.gen(function* () {
         retryable: false,
       });
     }
+    // T3-CUSTOM(expbkt3): the provider side effect was already acknowledged,
+    // but its visible same-turn association was not. This durable retry must
+    // issue only the idempotent association command after a restart.
+    if (
+      input.intent.lastFailureType === "turn-association-pending" &&
+      input.intent.providerTurnId !== null &&
+      input.intent.adoptedExecutionId !== null
+    ) {
+      const providerTurnId = TurnId.make(input.intent.providerTurnId);
+      const association = yield* Effect.exit(
+        dispatchTurnAdoption({
+          intent: input.intent,
+          expectedActiveTurnId: providerTurnId,
+          providerTurnId,
+        }),
+      );
+      if (Exit.isFailure(association)) {
+        if (Cause.hasInterruptsOnly(association.cause)) {
+          return yield* Effect.failCause(association.cause);
+        }
+        return {
+          providerTurnId: input.intent.providerTurnId,
+          providerInstanceId: input.intent.providerInstanceId,
+          adoptedExecutionId: input.intent.adoptedExecutionId,
+          associationPending: {
+            providerTurnId: input.intent.providerTurnId,
+            providerInstanceId: input.intent.providerInstanceId,
+            adoptedExecutionId: input.intent.adoptedExecutionId,
+          },
+        };
+      }
+      const terminalSession =
+        thread.session != null &&
+        (thread.session.status === "ready" ||
+          thread.session.status === "stopped" ||
+          thread.session.status === "error" ||
+          thread.session.status === "interrupted") &&
+        thread.session.activeTurnId === null;
+      return {
+        providerTurnId: input.intent.providerTurnId,
+        providerInstanceId: input.intent.providerInstanceId,
+        adoptedExecutionId: input.intent.adoptedExecutionId,
+        associationAcknowledged: true,
+        ...(terminalSession ? { completed: true } : {}),
+      };
+    }
+    const acceptedMessage = thread.messages.find((message) => message.id === input.intent.messageId);
+    // T3-CUSTOM(expbkt3): compaction is admitted from the projected provider session,
+    // which is authoritative after a completed turn. The supervisor consumes that
+    // lifecycle stream asynchronously and can briefly retain the previous turn.
+    if (acceptedMessage && isCompactCommandMessage(acceptedMessage)) {
+      const result = yield* processTurnStartRequested(
+        input.event,
+        undefined,
+        assertDurableClaimCurrent(input.intent, "provider-compaction"),
+      ).pipe(
+        Effect.mapError((cause) => durableRecoveryFailure(cause, "provider-compaction-failed")),
+      );
+      if (result === undefined) {
+        return yield* new DurableExecutionDispatchError({
+          failureType: "compaction-not-acknowledged",
+          detail: "Context compaction completed without a handled-command acknowledgement.",
+          retryable: true,
+        });
+      }
+      return {
+        providerTurnId: null,
+        providerInstanceId: thread.session?.providerInstanceId ?? input.intent.modelSelection?.instanceId ?? null,
+        adoptedExecutionId: input.intent.workItemId,
+        completed: true,
+        handledCommand: true,
+      };
+    }
     const snapshot = yield* executionSupervisor.getSnapshot(input.intent.threadId);
-    const activeProviderTurnId =
+    const supervisorProviderTurnId =
       (snapshot.activity === "active" || snapshot.activity === "blocked") &&
       snapshot.turn?.providerTurnId
         ? snapshot.turn.providerTurnId
         : null;
-    const acceptedMessage = thread.messages.find((message) => message.id === input.intent.messageId);
+    // T3-CUSTOM(expbkt3): provider acknowledgement can supply its turn id to
+    // the session projection before the supervisor observes that runtime event.
+    // Accept that id only while the supervisor independently confirms a live
+    // execution, so a stale ready/stopped session cannot create a steer route.
+    const activeProviderTurnId = supervisorProviderTurnId ??
+      ((snapshot.activity === "active" || snapshot.activity === "blocked") &&
+      thread.session?.status === "running"
+        ? thread.session.activeTurnId
+        : null);
     if (activeProviderTurnId !== null && acceptedMessage) {
       yield* assertDurableClaimCurrent(input.intent, "native-command");
       const handled = yield* processNativeAuthCommand(thread, input.event, acceptedMessage).pipe(
@@ -2840,13 +2962,6 @@ const make = Effect.gen(function* () {
         completed: true, handledCommand: true,
       };
       }
-    }
-    if (activeProviderTurnId !== null && acceptedMessage && isCompactCommandMessage(acceptedMessage)) {
-      return yield* new DurableExecutionDispatchError({
-        failureType: "compaction-busy",
-        detail: "Context compaction is unavailable while a provider turn is running.",
-        retryable: false,
-      });
     }
     if (activeProviderTurnId !== null) {
       const providerInstanceId =
@@ -2935,10 +3050,43 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+      if (steered.turnId === undefined || steered.turnId === activeProviderTurnId) {
+        // T3-CUSTOM(expbkt3): a same-turn steer has no lifecycle transition to
+        // consume its pending row. Record only the message-to-live-turn
+        // association; its projection rechecks that exact turn remains running
+        // and cannot resurrect a terminal session with a stale session write.
+        // T3-CUSTOM(expbkt3): retry this idempotent association in the same
+        // accepted-steer dispatch. Its stable receipt key means a persistence
+        // retry cannot resend the provider input or create a second event.
+        const association = yield* Effect.exit(
+          dispatchTurnAdoption({
+            intent: input.intent,
+            expectedActiveTurnId: activeProviderTurnId,
+            providerTurnId: activeProviderTurnId,
+          }),
+        );
+        if (Exit.isFailure(association)) {
+          if (Cause.hasInterruptsOnly(association.cause)) {
+            return yield* Effect.failCause(association.cause);
+          }
+          return {
+            providerTurnId: activeProviderTurnId,
+            providerInstanceId,
+            adoptedExecutionId: snapshot.turn?.executionId ?? input.intent.workItemId,
+            associationPending: {
+              providerTurnId: activeProviderTurnId,
+              providerInstanceId,
+              adoptedExecutionId: snapshot.turn?.executionId ?? input.intent.workItemId,
+            },
+          };
+        }
+      }
       return {
         providerTurnId: steered.turnId ?? activeProviderTurnId,
         providerInstanceId,
         adoptedExecutionId: snapshot.turn?.executionId ?? input.intent.workItemId,
+        associationAcknowledged:
+          steered.turnId === undefined || steered.turnId === activeProviderTurnId,
       };
     }
 
@@ -3048,9 +3196,14 @@ const make = Effect.gen(function* () {
     ? yield* makeDurableExecutionCoordinator({
         ownerId: executionSupervisor.authorityEpoch,
         // T3-CUSTOM(expbkt3): intent phases are part of the execution snapshot stream.
-        onTransition: ({ threadId }) =>
+        onTransition: ({ intent, threadId }) =>
           Effect.gen(function* () {
-            yield* executionSupervisor.refreshIntent(threadId);
+            // T3-CUSTOM(expbkt3): `/compact` has no execution snapshot. Its
+            // coordinator claim must not republish a retained active snapshot
+            // into the legacy session projection before the compact guard runs.
+            if (!isCompactCommandText(intent.messageText)) {
+              yield* executionSupervisor.refreshIntent(threadId);
+            }
             yield* refreshDurablePhaseMetrics;
           }).pipe(
             Effect.catchCause((cause) =>

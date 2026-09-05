@@ -323,6 +323,21 @@ export interface DurableExecutionIntentRepositoryShape {
     readonly providerTurnId: string;
     readonly providerInstanceId: string | null;
     readonly adoptedExecutionId: string;
+    readonly terminalAssociation?: boolean;
+    readonly at: string;
+  }) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  /**
+   * Records a provider-acknowledged same-turn steer whose visible association
+   * event still needs delivery. The provider side effect has already happened,
+   * so the coordinator must retry only the association command.
+   */
+  readonly markAssociationPending: (input: {
+    readonly workItemId: string;
+    readonly owner: string;
+    readonly generation: number;
+    readonly providerTurnId: string;
+    readonly providerInstanceId: string | null;
+    readonly adoptedExecutionId: string;
     readonly at: string;
   }) => Effect.Effect<boolean, ProjectionRepositoryError>;
   readonly markCompletedFromHistory: (input: {
@@ -575,7 +590,10 @@ const make = Effect.gen(function* () {
   const reconcileStartup: DurableExecutionIntentRepositoryShape["reconcileStartup"] = ({ at }) =>
     sql`
       UPDATE projection_thread_execution_intents
-      SET phase = 'recovering',
+      SET phase = CASE
+            WHEN last_failure_type = 'turn-association-pending' THEN 'retry-wait'
+            ELSE 'recovering'
+          END,
           delivery_certainty = CASE
             WHEN phase IN ('starting', 'running') AND delivery_certainty = 'never-delivered'
             THEN 'uncertain'
@@ -585,8 +603,14 @@ const make = Effect.gen(function* () {
           claim_owner = NULL,
           claim_generation = claim_generation + 1,
           claim_expires_at = NULL,
-          last_failure_type = 'server-authority-restarted',
-          last_failure_detail = 'Server authority restarted before terminal provider evidence.',
+          last_failure_type = CASE
+            WHEN last_failure_type = 'turn-association-pending' THEN last_failure_type
+            ELSE 'server-authority-restarted'
+          END,
+          last_failure_detail = CASE
+            WHEN last_failure_type = 'turn-association-pending' THEN last_failure_detail
+            ELSE 'Server authority restarted before terminal provider evidence.'
+          END,
           updated_at = ${at}
       WHERE desired_state = 'running'
         AND runnable = 1
@@ -1034,15 +1058,47 @@ const make = Effect.gen(function* () {
     providerTurnId,
     providerInstanceId,
     adoptedExecutionId,
+    terminalAssociation = false,
     at,
   }) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const rows = yield* sql<{ readonly threadId: ThreadId; readonly attempt: number }>`
+          // T3-CUSTOM(expbkt3): the terminal session fence is evaluated in
+          // this acknowledgement transaction, closing the completion race.
+          const rows = yield* sql<{ readonly threadId: ThreadId; readonly attempt: number; readonly desiredState: string }>`
           UPDATE projection_thread_execution_intents
-          SET phase = 'running',
-              delivery_certainty = 'provider-acknowledged',
+          SET desired_state = CASE
+                WHEN ${terminalAssociation ? 1 : 0} = 1
+                 AND EXISTS (
+                   SELECT 1 FROM projection_thread_sessions AS session
+                   WHERE session.thread_id = projection_thread_execution_intents.thread_id
+                     AND session.status IN ('ready', 'stopped', 'error', 'interrupted')
+                     AND session.active_turn_id IS NULL
+                 )
+                THEN 'stopped' ELSE desired_state
+              END,
+              phase = 'running',
+              runnable = CASE
+                WHEN ${terminalAssociation ? 1 : 0} = 1
+                 AND EXISTS (
+                   SELECT 1 FROM projection_thread_sessions AS session
+                   WHERE session.thread_id = projection_thread_execution_intents.thread_id
+                     AND session.status IN ('ready', 'stopped', 'error', 'interrupted')
+                     AND session.active_turn_id IS NULL
+                 )
+                THEN 0 ELSE runnable
+              END,
+              delivery_certainty = CASE
+                WHEN ${terminalAssociation ? 1 : 0} = 1
+                 AND EXISTS (
+                   SELECT 1 FROM projection_thread_sessions AS session
+                   WHERE session.thread_id = projection_thread_execution_intents.thread_id
+                     AND session.status IN ('ready', 'stopped', 'error', 'interrupted')
+                     AND session.active_turn_id IS NULL
+                 )
+                THEN 'completed' ELSE 'provider-acknowledged'
+              END,
               provider_turn_id = ${providerTurnId},
               provider_instance_id = COALESCE(${providerInstanceId}, provider_instance_id),
               adopted_execution_id = ${adoptedExecutionId},
@@ -1052,15 +1108,40 @@ const make = Effect.gen(function* () {
               claim_expires_at = NULL,
               last_failure_type = NULL,
               last_failure_detail = NULL,
+              terminal_at = CASE
+                WHEN ${terminalAssociation ? 1 : 0} = 1
+                 AND EXISTS (
+                   SELECT 1 FROM projection_thread_sessions AS session
+                   WHERE session.thread_id = projection_thread_execution_intents.thread_id
+                     AND session.status IN ('ready', 'stopped', 'error', 'interrupted')
+                     AND session.active_turn_id IS NULL
+                 )
+                THEN ${at} ELSE terminal_at
+              END,
               updated_at = ${at}
           WHERE work_item_id = ${workItemId}
             AND desired_state = 'running'
             AND claim_owner = ${owner}
             AND claim_generation = ${generation}
-          RETURNING thread_id AS "threadId", recovery_attempts AS attempt
+          RETURNING thread_id AS "threadId", recovery_attempts AS attempt, desired_state AS "desiredState"
         `;
           const row = rows[0];
           if (row === undefined) return false;
+          if (row.desiredState === "stopped") {
+            const remaining = yield* sql<{ readonly count: number }>`
+              SELECT COUNT(*) AS count
+              FROM projection_thread_execution_intents
+              WHERE thread_id = ${row.threadId} AND desired_state = 'running'
+            `;
+            if ((remaining[0]?.count ?? 0) === 0) {
+              yield* sql`
+                UPDATE session_recovery_state
+                SET desired_state = 'stopped', reason = 'turn-completed',
+                    next_attempt_at = NULL, updated_at = ${at}
+                WHERE thread_id = ${row.threadId}
+              `;
+            }
+          }
           if (row.attempt > 0) {
             yield* sql`
             UPDATE thread_execution_recovery_attempts
@@ -1087,6 +1168,43 @@ const make = Effect.gen(function* () {
           persistenceError("DurableExecutionIntentRepository.markAcknowledged", cause),
         ),
       );
+
+  const markAssociationPending: DurableExecutionIntentRepositoryShape["markAssociationPending"] = ({
+    workItemId,
+    owner,
+    generation,
+    providerTurnId,
+    providerInstanceId,
+    adoptedExecutionId,
+    at,
+  }) =>
+    sql<{ readonly workItemId: string }>`
+      UPDATE projection_thread_execution_intents
+      SET phase = 'retry-wait',
+          runnable = 1,
+          delivery_certainty = 'provider-acknowledged',
+          provider_turn_id = ${providerTurnId},
+          provider_instance_id = COALESCE(${providerInstanceId}, provider_instance_id),
+          adopted_execution_id = ${adoptedExecutionId},
+          started_at = COALESCE(started_at, ${at}),
+          next_attempt_at = ${at},
+          claim_owner = NULL,
+          claim_expires_at = NULL,
+          last_failure_type = 'turn-association-pending',
+          last_failure_detail = 'Provider accepted the steer; retrying its durable turn association.',
+          updated_at = ${at}
+      WHERE work_item_id = ${workItemId}
+        AND desired_state = 'running'
+        AND runnable = 1
+        AND claim_owner = ${owner}
+        AND claim_generation = ${generation}
+      RETURNING work_item_id AS "workItemId"
+    `.pipe(
+      Effect.map((rows) => rows.length === 1),
+      Effect.mapError((cause) =>
+        persistenceError("DurableExecutionIntentRepository.markAssociationPending", cause),
+      ),
+    );
 
   const markCompletedFromHistory: DurableExecutionIntentRepositoryShape["markCompletedFromHistory"] =
     ({ workItemId, owner, generation, providerTurnId, providerInstanceId, completionKind = "history-completed", at }) =>
@@ -1153,15 +1271,29 @@ const make = Effect.gen(function* () {
 
   const markOriginalDispatchFailed: DurableExecutionIntentRepositoryShape["markOriginalDispatchFailed"] =
     ({ workItemId, owner, generation, failureType, detail, deliveryUncertain, at }) =>
+      // T3-CUSTOM(expbkt3): an acknowledged steer cannot fall back to ordinary
+      // provider recovery when association persistence is interrupted.
       sql<{ readonly workItemId: string }>`
-        UPDATE projection_thread_execution_intents
-        SET phase = 'recovering',
+      UPDATE projection_thread_execution_intents
+      SET phase = CASE
+            WHEN last_failure_type = 'turn-association-pending' THEN 'retry-wait'
+            ELSE 'recovering'
+          END,
             delivery_certainty = CASE
+              WHEN last_failure_type = 'turn-association-pending' THEN 'provider-acknowledged'
               WHEN ${deliveryUncertain ? 1 : 0} THEN 'uncertain' ELSE delivery_certainty
             END,
             next_attempt_at = ${at},
             claim_owner = NULL, claim_expires_at = NULL,
-            last_failure_type = ${failureType}, last_failure_detail = ${detail}, updated_at = ${at}
+            last_failure_type = CASE
+              WHEN last_failure_type = 'turn-association-pending' THEN last_failure_type
+              ELSE ${failureType}
+            END,
+            last_failure_detail = CASE
+              WHEN last_failure_type = 'turn-association-pending' THEN last_failure_detail
+              ELSE ${detail}
+            END,
+            updated_at = ${at}
         WHERE work_item_id = ${workItemId}
           AND desired_state = 'running'
           AND claim_owner = ${owner}
@@ -1298,18 +1430,34 @@ const make = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
+          // T3-CUSTOM(expbkt3): an accepted steer still needs its durable
+          // association after a stop races the acknowledgement. Keep that
+          // marker runnable so the association can settle the terminal state.
           yield* sql`
           UPDATE projection_thread_execution_intents
-          SET desired_state = 'stopped',
-              phase = CASE WHEN phase = 'recovery-exhausted' THEN phase ELSE 'stopping' END,
-              runnable = 0,
-              next_attempt_at = NULL,
+          SET desired_state = CASE
+                WHEN last_failure_type = 'turn-association-pending' THEN 'running'
+                ELSE 'stopped'
+              END,
+              phase = CASE
+                WHEN last_failure_type = 'turn-association-pending' THEN 'retry-wait'
+                WHEN phase = 'recovery-exhausted' THEN phase
+                ELSE 'stopping'
+              END,
+              runnable = CASE WHEN last_failure_type = 'turn-association-pending' THEN 1 ELSE 0 END,
+              next_attempt_at = CASE WHEN last_failure_type = 'turn-association-pending' THEN ${at} ELSE NULL END,
               claim_owner = NULL,
               claim_generation = claim_generation + 1,
               claim_expires_at = NULL,
-              last_failure_type = ${reason},
+              last_failure_type = CASE
+                WHEN last_failure_type = 'turn-association-pending' THEN last_failure_type
+                ELSE ${reason}
+              END,
               updated_at = ${at},
-              terminal_at = COALESCE(terminal_at, ${at})
+              terminal_at = CASE
+                WHEN last_failure_type = 'turn-association-pending' THEN NULL
+                ELSE COALESCE(terminal_at, ${at})
+              END
           WHERE thread_id = ${threadId} AND desired_state = 'running'
         `;
           yield* sql`
@@ -1401,6 +1549,31 @@ const make = Effect.gen(function* () {
     return sql
       .withTransaction(
         Effect.gen(function* () {
+          // A provider-acknowledged steer association remains runnable through
+          // a terminal lifecycle observation. The adoption event is still
+          // needed to consume its exact pending placeholder; other intents on
+          // this thread must still receive the normal lifecycle settlement.
+          if (
+            (input.status === "idle" || input.status === "ready" ||
+              input.status === "error" || input.status === "interrupted" ||
+              input.status === "stopped")
+          ) {
+            const associationPending = yield* sql<{ readonly workItemId: string }>`
+              SELECT work_item_id AS "workItemId"
+              FROM projection_thread_execution_intents
+              WHERE thread_id = ${input.threadId}
+                AND desired_state = 'running'
+                AND last_failure_type = 'turn-association-pending'
+              LIMIT 1
+            `;
+            if (associationPending.length > 0) {
+              yield* sql`
+                UPDATE projection_thread_execution_intents
+                SET next_attempt_at = ${input.at}, updated_at = ${input.at}
+                WHERE work_item_id = ${associationPending[0]!.workItemId}
+              `;
+            }
+          }
           if (input.status === "running" && input.providerTurnId !== null) {
             yield* sql`
             UPDATE projection_thread_execution_intents
@@ -1423,6 +1596,7 @@ const make = Effect.gen(function* () {
                 runnable = 0, next_attempt_at = NULL, terminal_at = ${input.at},
                 updated_at = ${input.at}
             WHERE thread_id = ${input.threadId} AND desired_state = 'running'
+              AND COALESCE(last_failure_type, '') <> 'turn-association-pending'
               AND phase IN ('running', 'waiting-for-approval', 'waiting-for-input')
           `;
             yield* sql`
@@ -1479,6 +1653,7 @@ const make = Effect.gen(function* () {
               SELECT work_item_id FROM projection_thread_execution_intents
               WHERE thread_id = ${input.threadId} AND desired_state = 'running'
                 AND phase IN ('starting', 'running') AND claim_owner IS NULL
+                AND COALESCE(last_failure_type, '') <> 'turn-association-pending'
               ORDER BY request_event_sequence ASC LIMIT 1
             )
           `;
@@ -1559,6 +1734,7 @@ const make = Effect.gen(function* () {
     deferClaim,
     beginRecoveryAttempt,
     markAcknowledged,
+    markAssociationPending,
     markCompletedFromHistory,
     markOriginalDispatchFailed,
     markRecoveryAttemptFailed,

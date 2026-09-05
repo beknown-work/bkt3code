@@ -1240,7 +1240,12 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     );
 
   yield* Stream.runForEach(orchestration.streamDomainEvents, (event) =>
-    event.type === "thread.turn-start-requested" ? prepareExecutionEvent(event, true) : Effect.void,
+    // T3-CUSTOM(expbkt3): compaction is a provider-native command with no
+    // execution to supervise. Skipping it here prevents its own compatibility
+    // dual-write from making the later compaction guard see false busy work.
+    event.type === "thread.turn-start-requested" && !event.payload.isCompaction
+      ? prepareExecutionEvent(event, true)
+      : Effect.void,
   ).pipe(Effect.forkScoped);
   yield* Stream.runForEach(provider.streamEvents, observeProviderEvent).pipe(Effect.forkScoped);
 

@@ -18,6 +18,7 @@ import {
   ThreadSourceControlProfileSetPayload,
   ThreadWorkSummaryRequestedPayload,
   ThreadWorkSummaryUpdatedPayload,
+  ThreadTurnAdoptedPayload,
   OrchestrationTurnCatchupSummary,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -43,6 +44,7 @@ const FORK_EVENT_TYPES = [
   "thread.catchup-summary-updated",
   "thread.work-summary-requested",
   "thread.work-summary-updated",
+  "thread.turn-adopted",
 ] as const;
 
 export type ForkOrchestrationEvent = Extract<
@@ -354,5 +356,12 @@ export function projectForkEvent(
           }),
         };
       });
+
+    // T3-CUSTOM(expbkt3): persistence consumes this association; the visible
+    // thread session remains owned by provider lifecycle events.
+    case "thread.turn-adopted":
+      return decodeForEvent(ThreadTurnAdoptedPayload, event.payload, event.type, "payload").pipe(
+        Effect.as(nextBase),
+      );
   }
 }
