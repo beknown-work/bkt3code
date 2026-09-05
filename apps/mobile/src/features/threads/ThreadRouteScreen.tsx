@@ -13,7 +13,8 @@ import {
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import { Alert, Platform, ScrollView, View } from "react-native";
+// T3-CUSTOM(expbkt3): stale deep links need an in-route escape to the thread list.
+import { Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 // T3-CUSTOM(expbkt3): phase sidebar read state.
@@ -26,6 +27,7 @@ import { vcsEnvironment } from "../../state/vcs";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 
 import { EmptyState } from "../../components/EmptyState";
+import { AppText as Text } from "../../components/AppText";
 import {
   AndroidScreenHeader,
   type AndroidHeaderAction,
@@ -116,7 +118,7 @@ interface ThreadRouteScreenProps extends ThreadRouteScreenRouteProps {
   readonly renderInspector?: (headerInset: number) => ReactNode;
 }
 
-function ThreadUnavailableScreen() {
+function ThreadUnavailableScreen(props: { readonly onGoToThreads: () => void }) {
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
@@ -132,6 +134,17 @@ function ThreadUnavailableScreen() {
         title="Thread unavailable"
         detail="This thread is not available in the current mobile snapshot."
       />
+      {/* T3-CUSTOM(expbkt3): BEGIN give a missing deep-linked thread a visible route escape. */}
+      <Pressable
+        accessibilityHint="Returns to the threads list."
+        accessibilityLabel="Go to threads list"
+        accessibilityRole="button"
+        className="mt-4 self-center rounded-lg bg-primary px-4 py-2.5 active:opacity-70"
+        onPress={props.onGoToThreads}
+      >
+        <Text className="text-sm font-t3-bold text-primary-foreground">Go to threads</Text>
+      </Pressable>
+      {/* T3-CUSTOM(expbkt3): END give a missing deep-linked thread a visible route escape. */}
     </ScrollView>
   );
 }
@@ -140,6 +153,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
   const { selectedThread } = useThreadSelection();
+  const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const threadIdRaw = firstRouteParam(params.threadId);
@@ -179,7 +193,11 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
     return <OpeningThreadLoadingScreen />;
   }
 
-  return <ThreadUnavailableScreen />;
+  return (
+    <ThreadUnavailableScreen
+      onGoToThreads={() => navigation.dispatch(StackActions.replace("Home"))}
+    />
+  );
 }
 
 function ThreadRouteContent(
