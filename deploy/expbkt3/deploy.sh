@@ -78,7 +78,17 @@ LOCK_HASH_FILE="/home/ubuntu/.t3/expbkt3-dev/deployed-lock"
 LOCK_HASH="$(sha256sum "$REPO_DIR/pnpm-lock.yaml" | cut -d" " -f1)"
 if [[ "$LOCK_HASH" != "$(cat "$LOCK_HASH_FILE" 2>/dev/null || true)" ]]; then
   echo "==> Lockfile changed; installing dependencies"
-  pnpm --dir "$REPO_DIR" install --frozen-lockfile
+  # T3-CUSTOM(expbkt3): Corepack's ambient pnpm can drift from packageManager.
+  # Invoke the checked-out declaration explicitly, without changing the shared host default.
+  PACKAGE_MANAGER="$(node -p "require(process.argv[1] + '/package.json').packageManager" "$REPO_DIR")"
+  case "$PACKAGE_MANAGER" in
+    pnpm@*) ;;
+    *)
+      echo "ERROR: expected packageManager to declare pnpm, found '${PACKAGE_MANAGER:-missing}'." >&2
+      exit 1
+      ;;
+  esac
+  corepack "$PACKAGE_MANAGER" --dir "$REPO_DIR" install --frozen-lockfile
   install -d -m 0700 "$(dirname "$LOCK_HASH_FILE")"
   printf '%s\n' "$LOCK_HASH" >"$LOCK_HASH_FILE"
 else
