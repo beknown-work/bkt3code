@@ -841,9 +841,7 @@ const makeWsRpcLayer = (
         }
       };
 
-      const toShellStreamEvent = Effect.fn("Ws.toShellStreamEvent")(function* (
-        event: ShellEvent,
-      ) {
+      const toShellStreamEvent = Effect.fn("Ws.toShellStreamEvent")(function* (event: ShellEvent) {
         // Domain events and projection updates are independent subscribers to
         // the event stream. Without this barrier, a fast shell subscriber can
         // observe thread.created first, query a projection that does not yet
@@ -1824,13 +1822,15 @@ const makeWsRpcLayer = (
               yield* Effect.forkScoped(
                 executionSupervisor.streamSnapshots.pipe(
                   Stream.runForEach((execution) =>
-                    liveBudget.retain({
-                      kind: "execution" as const,
-                      execution: { kind: "execution" as const, execution },
-                    }).pipe(
-                      Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
-                      Effect.uninterruptible,
-                    ),
+                    liveBudget
+                      .retain({
+                        kind: "execution" as const,
+                        execution: { kind: "execution" as const, execution },
+                      })
+                      .pipe(
+                        Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+                        Effect.uninterruptible,
+                      ),
                   ),
                   Effect.raceFirst(liveBudget.failed),
                   Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
@@ -1903,21 +1903,23 @@ const makeWsRpcLayer = (
               // Offer the completion marker into the same queue as live events.
               // Anything buffered while snapshot/replay work was in flight is
               // therefore delivered before the client is told it is synchronized.
-              const synchronizedThenLive = applyShellItemVisibility(liveBudget.deliver(
-                input.requestCompletionMarker === true
-                  ? Stream.concat(
-                      Stream.fromEffect(
-                        liveBudget.retain({ kind: "synchronized" as const }).pipe(
-                          Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
-                          Effect.uninterruptible,
-                          Effect.andThen(Queue.takeAll(liveBuffer)),
-                          Effect.flatMap(coalesceRetainedInputs),
-                        ),
-                      ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
-                      bufferedLiveStream,
-                    )
-                  : bufferedLiveStream,
-              ));
+              const synchronizedThenLive = applyShellItemVisibility(
+                liveBudget.deliver(
+                  input.requestCompletionMarker === true
+                    ? Stream.concat(
+                        Stream.fromEffect(
+                          liveBudget.retain({ kind: "synchronized" as const }).pipe(
+                            Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+                            Effect.uninterruptible,
+                            Effect.andThen(Queue.takeAll(liveBuffer)),
+                            Effect.flatMap(coalesceRetainedInputs),
+                          ),
+                        ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
+                        bufferedLiveStream,
+                      )
+                    : bufferedLiveStream,
+                ),
+              );
 
               // When the client already holds a shell snapshot (cached, or loaded
               // over HTTP) it passes that snapshot's sequence, and we resume by
@@ -2064,10 +2066,7 @@ const makeWsRpcLayer = (
                 Stream.filter((execution) => execution.threadId === input.threadId),
                 Stream.map((execution) => ({ kind: "execution" as const, execution })),
               );
-              const liveStream = Stream.merge(
-                domainLiveStream,
-                executionLiveStream,
-              );
+              const liveStream = Stream.merge(domainLiveStream, executionLiveStream);
 
               // Attach live delivery before reading either replay or snapshot state.
               // Otherwise an event published while the snapshot is loading is lost.
@@ -2895,8 +2894,16 @@ const makeWsRpcLayer = (
             WS_METHODS.agentSessionsImport,
             Effect.gen(function* () {
               // T3-CUSTOM(expbkt3): imported history obeys project access and ownership.
-              if (actorUserId !== null && !(yield* accessControl.canAccessProject(actorUserId, input.projectId).pipe(Effect.orElseSucceed(() => false)))) {
-                return yield* new EnvironmentAuthorizationError({ message: "You do not have access to this project.", requiredScope: "orchestration:operate" });
+              if (
+                actorUserId !== null &&
+                !(yield* accessControl
+                  .canAccessProject(actorUserId, input.projectId)
+                  .pipe(Effect.orElseSucceed(() => false)))
+              ) {
+                return yield* new EnvironmentAuthorizationError({
+                  message: "You do not have access to this project.",
+                  requiredScope: "orchestration:operate",
+                });
               }
               return yield* importRecentAgentThreads(input, { actorUserId });
             }).pipe(

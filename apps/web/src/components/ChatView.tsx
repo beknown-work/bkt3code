@@ -28,7 +28,10 @@ import {
   type WorktreeBaseRef,
 } from "@t3tools/contracts";
 // T3-CUSTOM(expbkt3): expose recovery status while sends queue durably.
-import { connectionStatusTitle, type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import {
+  connectionStatusTitle,
+  type EnvironmentConnectionPresentation,
+} from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
@@ -2032,7 +2035,9 @@ export default function ChatView(props: ChatViewProps) {
       // an already-uploaded attachment has no data url to rehydrate from.
       hydrateImagesFromPersisted(
         failedOutboxItem.attachments.flatMap((attachment) =>
-          attachment.type !== "image" || attachment.dataUrl === undefined ? [] : [{ ...attachment, type: "image" as const, dataUrl: attachment.dataUrl }],
+          attachment.type !== "image" || attachment.dataUrl === undefined
+            ? []
+            : [{ ...attachment, type: "image" as const, dataUrl: attachment.dataUrl }],
         ),
       ),
     );
@@ -2749,8 +2754,7 @@ export default function ChatView(props: ChatViewProps) {
   const { enabled: interactionModeEnabled, interactionMode } = resolveComposerInteractionMode({
     planModeEnabled: settings.planModeAvailable,
     provider: activeProviderStatus,
-    interactionMode:
-      requestedInteractionMode,
+    interactionMode: requestedInteractionMode,
   });
   const conversationProviderStatus =
     providerStatuses.find(
@@ -3033,7 +3037,8 @@ export default function ChatView(props: ChatViewProps) {
     (isSendBusy || phase === "connecting" || phase === "running") &&
     compactRequestIsActive &&
     !compactionSettled;
-  const isWorking = executionPresentation.active || isConnecting || isRevertingCheckpoint || isCompacting;
+  const isWorking =
+    executionPresentation.active || isConnecting || isRevertingCheckpoint || isCompacting;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.execution ?? null,
@@ -8470,7 +8475,9 @@ export default function ChatView(props: ChatViewProps) {
           environmentId={activeThreadRef.environmentId}
           documentId={renderedRightPanelSurface.documentId}
           onClose={() =>
-            useRightPanelStore.getState().closeSurface(activeThreadRef, renderedRightPanelSurface.id)
+            useRightPanelStore
+              .getState()
+              .closeSurface(activeThreadRef, renderedRightPanelSurface.id)
           }
         />
       </Suspense>
@@ -8668,33 +8675,32 @@ export default function ChatView(props: ChatViewProps) {
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
                 onOpenProviderSetup={openProviderSetup}
               />
-        {/* T3-CUSTOM(expbkt3): recovery-exhausted and failed-outbox errors
+              {/* T3-CUSTOM(expbkt3): recovery-exhausted and failed-outbox errors
             expose explicit retry/dismiss actions; the plain thread error
             adopts upstream's session-scoped dismissal mask. */}
-        <ThreadErrorBanner
-          error={visibleThreadError ?? backendExecutionError}
-          {...(activeThread.execution?.intent?.phase === "recovery-exhausted"
-            ? {
-                onRetry: onRetryRecoveryFailure,
-                onDismiss: onDismissRecoveryFailure,
-              }
-            : failedOutboxItem
-              ? {
-                  onRetry: onRetryFailedOutboxItem,
-                  onDismiss: onEditFailedOutboxItem,
-                  dismissLabel: "Edit",
-                }
-              : visibleThreadError
-                ? {
-                    onDismiss: () => {
-                      setThreadError(activeThread.id, null);
-                      dismissThreadErrorBannerForSession(threadErrorBannerKey);
-                      setThreadErrorBannerDismissTick((tick) => tick + 1);
-                    },
-                  }
-                : {})}
-        />
-
+              <ThreadErrorBanner
+                error={visibleThreadError ?? backendExecutionError}
+                {...(activeThread.execution?.intent?.phase === "recovery-exhausted"
+                  ? {
+                      onRetry: onRetryRecoveryFailure,
+                      onDismiss: onDismissRecoveryFailure,
+                    }
+                  : failedOutboxItem
+                    ? {
+                        onRetry: onRetryFailedOutboxItem,
+                        onDismiss: onEditFailedOutboxItem,
+                        dismissLabel: "Edit",
+                      }
+                    : visibleThreadError
+                      ? {
+                          onDismiss: () => {
+                            setThreadError(activeThread.id, null);
+                            dismissThreadErrorBannerForSession(threadErrorBannerKey);
+                            setThreadErrorBannerDismissTick((tick) => tick + 1);
+                          },
+                        }
+                      : {})}
+              />
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">

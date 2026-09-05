@@ -22,7 +22,14 @@ const authLayer = EnvironmentAuth.layer.pipe(
   Layer.provide(testConfig),
 );
 
-it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("Clerk browser sessions", (it) => {
+it.layer(
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")),
+    }),
+  ),
+)("Clerk browser sessions", (it) => {
   it.effect("persist the verified environment user id on the issued session", () =>
     Effect.gen(function* () {
       const auth = yield* EnvironmentAuth.EnvironmentAuth;

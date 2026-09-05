@@ -81,7 +81,14 @@ const signProof = (input: {
   return `${header}.${payload}.${signature}`;
 };
 
-it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("proof-of-possession pairing credentials", (it) => {
+it.layer(
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")),
+    }),
+  ),
+)("proof-of-possession pairing credentials", (it) => {
   it.effect("live for two hours instead of five minutes", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -234,7 +241,14 @@ describe("a token bound to one key rejects proofs from another", () => {
   });
 });
 
-it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("ordinary pairing credentials are untouched", (it) => {
+it.layer(
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")),
+    }),
+  ),
+)("ordinary pairing credentials are untouched", (it) => {
   it.effect("keep the five-minute window and redeem as a plain bearer token", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

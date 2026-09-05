@@ -7,7 +7,12 @@ import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
 // T3-CUSTOM(expbkt3): persist per-project thread creation defaults additively.
-import { ModelSelection, ProjectIconOverride, ProjectScript, ProjectThreadCreationDefaults } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  ProjectIconOverride,
+  ProjectScript,
+  ProjectThreadCreationDefaults,
+} from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionProjectInput,

@@ -125,9 +125,10 @@ function hydrate(): void {
  * no longer matches this device is dead weight, and presenting it would just
  * produce a 401 loop instead of the pairing gate.
  */
-export async function readManagedPrimaryCredential(): Promise<
-  Pick<StoredManagedPrimaryCredential, "accessToken" | "expiresAtEpochMs"> | null
-> {
+export async function readManagedPrimaryCredential(): Promise<Pick<
+  StoredManagedPrimaryCredential,
+  "accessToken" | "expiresAtEpochMs"
+> | null> {
   hydrate();
   const managed = readBkManagedEnvironment();
   if (managed === null) {
@@ -141,7 +142,10 @@ export async function readManagedPrimaryCredential(): Promise<
   }
   return cachedCredential === null
     ? null
-    : { accessToken: cachedCredential.accessToken, expiresAtEpochMs: cachedCredential.expiresAtEpochMs };
+    : {
+        accessToken: cachedCredential.accessToken,
+        expiresAtEpochMs: cachedCredential.expiresAtEpochMs,
+      };
 }
 
 /** The validated token for callers that do not need the refresh deadline. */

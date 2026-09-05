@@ -2833,7 +2833,6 @@ export function makeOpenCodeAdapter(
           const stopExit = yield* Effect.exit(stopOpenCodeContext(existing));
           if (yield* Ref.get(existing.stopped)) deleteContextIfCurrent(existing);
           if (Exit.isFailure(stopExit)) return yield* Effect.failCause(stopExit.cause);
-
         }
 
         // T3-CUSTOM(expbkt3): BEGIN - the acquire→register handoff runs
@@ -2997,99 +2996,100 @@ export function makeOpenCodeAdapter(
           }
           const started = startedExit.value;
 
-        const createdAt = yield* nowIso;
-        const session: ProviderSession = {
-          provider: PROVIDER,
-          providerInstanceId: boundInstanceId,
-          status: "connecting",
-          runtimeMode: input.runtimeMode,
-          cwd: directory,
-          ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
-          threadId: input.threadId,
-          // ProviderService persists this cursor and feeds it back into
-          // `startSession` after the in-memory session is lost (reaper /
-          // restart), so follow-ups continue the same conversation (#3604).
-          resumeCursor: {
-            schemaVersion: OPENCODE_RESUME_VERSION,
-            sessionId: started.openCodeSession.id,
-          },
-          createdAt,
-          updatedAt: createdAt,
-        };
+          const createdAt = yield* nowIso;
+          const session: ProviderSession = {
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            status: "connecting",
+            runtimeMode: input.runtimeMode,
+            cwd: directory,
+            ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
+            threadId: input.threadId,
+            // ProviderService persists this cursor and feeds it back into
+            // `startSession` after the in-memory session is lost (reaper /
+            // restart), so follow-ups continue the same conversation (#3604).
+            resumeCursor: {
+              schemaVersion: OPENCODE_RESUME_VERSION,
+              sessionId: started.openCodeSession.id,
+            },
+            createdAt,
+            updatedAt: createdAt,
+          };
 
-        const context: OpenCodeSessionContext = {
-          session,
-          client: started.client,
-          server: started.server,
-          directory,
-          openCodeSessionId: started.openCodeSession.id,
-          relatedSessionIds: new Set([started.openCodeSession.id]),
-          resolvedRequestIds: new Set(),
-          autoRepliedRequestIds: new Set(),
-          emittedTerminalRequestIds: new Set(),
-          requestRelationRetries: new Map(),
-          pendingPermissions: new Map(),
-          pendingQuestions: new Map(),
-          partById: new Map(),
-          emittedTextByPartId: new Map(),
-          messageRoleById: new Map(),
-          completedAssistantPartIds: new Set(),
-          turnTokenUsage: undefined,
-          activeTurnId: undefined,
-          activeAgent: undefined,
-          activeVariant: undefined,
-          cancellation: undefined,
-          interruptedTurnId: undefined,
-          reconcileIdleStatus: false,
-          awaitingBusyAfterInterruption: false,
-          pendingIdleReconciliation: undefined,
-          pendingRequestRecovery: undefined,
-          promptGeneration: 0,
-          promptAdmission: undefined,
-          promptSemaphore: Semaphore.makeUnsafe(1),
-          firstConnection: Deferred.makeUnsafe<void, ProviderAdapterRequestError>(),
-          stopped: yield* Ref.make(false),
-          sessionScope: started.sessionScope,
-        };
-        const raceWinner = sessions.get(input.threadId);
-        if (raceWinner) {
-          // Another start published first. A newly created remote session
-          // belongs to this loser; a resumed session is shared upstream state.
-          yield* closeStartingOpenCodeContext(context, started.created);
-          return yield* Effect.interruptible(awaitOpenCodeContextReady(raceWinner));
-        }
-        sessions.set(input.threadId, context);
-        const cleanupStartingContext = closeStartingOpenCodeContext(context, started.created).pipe(
-          Effect.ensuring(Effect.sync(() => deleteContextIfCurrent(context))),
-        );
-        const connectionExit = yield* Effect.gen(function* () {
-          yield* startEventPump(context);
-          yield* Deferred.await(context.firstConnection).pipe(
-            Effect.timeout("10 seconds"),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "event.subscribe",
-                  detail: "OpenCode event stream did not connect within 10 seconds.",
-                  cause,
-                }),
-            ),
+          const context: OpenCodeSessionContext = {
+            session,
+            client: started.client,
+            server: started.server,
+            directory,
+            openCodeSessionId: started.openCodeSession.id,
+            relatedSessionIds: new Set([started.openCodeSession.id]),
+            resolvedRequestIds: new Set(),
+            autoRepliedRequestIds: new Set(),
+            emittedTerminalRequestIds: new Set(),
+            requestRelationRetries: new Map(),
+            pendingPermissions: new Map(),
+            pendingQuestions: new Map(),
+            partById: new Map(),
+            emittedTextByPartId: new Map(),
+            messageRoleById: new Map(),
+            completedAssistantPartIds: new Set(),
+            turnTokenUsage: undefined,
+            activeTurnId: undefined,
+            activeAgent: undefined,
+            activeVariant: undefined,
+            cancellation: undefined,
+            interruptedTurnId: undefined,
+            reconcileIdleStatus: false,
+            awaitingBusyAfterInterruption: false,
+            pendingIdleReconciliation: undefined,
+            pendingRequestRecovery: undefined,
+            promptGeneration: 0,
+            promptAdmission: undefined,
+            promptSemaphore: Semaphore.makeUnsafe(1),
+            firstConnection: Deferred.makeUnsafe<void, ProviderAdapterRequestError>(),
+            stopped: yield* Ref.make(false),
+            sessionScope: started.sessionScope,
+          };
+          const raceWinner = sessions.get(input.threadId);
+          if (raceWinner) {
+            // Another start published first. A newly created remote session
+            // belongs to this loser; a resumed session is shared upstream state.
+            yield* closeStartingOpenCodeContext(context, started.created);
+            return yield* Effect.interruptible(awaitOpenCodeContextReady(raceWinner));
+          }
+          sessions.set(input.threadId, context);
+          const cleanupStartingContext = closeStartingOpenCodeContext(
+            context,
+            started.created,
+          ).pipe(Effect.ensuring(Effect.sync(() => deleteContextIfCurrent(context))));
+          const connectionExit = yield* Effect.gen(function* () {
+            yield* startEventPump(context);
+            yield* Deferred.await(context.firstConnection).pipe(
+              Effect.timeout("10 seconds"),
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "event.subscribe",
+                    detail: "OpenCode event stream did not connect within 10 seconds.",
+                    cause,
+                  }),
+              ),
+            );
+          }).pipe(
+            Effect.interruptible,
+            Effect.onInterrupt(() => cleanupStartingContext),
+            Effect.exit,
           );
-        }).pipe(
-          Effect.interruptible,
-          Effect.onInterrupt(() => cleanupStartingContext),
-          Effect.exit,
-        );
-        if (Exit.isFailure(connectionExit)) {
-          yield* cleanupStartingContext;
-          return yield* Effect.failCause(connectionExit.cause);
-        }
-        yield* awaitOpenCodeContextReady(context);
-        if (!started.created) {
-          yield* schedulePendingRequestRecovery(context);
-        }
-        return context;
+          if (Exit.isFailure(connectionExit)) {
+            yield* cleanupStartingContext;
+            return yield* Effect.failCause(connectionExit.cause);
+          }
+          yield* awaitOpenCodeContextReady(context);
+          if (!started.created) {
+            yield* schedulePendingRequestRecovery(context);
+          }
+          return context;
         }).pipe(Effect.uninterruptible);
         // T3-CUSTOM(expbkt3): END
 

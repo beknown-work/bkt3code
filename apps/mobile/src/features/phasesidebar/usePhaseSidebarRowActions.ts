@@ -90,14 +90,12 @@ export function buildPhaseSidebarRowActions(input: {
       title: "Move to group",
       image: "folder",
       subactions: [
-        ...input.customGroups.map(
-          (group): PhaseSidebarRowAction => ({
-            id: `group:${group.id}`,
-            title: group.label,
-            image: "folder",
-            checked: input.customGroupId === group.id,
-          }),
-        ),
+        ...input.customGroups.map((group): PhaseSidebarRowAction => ({
+          id: `group:${group.id}`,
+          title: group.label,
+          image: "folder",
+          checked: input.customGroupId === group.id,
+        })),
         ...(input.customGroupId != null
           ? [
               {

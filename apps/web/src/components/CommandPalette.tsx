@@ -504,31 +504,31 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 
   return (
     <OpenAddProjectCommandPaletteProvider openAddProject={openAddProject}>
-    <ComposerHandleContext value={composerHandleRef}>
-      <CommandDialog
-        open={state.open}
-        onOpenChange={(open, eventDetails) => {
-          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
-            eventDetails.cancel();
-            toggleMode("command");
-            return;
-          }
-          setOpen(open);
-        }}
-      >
-        {/* Block background focus calls for the entire time the palette is open. */}
-        <div className="contents" inert={state.open}>
-          {children}
-        </div>
-        <CommandPaletteDialog
-          mode={state.mode}
-          openIntent={state.openIntent}
-          setOpen={setOpen}
-          openOverlayMode={toggleMode}
-          clearOpenIntent={clearOpenIntent}
-        />
-      </CommandDialog>
-    </ComposerHandleContext>
+      <ComposerHandleContext value={composerHandleRef}>
+        <CommandDialog
+          open={state.open}
+          onOpenChange={(open, eventDetails) => {
+            if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+              eventDetails.cancel();
+              toggleMode("command");
+              return;
+            }
+            setOpen(open);
+          }}
+        >
+          {/* Block background focus calls for the entire time the palette is open. */}
+          <div className="contents" inert={state.open}>
+            {children}
+          </div>
+          <CommandPaletteDialog
+            mode={state.mode}
+            openIntent={state.openIntent}
+            setOpen={setOpen}
+            openOverlayMode={toggleMode}
+            clearOpenIntent={clearOpenIntent}
+          />
+        </CommandDialog>
+      </ComposerHandleContext>
     </OpenAddProjectCommandPaletteProvider>
   );
 }

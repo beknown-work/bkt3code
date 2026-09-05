@@ -713,16 +713,17 @@ export const make = Effect.gen(function* () {
                   // post-commit worktree, setup, and provider side effect.
                   command.type === "thread.create" && command.externalSession
                   ? dispatchAttachedThreadCreate(command, command.externalSession)
-                  : orchestrationEngine
-                      .dispatch(command, dispatchOptions)
-                      .pipe(
-                        // T3-CUSTOM(expbkt3): the create receipt is the resource handoff fence.
-                        Effect.tap(({ sequence }) => command.type === "thread.create"
-                          ? threadDeletionReactor.drainThrough(sequence) : Effect.void),
-                        Effect.mapError((cause) =>
-                          toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                        ),
-                      );
+                  : orchestrationEngine.dispatch(command, dispatchOptions).pipe(
+                      // T3-CUSTOM(expbkt3): the create receipt is the resource handoff fence.
+                      Effect.tap(({ sequence }) =>
+                        command.type === "thread.create"
+                          ? threadDeletionReactor.drainThrough(sequence)
+                          : Effect.void,
+                      ),
+                      Effect.mapError((cause) =>
+                        toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                      ),
+                    );
 
     const dispatchEffect =
       command.type === "thread.turn.start" && command.precondition

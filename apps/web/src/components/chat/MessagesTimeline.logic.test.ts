@@ -103,7 +103,12 @@ describe("streaming row projection", () => {
       timelineEntries: timeline.entries,
       latestTurn: {
         // T3-CUSTOM(expbkt3): fork turn fixtures include persisted duration.
-        durationMs: null, turnId, state: "running", startedAt: time(5), completedAt: null },
+        durationMs: null,
+        turnId,
+        state: "running",
+        startedAt: time(5),
+        completedAt: null,
+      },
       runningTurnId: turnId,
       isWorking: true,
       activeTurnStartedAt: time(5),
@@ -2334,8 +2339,8 @@ describe("deriveMessagesTimelineRows", () => {
                 },
               ],
         latestTurn: {
-        // T3-CUSTOM(expbkt3): fork turn fixtures include persisted duration.
-        durationMs: null,
+          // T3-CUSTOM(expbkt3): fork turn fixtures include persisted duration.
+          durationMs: null,
           turnId: "turn-1" as never,
           state: "running",
           startedAt: "2026-01-01T00:00:00Z",

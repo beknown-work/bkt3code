@@ -137,8 +137,11 @@ const make = Effect.gen(function* () {
   const dispatch = (command: OrchestrationCommand, actorUserId: UserId | null = null) =>
     engine.dispatch(command, { actorUserId }).pipe(
       // A reused thread id cannot own setup terminals before prior deletion cleanup.
-      Effect.tap(({ sequence }) => command.type === "thread.create"
-        ? threadDeletionReactor.drainThrough(sequence) : Effect.void),
+      Effect.tap(({ sequence }) =>
+        command.type === "thread.create"
+          ? threadDeletionReactor.drainThrough(sequence)
+          : Effect.void,
+      ),
       Effect.mapError(
         (cause) =>
           new ThreadBootstrapCoordinatorError({

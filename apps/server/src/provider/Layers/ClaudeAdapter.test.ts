@@ -52,7 +52,12 @@ import {
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import type { ClaudeScopedLimitNames } from "./claudeUsageLimits.ts";
-import { makeClaudeAdapter, normalizeClaudeRateLimitEvent, normalizeClaudeUsageResponse, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  makeClaudeAdapter,
+  normalizeClaudeRateLimitEvent,
+  normalizeClaudeUsageResponse,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 // T3-CUSTOM(expbkt3): per-turn sender identity injected into Claude sessions.
 import { claudeSessionIdentityTurnContext } from "../claudeSessionIdentity.expbkt3.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
@@ -836,7 +841,8 @@ describe("ClaudeAdapterLive", () => {
         type: "preset",
         preset: "claude_code",
         // T3-CUSTOM(expbkt3): upstream runtime instructions remain without identity context.
-        append: "<runtime_info>In case you're asked: you are running in T3 Code through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>",
+        append:
+          "<runtime_info>In case you're asked: you are running in T3 Code through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>",
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

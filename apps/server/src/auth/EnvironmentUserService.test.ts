@@ -47,7 +47,14 @@ const serviceLayer = EnvironmentUserService.layer.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
-it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("EnvironmentUserService", (it) => {
+it.layer(
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")),
+    }),
+  ),
+)("EnvironmentUserService", (it) => {
   it.effect("registers verified users, derives presence, and connects GitHub ownership", () =>
     Effect.gen(function* () {
       const users = yield* EnvironmentUserService.EnvironmentUserService;

@@ -849,10 +849,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     // Only hydrate a fresh editing draft; reopening mid-edit keeps newer edits.
     if (isComposerDraftEmpty(getComposerDraftSnapshot(draftKey))) {
       setComposerDraftText(draftKey, message.text);
-      replaceComposerDraftAttachments(
-        draftKey,
-        message.attachments,
-      );
+      replaceComposerDraftAttachments(draftKey, message.attachments);
       updateComposerDraftSettings(draftKey, {
         modelSelection: message.modelSelection,
         runtimeMode: message.runtimeMode,

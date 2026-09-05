@@ -204,12 +204,15 @@ const runImport = (input: {
   // T3-CUSTOM(expbkt3): exercise authenticated imports as well as local imports.
   readonly actorUserId?: UserId;
 }) =>
-  importRecentAgentThreads({
-    projectId: PROJECT_ID,
-    ...(input.expectedWorkspaceRoot === undefined
-      ? {}
-      : { expectedWorkspaceRoot: input.expectedWorkspaceRoot }),
-  }, input.actorUserId === undefined ? undefined : { actorUserId: input.actorUserId }).pipe(
+  importRecentAgentThreads(
+    {
+      projectId: PROJECT_ID,
+      ...(input.expectedWorkspaceRoot === undefined
+        ? {}
+        : { expectedWorkspaceRoot: input.expectedWorkspaceRoot }),
+    },
+    input.actorUserId === undefined ? undefined : { actorUserId: input.actorUserId },
+  ).pipe(
     Effect.provideService(AgentSessionScanner.AgentSessionScanner, input.scanner),
     Effect.provideService(OrchestrationEngine.OrchestrationEngineService, input.engine),
     Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, input.directory),
@@ -243,10 +246,11 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
         });
         const engine = OrchestrationEngine.OrchestrationEngineService.of({
           // T3-CUSTOM(expbkt3): assert ownership and audit attribution across both commands.
-          dispatch: (command, options) => Effect.sync(() => {
-            dispatchActors.push(options?.actorUserId);
-            return { sequence: commands.push(command) };
-          }),
+          dispatch: (command, options) =>
+            Effect.sync(() => {
+              dispatchActors.push(options?.actorUserId);
+              return { sequence: commands.push(command) };
+            }),
           readEvents: () => Stream.empty,
           readThreadEvents: () => Stream.empty,
           getThreadReplayStats: () => Effect.die("unused"),
@@ -938,10 +942,13 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
         const reactorLayer = ProviderCommandReactorLive.pipe(
           Layer.provideMerge(providerLayer),
           // T3-CUSTOM(expbkt3): importing existing history never creates through turn bootstrap.
-          Layer.provide(Layer.succeed(ThreadDeletionReactor, {
-            start: () => Effect.void,
-            drainThrough: () => Effect.die("Imported thread resume must not bootstrap a new thread."),
-          })),
+          Layer.provide(
+            Layer.succeed(ThreadDeletionReactor, {
+              start: () => Effect.void,
+              drainThrough: () =>
+                Effect.die("Imported thread resume must not bootstrap a new thread."),
+            }),
+          ),
           Layer.provide(
             Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
               ...snapshots,

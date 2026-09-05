@@ -447,7 +447,10 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
     Effect.fn("AntigravityTextGeneration.generateWorkSummary")(function* (input) {
       const generated = yield* runAntigravityJson({
         operation: "generateWorkSummary",
-        ...buildWorkSummaryPrompt({ context: input.context, promptInstructions: input.promptInstructions }),
+        ...buildWorkSummaryPrompt({
+          context: input.context,
+          promptInstructions: input.promptInstructions,
+        }),
         modelSelection: input.modelSelection,
       });
       return {
@@ -459,6 +462,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
     });
   // T3-CUSTOM(expbkt3): END
 
+  // T3-CUSTOM(expbkt3): BEGIN — preserve fork summary capability formatting markerability.
   return {
     generateCommitMessage,
     generatePrContent,
@@ -469,4 +473,5 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
     generateCatchupSummary,
     generateWorkSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
+  // T3-CUSTOM(expbkt3): END
 });

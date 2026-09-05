@@ -208,8 +208,9 @@ export function DraftHeroHeadline({
             const explicit = selected?.project ?? null;
             const entry = explicit
               ? projectPickerEntries.find((candidate) =>
-                  candidate.group.memberProjects.some((member) =>
-                    member.id === explicit.id && member.environmentId === explicit.environmentId,
+                  candidate.group.memberProjects.some(
+                    (member) =>
+                      member.id === explicit.id && member.environmentId === explicit.environmentId,
                   ),
                 )
               : projectEntryByKey.get(value as string);

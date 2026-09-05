@@ -4110,9 +4110,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 onToggleInteractionMode={toggleInteractionMode}
                 onRuntimeModeChange={handleRuntimeModeChange}
-          // T3-CUSTOM(expbkt3): fresh draft can return to inherited defaults.
-          showCreationDefaultsReset={showCreationDefaultsReset}
-          onResetCreationDefaults={onResetCreationDefaults}
+                // T3-CUSTOM(expbkt3): fresh draft can return to inherited defaults.
+                showCreationDefaultsReset={showCreationDefaultsReset}
+                onResetCreationDefaults={onResetCreationDefaults}
               />
             </div>
           ) : null}

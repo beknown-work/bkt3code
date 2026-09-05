@@ -2614,22 +2614,20 @@ pending_approval_requests AS (
             ),
           ),
           Effect.map((rows) =>
-            rows.map(
-              (row): ProjectionSessionListDetail => ({
-                threadId: row.threadId,
-                rollingSummary: row.rollingSummary,
-                latestTurnSummary:
-                  row.turnId !== null && row.status !== null && row.createdAt !== null
-                    ? {
-                        turnId: row.turnId,
-                        assistantMessageId: row.assistantMessageId,
-                        summary: row.summary,
-                        status: row.status,
-                        createdAt: row.createdAt,
-                      }
-                    : null,
-              }),
-            ),
+            rows.map((row): ProjectionSessionListDetail => ({
+              threadId: row.threadId,
+              rollingSummary: row.rollingSummary,
+              latestTurnSummary:
+                row.turnId !== null && row.status !== null && row.createdAt !== null
+                  ? {
+                      turnId: row.turnId,
+                      assistantMessageId: row.assistantMessageId,
+                      summary: row.summary,
+                      status: row.status,
+                      createdAt: row.createdAt,
+                    }
+                  : null,
+            })),
           ),
         );
 
@@ -2644,12 +2642,10 @@ pending_approval_requests AS (
           ),
         ),
         Effect.map((rows) =>
-          rows.map(
-            (row): ProjectionLatestProposedPlan => ({
-              threadId: row.threadId,
-              proposedPlan: mapProposedPlanRow(row),
-            }),
-          ),
+          rows.map((row): ProjectionLatestProposedPlan => ({
+            threadId: row.threadId,
+            proposedPlan: mapProposedPlanRow(row),
+          })),
         ),
       );
 
@@ -3234,55 +3230,53 @@ pending_approval_requests AS (
                       )
                     : Result.failVoid,
                 ),
-                threads: threadRows.map(
-                  (row): OrchestrationThreadShell => ({
-                    id: row.threadId,
-                    projectId: row.projectId,
-                    title: row.title,
-                    modelSelection: row.modelSelection,
-                    runtimeMode: row.runtimeMode,
-                    interactionMode: row.interactionMode,
-                    branch: row.branch,
-                    worktreePath: row.worktreePath,
-                    sourceControlProfileId: row.sourceControlProfileId,
-                    ...(row.linkedPullRequest === null
-                      ? {}
-                      : { linkedPullRequest: row.linkedPullRequest }),
-                    latestTurn: latestTurnByThread.get(row.threadId) ?? null,
-                    ownerUserId: row.ownerUserId,
-                    memberUserIds: memberUserIdsByThread.get(row.threadId) ?? [],
-                    createdAt: row.createdAt,
-                    updatedAt: row.updatedAt,
-                    archivedAt: row.archivedAt,
-                    settledOverride: row.settledOverride,
-                    settledAt: row.settledAt,
-                    unsettledAt: row.unsettledAt,
-                    snoozedUntil: row.snoozedUntil,
-                    snoozedAt: row.snoozedAt,
-                    priority: row.priority,
-                    linearIssueUrl: row.linearIssueUrl ?? null,
-                    mattermostThreadUrl: row.mattermostThreadUrl ?? null,
-                    parentThreadId: row.parentThreadId ?? null,
-                    parentEnvironmentId: row.parentEnvironmentId ?? null,
-                    // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
-                    workSummary: mapWorkSummary(row.workSummary),
-                    // T3-CUSTOM(expbkt3): END
-                    pinnedAt: row.pinnedAt,
-                    // T3-CUSTOM(expbkt3): manual-title ownership.
-                    titleManuallySet: row.titleManuallySet === 1,
-                    pinOrderKey: row.pinOrderKey ?? null,
-                    titleRegeneration: mapTitleRegeneration(row),
-                    session: sessionByThread.get(row.threadId) ?? null,
-                    latestUserMessageAt: row.latestUserMessageAt,
-                    hasPendingApprovals: row.pendingApprovalCount > 0,
-                    hasPendingUserInput: row.pendingUserInputCount > 0,
-                    hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
-                    backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
-                      row.threadId,
-                    ),
-                    planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
-                  }),
-                ),
+                threads: threadRows.map((row): OrchestrationThreadShell => ({
+                  id: row.threadId,
+                  projectId: row.projectId,
+                  title: row.title,
+                  modelSelection: row.modelSelection,
+                  runtimeMode: row.runtimeMode,
+                  interactionMode: row.interactionMode,
+                  branch: row.branch,
+                  worktreePath: row.worktreePath,
+                  sourceControlProfileId: row.sourceControlProfileId,
+                  ...(row.linkedPullRequest === null
+                    ? {}
+                    : { linkedPullRequest: row.linkedPullRequest }),
+                  latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                  ownerUserId: row.ownerUserId,
+                  memberUserIds: memberUserIdsByThread.get(row.threadId) ?? [],
+                  createdAt: row.createdAt,
+                  updatedAt: row.updatedAt,
+                  archivedAt: row.archivedAt,
+                  settledOverride: row.settledOverride,
+                  settledAt: row.settledAt,
+                  unsettledAt: row.unsettledAt,
+                  snoozedUntil: row.snoozedUntil,
+                  snoozedAt: row.snoozedAt,
+                  priority: row.priority,
+                  linearIssueUrl: row.linearIssueUrl ?? null,
+                  mattermostThreadUrl: row.mattermostThreadUrl ?? null,
+                  parentThreadId: row.parentThreadId ?? null,
+                  parentEnvironmentId: row.parentEnvironmentId ?? null,
+                  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
+                  workSummary: mapWorkSummary(row.workSummary),
+                  // T3-CUSTOM(expbkt3): END
+                  pinnedAt: row.pinnedAt,
+                  // T3-CUSTOM(expbkt3): manual-title ownership.
+                  titleManuallySet: row.titleManuallySet === 1,
+                  pinOrderKey: row.pinOrderKey ?? null,
+                  titleRegeneration: mapTitleRegeneration(row),
+                  session: sessionByThread.get(row.threadId) ?? null,
+                  latestUserMessageAt: row.latestUserMessageAt,
+                  hasPendingApprovals: row.pendingApprovalCount > 0,
+                  hasPendingUserInput: row.pendingUserInputCount > 0,
+                  hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                  backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
+                    row.threadId,
+                  ),
+                  planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
+                })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 

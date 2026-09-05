@@ -750,19 +750,17 @@ export function SessionManagerPage() {
   const nowIso = useMemo(() => `${nowMinute}:00.000Z`, [nowMinute]);
 
   const filters = useSessionManagerFilterStore(
-    useShallow(
-      (state): SessionManagerFilters => ({
-        search: state.search,
-        repositoryKeys: state.repositoryKeys,
-        phaseIds: state.phaseIds,
-        providerKinds: state.providerKinds,
-        priorities: state.priorities,
-        attentionKinds: state.attentionKinds,
-        ownerUserIds: state.ownerUserIds,
-        lifecycles: state.lifecycles,
-        staleDays: state.staleDays,
-      }),
-    ),
+    useShallow((state): SessionManagerFilters => ({
+      search: state.search,
+      repositoryKeys: state.repositoryKeys,
+      phaseIds: state.phaseIds,
+      providerKinds: state.providerKinds,
+      priorities: state.priorities,
+      attentionKinds: state.attentionKinds,
+      ownerUserIds: state.ownerUserIds,
+      lifecycles: state.lifecycles,
+      staleDays: state.staleDays,
+    })),
   );
   const sort = useSessionManagerFilterStore((state) => state.sort);
   const activeViewId = useSessionManagerFilterStore((state) => state.activeViewId);

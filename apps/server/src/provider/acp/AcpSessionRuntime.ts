@@ -68,7 +68,7 @@ export type AcpSessionRuntimeEvent =
   | AcpParsedSessionEvent
   | AcpSessionEventStreamBarrier
   | AcpSessionRuntimeExited
-  | { readonly _tag: "ConnectionTerminated"; readonly error: EffectAcpErrors.AcpError; };
+  | { readonly _tag: "ConnectionTerminated"; readonly error: EffectAcpErrors.AcpError };
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);

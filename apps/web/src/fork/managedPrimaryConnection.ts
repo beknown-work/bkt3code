@@ -77,7 +77,10 @@ export const readManagedPrimaryDpopAuthorization: Effect.Effect<
       credential === null
         ? Option.none()
         : Option.some(
-            makeManagedPrimaryDpopAuthorization(credential.accessToken, credential.expiresAtEpochMs),
+            makeManagedPrimaryDpopAuthorization(
+              credential.accessToken,
+              credential.expiresAtEpochMs,
+            ),
           ),
     ),
   );

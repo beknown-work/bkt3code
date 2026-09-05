@@ -1312,7 +1312,7 @@ describe("buildThreadFeed", () => {
         projectId: ProjectId.make("project-1"),
         title: "Friendly MCP labels",
         latestTurn: {
-        durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
+          durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
           turnId,
           state: "running",
           requestedAt: "2026-04-01T00:00:00.000Z",
@@ -1402,7 +1402,7 @@ describe("buildThreadFeed", () => {
       projectId: ProjectId.make("project-1"),
       title: "Claude MCP labels",
       latestTurn: {
-      durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
+        durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
         turnId,
         state: "running",
         requestedAt: "2026-04-01T00:00:00.000Z",
@@ -1496,7 +1496,7 @@ describe("buildThreadFeed", () => {
         projectId: ProjectId.make("project-1"),
         title: "Browser tool lifecycle",
         latestTurn: {
-        durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
+          durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
           turnId,
           state: "running",
           requestedAt: "2026-04-01T00:00:00.000Z",
@@ -2295,7 +2295,7 @@ describe("buildThreadFeed", () => {
       projectId: ProjectId.make("project-1"),
       title: "Serialized shell wrapper",
       latestTurn: {
-      durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
+        durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
         turnId,
         state: "running",
         requestedAt: "2026-04-01T00:00:00.000Z",
@@ -2343,7 +2343,7 @@ describe("buildThreadFeed", () => {
       projectId: ProjectId.make("project-1"),
       title: "Task lifecycle",
       latestTurn: {
-      durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
+        durationMs: null, // T3-CUSTOM(expbkt3): required persisted metadata.
         turnId,
         state: "running",
         requestedAt: "2026-04-01T00:00:00.000Z",

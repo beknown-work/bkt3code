@@ -1,6 +1,9 @@
 // T3-CUSTOM(expbkt3): durable client outbox shared by web, desktop, and mobile.
 import { isTransportConnectionErrorMessage } from "../errors/transport.ts";
-import { clampFileAttachmentUploadBytes, fileAttachmentTooLargeMessage } from "../state/attachments.ts";
+import {
+  clampFileAttachmentUploadBytes,
+  fileAttachmentTooLargeMessage,
+} from "../state/attachments.ts";
 import type { EnvironmentShellStatus } from "../state/shell.ts";
 import {
   CommandId,
@@ -192,13 +195,16 @@ export function resolveQueuedThreadSettings(
   providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
 ): ThreadSettingsSnapshot {
   const modelSelection = message.modelSelection ?? thread.modelSelection;
-  const provider = providers.find((candidate) => candidate.instanceId === modelSelection.instanceId);
+  const provider = providers.find(
+    (candidate) => candidate.instanceId === modelSelection.instanceId,
+  );
   return {
     modelSelection,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: provider?.showInteractionModeToggle === false
-      ? DEFAULT_PROVIDER_INTERACTION_MODE
-      : message.interactionMode ?? thread.interactionMode,
+    interactionMode:
+      provider?.showInteractionModeToggle === false
+        ? DEFAULT_PROVIDER_INTERACTION_MODE
+        : (message.interactionMode ?? thread.interactionMode),
   };
 }
 

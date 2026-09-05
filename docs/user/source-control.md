@@ -131,6 +131,7 @@ reopening a declined pull request.
   or rate limits.
 
 <!-- T3-CUSTOM(expbkt3): actionable shared-identity failures. -->
+
 - **A thread cannot start GitHub activity:** assign a connected profile to its owner in **Settings → Users**.
 - **GitHub SSH remote is blocked:** choose **Convert origin to HTTPS**. The URL contains no token.
 - **Profile is invalid or disconnected:** replace its token in **Settings → Users → GitHub profiles**.

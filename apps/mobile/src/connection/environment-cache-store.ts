@@ -248,22 +248,24 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
     loadOutbox: Effect.fn("MobileEnvironmentCache.loadOutbox")((environmentId, identityKey) =>
       Effect.tryPromise({
         try: () =>
-          expoThreadOutboxStorage
-            .load()
-            .then(({ messages, errors }) => {
-              if (errors.length > 0) throw new AggregateError(errors, "Could not load all queued messages.");
-              return messages.filter(
-                (message) =>
-                  message.environmentId === environmentId &&
-                  (message.identityKey ?? ANONYMOUS_OUTBOX_IDENTITY) === identityKey,
-              );
-            }),
+          expoThreadOutboxStorage.load().then(({ messages, errors }) => {
+            if (errors.length > 0)
+              throw new AggregateError(errors, "Could not load all queued messages.");
+            return messages.filter(
+              (message) =>
+                message.environmentId === environmentId &&
+                (message.identityKey ?? ANONYMOUS_OUTBOX_IDENTITY) === identityKey,
+            );
+          }),
         catch: (cause) => persistenceError("load-outbox", cause),
       }),
     ),
     saveOutbox: Effect.fn("MobileEnvironmentCache.saveOutbox")((message) =>
       Effect.tryPromise({
-        try: () => expoThreadOutboxStorage.write(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message))),
+        try: () =>
+          expoThreadOutboxStorage.write(
+            decodeQueuedThreadMessage(encodeQueuedThreadMessage(message)),
+          ),
         catch: (cause) => persistenceError("save-outbox", cause),
       }),
     ),

@@ -140,7 +140,8 @@ export const makeProviderRateLimits = Effect.fn("ProviderRateLimits.make")(funct
         ...(window.windowDurationMins === undefined
           ? {}
           : { windowDurationMinutes: window.windowDurationMins }),
-        category: window.kind === "session" ? "rolling" : window.kind === "weekly" ? "weekly" : "other",
+        category:
+          window.kind === "session" ? "rolling" : window.kind === "weekly" ? "weekly" : "other",
       })),
     };
     const changed = yield* Ref.modify(state, (current) => {

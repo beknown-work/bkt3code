@@ -60,7 +60,10 @@ export function updateThreadOutboxMessage(
   expectedRevision?: number,
 ): Promise<boolean> {
   // T3-CUSTOM(expbkt3): identity survives upload CAS and editor retry.
-  const identityKey = message.identityKey ?? appAtomRegistry.get(managedRelaySessionAtom)?.accountId ?? ANONYMOUS_OUTBOX_IDENTITY;
+  const identityKey =
+    message.identityKey ??
+    appAtomRegistry.get(managedRelaySessionAtom)?.accountId ??
+    ANONYMOUS_OUTBOX_IDENTITY;
   // Upload CAS requires the exact published object for its post-write ownership check.
   return threadOutboxManager.update(
     expectedRevision === undefined ? asPendingMessage(message, identityKey) : message,
@@ -78,11 +81,14 @@ export function markThreadOutboxMessageFailed(
   failureDetail: string,
   expectedRevision?: number,
 ): Promise<boolean> {
-  return threadOutboxManager.update({
-    ...message,
-    deliveryState: "failed",
-    failureDetail,
-  }, expectedRevision);
+  return threadOutboxManager.update(
+    {
+      ...message,
+      deliveryState: "failed",
+      failureDetail,
+    },
+    expectedRevision,
+  );
 }
 // T3-CUSTOM(expbkt3): END
 

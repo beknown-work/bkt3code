@@ -231,8 +231,8 @@ function makeFakeCodexAdapter(
     Effect.sync(() => Array.from(sessions.values())),
   );
 
-  const hasSession = vi.fn(
-    (threadId: ThreadId): Effect.Effect<boolean> => Effect.sync(() => sessions.has(threadId)),
+  const hasSession = vi.fn((threadId: ThreadId): Effect.Effect<boolean> =>
+    Effect.sync(() => sessions.has(threadId)),
   );
 
   const readThread = vi.fn(

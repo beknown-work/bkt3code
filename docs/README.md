@@ -14,7 +14,9 @@
 - [Import browser sessions](./user/browser-import.md)
 - [Usage and limits](./user/usage.md)
 - [Product usage data](./user/telemetry.md)
+
 <!-- T3-CUSTOM(expbkt3): fork user guides. -->
+
 - [Opening a worktree in another app](./user/open-in-app.md)
 - [User management](./user/user-management.md)
 - [Worktree setup and new-thread defaults](./user/worktree-setup.md)
@@ -38,7 +40,9 @@ source alone does not explain. Most code changes do not need an internal documen
 [documentation rules](../AGENTS.md#documentation) before adding one.
 
 - [Architecture overview](./internals/overview.md)
+
 <!-- T3-CUSTOM(expbkt3): fork architecture and operation references. -->
+
 - [Durable thread bootstrap](./internals/thread-bootstrap.md)
 - [Execution reliability](./internals/execution-reliability.md)
 - [Provider rate limits](./internals/provider-rate-limits.md)
@@ -64,6 +68,7 @@ source alone does not explain. Most code changes do not need an internal documen
 ### Runbooks
 
 <!-- T3-CUSTOM(expbkt3): deployment runbook remains the CI/install authority. -->
+
 - [Beknown deployments](./operations/deployments.md)
 
 - [Development and local builds](./operations/development.md)

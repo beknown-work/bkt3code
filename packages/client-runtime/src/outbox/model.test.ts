@@ -110,18 +110,19 @@ describe("shared durable thread outbox", () => {
       ...queued("user_123"),
       deliveryState: "failed",
       failureDetail: "retry explicitly",
-      attachments: [{
-        id: "file-1",
-        type: "file",
-        name: "report.pdf",
-        mimeType: "application/pdf",
-        sizeBytes: 42,
-        fileUri: "file:///documents/report.pdf",
-        uploadedAttachmentId: "pending-report",
-        uploadEnvironmentId: EnvironmentId.make("environment-1"),
-      }],
+      attachments: [
+        {
+          id: "file-1",
+          type: "file",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 42,
+          fileUri: "file:///documents/report.pdf",
+          uploadedAttachmentId: "pending-report",
+          uploadEnvironmentId: EnvironmentId.make("environment-1"),
+        },
+      ],
     };
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message))).toEqual(message);
   });
-
 });

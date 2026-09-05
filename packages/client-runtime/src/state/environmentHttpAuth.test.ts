@@ -272,19 +272,22 @@ describe("authenticated environment HTTP requests", () => {
         Effect.provide(harness.httpLayer),
         Effect.provideService(PrimaryEnvironmentAuth, {
           bearerToken: Effect.succeed(Option.none()),
-          dpopAuthorization: Effect.succeed(Option.some({
-            accessToken: "managed-current-token",
-            expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
-            resolveSocketUrl: () => Effect.die("HTTP must not prepare a WebSocket connection."),
-          })),
+          dpopAuthorization: Effect.succeed(
+            Option.some({
+              accessToken: "managed-current-token",
+              expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
+              resolveSocketUrl: () => Effect.die("HTTP must not prepare a WebSocket connection."),
+            }),
+          ),
         }),
       );
       expect(result).toEqual(SHELL);
       expect(harness.authorizations).toEqual([]);
       expect(harness.calls).toHaveLength(1);
       expect(new URL(harness.calls[0]!.url).origin).toBe(PREPARED.httpBaseUrl);
-      expect(new Headers(harness.calls[0]!.init.headers).get("authorization"))
-        .toBe("DPoP managed-current-token");
+      expect(new Headers(harness.calls[0]!.init.headers).get("authorization")).toBe(
+        "DPoP managed-current-token",
+      );
       expect(harness.proofs[0]?.accessToken).toBe("managed-current-token");
     }),
   );

@@ -25,8 +25,10 @@ export function decodeQueuedThreadMessage(value: unknown): QueuedThreadMessage {
       return {
         ...attachment,
         type: "image",
-        previewUri: ("previewUri" in attachment ? attachment.previewUri : undefined) ??
-          ("dataUrl" in attachment ? attachment.dataUrl : undefined) ?? "",
+        previewUri:
+          ("previewUri" in attachment ? attachment.previewUri : undefined) ??
+          ("dataUrl" in attachment ? attachment.dataUrl : undefined) ??
+          "",
       };
     }),
   };

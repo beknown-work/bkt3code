@@ -3,7 +3,10 @@ import { ClerkProvider } from "@clerk/electron/react";
 import type { ReactNode } from "react";
 
 // T3-CUSTOM(expbkt3): identity-only team mode composes inside the lazy Clerk boundary.
-import { ManagedClerkIdentityAuthProvider, ManagedRelayAuthProvider } from "../../cloud/managedAuth";
+import {
+  ManagedClerkIdentityAuthProvider,
+  ManagedRelayAuthProvider,
+} from "../../cloud/managedAuth";
 import { resolveAppClerkMode } from "../../cloud/publicConfig";
 import { TeamIdentityBridge } from "./TeamIdentityBridge";
 // T3-CUSTOM(expbkt3): explain Clerk Native API stalls.
@@ -23,10 +26,15 @@ export default function ElectronManagedAuthShell({
   readonly publishableKey: string;
   readonly children: ReactNode;
 }) {
+  // T3-CUSTOM(expbkt3): BEGIN — preserve managed desktop auth formatting markerability.
   return (
     // T3-CUSTOM(expbkt3): diagnose a stalled Native API independently of Clerk children.
     <>
-      <ClerkProvider appearance={clerkAppearance} publishableKey={publishableKey} passkeys={passkeys}>
+      <ClerkProvider
+        appearance={clerkAppearance}
+        publishableKey={publishableKey}
+        passkeys={passkeys}
+      >
         <ManagedClerkIdentityAuthProvider>
           <TeamIdentityBridge />
           {resolveAppClerkMode() === "cloud" ? (
@@ -39,4 +47,5 @@ export default function ElectronManagedAuthShell({
       <DesktopAuthStallNotice />
     </>
   );
+  // T3-CUSTOM(expbkt3): END
 }

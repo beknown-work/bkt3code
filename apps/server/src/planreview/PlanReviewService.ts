@@ -216,11 +216,10 @@ export const make = Effect.gen(function* () {
       effect: Effect.Effect<A, E, R>,
     ): Effect.Effect<A, PlanReviewServiceError, R> =>
       effect.pipe(
-        Effect.mapError(
-          (cause): PlanReviewServiceError =>
-            cause._tag === "PlanDraftConflictError" || cause._tag === "PlanVersionConflictError"
-              ? (cause as unknown as PlanDraftConflictError | PlanVersionConflictError)
-              : new PlanReviewInvariantError({ operation, detail: cause.message }),
+        Effect.mapError((cause): PlanReviewServiceError =>
+          cause._tag === "PlanDraftConflictError" || cause._tag === "PlanVersionConflictError"
+            ? (cause as unknown as PlanDraftConflictError | PlanVersionConflictError)
+            : new PlanReviewInvariantError({ operation, detail: cause.message }),
         ),
       );
 

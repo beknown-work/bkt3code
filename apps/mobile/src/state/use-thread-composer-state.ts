@@ -614,10 +614,7 @@ export function useThreadComposerState() {
       text: failedOutboxMessage.text,
       attachments: [],
     });
-    appendComposerDraftAttachments(
-      selectedThreadKey,
-      failedOutboxMessage.attachments,
-    );
+    appendComposerDraftAttachments(selectedThreadKey, failedOutboxMessage.attachments);
     try {
       await removeThreadOutboxMessage(failedOutboxMessage);
     } catch (error) {

@@ -62,6 +62,7 @@ validators would turn native-player seeks into full downloads.
 ## Environment user identity
 
 <!-- T3-CUSTOM(expbkt3): Clerk identity and device authority remain separate. -->
+
 Scopes authorize a device session; they do not identify the human using it. When Clerk-backed user
 identity is present, the session also stores an `EnvironmentUserId` derived from the verified Clerk
 `sub` claim. `EnvironmentUserService` owns the durable local user directory, roles, blocked state,

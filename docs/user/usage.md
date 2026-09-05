@@ -17,6 +17,7 @@ If recent work is missing or a new model shows no cost, refresh to rescan sessio
 update model pricing.
 
 <!-- T3-CUSTOM(expbkt3): rolling usage ranges. -->
+
 Use **Past 24h** for an hourly chart of the rolling 24-hour period. **7 days**, **30 days**, and
 **90 days** use daily resolution. Cost and token toggles update the headline and chart.
 
@@ -62,6 +63,7 @@ the provider separately to send agent requests through the hub. Remove the hub f
 settings section when you no longer need it.
 
 <!-- T3-CUSTOM(expbkt3): per-thread usage breakdown. -->
+
 ## Session cost
 
 Every thread shows what it would have cost at API list prices, as a small

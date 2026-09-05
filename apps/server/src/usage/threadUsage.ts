@@ -84,7 +84,13 @@ export function aggregateThreadUsage(input: {
       if (seen.has(record.dedupeKey)) continue;
       seen.add(record.dedupeKey);
     }
-    const priced = priceUsage(input.rates, record.model, record.totals, record.reportedCostUsd, input.priceOverrides);
+    const priced = priceUsage(
+      input.rates,
+      record.model,
+      record.totals,
+      record.reportedCostUsd,
+      input.priceOverrides,
+    );
     const savings = cacheSavingsUsd(input.rates, record.model, record.totals, input.priceOverrides);
     const apply = (row: MutableRow) => {
       row.totals = addTotals(row.totals, record.totals);

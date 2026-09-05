@@ -235,7 +235,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                 EnvironmentRpcStreamFailure<TTag>
               >;
               // T3-CUSTOM(expbkt3): preserve bounded retries with upstream transformed output.
-              const subscribeToSession = (retryAttempt = 0): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
+              const subscribeToSession = (
+                retryAttempt = 0,
+              ): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
                     Effect.gen(function* () {

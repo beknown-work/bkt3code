@@ -132,9 +132,11 @@ function testLayer(input: {
 }) {
   return layer.pipe(
     Layer.provideMerge(NodeServices.layer),
-    Layer.provide(Layer.mock(ThreadDeletionReactor)({
-      drainThrough: input.drainDeletionThrough ?? (() => Effect.void),
-    })),
+    Layer.provide(
+      Layer.mock(ThreadDeletionReactor)({
+        drainThrough: input.drainDeletionThrough ?? (() => Effect.void),
+      }),
+    ),
     Layer.provide(
       Layer.mock(ThreadCreationDefaultsResolver)({
         resolve: () => Effect.succeed(input.request ?? resolvedRequest()),
@@ -248,21 +250,33 @@ describe("ThreadBootstrapCoordinator", () => {
       const setupStarted = yield* Deferred.make<void>();
       const { initialTurn: _initialTurn, ...workspaceRequest } = resolvedRequest();
       const dependencies = testLayer({
-        commands, turnStarted, bootstrapCompleted, request: workspaceRequest,
-        drainDeletionThrough: (sequence) => Deferred.succeed(cleanupEntered, sequence).pipe(
-          Effect.andThen(Deferred.await(finishCleanup)),
-        ),
-        setup: () => Deferred.succeed(setupStarted, undefined).pipe(Effect.as({
-          status: "completed" as const, scriptId: "setup", scriptName: "Setup",
-          terminalId: "setup-bootstrap-1-1", cwd: "/tmp/worktrees/project/t3code-bootstrap-1",
-          exitCode: 0 as const,
-        })),
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        request: workspaceRequest,
+        drainDeletionThrough: (sequence) =>
+          Deferred.succeed(cleanupEntered, sequence).pipe(
+            Effect.andThen(Deferred.await(finishCleanup)),
+          ),
+        setup: () =>
+          Deferred.succeed(setupStarted, undefined).pipe(
+            Effect.as({
+              status: "completed" as const,
+              scriptId: "setup",
+              scriptName: "Setup",
+              terminalId: "setup-bootstrap-1-1",
+              cwd: "/tmp/worktrees/project/t3code-bootstrap-1",
+              exitCode: 0 as const,
+            }),
+          ),
       });
       yield* Effect.gen(function* () {
         const coordinator = yield* ThreadBootstrapCoordinator;
         const request = yield* Effect.forkChild(coordinator.request(requestCommand()));
         expect(yield* Deferred.await(cleanupEntered)).toBe(1);
-        expect((yield* Ref.get(commands)).map((command) => command.type)).toEqual(["thread.create"]);
+        expect((yield* Ref.get(commands)).map((command) => command.type)).toEqual([
+          "thread.create",
+        ]);
         expect(Option.isNone(yield* Deferred.poll(setupStarted))).toBe(true);
         yield* Deferred.succeed(finishCleanup, undefined);
         yield* Fiber.join(request);

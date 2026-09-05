@@ -228,7 +228,14 @@ describe("who the self-service path admits", () => {
   );
 });
 
-it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("sessions redeemed from a member's own credential", (it) => {
+it.layer(
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")),
+    }),
+  ),
+)("sessions redeemed from a member's own credential", (it) => {
   const secondsIn = (duration: Duration.Duration) => Math.round(Duration.toSeconds(duration));
 
   it.effect("live seven days, not the thirty-day default", () =>

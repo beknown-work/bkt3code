@@ -1361,15 +1361,20 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                     provider: PROVIDER,
                     threadId: ctx.threadId,
                     payload: {
-                      exitKind: event._tag === "Exited" && event.exitCode === 0 ? "graceful" : "error",
-                      reason: event._tag === "Exited"
-                        ? `Grok agent process exited with code ${event.exitCode}.`
-                        : `Grok agent connection terminated: ${event.error.message}`,
+                      exitKind:
+                        event._tag === "Exited" && event.exitCode === 0 ? "graceful" : "error",
+                      reason:
+                        event._tag === "Exited"
+                          ? `Grok agent process exited with code ${event.exitCode}.`
+                          : `Grok agent connection terminated: ${event.error.message}`,
                       recoverable: false,
                     },
                   });
                   // T3-CUSTOM(expbkt3): transport loss can leave the child alive; release its scope outside this fiber.
-                  yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore({ log: true }), Effect.forkIn(adapterScope));
+                  yield* Scope.close(ctx.scope, Exit.void).pipe(
+                    Effect.ignore({ log: true }),
+                    Effect.forkIn(adapterScope),
+                  );
                   return;
                 }
                 if (

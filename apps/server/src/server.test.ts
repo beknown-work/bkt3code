@@ -11628,7 +11628,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(remoteBranchExists.mock.calls.length, 0);
       assert.equal(resolveRemoteTrackingCommit.mock.calls.length, 0);
       assert.equal(createWorktree.mock.calls.length, 0);
-      assert.deepEqual(dispatchedCommands.map((command) => command.type), ["thread.turn.start"]);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.start"],
+      );
       const accepted = dispatchedCommands[0];
       assertTrue(accepted?.type === "thread.turn.start");
       assert.deepEqual(accepted.bootstrap?.prepareWorktree, {
@@ -11707,7 +11710,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               bootstrap: {
                 createThread: {
                   projectId: defaultProjectId,
-                sourceControlProfileId: null, // T3-CUSTOM(expbkt3): required source profile.
+                  sourceControlProfileId: null, // T3-CUSTOM(expbkt3): required source profile.
                   title: "Bootstrap Thread",
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
@@ -11733,7 +11736,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result._tag === "Success");
       assert.equal(result.success.sequence, 1);
       assert.equal(createWorktree.mock.calls.length, 0);
-      assert.deepEqual(dispatchedCommands.map((command) => command.type), ["thread.turn.start"]);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.turn.start"],
+      );
       assert.isDefined(pendingAttachmentId);
       assert.isTrue(
         yield* fileSystem.exists(path.join(config.attachmentsDir, `${pendingAttachmentId}.png`)),
@@ -11742,10 +11748,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(accepted?.type === "thread.turn.start");
       const claimedAttachment = accepted.message.attachments[0];
       assert.isDefined(claimedAttachment);
-      assert.deepEqual((yield* fileSystem.readDirectory(config.attachmentsDir)).sort(), [
-        `${pendingAttachmentId}.png`,
-        `${claimedAttachment!.id}.png`,
-      ].sort());
+      assert.deepEqual(
+        (yield* fileSystem.readDirectory(config.attachmentsDir)).sort(),
+        [`${pendingAttachmentId}.png`, `${claimedAttachment!.id}.png`].sort(),
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -11834,7 +11840,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 bootstrap: {
                   createThread: {
                     projectId: defaultProjectId,
-                sourceControlProfileId: null, // T3-CUSTOM(expbkt3): required source profile.
+                    sourceControlProfileId: null, // T3-CUSTOM(expbkt3): required source profile.
                     title: "Retry",
                     modelSelection: defaultModelSelection,
                     runtimeMode: "full-access",

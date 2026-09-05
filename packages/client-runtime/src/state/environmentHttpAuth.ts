@@ -119,19 +119,28 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
             });
           }
           const current = yield* primary.value.dpopAuthorization.pipe(
-            Effect.mapError((cause) => new RemoteEnvironmentAuthFetchError({
-              message: "Could not authorize the managed environment request.", cause,
-            })),
+            Effect.mapError(
+              (cause) =>
+                new RemoteEnvironmentAuthFetchError({
+                  message: "Could not authorize the managed environment request.",
+                  cause,
+                }),
+            ),
           );
-          if (Option.isNone(current) || current.value.expiresAtEpochMs <= Date.now() ||
-            current.value.accessToken === rejectedAccessToken) {
+          if (
+            Option.isNone(current) ||
+            current.value.expiresAtEpochMs <= Date.now() ||
+            current.value.accessToken === rejectedAccessToken
+          ) {
             return yield* new RemoteEnvironmentAuthFetchError({
-              message: "The managed environment credential is unavailable or requires pairing again.",
+              message:
+                "The managed environment credential is unavailable or requires pairing again.",
               cause: input.prepared.target._tag,
             });
           }
           authorization = {
-            _tag: "Dpop", accessToken: current.value.accessToken,
+            _tag: "Dpop",
+            accessToken: current.value.accessToken,
             expiresAtEpochMs: current.value.expiresAtEpochMs,
           };
         } else {

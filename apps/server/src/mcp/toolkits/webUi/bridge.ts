@@ -248,34 +248,32 @@ const invokeWithHandlerContext = Effect.fn("McpWebUiBridge.invokeWithHandlerCont
         );
       }
       return encodeUnknown(successSchema, value).pipe(
-        Effect.map(
-          (encoded): WebUiRpcCallOutcome =>
-            Option.isNone(encoded)
-              ? internalOutcome(request, index)
-              : {
-                  ok: true,
-                  ...outcomeBase(request, index),
-                  stream: false,
-                  result: encoded.value ?? null,
-                },
+        Effect.map((encoded): WebUiRpcCallOutcome =>
+          Option.isNone(encoded)
+            ? internalOutcome(request, index)
+            : {
+                ok: true,
+                ...outcomeBase(request, index),
+                stream: false,
+                result: encoded.value ?? null,
+              },
         ),
       );
     }),
     Effect.catch((error) =>
       encodeUnknown(errorSchema, error).pipe(
-        Effect.map(
-          (encoded): WebUiRpcCallOutcome =>
-            Option.isNone(encoded)
-              ? internalOutcome(request, index)
-              : {
-                  ok: false,
-                  ...outcomeBase(request, index),
-                  error: {
-                    kind: "rpc_error",
-                    message: `The ${request.method} web UI operation was rejected.`,
-                    value: encoded.value ?? null,
-                  },
+        Effect.map((encoded): WebUiRpcCallOutcome =>
+          Option.isNone(encoded)
+            ? internalOutcome(request, index)
+            : {
+                ok: false,
+                ...outcomeBase(request, index),
+                error: {
+                  kind: "rpc_error",
+                  message: `The ${request.method} web UI operation was rejected.`,
+                  value: encoded.value ?? null,
                 },
+              },
         ),
       ),
     ),

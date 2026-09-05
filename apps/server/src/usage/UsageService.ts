@@ -600,7 +600,9 @@ export const make = Effect.gen(function* () {
     yield* ensureRates(false);
     yield* ensureScanCacheLoaded;
     const settings = yield* readSettings;
-    const dirs = yield* resolveTranscriptDirs(settings).pipe(Effect.provideService(Path.Path, path));
+    const dirs = yield* resolveTranscriptDirs(settings).pipe(
+      Effect.provideService(Path.Path, path),
+    );
     const records: UsageRecord[] = [];
     if (input.sessionIds.length > 0) {
       for (const { provider, dir } of dirs) {
@@ -692,7 +694,9 @@ export const make = Effect.gen(function* () {
   });
 
   // T3-CUSTOM(expbkt3): expose per-thread usage alongside upstream summary and rate refresh.
+  // T3-CUSTOM(expbkt3): BEGIN — preserve per-thread usage return formatting markerability.
   return { readSummary, readThreadUsage, refreshRates } as const;
+  // T3-CUSTOM(expbkt3): END
 });
 
 export const layer = Layer.effect(UsageService, make);

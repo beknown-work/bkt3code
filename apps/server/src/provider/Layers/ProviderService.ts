@@ -963,8 +963,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // T3-CUSTOM(expbkt3): fence stale runtime events by session generation before analytics/compaction.
       const canonicalEvent = yield* Effect.sync(() => {
         const canonical = correlateRuntimeEventWithInstance(source, event);
-        const generation = canonical.sessionGeneration ?? sessionGenerations.get(sessionGenerationKey(source.instanceId, canonical.threadId));
-        return generation === undefined ? canonical : { ...canonical, sessionGeneration: generation };
+        const generation =
+          canonical.sessionGeneration ??
+          sessionGenerations.get(sessionGenerationKey(source.instanceId, canonical.threadId));
+        return generation === undefined
+          ? canonical
+          : { ...canonical, sessionGeneration: generation };
       });
       yield* increment(providerRuntimeEventsTotal, {
         provider: canonicalEvent.provider,
@@ -1535,179 +1539,181 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
-  const sendTurn: ProviderServiceMethod<"sendTurn"> = Effect.fn("sendTurn")(function* (rawInput, executionOptions) {
-    const parsed = yield* decodeInputOrValidationError({
-      operation: "ProviderService.sendTurn",
-      schema: ProviderSendTurnInput,
-      payload: rawInput,
-    });
-
-    const attachments = parsed.attachments ?? [];
-    if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
-      return yield* toValidationError(
-        "ProviderService.sendTurn",
-        "Either input text or at least one attachment is required",
-      );
-    }
-
-    const inputTextWithCitations =
-      parsed.input === undefined ? undefined : expandAssistantCitationsForProvider(parsed.input);
-    if (inputTextWithCitations !== parsed.input) {
-      yield* decodeInputOrValidationError({
+  const sendTurn: ProviderServiceMethod<"sendTurn"> = Effect.fn("sendTurn")(
+    function* (rawInput, executionOptions) {
+      const parsed = yield* decodeInputOrValidationError({
         operation: "ProviderService.sendTurn",
-        schema: ProviderSendTurnInput.fields.input,
-        payload: inputTextWithCitations,
+        schema: ProviderSendTurnInput,
+        payload: rawInput,
       });
-    }
 
-    // Every attachment gets an on-disk path in the prompt so the model's tools
-    // can dereference the actual file. All attachments then go to the adapter,
-    // and each adapter decides what its provider ingests natively: OpenCode
-    // sends generic files as file parts, the others send images only and rely
-    // on the path line for everything else. Unresolvable ids are skipped here
-    // and surface as adapter errors when the file is read.
-    const attachmentPathLines = attachments.flatMap((attachment) => {
-      const attachmentPath = resolveAttachmentPath({
-        attachmentsDir: serverConfig.attachmentsDir,
-        attachment,
-      });
-      return attachmentPath === null
-        ? []
-        : [`[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`];
-    });
-    const inputTextWithAttachmentPaths =
-      attachmentPathLines.length === 0
-        ? inputTextWithCitations
-        : [inputTextWithCitations, attachmentPathLines.join("\n")]
-            .filter((part): part is string => typeof part === "string" && part.length > 0)
-            .join("\n\n");
-
-    const input = {
-      ...parsed,
-      ...(inputTextWithAttachmentPaths !== undefined
-        ? { input: inputTextWithAttachmentPaths }
-        : {}),
-    };
-    yield* Effect.annotateCurrentSpan({
-      "provider.operation": "send-turn",
-      "provider.thread_id": input.threadId,
-      "provider.interaction_mode": input.interactionMode,
-      "provider.attachment_count": attachments.length,
-    });
-    let metricProvider = "unknown";
-    let metricModel = input.modelSelection?.model;
-    return yield* Effect.gen(function* () {
-      let routed = yield* resolveRoutableSession({
-        threadId: input.threadId,
-        operation: "ProviderService.sendTurn",
-        allowRecovery: false,
-        ...(executionOptions ? { executionOptions } : {}),
-      });
-      if (
-        input.continuation === true &&
-        !input.input &&
-        attachments.length === 0 &&
-        routed.adapter.capabilities.promptlessTurnContinuation !== true
-      ) {
+      const attachments = parsed.attachments ?? [];
+      if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
         return yield* toValidationError(
           "ProviderService.sendTurn",
-          `Provider '${routed.adapter.provider}' requires an explicit continuation prompt`,
+          "Either input text or at least one attachment is required",
         );
       }
-      if (!routed.isActive) {
-        routed = yield* resolveRoutableSession({
-          threadId: input.threadId,
+
+      const inputTextWithCitations =
+        parsed.input === undefined ? undefined : expandAssistantCitationsForProvider(parsed.input);
+      if (inputTextWithCitations !== parsed.input) {
+        yield* decodeInputOrValidationError({
           operation: "ProviderService.sendTurn",
-          allowRecovery: true,
-          ...(executionOptions ? { executionOptions } : {}),
+          schema: ProviderSendTurnInput.fields.input,
+          payload: inputTextWithCitations,
         });
       }
-      metricProvider = routed.adapter.provider;
-      metricModel = input.modelSelection?.model;
+
+      // Every attachment gets an on-disk path in the prompt so the model's tools
+      // can dereference the actual file. All attachments then go to the adapter,
+      // and each adapter decides what its provider ingests natively: OpenCode
+      // sends generic files as file parts, the others send images only and rely
+      // on the path line for everything else. Unresolvable ids are skipped here
+      // and surface as adapter errors when the file is read.
+      const attachmentPathLines = attachments.flatMap((attachment) => {
+        const attachmentPath = resolveAttachmentPath({
+          attachmentsDir: serverConfig.attachmentsDir,
+          attachment,
+        });
+        return attachmentPath === null
+          ? []
+          : [`[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`];
+      });
+      const inputTextWithAttachmentPaths =
+        attachmentPathLines.length === 0
+          ? inputTextWithCitations
+          : [inputTextWithCitations, attachmentPathLines.join("\n")]
+              .filter((part): part is string => typeof part === "string" && part.length > 0)
+              .join("\n\n");
+
+      const input = {
+        ...parsed,
+        ...(inputTextWithAttachmentPaths !== undefined
+          ? { input: inputTextWithAttachmentPaths }
+          : {}),
+      };
       yield* Effect.annotateCurrentSpan({
         "provider.operation": "send-turn",
         "provider.thread_id": input.threadId,
         "provider.interaction_mode": input.interactionMode,
         "provider.attachment_count": attachments.length,
       });
-      // A turn is the clearest sign a session is still alive. The MCP
-      // credential is minted once at session start and cannot be rotated into
-      // an already-spawned agent process, so we keep the existing token valid
-      // rather than issuing a new one: sessions that go a long time between
-      // browser tool calls used to lose the toolkit outright.
-      yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
-      const analyticsModelSelection =
-        input.modelSelection?.instanceId === routed.instanceId ? input.modelSelection : undefined;
-      const turn = yield* Effect.acquireUseRelease(
-        beginTurnAnalytics({
-          providerInstanceId: routed.instanceId,
-          provider: routed.adapter.provider,
+      let metricProvider = "unknown";
+      let metricModel = input.modelSelection?.model;
+      return yield* Effect.gen(function* () {
+        let routed = yield* resolveRoutableSession({
           threadId: input.threadId,
-          modelSelection: analyticsModelSelection,
-          interactionMode: input.interactionMode,
-          runtimeMode: routed.runtimeMode,
-        }),
-        (turnMetadata) =>
-          Effect.gen(function* () {
-            const turn = yield* routed.adapter.sendTurn(input);
-            yield* associateTurnAnalytics({
+          operation: "ProviderService.sendTurn",
+          allowRecovery: false,
+          ...(executionOptions ? { executionOptions } : {}),
+        });
+        if (
+          input.continuation === true &&
+          !input.input &&
+          attachments.length === 0 &&
+          routed.adapter.capabilities.promptlessTurnContinuation !== true
+        ) {
+          return yield* toValidationError(
+            "ProviderService.sendTurn",
+            `Provider '${routed.adapter.provider}' requires an explicit continuation prompt`,
+          );
+        }
+        if (!routed.isActive) {
+          routed = yield* resolveRoutableSession({
+            threadId: input.threadId,
+            operation: "ProviderService.sendTurn",
+            allowRecovery: true,
+            ...(executionOptions ? { executionOptions } : {}),
+          });
+        }
+        metricProvider = routed.adapter.provider;
+        metricModel = input.modelSelection?.model;
+        yield* Effect.annotateCurrentSpan({
+          "provider.operation": "send-turn",
+          "provider.thread_id": input.threadId,
+          "provider.interaction_mode": input.interactionMode,
+          "provider.attachment_count": attachments.length,
+        });
+        // A turn is the clearest sign a session is still alive. The MCP
+        // credential is minted once at session start and cannot be rotated into
+        // an already-spawned agent process, so we keep the existing token valid
+        // rather than issuing a new one: sessions that go a long time between
+        // browser tool calls used to lose the toolkit outright.
+        yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
+        const analyticsModelSelection =
+          input.modelSelection?.instanceId === routed.instanceId ? input.modelSelection : undefined;
+        const turn = yield* Effect.acquireUseRelease(
+          beginTurnAnalytics({
+            providerInstanceId: routed.instanceId,
+            provider: routed.adapter.provider,
+            threadId: input.threadId,
+            modelSelection: analyticsModelSelection,
+            interactionMode: input.interactionMode,
+            runtimeMode: routed.runtimeMode,
+          }),
+          (turnMetadata) =>
+            Effect.gen(function* () {
+              const turn = yield* routed.adapter.sendTurn(input);
+              yield* associateTurnAnalytics({
+                providerInstanceId: routed.instanceId,
+                threadId: input.threadId,
+                turnId: String(turn.turnId),
+                metadata: turnMetadata,
+              });
+              return turn;
+            }),
+          (turnMetadata) =>
+            clearPendingTurnAnalytics({
               providerInstanceId: routed.instanceId,
               threadId: input.threadId,
-              turnId: String(turn.turnId),
-              metadata: turnMetadata,
-            });
-            return turn;
-          }),
-        (turnMetadata) =>
-          clearPendingTurnAnalytics({
-            providerInstanceId: routed.instanceId,
-            threadId: input.threadId,
-            requestId: turnMetadata.requestId,
-          }),
+              requestId: turnMetadata.requestId,
+            }),
+        );
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            activeTurnId: turn.turnId,
+            // Admission and marker consumption must survive the same restart.
+            continueAfterServerUpdate: null,
+            continueAfterServerUpdatePrepared: null,
+            lastRuntimeEvent: "provider.sendTurn",
+            lastRuntimeEventAt: yield* nowIso,
+          },
+        });
+        yield* analytics.record("provider.turn.sent", {
+          provider: routed.adapter.provider,
+          model: input.modelSelection?.model,
+          interactionMode: input.interactionMode,
+          // Session-start events alone skew runtime mode toward users who toggle
+          // often, since every toggle restarts the session. Recording it per turn
+          // gives a usage-weighted view and lets it cross with interactionMode.
+          runtimeMode: routed.runtimeMode,
+          attachmentCount: attachments.length,
+          hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+        });
+        return turn;
+      }).pipe(
+        withMetrics({
+          counter: providerTurnsTotal,
+          timer: providerTurnDuration,
+          attributes: () =>
+            providerTurnMetricAttributes({
+              provider: metricProvider,
+              model: metricModel,
+              extra: {
+                operation: "send",
+              },
+            }),
+        }),
       );
-      yield* directory.upsert({
-        threadId: input.threadId,
-        provider: routed.adapter.provider,
-        providerInstanceId: routed.instanceId,
-        status: "running",
-        ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-        runtimePayload: {
-          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-          activeTurnId: turn.turnId,
-          // Admission and marker consumption must survive the same restart.
-          continueAfterServerUpdate: null,
-          continueAfterServerUpdatePrepared: null,
-          lastRuntimeEvent: "provider.sendTurn",
-          lastRuntimeEventAt: yield* nowIso,
-        },
-      });
-      yield* analytics.record("provider.turn.sent", {
-        provider: routed.adapter.provider,
-        model: input.modelSelection?.model,
-        interactionMode: input.interactionMode,
-        // Session-start events alone skew runtime mode toward users who toggle
-        // often, since every toggle restarts the session. Recording it per turn
-        // gives a usage-weighted view and lets it cross with interactionMode.
-        runtimeMode: routed.runtimeMode,
-        attachmentCount: attachments.length,
-        hasInput: typeof input.input === "string" && input.input.trim().length > 0,
-      });
-      return turn;
-    }).pipe(
-      withMetrics({
-        counter: providerTurnsTotal,
-        timer: providerTurnDuration,
-        attributes: () =>
-          providerTurnMetricAttributes({
-            provider: metricProvider,
-            model: metricModel,
-            extra: {
-              operation: "send",
-            },
-          }),
-      }),
-    );
-  });
+    },
+  );
 
   const compactThread: ProviderServiceMethod<"compactThread"> = Effect.fn("compactThread")(
     function* (threadId, modelSelection, requestId) {

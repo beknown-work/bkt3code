@@ -120,13 +120,11 @@ export const resolveExchangeIdentity = (input: {
   }
 
   return input.verifyDirect(token).pipe(
-    Effect.map(
-      (verified): ExchangeIdentityResolution => ({
-        identity: verified.identity,
-        administrativeGrant: verified.administrativeGrant,
-        identitySource: "token",
-      }),
-    ),
+    Effect.map((verified): ExchangeIdentityResolution => ({
+      identity: verified.identity,
+      administrativeGrant: verified.administrativeGrant,
+      identitySource: "token",
+    })),
     Effect.catchTag("ClerkAuthError", (error) =>
       // A verified identity that is simply outside the organization is a decision,
       // not a failed guess at the token format. Retrying it against the other

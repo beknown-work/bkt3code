@@ -224,7 +224,9 @@ it.effect.each(["marked update", "opt-in restart"] as const)(
         ...makeProviderService(),
         getCapabilities: (instanceId) =>
           Effect.succeed({
-            sessionModelSwitch: "in-session", activeTurnInput: "steer", durableResume: "supported",
+            sessionModelSwitch: "in-session",
+            activeTurnInput: "steer",
+            durableResume: "supported",
             ...(instanceId === providerInstanceId ? { promptlessTurnContinuation: true } : {}),
           }),
         sendTurn: (input) =>
@@ -823,7 +825,9 @@ for (const preparedStatus of [
           ...makeProviderService(),
           getCapabilities: () =>
             Effect.succeed({
-              sessionModelSwitch: "in-session" as const, activeTurnInput: "steer" as const, durableResume: "supported" as const,
+              sessionModelSwitch: "in-session" as const,
+              activeTurnInput: "steer" as const,
+              durableResume: "supported" as const,
               promptlessTurnContinuation: true,
             }),
           sendTurn: (input: ProviderSendTurnInput) =>
@@ -930,7 +934,12 @@ it.effect("settles failed opt-in recovery without retrying the provider turn", (
       providerService: {
         ...makeProviderService(),
         getCapabilities: () =>
-          Effect.succeed({ sessionModelSwitch: "in-session", activeTurnInput: "steer", durableResume: "supported", promptlessTurnContinuation: true }),
+          Effect.succeed({
+            sessionModelSwitch: "in-session",
+            activeTurnInput: "steer",
+            durableResume: "supported",
+            promptlessTurnContinuation: true,
+          }),
         sendTurn: (input) =>
           Effect.gen(function* () {
             sends.push(input);

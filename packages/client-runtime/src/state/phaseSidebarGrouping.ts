@@ -431,20 +431,18 @@ export function buildPhaseSidebarSections(
 
   switch (grouping.groupBy) {
     case "lifecycle": {
-      const sections = groupPhaseSidebarTreeByPhase(tree).map(
-        (group): PhaseSidebarSection => ({
-          key: phaseSidebarSectionKey("lifecycle", group.id),
-          kind: "lifecycle",
-          id: group.id,
-          label: group.label,
-          helperText: group.helperText,
-          phaseId: group.id,
-          nodes: group.nodes,
-          summary: summarizeNodes(group.nodes),
-          isUngrouped: false,
-          collapsedByDefault: false,
-        }),
-      );
+      const sections = groupPhaseSidebarTreeByPhase(tree).map((group): PhaseSidebarSection => ({
+        key: phaseSidebarSectionKey("lifecycle", group.id),
+        kind: "lifecycle",
+        id: group.id,
+        label: group.label,
+        helperText: group.helperText,
+        phaseId: group.id,
+        nodes: group.nodes,
+        summary: summarizeNodes(group.nodes),
+        isUngrouped: false,
+        collapsedByDefault: false,
+      }));
       return { sections, forcedExpansionKeys };
     }
 

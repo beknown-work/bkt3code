@@ -1532,7 +1532,9 @@ function SavedBackendListRow({
             {/* T3-CUSTOM(expbkt3): BEGIN — show the environment's own identity here,
                 so what you pick below is what you recognise elsewhere. */}
             <EnvironmentBadge environmentId={environment.environmentId} variant="icon" />
-            <h3 className="min-w-0 truncate text-sm font-medium text-foreground">{environment.label}</h3>
+            <h3 className="min-w-0 truncate text-sm font-medium text-foreground">
+              {environment.label}
+            </h3>
             {/* T3-CUSTOM(expbkt3): END */}
           </div>
           {metadataBits.length > 0 ? (

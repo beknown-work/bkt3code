@@ -24,7 +24,11 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { type ClaudeScopedLimitNames, claudeRateLimitEventToUpdate, claudeUsageResponseToLimits } from "./claudeUsageLimits.ts";
+import {
+  type ClaudeScopedLimitNames,
+  claudeRateLimitEventToUpdate,
+  claudeUsageResponseToLimits,
+} from "./claudeUsageLimits.ts";
 import {
   ApprovalRequestId,
   classifyTaskAgentKind,
@@ -2043,9 +2047,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const update = yield* Effect.tryPromise(() => readUsage.call(context.query)).pipe(
       Effect.map((response) => ({
         rateLimits: normalizeClaudeUsageResponse(response, observedAt),
-        limits: { windows: claudeUsageResponseToLimits({ response, checkedAt: DateTime.formatIso(observedAt) }).limits.windows },
+        limits: {
+          windows: claudeUsageResponseToLimits({
+            response,
+            checkedAt: DateTime.formatIso(observedAt),
+          }).limits.windows,
+        },
       })),
-      Effect.orElseSucceed(() => ({ rateLimits: claudeRateLimitRefreshError(observedAt), limits: { windows: [] } })),
+      Effect.orElseSucceed(() => ({
+        rateLimits: claudeRateLimitRefreshError(observedAt),
+        limits: { windows: [] },
+      })),
     );
     const stamp = yield* makeEventStamp();
     yield* offerRuntimeEvent({
@@ -3943,7 +3955,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         yield* offerRuntimeEvent({
           ...base,
           type: "account.rate-limits.updated",
-          payload: { limits, rateLimits: normalizeClaudeRateLimitEvent(rateLimitInfo, DateTime.makeUnsafe(stamp.createdAt)) },
+          payload: {
+            limits,
+            rateLimits: normalizeClaudeRateLimitEvent(
+              rateLimitInfo,
+              DateTime.makeUnsafe(stamp.createdAt),
+            ),
+          },
         });
       }
       // A rejected window parks the turn inside the SDK: no further messages
@@ -4767,7 +4785,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           preset: "claude_code",
           // Model and effort can change after this session-level prompt is set.
           // T3-CUSTOM(expbkt3): keep runtime instructions and the acting user identity.
-          append: [buildRuntimeInstructions({ harness: "Claude Code" }), sessionIdentitySystemPrompt].filter(Boolean).join("\n\n"),
+          append: [
+            buildRuntimeInstructions({ harness: "Claude Code" }),
+            sessionIdentitySystemPrompt,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is

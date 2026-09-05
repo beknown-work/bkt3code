@@ -109,7 +109,14 @@ describe("pairing credential payload", () => {
   });
 });
 
-it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("issuePairingCredentialForPrincipal", (it) => {
+it.layer(
+  Layer.merge(
+    NodeServices.layer,
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")),
+    }),
+  ),
+)("issuePairingCredentialForPrincipal", (it) => {
   it.effect("carries the authenticated operator through to the paired session", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

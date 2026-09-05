@@ -207,7 +207,11 @@ interface SessionContext {
   /** Keep only IDs after settlement or MCP exclusion so merged late updates cannot change identity. */
   readonly subagents: Map<string, OpenSubagent | "finished" | "mcp">;
   // T3-CUSTOM(expbkt3): retained history must distinguish terminal proof.
-  readonly turns: Array<{ id: TurnId; items: Array<unknown>; state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown" }>;
+  readonly turns: Array<{
+    id: TurnId;
+    items: Array<unknown>;
+    state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown";
+  }>;
   session: ProviderSession;
   activeTurnId: TurnId | undefined;
   promptFiber: Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError> | undefined;
@@ -566,6 +570,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
     switch (event._tag) {
       case "ModeChanged":
         return;
+      // T3-CUSTOM(expbkt3): BEGIN — preserve lifecycle handling around fork exit events.
       case "AvailableCommandsUpdated":
         yield* options.onAvailableCommands?.(event.availableCommands, context.cwd) ?? Effect.void;
         return;
@@ -579,6 +584,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
         context.disconnected = true;
         yield* stopContext(context).pipe(Effect.forkIn(ownerScope));
         return;
+      // T3-CUSTOM(expbkt3): END
       case "AssistantItemStarted":
       case "AssistantItemCompleted":
         yield* emit(
@@ -738,11 +744,15 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       input.threadId,
       Effect.gen(function* () {
         // T3-CUSTOM(expbkt3): this provider's managed login process cannot accept per-thread Git credentials.
-        if (executionOptions?.environment && carriesSourceControlIdentity(executionOptions.environment)) {
+        if (
+          executionOptions?.environment &&
+          carriesSourceControlIdentity(executionOptions.environment)
+        ) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "startSession",
-            issue: "Thread-owned source-control identity is not supported by Antigravity. Select a provider that supports this profile.",
+            issue:
+              "Thread-owned source-control identity is not supported by Antigravity. Select a provider that supports this profile.",
           });
         }
         if (!settings.enabled) {
@@ -998,6 +1008,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
+      // T3-CUSTOM(expbkt3): BEGIN — retain the provider prompt lifecycle seam.
       Effect.mapError((cause) => mapAntigravityError(input.threadId, "session/prompt", cause)),
     );
     let intent: TurnIntent | undefined;
@@ -1008,7 +1019,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
         turn.settled = true;
         // T3-CUSTOM(expbkt3): durable recovery trusts explicit terminal state only.
         const record = context.turns.find((entry) => entry.id === turn.turnId);
-        const state = payload.state === "cancelled" ? "interrupted" : payload.state === "failed" ? "failed" : "completed";
+        const state =
+          payload.state === "cancelled"
+            ? "interrupted"
+            : payload.state === "failed"
+              ? "failed"
+              : "completed";
         if (record) record.state = state;
         else context.turns.push({ id: turn.turnId, items: [], state });
         yield* promoteBackgroundCommands(context);
@@ -1040,6 +1056,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
           turnId: turn.turnId,
           payload,
         });
+        // T3-CUSTOM(expbkt3): END
       }).pipe(Effect.uninterruptible);
 
     return yield* Effect.gen(function* () {
@@ -1118,9 +1135,11 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
               Effect.asVoid,
             ),
           );
+          // T3-CUSTOM(expbkt3): BEGIN — preserve launch result formatting markerability.
           return { turn, fiber };
         }),
       );
+      // T3-CUSTOM(expbkt3): END
       const result = yield* Fiber.await(launch.fiber).pipe(Effect.flatMap((exit) => exit));
       yield* context.runtime.drainEvents;
       if (context.stopped) {
@@ -1249,8 +1268,11 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
 
   const stopSession: Adapter["stopSession"] = (threadId) =>
     withThreadLock(threadId, Effect.flatMap(requireSession(threadId), stopContext));
+  // T3-CUSTOM(expbkt3): BEGIN — preserve session cleanup formatting markerability.
   const stopAll: Adapter["stopAll"] = () =>
     Effect.forEach([...sessions.values()], stopContext, { discard: true });
+  // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): BEGIN — preserve finalizer formatting markerability.
   yield* Effect.addFinalizer(() =>
     stopAll().pipe(
       Effect.catchCause((cause) =>
@@ -1261,12 +1283,18 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
       Effect.ensuring(PubSub.shutdown(events)),
     ),
   );
+  // T3-CUSTOM(expbkt3): END
 
   // T3-CUSTOM(expbkt3): compose provider execution environment around the upstream adapter.
   const adapter = {
     provider: PROVIDER,
     // T3-CUSTOM(expbkt3): ACP supports steer and cursor resume; history rewind is unavailable.
-    capabilities: { sessionModelSwitch: "in-session", supportsConversationRollback: false, activeTurnInput: "steer", durableResume: "supported" },
+    capabilities: {
+      sessionModelSwitch: "in-session",
+      supportsConversationRollback: false,
+      activeTurnInput: "steer",
+      durableResume: "supported",
+    },
     startSession,
     sendTurn,
     interruptTurn,
@@ -1293,6 +1321,9 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
         }),
       ),
     streamEvents: Stream.fromPubSub(events),
-  } satisfies Omit<Adapter, "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession">;
+  } satisfies Omit<
+    Adapter,
+    "inspectSession" | "requestTurnInterrupt" | "terminateSession" | "watchSession"
+  >;
   return { ...adapter, ...makeObservableLifecycle(adapter) } satisfies Adapter;
 });

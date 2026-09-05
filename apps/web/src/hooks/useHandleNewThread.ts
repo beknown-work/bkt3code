@@ -278,7 +278,9 @@ export function useNewThreadHandler() {
             });
           }
           // T3-CUSTOM(expbkt3): upstream explicit picks stand; stale seeds return to inherited defaults.
-          if (!hasExplicitComposerModelSelection(getComposerDraft(emptyStoredDraftThread.draftId))) {
+          if (
+            !hasExplicitComposerModelSelection(getComposerDraft(emptyStoredDraftThread.draftId))
+          ) {
             setModelSelection(emptyStoredDraftThread.draftId, null, { replaceOptions: true });
           }
           // The workspace context must also ride along here: when projectRef

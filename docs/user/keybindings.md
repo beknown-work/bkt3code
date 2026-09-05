@@ -58,6 +58,7 @@ a shortcut.
 [new-thread defaults](./thread-sidebar.md#start-a-thread).
 
 <!-- T3-CUSTOM(expbkt3): explicit settle, panel, and inherited-default commands. -->
+
 `thread.settle` settles the active thread or restores it when already settled. Its default is
 `mod+shift+s`, and it does not run while the terminal has focus.
 
