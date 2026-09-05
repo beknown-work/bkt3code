@@ -90,9 +90,14 @@ For `t3main` and `expbkmain`, CI also resolves the upstream nightly tag that
 points at the integrated upstream tip and temporarily aligns the web, server,
 desktop, and contracts package versions before validation and build. This keeps
 the byte-pure `main` mirror unchanged while the deployed UI and server report
-the matching nightly version. If the integrated upstream tip has no nightly
-release tag, CI fails closed instead of publishing an artifact labeled with the
-previous stable version.
+the matching nightly version. When the integrated upstream tip is ahead of its
+closest upstream nightly tag, the experimental workflow derives a SemVer
+prerelease such as `0.0.39-nightly.20260905.1286.upstream.gbe7796d867a1`.
+The tag portion identifies the nearest released ancestor and the `g`-prefixed
+suffix identifies the exact integrated upstream commit; an exact tag remains
+unchanged. CI still fails closed when it cannot find a nightly ancestor or the
+nearest nightly tag is invalid, instead of publishing an artifact labeled as a
+prior exact release.
 
 ### Restarting a service kills its agent sessions
 

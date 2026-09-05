@@ -8,6 +8,12 @@ describe("updateChannels", () => {
     expect(resolveDefaultDesktopUpdateChannel("0.0.32-nightly.20260810.1")).toBe("nightly");
   });
 
+  it("keeps an untagged integrated upstream revision on the nightly channel", () => {
+    expect(isNightlyDesktopVersion("0.0.39-nightly.20260905.1286.upstream.gbe7796d867a1")).toBe(
+      true,
+    );
+  });
+
   it("routes stable versions to latest", () => {
     expect(isNightlyDesktopVersion("0.0.32")).toBe(false);
     expect(resolveDefaultDesktopUpdateChannel("0.0.32")).toBe("latest");
