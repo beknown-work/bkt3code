@@ -409,6 +409,17 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const hasSearchQuery = props.searchQuery.trim().length > 0;
+  // T3-CUSTOM(expbkt3): pass the existing Home scope to the phase sidebar so
+  // enabling it never disables search, project, or environment filtering.
+  const phaseSidebarHomeFilters = useMemo(
+    () => ({
+      matchedThreadKeys,
+      searchQuery: props.searchQuery,
+      selectedEnvironmentId: props.selectedEnvironmentId,
+      selectedProjectKeys: selectedProjectRefKeys,
+    }),
+    [matchedThreadKeys, props.searchQuery, props.selectedEnvironmentId, selectedProjectRefKeys],
+  );
   const listLayout = useMemo(
     () =>
       threadListV2Enabled
@@ -1116,6 +1127,7 @@ export function HomeScreen(props: HomeScreenProps) {
   ) : null;
   // Use the v2 project scope for its empty state. Snoozed threads need no
   // special empty state: their shelf header is a list row even while collapsed.
+  // T3-CUSTOM(expbkt3): preserve the active search query in the v2 empty state.
   const v2ListEmpty =
     hasSearchQuery && threadSearch.isPending ? null : hasSearchQuery ? (
       <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
@@ -1144,6 +1156,7 @@ export function HomeScreen(props: HomeScreenProps) {
           // Same inset handling as the stock list below, so the first row clears
           // the navigation header instead of sliding under it.
           contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+          homeFilters={phaseSidebarHomeFilters}
           onSelectThread={props.onSelectThread}
           selectedThreadKey={null}
           viewerEnvironmentId={props.selectedEnvironmentId}

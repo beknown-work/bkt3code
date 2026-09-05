@@ -59,6 +59,10 @@ import {
   useClearPhaseSidebarThreadVisit,
   useMarkPhaseSidebarThreadVisited,
 } from "./phaseSidebarVisitStore";
+import {
+  filterPhaseSidebarRowsForHost,
+  type PhaseSidebarHostFilters,
+} from "./phaseSidebarHostFilters";
 import { usePhaseSidebarRows, usePhaseSidebarViewerUserId } from "./usePhaseSidebarRows";
 
 function HeaderButton(props: {
@@ -93,6 +97,8 @@ export function PhaseSidebarPane(props: {
    * something when the phone is showing every environment at once.
    */
   readonly viewerEnvironmentId: EnvironmentId | null;
+  /** Home's search, project and environment scope. */
+  readonly homeFilters: PhaseSidebarHostFilters;
   readonly selectedThreadKey: string | null;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   /** Passed straight to the list so each host can clear its own chrome. */
@@ -105,7 +111,11 @@ export function PhaseSidebarPane(props: {
   const projects = useProjects();
   const { environments } = useEnvironments();
   const viewerEnvironmentId = props.viewerEnvironmentId ?? environments[0]?.environmentId ?? null;
-  const rows = usePhaseSidebarRows({ viewerEnvironmentId });
+  const allRows = usePhaseSidebarRows({ viewerEnvironmentId });
+  const rows = useMemo(
+    () => filterPhaseSidebarRowsForHost(allRows, props.homeFilters),
+    [allRows, props.homeFilters],
+  );
   const viewerUserId = usePhaseSidebarViewerUserId(viewerEnvironmentId);
   const markVisited = useMarkPhaseSidebarThreadVisited();
   const clearVisit = useClearPhaseSidebarThreadVisit();
@@ -345,15 +355,14 @@ export function PhaseSidebarPane(props: {
     [movePinnedThread],
   );
 
-  // Header: the three counters left, the two controls right, on one line; the
-  // provider quota grid gets the full width beneath. Nothing fights for the
-  // right-hand third any more.
+  // Status labels and controls get their own lines. This keeps every count
+  // meaningful at large text instead of shrinking it back to a bare number.
   const listHeader = useMemo(
     () => (
       <View>
-        <View className="flex-row items-center justify-between gap-2 px-4 pb-1 pt-2">
-          <PhaseSidebarCounters />
-          <View className="flex-row items-center gap-2">
+        <View className="px-4 pb-1 pt-2">
+          <PhaseSidebarCounters rows={rows} />
+          <View className="mt-2 flex-row items-center justify-end gap-2">
             <HeaderButton
               active={sheet?.kind === "group"}
               icon="square.grid.2x2"
@@ -377,7 +386,7 @@ export function PhaseSidebarPane(props: {
         <PhaseSidebarRateLimits />
       </View>
     ),
-    [filters, grouping.groupBy, sheet?.kind],
+    [filters, grouping.groupBy, rows, sheet?.kind],
   );
 
   return (
@@ -408,7 +417,7 @@ export function PhaseSidebarPane(props: {
         ListEmptyComponent={
           <View className="items-center gap-2 px-6 py-12">
             <Text className="text-center text-sm text-foreground-muted">
-              {phaseSidebarFiltersActive(filters)
+              {phaseSidebarFiltersActive(filters) || props.homeFilters.searchQuery.trim().length > 0
                 ? "No sessions match these filters."
                 : "No sessions yet."}
             </Text>

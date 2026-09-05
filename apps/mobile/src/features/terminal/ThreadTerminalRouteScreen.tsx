@@ -18,6 +18,7 @@ import {
 } from "react-native-keyboard-controller";
 
 import { AndroidHeaderIconButton, AndroidScreenHeader } from "../../components/AndroidScreenHeader";
+import { AppText as Text } from "../../components/AppText";
 import {
   ComposerToolbarButton,
   ComposerToolbarRow,
@@ -247,6 +248,9 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     },
   );
   const [keyboardFocusRequest, setKeyboardFocusRequest] = useState(0);
+  // T3-CUSTOM(expbkt3): tells hardware-keyboard simulation apart from failed native focus.
+  const [keyboardFocusState, setKeyboardFocusState] = useState<boolean | null>(null);
+  const [hasRequestedKeyboardFocus, setHasRequestedKeyboardFocus] = useState(false);
   const [isAccessoryDismissed, setIsAccessoryDismissed] = useState(false);
   const bufferReplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstNonEmptyBufferLoggedRef = useRef(false);
@@ -368,6 +372,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   // without a new attach RPC — the server never respawns anything. Detect
   // that (dead status with processed events, never seen running here) and
   // issue an explicit open; its snapshot flows into the live subscription.
+  // T3-CUSTOM(expbkt3): debug surface transitions without terminal contents.
   useEffect(() => {
     if (isRunning) {
       reopenedStaleTerminalKeyRef.current = null;
@@ -412,6 +417,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     terminalKey,
   ]);
 
+  // T3-CUSTOM(expbkt3): retain terminal status diagnostics across native redraws.
   useEffect(() => {
     terminalDebugLog("surface:props", {
       terminalKey,
@@ -439,6 +445,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       terminalKey,
       status: terminal.status,
       error: terminal.error,
+      // T3-CUSTOM(expbkt3): include the native terminal's current working-directory diagnostic.
       summary: terminal.summary?.cwd ?? null,
       // T3-CUSTOM(expbkt3): measure the joined output buffer.
       bufferLen: terminalBuffer.length,
@@ -527,6 +534,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   useEffect(() => {
     const keyboardWillShow = KeyboardEvents.addListener("keyboardWillShow", () => {
       setIsAccessoryDismissed(false);
+      setHasRequestedKeyboardFocus(false);
     });
     const keyboardWillHide = KeyboardEvents.addListener("keyboardWillHide", () => {
       setIsAccessoryDismissed(true);
@@ -1095,7 +1103,12 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   }, []);
 
   const handleShowKeyboard = useCallback(() => {
+    setKeyboardFocusState(null);
+    setHasRequestedKeyboardFocus(true);
     setKeyboardFocusRequest((current) => current + 1);
+  }, []);
+  const handleNativeKeyboardFocusChange = useCallback((isFocused: boolean) => {
+    setKeyboardFocusState(isFocused);
   }, []);
   const handleRetryEnvironment = useCallback(() => {
     if (routeEnvironmentId !== null) {
@@ -1193,6 +1206,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
             accessibilityLabel={panes.primarySidebarVisible ? "Maximize terminal" : "Show threads"}
             icon={
               panes.primarySidebarVisible ? "arrow.up.left.and.arrow.down.right" : "sidebar.left"
+            // T3-CUSTOM(expbkt3): construct a fallback connection for the terminal retry card.
             }
             onPress={togglePrimarySidebar}
             separateBackground
@@ -1260,9 +1274,11 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               selectedEnvironmentConnection?.environmentLabel ??
               "Environment"
             }
+            // T3-CUSTOM(expbkt3): terminal retry uses a complete fallback connection state.
             connection={
               environment.presentation?.connection ?? {
                 phase: "available",
+                // T3-CUSTOM(expbkt3): the terminal retry card needs a complete fallback connection.
                 error: null,
                 traceId: null,
               }
@@ -1281,6 +1297,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 isRunning={isRunning}
                 keyboardFocusRequest={keyboardFocusRequest}
                 onInput={handleInput}
+                onKeyboardFocusChange={handleNativeKeyboardFocusChange}
                 onResize={handleResize}
                 style={{ flex: 1 }}
                 terminalKey={terminalKey}
@@ -1339,39 +1356,59 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 </View>
               </KeyboardStickyView>
             ) : !keyboardState.isVisible ? (
-              <Pressable
-                accessibilityLabel="Show keyboard"
-                accessibilityRole="button"
-                onPress={handleShowKeyboard}
-                style={({ pressed }) => ({
-                  bottom: 16,
-                  borderRadius: 28,
-                  opacity: pressed ? 0.72 : 1,
-                  position: "absolute",
-                  right: 16,
-                })}
-              >
-                <GlassSurface
-                  chrome="none"
-                  glassEffectStyle="regular"
-                  tintColor="transparent"
-                  style={{
-                    alignItems: "center",
-                    borderRadius: 24,
-                    height: 48,
-                    justifyContent: "center",
-                    width: 48,
-                  }}
-                  pointerEvents="none"
+              <>
+                {hasRequestedKeyboardFocus && keyboardFocusState !== null ? (
+                  <View
+                    accessibilityLiveRegion="polite"
+                    className="absolute rounded-md px-3 py-2"
+                    style={{
+                      backgroundColor: terminalTheme.border,
+                      bottom: 72,
+                      maxWidth: 260,
+                      right: 16,
+                    }}
+                  >
+                    <Text className="text-2xs" style={{ color: terminalTheme.foreground }}>
+                      {keyboardFocusState
+                        ? "Terminal input is focused. A connected hardware keyboard may keep the software keyboard hidden."
+                        : "Terminal input could not be focused. Tap the terminal and try again."}
+                    </Text>
+                  </View>
+                ) : null}
+                <Pressable
+                  accessibilityLabel="Show keyboard"
+                  accessibilityRole="button"
+                  onPress={handleShowKeyboard}
+                  style={({ pressed }) => ({
+                    bottom: 16,
+                    borderRadius: 28,
+                    opacity: pressed ? 0.72 : 1,
+                    position: "absolute",
+                    right: 16,
+                  })}
                 >
-                  <SymbolView
-                    name={{ ios: "keyboard", android: "keyboard" }}
-                    size={20}
-                    tintColor={terminalTheme.foreground}
-                    type="monochrome"
-                  />
-                </GlassSurface>
-              </Pressable>
+                  <GlassSurface
+                    chrome="none"
+                    glassEffectStyle="regular"
+                    tintColor="transparent"
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 24,
+                      height: 48,
+                      justifyContent: "center",
+                      width: 48,
+                    }}
+                    pointerEvents="none"
+                  >
+                    <SymbolView
+                      name={{ ios: "keyboard", android: "keyboard" }}
+                      size={20}
+                      tintColor={terminalTheme.foreground}
+                      type="monochrome"
+                    />
+                  </GlassSurface>
+                </Pressable>
+              </>
             ) : null}
           </>
         )}

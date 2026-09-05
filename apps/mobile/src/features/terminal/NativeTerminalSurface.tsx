@@ -32,6 +32,11 @@ interface TerminalResizeEvent {
   readonly rows: number;
 }
 
+// T3-CUSTOM(expbkt3): bridge a non-sensitive native focus result to the route.
+interface TerminalKeyboardFocusEvent {
+  readonly isFocused: boolean;
+}
+
 interface TerminalSurfaceProps extends ViewProps {
   readonly terminalKey: string;
   readonly buffer: string;
@@ -44,6 +49,7 @@ interface TerminalSurfaceProps extends ViewProps {
   readonly theme?: TerminalTheme;
   readonly onInput: (data: string) => void;
   readonly onResize: (size: { readonly cols: number; readonly rows: number }) => void;
+  readonly onKeyboardFocusChange?: (isFocused: boolean) => void;
 }
 
 function estimateGridSize(input: {
@@ -170,6 +176,7 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface(props: Ter
         </Pressable>
       </View>
     </View>
+  // T3-CUSTOM(expbkt3): bridge native keyboard-focus events to the route.
   );
 });
 
@@ -210,7 +217,15 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
         rows: event.nativeEvent.rows,
       });
     },
+    // T3-CUSTOM(expbkt3): resize callback remains stable for the native terminal.
     [onResize],
+  );
+  // T3-CUSTOM(expbkt3): diagnose focus without observing terminal text.
+  const handleNativeKeyboardFocusChange = useCallback(
+    (event: NativeSyntheticEvent<TerminalKeyboardFocusEvent>) => {
+      props.onKeyboardFocusChange?.(event.nativeEvent.isFocused);
+    },
+    [props.onKeyboardFocusChange],
   );
 
   if (NativeTerminalSurfaceView) {
@@ -230,6 +245,7 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
           style={{ flex: 1 }}
           themeConfig={buildGhosttyThemeConfig(theme)}
           onInput={handleNativeInput}
+          onKeyboardFocusChange={handleNativeKeyboardFocusChange}
           onResize={handleNativeResize}
         />
       </View>

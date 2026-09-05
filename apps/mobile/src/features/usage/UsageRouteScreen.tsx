@@ -140,7 +140,7 @@ export function UsageRouteScreen() {
           />
         }
       >
-        <SegmentedControl options={TAB_OPTIONS} selected={tab} onSelect={setTab} role="tab" />
+        <SegmentedControl options={TAB_OPTIONS} selected={tab} onSelect={setTab} />
 
         {showingLimits ? (
           <UsageLimitsSection now={limits.now} failedLabels={limits.failedLabels} />
@@ -211,14 +211,14 @@ function SegmentedControl<Value extends number | string>(props: {
   readonly onSelect: (value: Value) => void;
   /** The tab bar is full height; filters under it are shorter so it stays primary. */
   readonly size?: "default" | "compact";
-  /** "tab" for the view switcher; filters stay plain buttons. */
-  readonly role?: "tab" | "button";
   readonly className?: string;
 }) {
   const compact = props.size === "compact";
   return (
+    // T3-CUSTOM(expbkt3): iOS exposes tab roles as static selected labels in this
+    // segmented surface. Direct button semantics keep every visual segment actionable.
     <View
-      accessibilityRole={props.role === "tab" ? "tablist" : undefined}
+      accessible={false}
       className={cn(
         "flex-row overflow-hidden rounded-full border-continuous bg-card",
         props.className,
@@ -229,8 +229,9 @@ function SegmentedControl<Value extends number | string>(props: {
         return (
           <Pressable
             key={String(option.value)}
-            accessibilityRole={props.role ?? "button"}
-            accessibilityLabel={option.accessibilityLabel}
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={option.accessibilityLabel ?? option.label}
             accessibilityState={{ selected: active }}
             onPress={() => props.onSelect(option.value)}
             className={cn(

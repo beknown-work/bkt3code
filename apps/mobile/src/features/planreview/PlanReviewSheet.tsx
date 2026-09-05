@@ -52,6 +52,10 @@ function PlanReviewLine(props: {
 
   return (
     <Pressable
+      accessibilityHint="Double tap to select this line. Select another line to extend the range."
+      accessibilityLabel={`Line ${row.lineIndex + 1}${row.discussionIds.length > 0 ? `, ${row.discussionIds.length} open comment${row.discussionIds.length === 1 ? "" : "s"}` : ""}: ${row.text || "blank"}`}
+      accessibilityRole="button"
+      accessibilityState={{ selected: isSelected }}
       className={cn(
         "flex-row items-start px-3 py-0.5",
         isSelected && "bg-primary/15",
@@ -158,7 +162,12 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
         <Text className="text-center text-sm text-foreground-muted">
           {initial.error ?? "This plan is no longer available."}
         </Text>
-        <Pressable hitSlop={8} onPress={initial.refresh}>
+        <Pressable
+          accessibilityLabel="Retry plan review"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={initial.refresh}
+        >
           <Text className="text-sm font-t3-bold text-primary">Try again</Text>
         </Pressable>
       </View>
@@ -227,6 +236,9 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
             style={{ bottom: 0, paddingBottom: insets.bottom + 12 }}
           >
             <Pressable
+              accessibilityLabel="Request changes to this plan"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isSubmitting, busy: pendingDecision === "changes-requested" }}
               className="flex-1 items-center rounded-lg border border-border py-3"
               disabled={isSubmitting}
               onPress={() => handleDecide("changes-requested")}
@@ -238,6 +250,9 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
               )}
             </Pressable>
             <Pressable
+              accessibilityLabel="Approve this plan"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isSubmitting, busy: pendingDecision === "approved" }}
               className="flex-1 items-center rounded-lg bg-primary py-3"
               disabled={isSubmitting}
               onPress={() => handleDecide("approved")}
@@ -259,6 +274,8 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
             {formatPlanReviewSelectionLabel(selection)}
           </Text>
           <Pressable
+            accessibilityLabel={`Comment on ${formatPlanReviewSelectionLabel(selection).toLowerCase()}`}
+            accessibilityRole="button"
             className="flex-row items-center gap-2 rounded-lg bg-primary px-4 py-3"
             onPress={handleOpenComposer}
           >
@@ -313,6 +330,9 @@ function PlanReviewDiscussionList(props: {
             </Text>
           ))}
           <Pressable
+            accessibilityLabel={thread.discussion.isResolved ? "Reopen discussion" : "Resolve discussion"}
+            accessibilityRole="button"
+            accessibilityState={{ checked: thread.discussion.isResolved }}
             className="mt-2 self-start"
             hitSlop={8}
             onPress={() => {

@@ -123,6 +123,8 @@ export interface NativeReviewDiffViewProps extends ViewProps {
   readonly contentWidth: number;
   readonly initialRowIndex?: number;
   readonly refreshing?: boolean;
+  /** Enables review-only line actions; source previews remain static text. */
+  readonly reviewSelectionEnabled?: boolean;
   readonly nativeViewRef?: Ref<NativeReviewDiffViewHandle>;
   readonly onPullToRefresh?: (event: NativeSyntheticEvent<Record<string, never>>) => void;
   readonly onDebug?: (event: NativeSyntheticEvent<Record<string, unknown>>) => void;

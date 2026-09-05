@@ -83,11 +83,26 @@ export function PlanReviewCommentSheet(props: PlanReviewCommentSheetProps) {
     >
       <View className="flex-1" style={{ paddingBottom: insets.bottom }}>
         <View className="flex-row items-center justify-between border-b border-border px-4 py-3">
-          <Pressable hitSlop={8} onPress={dismiss}>
+          <Pressable
+            // T3-CUSTOM(expbkt3): keep route actions visible to native accessibility.
+            accessible
+            accessibilityLabel="Cancel comment"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={dismiss}
+          >
             <Text className="text-base text-foreground-muted">Cancel</Text>
           </Pressable>
           <Text className="text-base font-t3-bold text-foreground">Comment</Text>
-          <Pressable disabled={!canSubmit} hitSlop={8} onPress={handleSubmit}>
+          <Pressable
+            accessible
+            accessibilityLabel="Save comment"
+            accessibilityRole="button"
+            accessibilityState={{ busy: isSaving, disabled: !canSubmit }}
+            disabled={!canSubmit}
+            hitSlop={8}
+            onPress={handleSubmit}
+          >
             {isSaving ? (
               <ActivityIndicator size="small" />
             ) : (

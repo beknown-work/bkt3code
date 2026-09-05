@@ -215,6 +215,8 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
 
   let onInput = EventDispatcher()
   let onResize = EventDispatcher()
+  // T3-CUSTOM(expbkt3): reports focus only, never typed terminal data.
+  let onKeyboardFocusChange = EventDispatcher()
 
   var terminalKey: String = "" {
     didSet {
@@ -290,6 +292,17 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     applyTheme()
     clipsToBounds = true
     contentScaleFactor = UIScreen.main.scale
+    isAccessibilityElement = true
+    accessibilityLabel = "Terminal input"
+    accessibilityHint = "Double tap to focus the terminal and start typing."
+    accessibilityTraits = .button
+    accessibilityCustomActions = [
+      UIAccessibilityCustomAction(
+        name: "Focus terminal input",
+        target: self,
+        selector: #selector(focusTerminalInputForAccessibility)
+      )
+    ]
 
     terminalViewport.clipsToBounds = true
     terminalViewport.contentScaleFactor = contentScaleFactor
@@ -440,7 +453,19 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
 
   @objc
   private func handleInputEditingDidBegin() {
+    reportKeyboardFocus()
     textInputModeDidChange()
+  }
+
+  @objc
+  private func focusTerminalInputForAccessibility() -> Bool {
+    requestKeyboardFocus()
+    return inputField.isFirstResponder
+  }
+
+  // T3-CUSTOM(expbkt3): VoiceOver activation must match the named rotor action.
+  public override func accessibilityActivate() -> Bool {
+    focusTerminalInputForAccessibility()
   }
 
   private func createSurfaceIfPossible() {
@@ -657,9 +682,19 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   }
 
   private func requestKeyboardFocus() {
-    guard window != nil else { return }
+    guard window != nil else {
+      onKeyboardFocusChange(["isFocused": false])
+      return
+    }
     inputField.becomeFirstResponder()
+    DispatchQueue.main.async { [weak self] in
+      self?.reportKeyboardFocus()
+    }
     textInputModeDidChange()
+  }
+
+  private func reportKeyboardFocus() {
+    onKeyboardFocusChange(["isFocused": inputField.isFirstResponder])
   }
 
   private func emitInput(_ data: String) {

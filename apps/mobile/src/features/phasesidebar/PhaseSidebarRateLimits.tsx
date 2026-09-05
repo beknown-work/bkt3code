@@ -10,6 +10,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   buildProviderRateLimitRows,
+  formatSingleUnitMinutes,
   providerRateLimitTone,
   type ProviderRateLimitRowView,
   type ProviderRateLimitTone,
@@ -38,9 +39,9 @@ function toneBarClassName(tone: ProviderRateLimitTone): string {
 }
 
 /**
- * One provider's quota as a full-width row: name, bar, percent. Rows sit in a
- * two-column grid so four providers across two machines fit in two lines and
- * the bars get real width instead of a 48px stub.
+ * One provider's quota as a full-width row. The machine, provider, remaining
+ * amount and reset window stay together, which is more useful than a clipped
+ * two-column meter when Home combines several environments.
  */
 function RateLimitBar(props: {
   readonly row: ProviderRateLimitRowView;
@@ -52,24 +53,35 @@ function RateLimitBar(props: {
   if (row.remainingPercent === null) return null;
   const tone = providerRateLimitTone(row.remainingPercent);
   const clamped = Math.max(0, Math.min(100, row.remainingPercent));
+  const name = props.prefix === null ? row.displayName : `${props.prefix} · ${row.displayName}`;
+  const resetLabel =
+    row.headlineMinutesUntilReset === null
+      ? "Reset time unavailable"
+      : row.headlineMinutesUntilReset === 0
+        ? "Resets now"
+        : `Resets in ${formatSingleUnitMinutes(row.headlineMinutesUntilReset)}`;
 
   return (
-    <View className="w-1/2 flex-row items-center gap-2 pr-3">
-      <Text
-        className="w-[72px] shrink-0 font-t3-mono text-[10px] uppercase text-foreground-muted"
-        numberOfLines={1}
-      >
-        {props.prefix === null ? row.displayName : `${props.prefix} ${row.displayName}`}
-      </Text>
-      <View className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-subtle-strong">
+    <View
+      accessibilityLabel={`${name}, ${Math.round(clamped)}% quota remaining. ${resetLabel}.`}
+      accessibilityRole="text"
+      className="w-full gap-1"
+    >
+      <View className="flex-row items-baseline gap-2">
+        <Text className="min-w-0 flex-1 font-t3-mono text-[10px] uppercase text-foreground-muted">
+          {name}
+        </Text>
+        <Text className="shrink-0 font-t3-mono text-[10px] text-foreground">
+          {Math.round(clamped)}% remaining
+        </Text>
+      </View>
+      <View className="h-1.5 w-full overflow-hidden rounded-full bg-subtle-strong">
         <View
           className={cn("h-full rounded-full", toneBarClassName(tone))}
           style={{ width: `${clamped}%` }}
         />
       </View>
-      <Text className="w-8 shrink-0 text-right font-t3-mono text-[10px] text-foreground-muted">
-        {Math.round(clamped)}%
-      </Text>
+      <Text className="font-t3-mono text-[10px] text-foreground-tertiary">{resetLabel}</Text>
     </View>
   );
 }
@@ -145,7 +157,7 @@ export function PhaseSidebarRateLimits(props: { readonly onPress?: () => void })
   return (
     <Pressable
       className={cn(
-        "flex-row flex-wrap gap-y-1.5 px-4",
+        "gap-2 px-4",
         anyVisible ? "pb-1 pt-2" : "h-0 overflow-hidden",
       )}
       disabled={props.onPress === undefined}

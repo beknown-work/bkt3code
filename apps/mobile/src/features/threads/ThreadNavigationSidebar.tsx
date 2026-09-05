@@ -282,6 +282,16 @@ function ThreadNavigationSidebarPane(
           ),
     [selectedProjectScope],
   );
+  // T3-CUSTOM(expbkt3): keep the phase sidebar inside the stock Home scope.
+  const phaseSidebarHomeFilters = useMemo(
+    () => ({
+      matchedThreadKeys,
+      searchQuery: props.searchQuery,
+      selectedEnvironmentId: options.selectedEnvironmentId,
+      selectedProjectKeys: selectedProjectRefs,
+    }),
+    [matchedThreadKeys, options.selectedEnvironmentId, props.searchQuery, selectedProjectRefs],
+  );
   const scopedProjects = useMemo(
     () =>
       threadListV2Enabled
@@ -1179,6 +1189,7 @@ function ThreadNavigationSidebarPane(
               obscureBackground: false,
               placeholder: "Search",
               placement: "stacked",
+              // T3-CUSTOM(expbkt3): controlled native search updates the fork sidebar filter.
               onCancelButtonPress: () => {
                 props.onSearchQueryChange("");
               },
@@ -1195,6 +1206,7 @@ function ThreadNavigationSidebarPane(
           <PhaseSidebarPane
             contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 16 }}
             contentInsetAdjustmentBehavior={NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"}
+            homeFilters={phaseSidebarHomeFilters}
             onSelectThread={props.onSelectThread}
             selectedThreadKey={props.selectedThreadKey}
             viewerEnvironmentId={phaseSidebarViewerEnvironmentId}
@@ -1229,7 +1241,9 @@ function ThreadNavigationSidebarPane(
                   {...scrollGateHandlers}
                   recycleItems
                   scrollEventThrottle={16}
+                  // T3-CUSTOM(expbkt3): retain stock scroll behavior behind the fork sidebar flag.
                   showsVerticalScrollIndicator={false}
+                  // T3-CUSTOM(expbkt3): preserve stock list layout when the fork sidebar is off.
                   style={styles.threadList}
                   ListEmptyComponent={listEmpty}
                 />
@@ -1249,6 +1263,7 @@ function ThreadNavigationSidebarPane(
       <View className="flex-1" style={{ width: props.width }}>
         <PhaseSidebarPane
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 16 }}
+          homeFilters={phaseSidebarHomeFilters}
           onSelectThread={props.onSelectThread}
           selectedThreadKey={props.selectedThreadKey}
           viewerEnvironmentId={phaseSidebarViewerEnvironmentId}

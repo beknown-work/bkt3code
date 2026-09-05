@@ -25,13 +25,25 @@ import {
 } from "@t3tools/client-runtime/state/phase-sidebar";
 import { worktreeCodenameToneIndex } from "@t3tools/shared/worktreeCodename";
 import type { UserId } from "@t3tools/contracts";
-import type { MenuAction, NativeActionEvent } from "@react-native-menu/menu";
-import { memo, useCallback, useMemo, type ReactNode } from "react";
+import {
+  MenuView,
+  type MenuAction,
+  type MenuComponentRef,
+  type NativeActionEvent,
+} from "@react-native-menu/menu";
+import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-import { Pressable, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
+import {
+  ActionSheetIOS,
+  Platform,
+  Pressable,
+  useWindowDimensions,
+  View,
+  type LayoutChangeEvent,
+} from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
-import { ControlPillMenu } from "../../components/ControlPill";
+import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
@@ -106,6 +118,8 @@ const PRIMARY_SWIPE: Record<
   unsnooze: { icon: "clock", label: "Wake" },
 };
 
+type IdentifiedMenuAction = MenuAction & { readonly id: string };
+
 export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
   props: PhaseSidebarRowViewProps,
 ) {
@@ -127,6 +141,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
   });
   const providerCode = resolvePhaseSidebarProviderCode(row.providerKind);
   const priority = thread.priority ?? null;
+  const actionsMenuRef = useRef<MenuComponentRef>(null);
 
   const handlePress = useCallback(() => props.onPress(row), [props, row]);
   const handleLayout = useCallback(
@@ -141,6 +156,84 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
     [onPressAction, row],
   );
   const handleToggle = useCallback(() => props.onToggleExpanded(row), [props, row]);
+  // VoiceOver custom actions cannot enter a submenu, so expose the actionable
+  // leaves (for example each snooze preset and destination group) directly.
+  const actionLeaves = useMemo<ReadonlyArray<IdentifiedMenuAction>>(
+    () =>
+      props.actions
+        .flatMap((action) => action.subactions ?? [action])
+        .filter((action): action is IdentifiedMenuAction => typeof action.id === "string"),
+    [props.actions],
+  );
+  const accessibilityActions = useMemo(
+    () =>
+      actionLeaves.map((action) => ({
+        name: action.id,
+        label: action.title,
+      })),
+    [actionLeaves],
+  );
+  const showActions = useCallback(() => actionsMenuRef.current?.show(), []);
+  // T3-CUSTOM(expbkt3): iOS has no accessible MenuView child, so retain nested
+  // lifecycle groups in successive native action sheets instead of flattening them.
+  const presentIosActions = useCallback(
+    (actions: ReadonlyArray<IdentifiedMenuAction>, title: string) => {
+      const cancelButtonIndex = actions.length;
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          cancelButtonIndex,
+          destructiveButtonIndex: actions.flatMap((action, index) =>
+            action.attributes?.destructive === true ? [index] : [],
+          ),
+          options: [...actions.map((action) => action.title), "Cancel"],
+          title,
+        },
+        (selectedIndex) => {
+          const action = actions[selectedIndex];
+          if (action === undefined) return;
+          const subactions = action.subactions?.filter(
+            (candidate): candidate is IdentifiedMenuAction => typeof candidate.id === "string",
+          );
+          if (subactions && subactions.length > 0) {
+            presentIosActions(subactions, thread.title + " · " + action.title);
+            return;
+          }
+          onPressAction(row, action.id);
+        },
+      );
+    },
+    [onPressAction, row, thread.title],
+  );
+  const iosTopLevelActions = useMemo<ReadonlyArray<IdentifiedMenuAction>>(() => {
+    const priorityActions = props.actions.filter(
+      (action): action is IdentifiedMenuAction =>
+        typeof action.id === "string" && action.id.startsWith("priority:"),
+    );
+    const nonPriorityActions = props.actions.filter(
+      (action): action is IdentifiedMenuAction =>
+        typeof action.id === "string" && !action.id.startsWith("priority:"),
+    );
+    return priorityActions.length === 0
+      ? nonPriorityActions
+      : [
+          ...nonPriorityActions,
+          {
+            id: "priority",
+            subactions: [...priorityActions],
+            title: "Priority",
+          },
+        ];
+  }, [props.actions]);
+  const showLongPressActions = useCallback(() => {
+    // `@react-native-menu/menu` exposes an imperative menu presenter on
+    // Android only. iOS keeps the familiar long-press gesture with a native
+    // action sheet while the visible overflow retains its hierarchical menu.
+    if (Platform.OS !== "ios") {
+      showActions();
+      return;
+    }
+    presentIosActions(iosTopLevelActions, thread.title + " actions");
+  }, [iosTopLevelActions, presentIosActions, showActions, thread.title]);
 
   const primary = PRIMARY_SWIPE[props.swipe.primary];
   const primaryAction = useMemo(
@@ -207,33 +300,31 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
       threadTitle={thread.title}
     >
       {(close) => (
-        <ControlPillMenu
-          actions={props.actions}
-          isAnchoredToRight
-          onPressAction={handlePressAction}
-          shouldOpenOnLongPress
+        <View
+          className={cn(
+            "min-h-[56px] flex-row items-stretch gap-1 bg-screen py-2.5 pr-2",
+            props.isActive && "bg-primary/10",
+            props.isDragging === true && "opacity-40",
+            props.isDropTarget === true &&
+              (props.dropRejectionLabel === null ? "bg-emerald-500/15" : "bg-rose-500/15"),
+          )}
+          onLayout={handleLayout}
+          style={{ paddingLeft: 16 + props.indentDepth * INDENT_STEP }}
         >
           <Pressable
-            accessibilityHint={`Opens the thread. Swipe left for ${swipeHint}.`}
+            accessibilityActions={accessibilityActions}
+            accessibilityHint={`Opens the thread. Swipe left for ${swipeHint}. Touch and hold for actions.`}
             accessibilityLabel={`${thread.title}${unread ? ", unread" : ""}${props.environmentAppearance ? `, on ${props.environmentAppearance.name}` : ""}`}
             accessibilityRole="button"
             accessibilityState={{ selected: props.isActive }}
-            className={cn(
-              "min-h-[56px] flex-row items-start gap-2 bg-screen py-2.5 pr-3",
-              props.isActive && "bg-primary/10",
-              props.isDragging === true && "opacity-40",
-              props.isDropTarget === true &&
-                (props.dropRejectionLabel === null ? "bg-emerald-500/15" : "bg-rose-500/15"),
-            )}
-            onLayout={handleLayout}
+            className="min-w-0 flex-1 flex-row items-start gap-2"
+            onAccessibilityAction={({ nativeEvent }) => onPressAction(row, nativeEvent.actionName)}
+            onLongPress={showLongPressActions}
             onPress={() => {
               close();
               handlePress();
             }}
-            style={({ pressed }) => ({
-              paddingLeft: 16 + props.indentDepth * INDENT_STEP,
-              opacity: pressed ? 0.7 : 1,
-            })}
+            style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
           >
             {/* The unread dot sits in a fixed gutter, so read and unread
                 titles start at the same x and the eye can scan the column. */}
@@ -341,11 +432,52 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
                 <Text className="shrink-0 font-t3-mono text-[11px] uppercase text-foreground-tertiary">
                   {providerCode}
                 </Text>
-                {props.dragHandle}
               </View>
             </View>
           </Pressable>
-        </ControlPillMenu>
+          {/* T3-CUSTOM(expbkt3): MenuView swallows its child from iOS accessibility.
+              ActionSheetIOS leaves this visible control independently actionable. */}
+          {Platform.OS === "ios" ? (
+            <Pressable
+              accessibilityHint="Opens session lifecycle actions"
+              accessibilityLabel={`Actions for ${thread.title}`}
+              accessibilityRole="button"
+              className="w-8 items-center justify-center rounded-md"
+              onPress={showLongPressActions}
+            >
+              <SymbolView
+                name="ellipsis"
+                size={16}
+                tintColorClassName="accent-icon"
+                type="monochrome"
+              />
+            </Pressable>
+          ) : (
+            <MenuView
+              actions={props.actions}
+              isAnchoredToRight
+              onPressAction={handlePressAction}
+              ref={actionsMenuRef}
+              title={`${thread.title} actions`}
+            >
+              <Pressable
+                accessibilityHint="Opens session lifecycle actions"
+                accessibilityLabel={`Actions for ${thread.title}`}
+                accessibilityRole="button"
+                className="w-8 items-center justify-center rounded-md"
+                onPress={showActions}
+              >
+                <SymbolView
+                  name="ellipsis"
+                  size={16}
+                  tintColorClassName="accent-icon"
+                  type="monochrome"
+                />
+              </Pressable>
+            </MenuView>
+          )}
+          {props.dragHandle}
+        </View>
       )}
     </ThreadSwipeable>
   );

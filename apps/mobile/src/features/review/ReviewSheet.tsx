@@ -69,7 +69,7 @@ import { useReviewFileVisibility } from "./reviewFileVisibility";
 import { useReviewSections } from "./useReviewSections";
 import { useNativeReviewDiffBridge } from "./useNativeReviewDiffBridge";
 import { useReviewCommentSelectionController } from "./useReviewCommentSelectionController";
-import { resolveReviewAvailability } from "./reviewAvailability";
+import { resolveReviewAvailability, resolveReviewResultPresentation } from "./reviewAvailability";
 import { resolveSelectedReviewFileId } from "./reviewPaneSelection";
 import { buildReviewSectionMenu } from "./review-section-menu";
 import type { ReviewSectionItem } from "./reviewModel";
@@ -126,6 +126,8 @@ function ReviewSelectionActionBar(props: {
     >
       {props.onOpenComment ? (
         <Pressable
+          accessibilityLabel={props.title}
+          accessibilityRole="button"
           className="h-12 flex-1 flex-row items-center justify-center gap-2 rounded-full bg-primary px-5"
           onPress={props.onOpenComment}
         >
@@ -138,6 +140,8 @@ function ReviewSelectionActionBar(props: {
       )}
 
       <Pressable
+        accessibilityLabel="Clear selected diff lines"
+        accessibilityRole="button"
         className="h-12 w-12 items-center justify-center rounded-full bg-primary"
         onPress={props.onClear}
       >
@@ -532,6 +536,12 @@ export function ReviewSheet(props: ReviewSheetProps) {
     hasCachedSelectedDiff,
     hasAnyCachedDiff,
   });
+  // T3-CUSTOM(expbkt3): an error must never also claim the diff is clean.
+  const reviewResultPresentation = resolveReviewResultPresentation({
+    error,
+    hasSelectedSection: selectedSection !== null,
+    parsedDiffKind: parsedDiff.kind,
+  });
   const androidSectionMenuActions = useMemo<MenuAction[]>(() => {
     const sectionAction = (section: ReviewSectionItem | null, title: string): MenuAction => ({
       id: section ? `section:${section.id}` : `unavailable:${title}`,
@@ -608,11 +618,19 @@ export function ReviewSheet(props: ReviewSheetProps) {
   const listHeader = useMemo(() => {
     const children: ReactElement[] = [];
 
-    if (error) {
+    if (reviewResultPresentation.showUnavailable) {
       children.push(
         <View key="review-error" className="border-b border-border bg-card px-4 py-3">
           <Text className="text-sm font-t3-bold text-foreground">Review unavailable</Text>
           <Text className="text-xs leading-normal text-foreground-muted">{error}</Text>
+          <Pressable
+            accessibilityLabel="Retry review"
+            accessibilityRole="button"
+            className="mt-3 self-start rounded-md bg-primary px-3 py-2"
+            onPress={() => void refreshSelectedSection()}
+          >
+            <Text className="text-xs font-t3-bold text-primary-foreground">Try again</Text>
+          </Pressable>
         </View>,
       );
     }
@@ -626,7 +644,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
     }
 
     return <>{children}</>;
-  }, [error, parsedDiffNotice]);
+  }, [error, parsedDiffNotice, refreshSelectedSection, reviewResultPresentation.showUnavailable]);
   const headerSubtitle = [
     headerDiffSummary.additions,
     headerDiffSummary.deletions,
@@ -800,6 +818,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
                   collapsable={false}
                   testID="review-native-diff-view"
                   refreshing={isPullRefreshing}
+                  reviewSelectionEnabled
                   onPullToRefresh={() => void handlePullToRefresh()}
                   style={StyleSheet.absoluteFill}
                   appearanceScheme={selectedTheme}
@@ -839,19 +858,19 @@ export function ReviewSheet(props: ReviewSheetProps) {
             className="flex-1"
           >
             {listHeader}
-            {!selectedSection ? (
+            {reviewResultPresentation.showUnavailable ? null : reviewResultPresentation.showNoSections ? (
               <View className="border-b border-border bg-card px-4 py-5">
                 <Text className="text-sm font-t3-bold text-foreground">No review diffs</Text>
                 <Text className="text-xs leading-normal text-foreground-muted">
                   This thread has no ready turn diffs and the worktree diff is empty.
                 </Text>
               </View>
-            ) : selectedSection.isLoading && selectedSection.diff === null ? (
+            ) : selectedSection?.isLoading && selectedSection.diff === null ? (
               <View className="items-center gap-3 border-b border-border bg-card px-4 py-6">
                 <ActivityIndicator size="small" />
                 <Text className="text-xs text-foreground-muted">Loading diff…</Text>
               </View>
-            ) : parsedDiff.kind === "empty" ? (
+            ) : reviewResultPresentation.showSuccessfulEmpty ? (
               <View className="border-b border-border bg-card px-4 py-5">
                 <Text className="text-sm font-t3-bold text-foreground">No changes</Text>
                 <Text className="text-xs leading-normal text-foreground-muted">

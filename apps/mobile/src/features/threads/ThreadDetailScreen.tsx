@@ -78,6 +78,8 @@ import { PendingApprovalCard } from "./PendingApprovalCard";
 // T3-CUSTOM(expbkt3): plan review entry point, shown beside the other pending cards.
 import { PlanReviewThreadBanner } from "../planreview/PlanReviewThreadBanner";
 import { PendingUserInputCard } from "./PendingUserInputCard";
+// T3-CUSTOM(expbkt3): terminal execution outcome card and truthful stopped fold.
+import { getThreadExecutionOutcome } from "./thread-execution-outcome";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -318,6 +320,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     intent: props.selectedThread.execution?.intent ?? null,
     providerActivity: props.selectedThread.execution?.activity ?? "idle",
   });
+  // T3-CUSTOM(expbkt3): use the supervisor's terminal turn state, not the
+  // lagging latest-turn projection, for an explicit stopped/failed outcome.
+  const executionOutcome = getThreadExecutionOutcome(props.selectedThread.execution);
+  // T3-CUSTOM(expbkt3): a provider can acknowledge an interrupt with a
+  // completed event. Keep the work-group label truthful for that same turn.
+  const latestTurn = props.selectedThread.latestTurn;
+  const feedLatestTurn =
+    executionOutcome?.kind === "stopped" &&
+    executionOutcome.providerTurnId !== null &&
+    latestTurn !== null &&
+    latestTurn.turnId === executionOutcome.providerTurnId
+      ? { ...latestTurn, state: "interrupted" as const }
+      : latestTurn;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
   // data yet → "Loading messages", cached data reconciling → "Syncing".
@@ -741,7 +756,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             feed={props.selectedThreadFeed}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
-            latestTurn={props.selectedThread.latestTurn}
+            latestTurn={feedLatestTurn}
             execution={props.selectedThread.execution ?? null}
             turnSummaries={props.selectedThreadTurnSummaries}
             activeWorkStartedAt={props.activeWorkStartedAt}
@@ -849,6 +864,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         <Text className="text-xs font-t3-medium text-foreground">Edit</Text>
                       </Pressable>
                     </View>
+                  </View>
+                ) : null}
+                {executionOutcome ? (
+                  <View className="mx-4 mb-3 rounded-xl border border-border bg-card px-4 py-3">
+                    <Text className="text-sm font-t3-medium text-foreground">
+                      {executionOutcome.title}
+                    </Text>
+                    <Text className="mt-1 text-xs text-foreground-muted">
+                      {executionOutcome.detail}
+                    </Text>
                   </View>
                 ) : null}
                 {/* T3-CUSTOM(expbkt3): plan ready → review. Lives with the pending

@@ -106,6 +106,53 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
 };
 
+// T3-CUSTOM(expbkt3): compact headers keep terminal sessions and project scripts in Git.
+function terminalMenuItems(props: ThreadGitControlsProps): HeaderItems {
+  return [
+    ...props.projectScripts.map((script) => ({
+      description: script.command,
+      icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
+      label: projectScriptMenuLabel(script),
+      onPress: () => void props.onRunProjectScript(script),
+      type: "action" as const,
+    })),
+    ...(props.projectScripts.length === 0
+      ? [
+          {
+            description: "This project has no saved scripts yet",
+            disabled: true,
+            icon: { name: "play", type: "sfSymbol" as const },
+            label: "No project scripts",
+            onPress: () => {},
+            type: "action" as const,
+          },
+        ]
+      : []),
+    ...props.terminalSessions.map((session) => ({
+      description: [
+        getTerminalStatusLabel({
+          status: session.status,
+          hasRunningSubprocess: session.hasRunningSubprocess,
+        }),
+        basename(session.cwd),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      icon: { name: "terminal", type: "sfSymbol" as const },
+      label: session.displayLabel,
+      onPress: () => props.onOpenTerminal(session.terminalId),
+      type: "action" as const,
+    })),
+    {
+      description: "Start another shell for this thread",
+      icon: { name: "plus", type: "sfSymbol" },
+      label: "Open new terminal",
+      onPress: props.onOpenNewTerminal,
+      type: "action",
+    },
+  ];
+}
+
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const navigation = useNavigation();
   const environmentId = props.environmentId;
@@ -250,7 +297,9 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
   const model = useThreadGitControlModel(props);
 
   return useMemo(
-    () => ({
+    () => {
+      const terminalItems = terminalMenuItems(props);
+      return {
       terminal: {
         accessibilityLabel: "Open terminal",
         disabled: !props.canOpenTerminal,
@@ -258,49 +307,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         identifier: "thread-right-terminal",
         label: "Terminal",
         menu: {
-          items: [
-            ...props.projectScripts.map((script) => ({
-              description: script.command,
-              icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
-              label: projectScriptMenuLabel(script),
-              onPress: () => void props.onRunProjectScript(script),
-              type: "action" as const,
-            })),
-            ...(props.projectScripts.length === 0
-              ? [
-                  {
-                    description: "This project has no saved scripts yet",
-                    disabled: true,
-                    icon: { name: "play", type: "sfSymbol" as const },
-                    label: "No project scripts",
-                    onPress: () => {},
-                    type: "action" as const,
-                  },
-                ]
-              : []),
-            ...props.terminalSessions.map((session) => ({
-              description: [
-                getTerminalStatusLabel({
-                  status: session.status,
-                  hasRunningSubprocess: session.hasRunningSubprocess,
-                }),
-                basename(session.cwd),
-              ]
-                .filter(Boolean)
-                .join(" · "),
-              icon: { name: "terminal", type: "sfSymbol" as const },
-              label: session.displayLabel,
-              onPress: () => props.onOpenTerminal(session.terminalId),
-              type: "action" as const,
-            })),
-            {
-              description: "Start another shell for this thread",
-              icon: { name: "plus", type: "sfSymbol" },
-              label: "Open new terminal",
-              onPress: props.onOpenNewTerminal,
-              type: "action",
-            },
-          ],
+          items: terminalItems,
           title: "Terminal",
         },
         sharesBackground: true,
@@ -352,6 +359,26 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
               onPress: model.openReview,
               type: "action",
             },
+            // T3-CUSTOM(expbkt3): compact headers collapse direct controls
+            // into this menu without removing Files or Terminal access.
+            {
+              description: "Browse files for this thread",
+              disabled: !props.canOpenFiles,
+              icon: { name: "folder", type: "sfSymbol" },
+              label: "Open files",
+              onPress: model.openFiles,
+              type: "action",
+            },
+            {
+              description: "Open this thread's terminal",
+              disabled: !props.canOpenTerminal,
+              icon: { name: "terminal", type: "sfSymbol" },
+              label: "Open terminal",
+              onPress: () => props.onOpenTerminal(null),
+              type: "action",
+            },
+            // T3-CUSTOM(expbkt3): direct compact menus must retain every terminal action.
+            ...terminalItems,
             {
               description: "Commit, files, branches",
               icon: { name: "ellipsis", type: "sfSymbol" },
@@ -366,7 +393,8 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         type: "menu",
         variant: "plain",
       },
-    }),
+    };
+    },
     [
       model.currentBranchLabel,
       model.isRepo,
@@ -396,6 +424,12 @@ export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): Hea
     () => [actionItems.git, actionItems.files, actionItems.terminal] as HeaderItems,
     [actionItems],
   );
+}
+
+/** Compact thread headers preserve the session title and put utilities in Git's menu. */
+export function useThreadGitCompactHeaderItems(props: ThreadGitControlsProps): HeaderItems {
+  const actionItems = useThreadGitHeaderActionItems(props);
+  return useMemo(() => [actionItems.git] as HeaderItems, [actionItems]);
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {

@@ -57,6 +57,11 @@ public class T3ReviewDiffModule: Module {
         view.setRefreshing(refreshing)
       }
 
+      // T3-CUSTOM(expbkt3): source previews use static line semantics.
+      Prop("reviewSelectionEnabled") { (view: T3ReviewDiffView, reviewSelectionEnabled: Bool) in
+        view.setReviewSelectionEnabled(reviewSelectionEnabled)
+      }
+
       Events(
         "onDebug",
         "onVisibleFileChange",

@@ -242,9 +242,12 @@ function ModeCard(props: {
 }) {
   return (
     <Pressable
+      // T3-CUSTOM(expbkt3): expose the visible colour card as an iOS action;
+      // radio traits are omitted by the native action snapshot used by the app.
+      accessible
       accessibilityLabel={`${props.label} appearance`}
-      accessibilityRole="radio"
-      accessibilityState={{ checked: props.selected, disabled: props.disabled }}
+      accessibilityRole="button"
+      accessibilityState={{ selected: props.selected, disabled: props.disabled }}
       className={cn(
         "min-w-0 flex-1 gap-2 rounded-[24px] p-2 active:scale-[0.97]",
         props.selected ? "border-2 border-primary bg-subtle" : "border border-border bg-card",
@@ -284,7 +287,9 @@ export function ThemeAppearanceSection() {
     <View className="gap-6">
       <View className="gap-2">
         <SectionLabel>Color scheme</SectionLabel>
-        <View accessibilityRole="radiogroup" className="flex-row gap-2">
+        {/* T3-CUSTOM(expbkt3): iOS exposes an accessible wrapper instead of
+            its color-scheme cards, so only the individual radios are semantic. */}
+        <View accessible={false} className="flex-row gap-2">
           {APPEARANCE_MODES.map((mode) => (
             <ModeCard
               disabled={!isReady}

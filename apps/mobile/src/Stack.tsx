@@ -332,6 +332,8 @@ const NewTaskSheetStack = createNativeStackNavigator({
     AddProjectLocal: createNativeStackScreen({
       screen: AddProjectLocalRoute,
       linking: "add-project/local",
+      // T3-CUSTOM(expbkt3): deep links must show the user-facing route title.
+      options: { title: "Local folder" },
     }),
   },
 });
@@ -339,6 +341,7 @@ const NewTaskSheetStack = createNativeStackNavigator({
 // Routes presented as sheets/overlays ON TOP of the workspace. They must not
 // influence the adaptive workspace layout: opening Settings over Home should
 // not flip the sidebar in or change the active thread.
+// T3-CUSTOM(expbkt3): overlays include fork sheets as well as native review comments.
 const WORKSPACE_OVERLAY_ROUTES = new Set([
   "ConnectOnboarding",
   "Connections",
@@ -499,6 +502,7 @@ export const RootStack = createNativeStackNavigator({
       linking: `${THREAD_LINKING_PREFIX}/review`,
       options: SOLID_HEADER_OPTIONS,
     }),
+    // T3-CUSTOM(expbkt3): comment composition needs form-sheet detents on iOS.
     ThreadReviewComment: createNativeStackScreen({
       screen: ReviewCommentComposerSheet,
       linking: `${THREAD_LINKING_PREFIX}/review-comment`,
@@ -727,15 +731,18 @@ export const RootStack = createNativeStackNavigator({
             }),
       },
     }),
+    // T3-CUSTOM(expbkt3): close fork routes before retaining the stock NotFound route.
     NotFound: createNativeStackScreen({
       screen: NotFoundScreen,
       linking: "*",
     }),
+  // T3-CUSTOM(expbkt3): close the fork navigator additions before path config.
   },
 });
 // T3-CUSTOM(expbkt3): register the navigator at the upstream declaration owner.
 type RootStackType = typeof RootStack;
 
+// T3-CUSTOM(expbkt3): derive fork paths from the static navigator.
 const navigationPathConfig = {
   screens: createPathConfigForStaticNavigation(RootStack) ?? {},
 };

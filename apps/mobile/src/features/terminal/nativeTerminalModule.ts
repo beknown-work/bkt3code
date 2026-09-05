@@ -21,6 +21,11 @@ interface TerminalResizeEvent {
   readonly rows: number;
 }
 
+// T3-CUSTOM(expbkt3): native focus diagnostics contain no terminal input.
+interface TerminalKeyboardFocusEvent {
+  readonly isFocused: boolean;
+}
+
 export interface NativeTerminalSurfaceProps extends ViewProps {
   readonly appearanceScheme?: "light" | "dark";
   readonly autoFocus?: boolean;
@@ -34,6 +39,9 @@ export interface NativeTerminalSurfaceProps extends ViewProps {
   readonly fontSize: number;
   readonly onInput?: (event: NativeSyntheticEvent<TerminalInputEvent>) => void;
   readonly onResize?: (event: NativeSyntheticEvent<TerminalResizeEvent>) => void;
+  readonly onKeyboardFocusChange?: (
+    event: NativeSyntheticEvent<TerminalKeyboardFocusEvent>,
+  ) => void;
 }
 
 let cachedNativeTerminalSurfaceView: ComponentType<NativeTerminalSurfaceProps> | undefined;

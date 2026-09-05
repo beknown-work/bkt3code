@@ -59,7 +59,7 @@ import { ThreadDetailScreen } from "./ThreadDetailScreen";
 import {
   ThreadGitControls,
   useThreadGitCenterHeaderItems,
-  useThreadGitRightHeaderItems,
+  useThreadGitCompactHeaderItems,
 } from "./ThreadGitControls";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -677,7 +677,9 @@ function ThreadRouteContent(
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
   const baseThreadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
-  const baseCompactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  // T3-CUSTOM(expbkt3): compact headers keep title and environment readable;
+  // the Git menu retains the secondary utility access routes.
+  const baseCompactRightHeaderItems = useThreadGitCompactHeaderItems(threadGitControlProps);
   // T3-CUSTOM(expbkt3): BEGIN — what this session costs at API prices, as a
   // header pill ahead of the git controls; tapping opens the breakdown sheet.
   const threadCost = useThreadUsage(

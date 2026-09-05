@@ -217,6 +217,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             ) : null}
             {catalogState.hasReadyEnvironment ? (
               <NativeHeaderToolbar.Button
+                accessibilityLabel="Add project"
                 icon="plus"
                 onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
                 separateBackground
@@ -250,6 +251,10 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             </Text>
             {!catalogState.hasReadyEnvironment ? (
               <Pressable
+                // T3-CUSTOM(expbkt3): empty-state recovery must be a native action.
+                accessible
+                accessibilityLabel="Add environment"
+                accessibilityRole="button"
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.navigate("ConnectionsNew")}
               >
@@ -259,6 +264,9 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </Pressable>
             ) : (
               <Pressable
+                accessible
+                accessibilityLabel="Add new project"
+                accessibilityRole="button"
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
               >
@@ -269,16 +277,32 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             )}
           </View>
         ) : (
-          <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
+          <View
+            accessible={false}
+            collapsable={false}
+            className="overflow-hidden rounded-[24px] bg-card"
+          >
             {projectScopes.map((scope, scopeIndex) => {
               const hasMultipleProjects = scope.projects.length > 1;
               const selectionTarget = getProjectScopeSelectionTarget(scope, selectedEnvironmentId);
               return (
                 <View
+                  accessible={false}
                   key={scope.key}
                   className={cn(scopeIndex > 0 && "border-t border-border-subtle")}
                 >
                   <Pressable
+                    // T3-CUSTOM(expbkt3): project cards must remain direct native actions
+                    // inside the form-sheet scroll view.
+                    accessible
+                    accessibilityHint="Starts a new task in this project"
+                    accessibilityLabel={
+                      hasMultipleProjects
+                        ? `${scope.title}, ${scope.projects.length} workspaces`
+                        : `${scope.title}, ${selectionTarget.workspaceRoot}`
+                    }
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: reservedDestinationProject !== null }}
                     disabled={reservedDestinationProject !== null}
                     onPress={() => void selectProject(selectionTarget)}
                     className="flex-row items-center gap-3 bg-card px-4 py-3.5"

@@ -57,7 +57,12 @@ export function EnvironmentAppearanceEditor(props: {
           </Text>
         </View>
         {appearance.customized ? (
-          <Pressable hitSlop={8} onPress={() => update(environmentId, null)}>
+          <Pressable
+            accessibilityLabel="Reset environment appearance"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => update(environmentId, null)}
+          >
             <Text className="text-xs font-t3-bold text-primary">Reset</Text>
           </Pressable>
         ) : null}

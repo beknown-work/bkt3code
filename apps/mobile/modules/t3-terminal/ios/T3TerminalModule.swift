@@ -7,7 +7,7 @@ public class T3TerminalModule: Module {
     // Bumped when native hardware-keyboard handling changes; surfaced in the JS debug
     // logs so a stale native binary is distinguishable from a broken key pipeline.
     Constants([
-      "hardwareKeyRevision": 3,
+      "hardwareKeyRevision": 4,
     ])
 
     View(T3TerminalView.self) {
@@ -51,7 +51,8 @@ public class T3TerminalModule: Module {
         view.mutedForegroundColorHex = mutedForegroundColor
       }
 
-      Events("onInput", "onResize")
+      // T3-CUSTOM(expbkt3): expose non-sensitive native focus diagnostics.
+      Events("onInput", "onResize", "onKeyboardFocusChange")
     }
   }
 }

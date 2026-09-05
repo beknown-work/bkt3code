@@ -106,10 +106,13 @@ function ModelRow(props: {
 }) {
   return (
     <Pressable
+      // T3-CUSTOM(expbkt3): iOS exposes button actions but not radio rows from
+      // this virtualized catalog; retain the selected state on an actionable row.
+      accessible
       accessibilityLabel={[props.option.label, props.option.subtitle].filter(Boolean).join(", ")}
-      accessibilityRole="radio"
+      accessibilityRole="button"
       accessibilityState={{
-        checked: props.selected,
+        selected: props.selected,
         disabled: props.option.isUnavailable === true,
       }}
       disabled={props.option.isUnavailable}
@@ -834,6 +837,9 @@ function ThreadSettingsMainContent(props: {
 
       return (
         <Animated.View
+          // T3-CUSTOM(expbkt3): the animated list wrapper is structural only;
+          // otherwise iOS collapses its model-row actions into one inert element.
+          accessible={false}
           key={item.key}
           entering={animationsReady ? THREAD_SETTINGS_CATALOG_ENTER_TRANSITION : undefined}
           exiting={animationsReady ? THREAD_SETTINGS_CATALOG_EXIT_TRANSITION : undefined}

@@ -1,3 +1,4 @@
+// T3-CUSTOM(expbkt3): fork linking resets only external Thread routes.
 import { BlurTargetView } from "expo-blur";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
@@ -6,7 +7,13 @@ import { StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { createStaticNavigation } from "@react-navigation/native";
+import {
+  CommonActions,
+  createStaticNavigation,
+  getActionFromState,
+  type NavigationState,
+  type PartialState,
+} from "@react-navigation/native";
 
 import { RegistryContext } from "@effect/atom-react";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
@@ -25,10 +32,12 @@ import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 
 import "../global.css";
 
+// T3-CUSTOM(expbkt3): native showcase setup and splash timing belong to the fork app shell.
 if (process.env.EXPO_PUBLIC_SHOWCASE === "1") {
   prepareNativeShowcaseCapture();
 }
 
+// T3-CUSTOM(expbkt3): native splash handling is needed by the fork app shell.
 void SplashScreen.preventAutoHideAsync().catch(() => {
   // The native module can be unavailable in non-native test environments.
 });
@@ -50,6 +59,17 @@ const appLinking = {
   // persisted share inbox below owns navigation once the payload is durable.
   filter: (url: string) =>
     !url.includes("expo-development-client") && !url.includes("://expo-sharing"),
+  // T3-CUSTOM(expbkt3): an external thread link must replace an open form
+  // sheet, rather than push a thread route into that sheet's navigator.
+  getActionFromState: (
+    state: PartialState<NavigationState>,
+    config: Parameters<typeof getActionFromState>[1],
+  ) => {
+    const route = state.routes[state.index ?? state.routes.length - 1];
+    return route?.name === "Thread"
+      ? CommonActions.reset(state)
+      : getActionFromState(state, config);
+  },
 };
 
 const Navigation = createStaticNavigation(RootStack);

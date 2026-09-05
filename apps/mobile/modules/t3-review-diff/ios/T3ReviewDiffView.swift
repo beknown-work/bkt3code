@@ -822,6 +822,11 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     }
   }
 
+  // T3-CUSTOM(expbkt3): only review diffs expose comment-selection actions.
+  func setReviewSelectionEnabled(_ reviewSelectionEnabled: Bool) {
+    contentView.isReviewSelectionEnabled = reviewSelectionEnabled
+  }
+
   private func applyStyle() {
     contentView.style = ReviewDiffNativeStyle
       .resolve(stylePayload)
@@ -921,6 +926,20 @@ private struct ReviewDiffScrollAnchor {
   let screenY: CGFloat
 }
 
+// T3-CUSTOM(expbkt3): Core Graphics rows need an explicit semantic tree.
+private final class ReviewDiffAccessibilityElement: UIAccessibilityElement {
+  var onActivate: (() -> Bool)?
+  var onStartRange: (() -> Bool)?
+
+  override func accessibilityActivate() -> Bool {
+    onActivate?() ?? false
+  }
+
+  @objc func startRangeSelection() -> Bool {
+    onStartRange?() ?? false
+  }
+}
+
 private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
   var rows: [ReviewDiffNativeRow] = [] {
     didSet {
@@ -931,7 +950,13 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
       activePanKind = nil
       tokenAttributedStringsByRowId.removeAll()
       rebuildRowLayout()
+      let activeRowIds = Set(rows.map(\.id))
+      accessibilityElementsByRowId = accessibilityElementsByRowId.filter {
+        activeRowIds.contains($0.key)
+      }
+      lastAccessibilityRange = ""
       setNeedsDisplayForVisibleBounds()
+      updateAccessibilityElementsIfNeeded()
     }
   }
   var tokensByRowId: [String: [ReviewDiffNativeToken]] = [:] {
@@ -956,22 +981,28 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
       rebuildRowLayout()
       clampHorizontalOffsets()
       setNeedsDisplayForVisibleBounds()
+      lastAccessibilityRange = ""
+      updateAccessibilityElementsIfNeeded()
     }
   }
   var viewedFileIds: Set<String> = [] {
     didSet {
       setNeedsDisplayForVisibleBounds()
+      updateAccessibilityElementsIfNeeded()
     }
   }
   var selectedRowIds: Set<String> = [] {
     didSet {
       setNeedsDisplayForVisibleBounds()
+      updateAccessibilityElementsIfNeeded()
     }
   }
   var collapsedCommentIds: Set<String> = [] {
     didSet {
       rebuildRowLayout()
       setNeedsDisplayForVisibleBounds()
+      lastAccessibilityRange = ""
+      updateAccessibilityElementsIfNeeded()
     }
   }
   var style = ReviewDiffNativeStyle.resolve(nil) {
@@ -980,15 +1011,28 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
       rebuildRowLayout()
       clampHorizontalOffsets()
       setNeedsDisplayForVisibleBounds()
+      lastAccessibilityRange = ""
+      updateAccessibilityElementsIfNeeded()
     }
   }
   var viewportWidth: CGFloat = 0 {
     didSet {
       clampHorizontalOffsets()
       setNeedsDisplayForVisibleBounds()
+      updateAccessibilityElementsIfNeeded()
     }
   }
-  var verticalOffset: CGFloat = 0
+  var verticalOffset: CGFloat = 0 {
+    didSet {
+      updateAccessibilityElementsIfNeeded()
+    }
+  }
+  // T3-CUSTOM(expbkt3): source previews share this renderer but cannot comment.
+  var isReviewSelectionEnabled = false {
+    didSet {
+      updateAccessibilityElementsIfNeeded()
+    }
+  }
   var theme = ReviewDiffNativeTheme.resolve("light") {
     didSet {
       tokenColorsByHex.removeAll()
@@ -1014,6 +1058,10 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
   private var horizontalVelocity: CGFloat = 0
   private var lastDecelerationTimestamp: CFTimeInterval = 0
   private var lastDrawMetricsTimestamp: CFTimeInterval = 0
+  private var lastAccessibilityRange = ""
+  // T3-CUSTOM(expbkt3): retain semantic elements while scroll/resize only moves them.
+  private var accessibilityElementsByRowId: [String: ReviewDiffAccessibilityElement] = [:]
+  private var emptyAccessibilityElement: ReviewDiffAccessibilityElement?
   var isVerticalScrollActive = false
   var onToggleFile: ((String) -> Void)?
   var onToggleViewedFile: ((String) -> Void)?
@@ -1158,6 +1206,8 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     super.init(frame: frame)
     isOpaque = true
     contentMode = .redraw
+    isAccessibilityElement = false
+    accessibilityElementsHidden = false
     addGestureRecognizer(horizontalPanGesture)
     addGestureRecognizer(tapGesture)
     addGestureRecognizer(longPressGesture)
@@ -1166,16 +1216,171 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
 
   func invalidateVisibleViewport() {
     setNeedsDisplayForVisibleBounds()
+    updateAccessibilityElementsIfNeeded()
   }
 
   private func setNeedsDisplayForVisibleBounds() {
     setNeedsDisplay()
   }
 
+  private func updateAccessibilityElementsIfNeeded() {
+    guard bounds.width > 0, bounds.height > 0 else {
+      accessibilityElements = []
+      return
+    }
+
+    guard !rows.isEmpty else {
+      lastAccessibilityRange = "empty"
+      let element = emptyAccessibilityElement
+        ?? ReviewDiffAccessibilityElement(accessibilityContainer: self)
+      emptyAccessibilityElement = element
+      element.accessibilityLabel = "No source lines are available."
+      element.accessibilityTraits = .staticText
+      element.accessibilityFrameInContainerSpace = bounds
+      accessibilityElements = [element]
+      return
+    }
+
+    let first = max(0, (firstVisibleRowIndex(atOrAfter: verticalOffset) ?? 0) - 2)
+    let last = min(
+      rows.count - 1,
+      (lastVisibleRowIndex(atOrBefore: verticalOffset + bounds.height) ?? rows.count - 1) + 2
+    )
+    let key = "\(first):\(last):\(selectedRowIds.sorted().joined(separator: ",")): \(viewedFileIds.sorted().joined(separator: ",")): \(collapsedFileIds.sorted().joined(separator: ",")): \(collapsedCommentIds.sorted().joined(separator: ",")): \(isReviewSelectionEnabled)"
+    let needsSemanticUpdate = key != lastAccessibilityRange
+    lastAccessibilityRange = key
+
+    if !needsSemanticUpdate {
+      var movedElements: [Any] = []
+      var movedRowIds = Set<String>()
+      movedElements.reserveCapacity(last - first + 1)
+      for index in first...last {
+        let row = rows[index]
+        guard let rowFrame = frameForRow(at: index),
+              rowFrame.height > 0,
+              let element = accessibilityElementsByRowId[row.id] else {
+          movedElements = []
+          break
+        }
+        movedRowIds.insert(row.id)
+        element.accessibilityFrameInContainerSpace = CGRect(
+          x: rowFrame.minX,
+          y: rowFrame.minY - verticalOffset,
+          width: max(rowFrame.width, bounds.width),
+          height: rowFrame.height
+        )
+        movedElements.append(element)
+      }
+      if !movedElements.isEmpty {
+        accessibilityElements = movedElements
+        pruneAccessibilityElements(keeping: movedRowIds)
+        return
+      }
+    }
+
+    var elements: [Any] = []
+    var visibleRowIds = Set<String>()
+    elements.reserveCapacity(last - first + 1)
+    for index in first...last {
+      let row = rows[index]
+      guard let rowFrame = frameForRow(at: index), rowFrame.height > 0 else { continue }
+      // T3-CUSTOM(expbkt3): update scroll and resize geometry without dropping focus.
+      let element = accessibilityElementsByRowId[row.id]
+        ?? ReviewDiffAccessibilityElement(accessibilityContainer: self)
+      accessibilityElementsByRowId[row.id] = element
+      visibleRowIds.insert(row.id)
+      element.accessibilityCustomActions = nil
+      element.onStartRange = nil
+      element.accessibilityFrameInContainerSpace = CGRect(
+        x: rowFrame.minX,
+        y: rowFrame.minY - verticalOffset,
+        width: max(rowFrame.width, bounds.width),
+        height: rowFrame.height
+      )
+
+      switch row.kind {
+      case "file":
+        let fileId = resolvedFileId(for: row)
+        let path = row.filePath ?? row.text ?? "file"
+        let isCollapsed = collapsedFileIds.contains(fileId)
+        element.accessibilityLabel = "\(path), \(isCollapsed ? "collapsed" : "expanded")"
+        element.accessibilityHint = "Double tap to \(isCollapsed ? "expand" : "collapse") this file."
+        element.accessibilityTraits = .button
+        element.onActivate = { [weak self] in
+          self?.onToggleFile?(fileId)
+          return true
+        }
+      case "line":
+        let lineNumber = row.newLineNumber ?? row.oldLineNumber
+        let linePrefix = lineNumber.map { "Line \($0)" } ?? "Line"
+        let change = row.change.map { ", \($0)" } ?? ""
+        let content = String((row.content ?? row.text ?? "blank").prefix(1_000))
+        element.accessibilityLabel = "\(linePrefix)\(change): \(content)"
+        if isReviewSelectionEnabled {
+          let isSelected = selectedRowIds.contains(row.id)
+          element.accessibilityHint = "Double tap to \(isSelected ? "clear" : "select") this line for a review comment. Use actions to start a range."
+          element.accessibilityTraits = isSelected ? [.button, .selected] : .button
+          element.onActivate = { [weak self] in
+            guard let self else { return false }
+            self.onPressLine?(self.linePressPayload(for: row, gesture: "tap"))
+            return true
+          }
+          element.onStartRange = { [weak self] in
+            guard let self else { return false }
+            self.onPressLine?(self.linePressPayload(for: row, gesture: "longPress"))
+            return true
+          }
+          element.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(
+              name: "Start comment range",
+              target: element,
+              selector: #selector(ReviewDiffAccessibilityElement.startRangeSelection)
+            )
+          ]
+        } else {
+          element.accessibilityTraits = .staticText
+          element.accessibilityHint = nil
+          element.onActivate = nil
+          element.onStartRange = nil
+          element.accessibilityCustomActions = nil
+        }
+      case "comment":
+        let isCollapsed = collapsedCommentIds.contains(row.id)
+        element.accessibilityLabel = row.commentText ?? "Review comment"
+        element.accessibilityHint = "Double tap to \(isCollapsed ? "expand" : "collapse") this comment."
+        element.accessibilityTraits = .button
+        element.onActivate = { [weak self] in
+          self?.onToggleComment?(row.id)
+          return true
+        }
+      case "hunk", "notice":
+        element.accessibilityLabel = String((row.text ?? row.content ?? "Diff information").prefix(1_000))
+        element.accessibilityTraits = .staticText
+      default:
+        continue
+      }
+      elements.append(element)
+    }
+    accessibilityElements = elements
+    pruneAccessibilityElements(keeping: visibleRowIds)
+  }
+
+  // T3-CUSTOM(expbkt3): preserve focus while bounding semantic row closures.
+  private func pruneAccessibilityElements(keeping visibleRowIds: Set<String>) {
+    let focusedElement = UIAccessibility.focusedElement(using: .notificationVoiceOver)
+      as? ReviewDiffAccessibilityElement
+    let focusedRowId = accessibilityElementsByRowId.first { $0.value === focusedElement }?.key
+    accessibilityElementsByRowId = accessibilityElementsByRowId.filter {
+      visibleRowIds.contains($0.key) || $0.key == focusedRowId
+    }
+  }
+
   required init?(coder: NSCoder) {
     super.init(coder: coder)
     isOpaque = true
     contentMode = .redraw
+    isAccessibilityElement = false
+    accessibilityElementsHidden = false
     addGestureRecognizer(horizontalPanGesture)
     addGestureRecognizer(tapGesture)
     addGestureRecognizer(longPressGesture)

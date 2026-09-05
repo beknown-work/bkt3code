@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { DEFAULT_PROVIDER_INTERACTION_MODE } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   MessageId,
@@ -53,6 +54,7 @@ import { ComposerEditor, type ComposerEditorHandle } from "../../components/Comp
 import {
   ComposerActionButton,
   ComposerInlineControl,
+  ComposerToolbarScroller,
   ComposerToolbarRow,
 } from "../../components/ComposerToolbar";
 import { ProviderIcon } from "../../components/ProviderIcon";
@@ -80,6 +82,7 @@ import {
 } from "../voice-input/ComposerDictationControl";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
+import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
@@ -307,6 +310,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
 
+  // T3-CUSTOM(expbkt3): retain native file/video previews beside existing-thread controls.
   const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
@@ -333,6 +337,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  // T3-CUSTOM(expbkt3): existing threads honor the explicit Plan Mode
+  // preference and provider capability, with the reverse Build control.
+  const { enabled: legacyPlanModeEnabled } = useLegacyPlanModeState();
+  const canSwitchInteractionMode =
+    legacyPlanModeEnabled && selectedProviderStatus?.showInteractionModeToggle !== false;
+  const interactionMode = props.selectedThread.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
   const composerOwnerKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
 
   const composerMenu = useComposerCommandMenu({
@@ -775,7 +785,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onDismissError={voiceInput.cancel}
                   />
                 ) : (
-                  <View className="min-w-0 flex-1 flex-row items-center justify-between">
+                  <View className="min-w-0 flex-1 flex-row items-center">
                     <ComposerAttachmentButton
                       supportsFiles={Boolean(
                         props.serverConfig?.environment.capabilities.fileAttachments,
@@ -783,7 +793,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPickMedia={props.onPickDraftMedia}
                       onPickFiles={props.onPickDraftFiles}
                     />
-                    <View className="min-w-0 shrink" style={{ maxWidth: 152 }}>
+                    <ComposerToolbarScroller align="end" contentPaddingRight={0} fadeSurface="card">
                       <ComposerInlineControl
                         accessibilityLabel="Model and reasoning settings"
                         emphasized
@@ -794,7 +804,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         maxWidth={152}
                         onPress={openSettings}
                       />
-                    </View>
+                      {canSwitchInteractionMode ? (
+                        <ComposerInlineControl
+                          accessibilityHint={`Switches to ${interactionMode === "plan" ? "Build" : "Plan"} mode`}
+                          accessibilityLabel={`Interaction mode: ${interactionMode === "plan" ? "Plan" : "Build"}`}
+                          emphasized
+                          icon={interactionMode === "plan" ? "list.bullet.clipboard" : "hammer"}
+                          label={interactionMode === "plan" ? "Plan" : "Build"}
+                          onPress={() =>
+                            props.onUpdateInteractionMode(
+                              interactionMode === "plan" ? "default" : "plan",
+                            )
+                          }
+                          showChevron={false}
+                        />
+                      ) : null}
+                    </ComposerToolbarScroller>
                   </View>
                 )}
                 <View className="shrink-0 flex-row items-center">
