@@ -5,8 +5,6 @@ import type { PhaseSidebarRow } from "@t3tools/client-runtime/state/phase-sideba
 export function countPhaseSidebarUnreadRows(rows: ReadonlyArray<PhaseSidebarRow>): number {
   return rows.filter(
     (row) =>
-      row.thread.archivedAt === null &&
-      row.thread.settledAt === null &&
-      row.isUnreadCompletion,
+      row.thread.archivedAt === null && row.thread.settledAt === null && row.isUnreadCompletion,
   ).length;
 }

@@ -296,10 +296,10 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGitHeaderActionItems {
   const model = useThreadGitControlModel(props);
 
-  return useMemo(
-    () => {
-      const terminalItems = terminalMenuItems(props);
-      return {
+  // T3-CUSTOM(expbkt3): keep terminal and Git utilities available across compact headers.
+  return useMemo(() => {
+    const terminalItems = terminalMenuItems(props);
+    return {
       terminal: {
         accessibilityLabel: "Open terminal",
         disabled: !props.canOpenTerminal,
@@ -394,28 +394,26 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         variant: "plain",
       },
     };
-    },
-    [
-      model.currentBranchLabel,
-      model.isRepo,
-      model.openFiles,
-      model.openGitInspector,
-      model.openReview,
-      model.quickAction.disabled,
-      model.quickAction.label,
-      model.quickActionHint,
-      model.quickActionIcon,
-      model.runQuickAction,
-      props.canOpenFiles,
-      props.canOpenTerminal,
-      props.gitStatus,
-      props.onOpenNewTerminal,
-      props.onOpenTerminal,
-      props.onRunProjectScript,
-      props.projectScripts,
-      props.terminalSessions,
-    ],
-  );
+  }, [
+    model.currentBranchLabel,
+    model.isRepo,
+    model.openFiles,
+    model.openGitInspector,
+    model.openReview,
+    model.quickAction.disabled,
+    model.quickAction.label,
+    model.quickActionHint,
+    model.quickActionIcon,
+    model.runQuickAction,
+    props.canOpenFiles,
+    props.canOpenTerminal,
+    props.gitStatus,
+    props.onOpenNewTerminal,
+    props.onOpenTerminal,
+    props.onRunProjectScript,
+    props.projectScripts,
+    props.terminalSessions,
+  ]);
 }
 
 export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): HeaderItems {
@@ -428,8 +426,10 @@ export function useThreadGitRightHeaderItems(props: ThreadGitControlsProps): Hea
 
 /** Compact thread headers preserve the session title and put utilities in Git's menu. */
 export function useThreadGitCompactHeaderItems(props: ThreadGitControlsProps): HeaderItems {
+  // T3-CUSTOM(expbkt3): BEGIN compact headers retain Git utilities in their contextual menu.
   const actionItems = useThreadGitHeaderActionItems(props);
   return useMemo(() => [actionItems.git] as HeaderItems, [actionItems]);
+  // T3-CUSTOM(expbkt3): END compact headers retain Git utilities in their contextual menu.
 }
 
 export function useThreadGitCenterHeaderItems(props: ThreadGitControlsProps): HeaderItems {

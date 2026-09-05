@@ -21,6 +21,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+// T3-CUSTOM(expbkt3): fence async Keychain catalog operations against stale rotation writes.
 import * as Semaphore from "effect/Semaphore";
 
 // T3-CUSTOM(expbkt3): packaged BK clients keep encrypted catalogs per app identity.
@@ -383,6 +384,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
+  // T3-CUSTOM(expbkt3): encrypt the catalog document before asynchronous Electron safe-storage writes.
   const crypto = yield* Crypto.Crypto;
   // T3-CUSTOM(expbkt3): desktop catalog migration remains a fork-owned dependency.
   const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
@@ -504,6 +506,7 @@ export const make = Effect.gen(function* () {
     return Option.some(encoded);
   });
 
+  // T3-CUSTOM(expbkt3): BEGIN serialize catalog reads, rotation rewrites, saves, and clears.
   return DesktopConnectionCatalogStore.of({
     // T3-CUSTOM(expbkt3): one permit fences a rotating async read with saves and clears.
     get: catalogOperationLock
@@ -521,7 +524,10 @@ export const make = Effect.gen(function* () {
             );
             return Option.none<string>();
           }
-          const decrypted = yield* decodeSecretBytes(catalogPath, document.value.encryptedCatalog).pipe(
+          const decrypted = yield* decodeSecretBytes(
+            catalogPath,
+            document.value.encryptedCatalog,
+          ).pipe(
             Effect.flatMap((encryptedCatalog) =>
               safeStorage.decryptStringWithMetadata(encryptedCatalog).pipe(
                 Effect.mapError(
@@ -577,6 +583,7 @@ export const make = Effect.gen(function* () {
       )
       .pipe(Effect.withSpan("desktop.connectionCatalogStore.clear")),
   });
+  // T3-CUSTOM(expbkt3): END serialize catalog reads, rotation rewrites, saves, and clears.
 });
 
 export const layer = Layer.effect(DesktopConnectionCatalogStore, make);

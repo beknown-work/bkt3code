@@ -473,7 +473,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       length: terminalBuffer.length,
       preview: terminalBuffer.slice(0, 160),
     });
-  // T3-CUSTOM(expbkt3): observe the joined output for replay diagnostics.
+    // T3-CUSTOM(expbkt3): observe the joined output for replay diagnostics.
   }, [terminalBuffer, terminalBuffer.length, terminalKey]);
   const cwd = terminal.summary?.cwd ?? selectedThreadProject?.workspaceRoot ?? null;
   const serverConfigs = useServerConfigs();
@@ -534,6 +534,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   useEffect(() => {
     const keyboardWillShow = KeyboardEvents.addListener("keyboardWillShow", () => {
       setIsAccessoryDismissed(false);
+      // T3-CUSTOM(expbkt3): reset native-focus recovery state when the keyboard becomes visible.
       setHasRequestedKeyboardFocus(false);
     });
     const keyboardWillHide = KeyboardEvents.addListener("keyboardWillHide", () => {
@@ -1102,6 +1103,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     void KeyboardController.dismiss();
   }, []);
 
+  // T3-CUSTOM(expbkt3): request and surface native terminal focus for hardware keyboards.
   const handleShowKeyboard = useCallback(() => {
     setKeyboardFocusState(null);
     setHasRequestedKeyboardFocus(true);
@@ -1204,9 +1206,10 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
         <NativeHeaderToolbar placement="left">
           <NativeHeaderToolbar.Button
             accessibilityLabel={panes.primarySidebarVisible ? "Maximize terminal" : "Show threads"}
+            // T3-CUSTOM(expbkt3): preserve the split-pane terminal/sidebar action in the native header.
             icon={
               panes.primarySidebarVisible ? "arrow.up.left.and.arrow.down.right" : "sidebar.left"
-            // T3-CUSTOM(expbkt3): construct a fallback connection for the terminal retry card.
+              // T3-CUSTOM(expbkt3): construct a fallback connection for the terminal retry card.
             }
             onPress={togglePrimarySidebar}
             separateBackground
@@ -1269,6 +1272,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
       <View className="flex-1" style={{ backgroundColor: terminalTheme.background }}>
         {!isEnvironmentReady ? (
           <EnvironmentConnectionNotice
+            // T3-CUSTOM(expbkt3): name an unavailable terminal environment even without saved metadata.
             environmentLabel={
               environment.presentation?.entry.target.label ??
               selectedEnvironmentConnection?.environmentLabel ??
@@ -1292,9 +1296,12 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               <TerminalSurface
                 autoFocus={!SHOWCASE_ENABLED}
                 buffer={terminalSurfaceBuffer}
-                outputResetKey={`${terminal.output.generation}:${terminal.output.resetVersion}` /* T3-CUSTOM(expbkt3): reset native replay with upstream history. */}
+                outputResetKey={
+                  `${terminal.output.generation}:${terminal.output.resetVersion}` /* T3-CUSTOM(expbkt3): reset native replay with upstream history. */
+                }
                 fontSize={fontSize}
                 isRunning={isRunning}
+                // T3-CUSTOM(expbkt3): relay an explicit keyboard request to the native terminal surface.
                 keyboardFocusRequest={keyboardFocusRequest}
                 onInput={handleInput}
                 onKeyboardFocusChange={handleNativeKeyboardFocusChange}
@@ -1305,6 +1312,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               />
             </View>
 
+            {/* T3-CUSTOM(expbkt3): BEGIN show native-focus status and keyboard recovery when the accessory is hidden. */}
             {isAccessoryVisible ? (
               <KeyboardStickyView
                 style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
@@ -1410,6 +1418,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 </Pressable>
               </>
             ) : null}
+            {/* T3-CUSTOM(expbkt3): END show native-focus status and keyboard recovery when the accessory is hidden. */}
           </>
         )}
       </View>

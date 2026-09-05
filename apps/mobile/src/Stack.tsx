@@ -736,7 +736,7 @@ export const RootStack = createNativeStackNavigator({
       screen: NotFoundScreen,
       linking: "*",
     }),
-  // T3-CUSTOM(expbkt3): close the fork navigator additions before path config.
+    // T3-CUSTOM(expbkt3): close the fork navigator additions before path config.
   },
 });
 // T3-CUSTOM(expbkt3): register the navigator at the upstream declaration owner.

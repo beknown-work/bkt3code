@@ -63,17 +63,17 @@ export function EnvironmentAppearanceSheet({ route }: EnvironmentAppearanceSheet
         contentInsetAdjustmentBehavior="never"
         keyboardShouldPersistTaps="handled"
       >
-          {environment === null || appearance === null ? (
-            <Text className="text-sm text-foreground-muted">
-              This environment is no longer known.
-            </Text>
-          ) : (
-            <EnvironmentAppearanceEditor
-              appearance={appearance}
-              environmentId={environmentId}
-              fallbackName={environment.label}
-            />
-          )}
+        {environment === null || appearance === null ? (
+          <Text className="text-sm text-foreground-muted">
+            This environment is no longer known.
+          </Text>
+        ) : (
+          <EnvironmentAppearanceEditor
+            appearance={appearance}
+            environmentId={environmentId}
+            fallbackName={environment.label}
+          />
+        )}
       </ScrollView>
     </>
   );

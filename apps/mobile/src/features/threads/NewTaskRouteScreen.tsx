@@ -216,6 +216,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               />
             ) : null}
             {catalogState.hasReadyEnvironment ? (
+              // T3-CUSTOM(expbkt3): keep project creation available from the new-task header.
               <NativeHeaderToolbar.Button
                 accessibilityLabel="Add project"
                 icon="plus"
@@ -238,6 +239,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
           paddingTop: 8,
         }}
       >
+        {/* T3-CUSTOM(expbkt3): BEGIN preserve accessible project and environment actions in the task chooser. */}
         {projectScopes.length === 0 ? (
           <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
             {projectEmptyState.loading ? (
@@ -250,8 +252,8 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               {projectEmptyState.detail}
             </Text>
             {!catalogState.hasReadyEnvironment ? (
+              // T3-CUSTOM(expbkt3): BEGIN make empty-state environment recovery a native action.
               <Pressable
-                // T3-CUSTOM(expbkt3): empty-state recovery must be a native action.
                 accessible
                 accessibilityLabel="Add environment"
                 accessibilityRole="button"
@@ -263,6 +265,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                 </Text>
               </Pressable>
             ) : (
+              // T3-CUSTOM(expbkt3): END make empty-state environment recovery a native action.
               <Pressable
                 accessible
                 accessibilityLabel="Add new project"
@@ -340,6 +343,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             })}
           </View>
         )}
+        {/* T3-CUSTOM(expbkt3): END preserve accessible project and environment actions in the task chooser. */}
       </ScrollView>
     </View>
   );

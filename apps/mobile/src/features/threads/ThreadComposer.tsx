@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+// T3-CUSTOM(expbkt3): default the fork's Plan/Build control to the provider-compatible mode.
 import { DEFAULT_PROVIDER_INTERACTION_MODE } from "@t3tools/contracts";
 import type {
   EnvironmentId,
@@ -53,6 +54,7 @@ import { GlassSurface } from "../../components/GlassSurface";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
   ComposerActionButton,
+  // T3-CUSTOM(expbkt3): compose model and Plan/Build controls in the compact toolbar.
   ComposerInlineControl,
   ComposerToolbarScroller,
   ComposerToolbarRow,
@@ -82,6 +84,7 @@ import {
 } from "../voice-input/ComposerDictationControl";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
+// T3-CUSTOM(expbkt3): preserve legacy Plan mode state while the provider interaction setting migrates.
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import {
   type ExistingThreadSettingsRouteSession,
@@ -307,6 +310,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const settingsRoutePresentation = useExistingThreadSettingsRoutePresentation();
   const settingsRoutePresentedRef = useRef(false);
   const wasExpandedBeforePreviewRef = useRef(false);
+  // T3-CUSTOM(expbkt3): prevent duplicate sends while a fork-aware thread submission is pending.
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
 
@@ -333,6 +337,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     if (!props.serverConfig) return null;
     return (
       props.serverConfig.providers.find(
+        // T3-CUSTOM(expbkt3): resolve provider capabilities for the Plan/Build interaction control.
         (p) => p.instanceId === props.selectedThread.modelSelection.instanceId,
       ) ?? null
     );
@@ -777,6 +782,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   onCancel={voiceInput.cancel}
                 />
                 {isVoiceInputPresented ? (
+                  // T3-CUSTOM(expbkt3): retain voice-state presentation alongside fork composer controls.
                   <ComposerDictationStatus
                     audioLevels={voiceInput.audioLevels}
                     elapsedSeconds={voiceInput.elapsedSeconds}
@@ -785,6 +791,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onDismissError={voiceInput.cancel}
                   />
                 ) : (
+                  // T3-CUSTOM(expbkt3): BEGIN keep model and Plan/Build controls reachable in the composer toolbar.
                   <View className="min-w-0 flex-1 flex-row items-center">
                     <ComposerAttachmentButton
                       supportsFiles={Boolean(
@@ -821,6 +828,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       ) : null}
                     </ComposerToolbarScroller>
                   </View>
+                  // T3-CUSTOM(expbkt3): END keep model and Plan/Build controls reachable in the composer toolbar.
                 )}
                 <View className="shrink-0 flex-row items-center">
                   <ComposerDictationPrimaryAction

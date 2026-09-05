@@ -116,7 +116,9 @@ if (import.meta.main) {
   const upstreamSha = readFlag("--upstream-sha");
   const githubEnv = readFlag("--github-env");
   if (upstreamSha === undefined || githubEnv === undefined) {
-    throw new Error("Usage: resolve-integrated-upstream-nightly --upstream-sha <sha> --github-env <path>");
+    throw new Error(
+      "Usage: resolve-integrated-upstream-nightly --upstream-sha <sha> --github-env <path>",
+    );
   }
   const resolution = resolveIntegratedUpstreamNightly({
     upstreamSha,

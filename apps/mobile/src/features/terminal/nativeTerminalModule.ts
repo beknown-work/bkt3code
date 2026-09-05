@@ -39,6 +39,7 @@ export interface NativeTerminalSurfaceProps extends ViewProps {
   readonly fontSize: number;
   readonly onInput?: (event: NativeSyntheticEvent<TerminalInputEvent>) => void;
   readonly onResize?: (event: NativeSyntheticEvent<TerminalResizeEvent>) => void;
+  // T3-CUSTOM(expbkt3): receive native focus state for the hardware-keyboard recovery control.
   readonly onKeyboardFocusChange?: (
     event: NativeSyntheticEvent<TerminalKeyboardFocusEvent>,
   ) => void;

@@ -1066,7 +1066,11 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           // T3-CUSTOM(expbkt3): the terminal session fence is evaluated in
           // this acknowledgement transaction, closing the completion race.
-          const rows = yield* sql<{ readonly threadId: ThreadId; readonly attempt: number; readonly desiredState: string }>`
+          const rows = yield* sql<{
+            readonly threadId: ThreadId;
+            readonly attempt: number;
+            readonly desiredState: string;
+          }>`
           UPDATE projection_thread_execution_intents
           SET desired_state = CASE
                 WHEN ${terminalAssociation ? 1 : 0} = 1
@@ -1207,7 +1211,15 @@ const make = Effect.gen(function* () {
     );
 
   const markCompletedFromHistory: DurableExecutionIntentRepositoryShape["markCompletedFromHistory"] =
-    ({ workItemId, owner, generation, providerTurnId, providerInstanceId, completionKind = "history-completed", at }) =>
+    ({
+      workItemId,
+      owner,
+      generation,
+      providerTurnId,
+      providerInstanceId,
+      completionKind = "history-completed",
+      at,
+    }) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
@@ -1554,9 +1566,11 @@ const make = Effect.gen(function* () {
           // needed to consume its exact pending placeholder; other intents on
           // this thread must still receive the normal lifecycle settlement.
           if (
-            (input.status === "idle" || input.status === "ready" ||
-              input.status === "error" || input.status === "interrupted" ||
-              input.status === "stopped")
+            input.status === "idle" ||
+            input.status === "ready" ||
+            input.status === "error" ||
+            input.status === "interrupted" ||
+            input.status === "stopped"
           ) {
             const associationPending = yield* sql<{ readonly workItemId: string }>`
               SELECT work_item_id AS "workItemId"

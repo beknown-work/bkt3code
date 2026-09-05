@@ -140,6 +140,7 @@ export function UsageRouteScreen() {
           />
         }
       >
+        {/* T3-CUSTOM(expbkt3): expose fork usage limits alongside the existing activity view. */}
         <SegmentedControl options={TAB_OPTIONS} selected={tab} onSelect={setTab} />
 
         {showingLimits ? (
@@ -214,6 +215,7 @@ function SegmentedControl<Value extends number | string>(props: {
   readonly className?: string;
 }) {
   const compact = props.size === "compact";
+  // T3-CUSTOM(expbkt3): render each usage segment as a direct native button.
   return (
     // T3-CUSTOM(expbkt3): iOS exposes tab roles as static selected labels in this
     // segmented surface. Direct button semantics keep every visual segment actionable.

@@ -123,6 +123,7 @@ export interface NativeReviewDiffViewProps extends ViewProps {
   readonly contentWidth: number;
   readonly initialRowIndex?: number;
   readonly refreshing?: boolean;
+  // T3-CUSTOM(expbkt3): native review rows expose only the interactive selection actions.
   /** Enables review-only line actions; source previews remain static text. */
   readonly reviewSelectionEnabled?: boolean;
   readonly nativeViewRef?: Ref<NativeReviewDiffViewHandle>;

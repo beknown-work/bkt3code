@@ -29,9 +29,27 @@ function row(input: {
 }
 
 const rows = [
-  row({ environmentId: local, projectId: alpha, id: "one", title: "Fix sidebar", repositoryLabel: "T3" }),
-  row({ environmentId: local, projectId: beta, id: "two", title: "Write docs", repositoryLabel: "Docs" }),
-  row({ environmentId: remote, projectId: alpha, id: "three", title: "Release", repositoryLabel: "T3" }),
+  row({
+    environmentId: local,
+    projectId: alpha,
+    id: "one",
+    title: "Fix sidebar",
+    repositoryLabel: "T3",
+  }),
+  row({
+    environmentId: local,
+    projectId: beta,
+    id: "two",
+    title: "Write docs",
+    repositoryLabel: "Docs",
+  }),
+  row({
+    environmentId: remote,
+    projectId: alpha,
+    id: "three",
+    title: "Release",
+    repositoryLabel: "T3",
+  }),
 ];
 
 describe("filterPhaseSidebarRowsForHost", () => {

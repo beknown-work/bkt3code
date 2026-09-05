@@ -169,8 +169,11 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     const now = options.now ?? (() => Effect.map(DateTime.now, DateTime.formatIso));
     const safetyPollIntervalMs = options.safetyPollIntervalMs ?? DEFAULT_SAFETY_POLL_INTERVAL_MS;
     const notifyTransition = (intent: DurableExecutionIntent) =>
-      options.onTransition?.({ intent, workItemId: intent.workItemId, threadId: intent.threadId }) ??
-      Effect.void;
+      options.onTransition?.({
+        intent,
+        workItemId: intent.workItemId,
+        threadId: intent.threadId,
+      }) ?? Effect.void;
 
     const runClaimed = Effect.fn("DurableExecutionCoordinator.runClaimed")(function* (
       claimed: DurableExecutionIntent,
@@ -181,8 +184,7 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
         // provider input, so keep it on the original dispatch path where the
         // reactor retries only the association command.
         const recovery =
-          claimed.phase === "recovering" &&
-          claimed.lastFailureType !== "turn-association-pending";
+          claimed.phase === "recovering" && claimed.lastFailureType !== "turn-association-pending";
         const activeIntent = recovery
           ? yield* repository.beginRecoveryAttempt({
               workItemId: claimed.workItemId,
@@ -336,14 +338,18 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
             });
             return;
           }
-          if (result.completed === true && (result.providerTurnId !== null || result.handledCommand === true)) {
+          if (
+            result.completed === true &&
+            (result.providerTurnId !== null || result.handledCommand === true)
+          ) {
             const reconciled = yield* repository.markCompletedFromHistory({
               workItemId: intent.workItemId,
               owner: options.ownerId,
               generation: intent.claimGeneration,
               providerTurnId: result.providerTurnId,
               providerInstanceId: result.providerInstanceId,
-              completionKind: result.handledCommand === true ? "handled-command" : "history-completed",
+              completionKind:
+                result.handledCommand === true ? "handled-command" : "history-completed",
               at: yield* now(),
             });
             if (reconciled && recovery && options.onRecoveryActivity) {

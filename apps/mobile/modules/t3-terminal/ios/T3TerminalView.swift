@@ -286,6 +286,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   var foregroundColorHex: String = "#d1d5da"
   var mutedForegroundColorHex: String = "#959da5"
 
+  // T3-CUSTOM(expbkt3): BEGIN expose terminal focus as a VoiceOver action and report native focus changes.
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
 
@@ -697,6 +698,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     onKeyboardFocusChange(["isFocused": inputField.isFirstResponder])
   }
 
+  // T3-CUSTOM(expbkt3): END expose terminal focus as a VoiceOver action and report native focus changes.
   private func emitInput(_ data: String) {
     guard !data.isEmpty else { return }
     onInput(["data": data])

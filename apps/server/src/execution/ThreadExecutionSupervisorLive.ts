@@ -514,7 +514,11 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     fromSubscription = false,
   ) =>
     transition(event.payload.threadId, (current, observedAt) => {
-      if (fromSubscription && event.sequence <= (handledCommandSequences.get(event.payload.threadId) ?? -1)) return null;
+      if (
+        fromSubscription &&
+        event.sequence <= (handledCommandSequences.get(event.payload.threadId) ?? -1)
+      )
+        return null;
       const executionId = String(event.commandId ?? event.eventId);
       if (
         current.turn?.executionId === executionId ||
@@ -667,7 +671,10 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   ) =>
     transition(threadId, (current, observedAt) => {
       if (handledCommandSequence !== undefined) {
-        handledCommandSequences.set(threadId, Math.max(handledCommandSequence, handledCommandSequences.get(threadId) ?? -1));
+        handledCommandSequences.set(
+          threadId,
+          Math.max(handledCommandSequence, handledCommandSequences.get(threadId) ?? -1),
+        );
       }
       if (
         current.turn?.executionId !== executionId ||

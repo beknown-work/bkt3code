@@ -213,7 +213,11 @@ function derivePendingUserInputCountFromActivities(
 
     if (activity.kind === "user-input.requested") {
       // T3-CUSTOM(expbkt3): async message replies survive turn completion; native requests do not.
-      if (payload?.responseMode !== "message" && activity.turnId !== null && terminalTurnIds.has(activity.turnId)) {
+      if (
+        payload?.responseMode !== "message" &&
+        activity.turnId !== null &&
+        terminalTurnIds.has(activity.turnId)
+      ) {
         continue;
       }
       openRequestIds.add(requestId);
@@ -1625,7 +1629,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             session.value.status === "running" &&
             session.value.activeTurnId === event.payload.expectedActiveTurnId &&
             event.payload.providerTurnId === event.payload.expectedActiveTurnId;
-            const isTerminalSession =
+          const isTerminalSession =
             Option.isSome(session) &&
             (session.value.status === "ready" ||
               session.value.status === "stopped" ||

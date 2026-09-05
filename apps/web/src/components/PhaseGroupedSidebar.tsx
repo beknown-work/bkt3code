@@ -3228,7 +3228,8 @@ export function PhaseGroupedSidebar() {
         vcsStatus={vcsStatusByThreadKey.get(key) ?? null}
         onWorkflowStatus={recordWorkflowStatus}
         pinningSupported={
-          serverConfigs.get(row.thread.environmentId)?.environment.capabilities.threadPinning === true
+          serverConfigs.get(row.thread.environmentId)?.environment.capabilities.threadPinning ===
+          true
         }
         onPin={attemptPin}
         onUnpin={attemptUnpin}

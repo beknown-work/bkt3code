@@ -156,10 +156,7 @@ export function PhaseSidebarRateLimits(props: { readonly onPress?: () => void })
 
   return (
     <Pressable
-      className={cn(
-        "gap-2 px-4",
-        anyVisible ? "pb-1 pt-2" : "h-0 overflow-hidden",
-      )}
+      className={cn("gap-2 px-4", anyVisible ? "pb-1 pt-2" : "h-0 overflow-hidden")}
       disabled={props.onPress === undefined}
       onPress={props.onPress}
     >

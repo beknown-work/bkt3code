@@ -6,6 +6,7 @@ public class T3TerminalModule: Module {
 
     // Bumped when native hardware-keyboard handling changes; surfaced in the JS debug
     // logs so a stale native binary is distinguishable from a broken key pipeline.
+    // T3-CUSTOM(expbkt3): expose the native hardware-keyboard bridge revision to JS diagnostics.
     Constants([
       "hardwareKeyRevision": 4,
     ])

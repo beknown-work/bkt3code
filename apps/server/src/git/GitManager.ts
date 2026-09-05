@@ -1194,10 +1194,10 @@ export const make = Effect.gen(function* () {
             pr:
               skipReason === "no-remote"
                 ? resolveLastKnownPr(branchKey, {
-                  upstreamRef: details.upstreamRef,
-                  headBranch: headContext.headBranch,
-                  remoteName: headContext.remoteName,
-                  headRemoteUrlKey: headContext.headRemoteUrlKey,
+                    upstreamRef: details.upstreamRef,
+                    headBranch: headContext.headBranch,
+                    remoteName: headContext.remoteName,
+                    headRemoteUrlKey: headContext.headRemoteUrlKey,
                   })
                 : null,
             headContext,
@@ -1553,8 +1553,8 @@ export const make = Effect.gen(function* () {
     if (Option.isNone(remoteResult)) {
       return null;
     }
-    const remoteNames = remoteResult.value
-      .stdout.split("\n")
+    const remoteNames = remoteResult.value.stdout
+      .split("\n")
       .map((name) => name.trim())
       .filter((name) => name.length > 0);
     if (remoteNames.length === 0) {

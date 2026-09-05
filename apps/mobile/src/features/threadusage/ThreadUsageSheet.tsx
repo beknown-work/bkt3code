@@ -128,62 +128,62 @@ export function ThreadUsageSheet({ route }: ThreadUsageSheetProps) {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 16 }}
         contentInsetAdjustmentBehavior="never"
       >
-          <View className="px-4 pt-3">
-            <Text className="font-t3-bold text-4xl tabular-nums text-foreground">{label}</Text>
-            <Text className="mt-1 text-xs text-foreground-muted">
-              {usage === null ? "Reading provider transcripts…" : costSourceLabel(usage)}
-            </Text>
-          </View>
+        <View className="px-4 pt-3">
+          <Text className="font-t3-bold text-4xl tabular-nums text-foreground">{label}</Text>
+          <Text className="mt-1 text-xs text-foreground-muted">
+            {usage === null ? "Reading provider transcripts…" : costSourceLabel(usage)}
+          </Text>
+        </View>
 
-          {usage === null ? null : (
-            <>
-              <View className="mx-4 mt-4 flex-row gap-3 rounded-xl border border-border bg-subtle p-3">
-                <Stat label="Input" value={formatTokens(usage.totals.uncachedInputTokens)} />
-                <Stat label="Cached" value={formatTokens(usage.totals.cachedInputTokens)} />
-                <Stat label="Output" value={formatTokens(usage.totals.outputTokens)} />
-                <Stat label="Usage records" value={String(usage.records)} />
-              </View>
-              {usage.cacheSavingsUsd > 0 ? (
-                <Text className="px-4 pt-2 text-xs text-foreground-muted">
-                  Prompt caching saved about {formatThreadCost(usage.cacheSavingsUsd)} against full
-                  input rates.
-                </Text>
-              ) : null}
-
-              {usage.models.length > 0 ? (
-                <>
-                  <SectionTitle>By model</SectionTitle>
-                  {usage.models.map((row) => (
-                    <Row
-                      key={`${row.provider}:${row.model}`}
-                      left={row.model}
-                      right={formatThreadCost(row.costUsd)}
-                      sub={`${row.provider.toUpperCase()} · ${formatTokens(tokensOf(row))} tokens · ${row.records} usage record${row.records === 1 ? "" : "s"}`}
-                    />
-                  ))}
-                </>
-              ) : null}
-
-              {usage.days.length > 1 ? (
-                <>
-                  <SectionTitle>By day</SectionTitle>
-                  {usage.days.map((row) => (
-                    <Row
-                      key={row.day}
-                      left={row.day}
-                      right={formatThreadCost(row.costUsd)}
-                      sub={`${formatTokens(tokensOf(row as unknown as ThreadUsage))} tokens`}
-                    />
-                  ))}
-                </>
-              ) : null}
-
-              <Text className="px-4 pt-5 text-[11px] leading-4 text-foreground-tertiary">
-                Estimate at API list prices from the same rate table as the Usage page. A
-                subscription bills differently; this is the yardstick for how heavy a session is.
+        {usage === null ? null : (
+          <>
+            <View className="mx-4 mt-4 flex-row gap-3 rounded-xl border border-border bg-subtle p-3">
+              <Stat label="Input" value={formatTokens(usage.totals.uncachedInputTokens)} />
+              <Stat label="Cached" value={formatTokens(usage.totals.cachedInputTokens)} />
+              <Stat label="Output" value={formatTokens(usage.totals.outputTokens)} />
+              <Stat label="Usage records" value={String(usage.records)} />
+            </View>
+            {usage.cacheSavingsUsd > 0 ? (
+              <Text className="px-4 pt-2 text-xs text-foreground-muted">
+                Prompt caching saved about {formatThreadCost(usage.cacheSavingsUsd)} against full
+                input rates.
               </Text>
-            </>
-          )}
+            ) : null}
+
+            {usage.models.length > 0 ? (
+              <>
+                <SectionTitle>By model</SectionTitle>
+                {usage.models.map((row) => (
+                  <Row
+                    key={`${row.provider}:${row.model}`}
+                    left={row.model}
+                    right={formatThreadCost(row.costUsd)}
+                    sub={`${row.provider.toUpperCase()} · ${formatTokens(tokensOf(row))} tokens · ${row.records} usage record${row.records === 1 ? "" : "s"}`}
+                  />
+                ))}
+              </>
+            ) : null}
+
+            {usage.days.length > 1 ? (
+              <>
+                <SectionTitle>By day</SectionTitle>
+                {usage.days.map((row) => (
+                  <Row
+                    key={row.day}
+                    left={row.day}
+                    right={formatThreadCost(row.costUsd)}
+                    sub={`${formatTokens(tokensOf(row as unknown as ThreadUsage))} tokens`}
+                  />
+                ))}
+              </>
+            ) : null}
+
+            <Text className="px-4 pt-5 text-[11px] leading-4 text-foreground-tertiary">
+              Estimate at API list prices from the same rate table as the Usage page. A subscription
+              bills differently; this is the yardstick for how heavy a session is.
+            </Text>
+          </>
+        )}
       </ScrollView>
     </>
   );

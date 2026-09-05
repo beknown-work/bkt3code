@@ -67,8 +67,14 @@ import {
 } from "../../identity/SessionIdentityEnvironment.ts";
 // T3-CUSTOM(expbkt3): exercise native commands through the real durable coordinator.
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
-import { ThreadExecutionSupervisor, type ThreadExecutionSupervisorShape } from "../../execution/ThreadExecutionSupervisor.ts";
-import { DurableExecutionIntentRepository, DurableExecutionIntentRepositoryLive } from "../../execution/DurableExecutionIntentRepository.ts";
+import {
+  ThreadExecutionSupervisor,
+  type ThreadExecutionSupervisorShape,
+} from "../../execution/ThreadExecutionSupervisor.ts";
+import {
+  DurableExecutionIntentRepository,
+  DurableExecutionIntentRepositoryLive,
+} from "../../execution/DurableExecutionIntentRepository.ts";
 import { SourceControlProfileService } from "../../sourceControl/SourceControlProfileService.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -308,16 +314,25 @@ describe("ProviderCommandReactor", () => {
     createdStateDirs.add(stateDir);
     // T3-CUSTOM(expbkt3): completion receipt fires after the repository transaction.
     const nativeCompletion = Effect.runSync(Deferred.make<string>());
-    const durableLayer = Layer.effect(DurableExecutionIntentRepository, Effect.gen(function* () {
-      const repository = yield* DurableExecutionIntentRepository;
-      return {
-        ...repository,
-        markCompletedFromHistory: (request: Parameters<typeof repository.markCompletedFromHistory>[0]) =>
-          repository.markCompletedFromHistory(request).pipe(Effect.tap((completed) =>
-            completed ? Deferred.succeed(nativeCompletion, request.workItemId) : Effect.void,
-          )),
-      };
-    })).pipe(Layer.provide(DurableExecutionIntentRepositoryLive));
+    const durableLayer = Layer.effect(
+      DurableExecutionIntentRepository,
+      Effect.gen(function* () {
+        const repository = yield* DurableExecutionIntentRepository;
+        return {
+          ...repository,
+          markCompletedFromHistory: (
+            request: Parameters<typeof repository.markCompletedFromHistory>[0],
+          ) =>
+            repository
+              .markCompletedFromHistory(request)
+              .pipe(
+                Effect.tap((completed) =>
+                  completed ? Deferred.succeed(nativeCompletion, request.workItemId) : Effect.void,
+                ),
+              ),
+        };
+      }),
+    ).pipe(Layer.provide(DurableExecutionIntentRepositoryLive));
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     const tryHandlePromptCommand = vi.fn<ProviderAuthService["Service"]["tryHandlePromptCommand"]>(
       input?.tryHandlePromptCommandEffect ?? (() => Effect.succeed(false)),
@@ -570,7 +585,9 @@ describe("ProviderCommandReactor", () => {
               const hold = input?.holdAssociationDispatch;
               if (hold !== undefined && hold.armed.value) {
                 return Effect.gen(function* () {
-                  const dispatchFiber = yield* engine.dispatch(command, options).pipe(Effect.forkChild);
+                  const dispatchFiber = yield* engine
+                    .dispatch(command, options)
+                    .pipe(Effect.forkChild);
                   yield* Deferred.succeed(hold.started, undefined);
                   yield* Deferred.await(hold.release);
                   return yield* Fiber.join(dispatchFiber);
@@ -602,9 +619,11 @@ describe("ProviderCommandReactor", () => {
     ).pipe(Layer.provide(orchestrationLayer));
     const layer = ProviderCommandReactorLive.pipe(
       // T3-CUSTOM(expbkt3): deterministic cleanup fence for bootstrap resource handoff.
-      Layer.provide(Layer.mock(ThreadDeletionReactor)({
-        drainThrough: input?.drainDeletionThrough ?? (() => Effect.void),
-      })),
+      Layer.provide(
+        Layer.mock(ThreadDeletionReactor)({
+          drainThrough: input?.drainDeletionThrough ?? (() => Effect.void),
+        }),
+      ),
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
@@ -673,9 +692,11 @@ describe("ProviderCommandReactor", () => {
       ),
       // T3-CUSTOM(expbkt3): keep upstream tests lightweight; opt in for durable routing.
       Layer.provideMerge(input?.durableNativeCommands ? durableLayer : Layer.empty),
-      Layer.provide(input?.executionSupervisor
-        ? Layer.succeed(ThreadExecutionSupervisor, input.executionSupervisor)
-        : Layer.empty),
+      Layer.provide(
+        input?.executionSupervisor
+          ? Layer.succeed(ThreadExecutionSupervisor, input.executionSupervisor)
+          : Layer.empty,
+      ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
@@ -780,26 +801,41 @@ describe("ProviderCommandReactor", () => {
     );
     // T3-CUSTOM(expbkt3): production starts the durable loop after reactor subscriptions.
     if (input?.durableNativeCommands) {
-      await Effect.runPromise((reactor.startDurableRecovery?.() ?? Effect.void).pipe(Scope.provide(scope)));
+      await Effect.runPromise(
+        (reactor.startDurableRecovery?.() ?? Effect.void).pipe(Scope.provide(scope)),
+      );
     }
     const drain = () => Effect.runPromise(reactor.drain);
 
     return {
       // T3-CUSTOM(expbkt3): deterministic durable completion and fixture inspection.
       nativeCompletion,
-      readDurableIntent: (workItemId: string) => runtime!.runPromise(Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const rows = yield* sql<{ readonly deliveryCertainty: string; readonly desiredState: string; readonly runnable: number; readonly phase: string; readonly providerTurnId: string | null; readonly lastFailureType: string | null }>`
+      readDurableIntent: (workItemId: string) =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const rows = yield* sql<{
+              readonly deliveryCertainty: string;
+              readonly desiredState: string;
+              readonly runnable: number;
+              readonly phase: string;
+              readonly providerTurnId: string | null;
+              readonly lastFailureType: string | null;
+            }>`
           SELECT delivery_certainty AS "deliveryCertainty", desired_state AS "desiredState", runnable, phase, provider_turn_id AS "providerTurnId", last_failure_type AS "lastFailureType"
           FROM projection_thread_execution_intents WHERE work_item_id = ${workItemId}`;
-        return rows[0];
-      })),
-      seedNativeConversation: () => runtime!.runPromise(Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`INSERT INTO projection_thread_messages
+            return rows[0];
+          }),
+        ),
+      seedNativeConversation: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`INSERT INTO projection_thread_messages
           (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
           VALUES ('native-history', 'thread-1', NULL, 'user', 'Existing conversation', 0, ${now}, ${now})`;
-      })),
+          }),
+        ),
       engine,
       snapshotQuery,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
@@ -840,7 +876,10 @@ describe("ProviderCommandReactor", () => {
   }
 
   // T3-CUSTOM(expbkt3): native commands have durable receipts but no provider turn.
-  const dispatchNativeCommand = (harness: Awaited<ReturnType<typeof createHarness>>, text: string) =>
+  const dispatchNativeCommand = (
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    text: string,
+  ) =>
     harness.engine.dispatch({
       type: "thread.turn.start",
       commandId: CommandId.make("native-command"),
@@ -853,87 +892,136 @@ describe("ProviderCommandReactor", () => {
 
   effectIt.effect.each(["/logout", "/compact"] as const)(
     "releases the prepared admission after durable %s without creating a provider turn",
-    (text) => Effect.gen(function* () {
-      const supervisor = yield* ThreadExecutionSupervisor;
-      const releaseTurnAdmission = vi.fn(supervisor.releaseTurnAdmission);
-      const harness = yield* Effect.promise(() => createHarness({
-        durableNativeCommands: true,
-        executionSupervisor: { ...supervisor, releaseTurnAdmission },
-        tryHandlePromptCommandEffect: ({ text }) => Effect.succeed(text === "/logout"),
-      }));
-      yield* dispatchNativeCommand(harness, text);
-      expect(yield* Deferred.await(harness.nativeCompletion)).toBe("native-command");
-      yield* Effect.promise(() => harness.drain());
-      expect(releaseTurnAdmission).toHaveBeenCalledWith(ThreadId.make("thread-1"), "native-command", expect.any(Number));
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect(harness.compactThread).not.toHaveBeenCalled();
-      expect(yield* Effect.promise(() => harness.readDurableIntent("native-command"))).toMatchObject({
-        deliveryCertainty: "completed", desiredState: "stopped", providerTurnId: null,
-      });
-    }),
+    (text) =>
+      Effect.gen(function* () {
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const releaseTurnAdmission = vi.fn(supervisor.releaseTurnAdmission);
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            durableNativeCommands: true,
+            executionSupervisor: { ...supervisor, releaseTurnAdmission },
+            tryHandlePromptCommandEffect: ({ text }) => Effect.succeed(text === "/logout"),
+          }),
+        );
+        yield* dispatchNativeCommand(harness, text);
+        expect(yield* Deferred.await(harness.nativeCompletion)).toBe("native-command");
+        yield* Effect.promise(() => harness.drain());
+        expect(releaseTurnAdmission).toHaveBeenCalledWith(
+          ThreadId.make("thread-1"),
+          "native-command",
+          expect.any(Number),
+        );
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(harness.compactThread).not.toHaveBeenCalled();
+        expect(
+          yield* Effect.promise(() => harness.readDurableIntent("native-command")),
+        ).toMatchObject({
+          deliveryCertainty: "completed",
+          desiredState: "stopped",
+          providerTurnId: null,
+        });
+      }),
   );
 
   effectIt.effect.each(["steer", "queue"] as const)(
     "handles durable busy logout before %s routing",
-    (activeTurnInput) => Effect.gen(function* () {
-      const supervisor = yield* ThreadExecutionSupervisor;
-      const idle = yield* supervisor.getSnapshot(ThreadId.make("thread-1"));
-      const releaseTurnAdmission = vi.fn(supervisor.releaseTurnAdmission);
-      const harness = yield* Effect.promise(() => createHarness({
-        durableNativeCommands: true,
-        activeTurnInput,
-        executionSupervisor: {
-          ...supervisor,
-          releaseTurnAdmission,
-          getSnapshot: () => Effect.succeed({ ...idle, activity: "active", canStop: true,
-            turn: { executionId: "existing-execution", providerTurnId: asTurnId("existing-turn"),
-              state: "running", startedAt: idle.observedAt, stopRequestedAt: null,
-              completedAt: null, lastError: null } }),
-        },
-        tryHandlePromptCommandEffect: ({ text }) => Effect.succeed(text === "/logout"),
-      }));
-      yield* dispatchNativeCommand(harness, "/logout");
-      yield* Deferred.await(harness.nativeCompletion);
-      yield* Effect.promise(() => harness.drain());
-      expect(harness.tryHandlePromptCommand).toHaveBeenCalledTimes(1);
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect(releaseTurnAdmission).toHaveBeenCalledWith(ThreadId.make("thread-1"), "native-command", expect.any(Number));
-      expect(yield* Effect.promise(() => harness.readDurableIntent("native-command"))).toMatchObject({
-        deliveryCertainty: "completed", providerTurnId: null,
-      });
-    }),
+    (activeTurnInput) =>
+      Effect.gen(function* () {
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const idle = yield* supervisor.getSnapshot(ThreadId.make("thread-1"));
+        const releaseTurnAdmission = vi.fn(supervisor.releaseTurnAdmission);
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            durableNativeCommands: true,
+            activeTurnInput,
+            executionSupervisor: {
+              ...supervisor,
+              releaseTurnAdmission,
+              getSnapshot: () =>
+                Effect.succeed({
+                  ...idle,
+                  activity: "active",
+                  canStop: true,
+                  turn: {
+                    executionId: "existing-execution",
+                    providerTurnId: asTurnId("existing-turn"),
+                    state: "running",
+                    startedAt: idle.observedAt,
+                    stopRequestedAt: null,
+                    completedAt: null,
+                    lastError: null,
+                  },
+                }),
+            },
+            tryHandlePromptCommandEffect: ({ text }) => Effect.succeed(text === "/logout"),
+          }),
+        );
+        yield* dispatchNativeCommand(harness, "/logout");
+        yield* Deferred.await(harness.nativeCompletion);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.tryHandlePromptCommand).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(releaseTurnAdmission).toHaveBeenCalledWith(
+          ThreadId.make("thread-1"),
+          "native-command",
+          expect.any(Number),
+        );
+        expect(
+          yield* Effect.promise(() => harness.readDurableIntent("native-command")),
+        ).toMatchObject({
+          deliveryCertainty: "completed",
+          providerTurnId: null,
+        });
+      }),
   );
 
-  effectIt.effect("acknowledges durable compaction only after completion and never repeats it", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const finish = yield* Deferred.make<void>();
-      const supervisor = yield* ThreadExecutionSupervisor;
-      const releaseTurnAdmission = vi.fn(supervisor.releaseTurnAdmission);
-      const harness = yield* Effect.promise(() => createHarness({
-        durableNativeCommands: true,
-        executionSupervisor: { ...supervisor, releaseTurnAdmission },
-        compactThreadEffect: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
-      }));
-      yield* Effect.promise(() => harness.seedNativeConversation());
-      yield* dispatchNativeCommand(harness, "/compact");
-      yield* Deferred.await(started);
-      expect(Option.isNone(yield* Deferred.poll(harness.nativeCompletion))).toBe(true);
-      expect(yield* Effect.promise(() => harness.readDurableIntent("native-command"))).toMatchObject({
-        // The starting phase is promoted to uncertain if authority is lost.
-        desiredState: "running", phase: "starting", deliveryCertainty: "never-delivered",
-      });
-      yield* Deferred.succeed(finish, undefined);
-      yield* Deferred.await(harness.nativeCompletion);
-      yield* dispatchNativeCommand(harness, "/compact");
-      yield* Effect.promise(() => harness.drain());
-      expect(harness.compactThread).toHaveBeenCalledTimes(1);
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      expect(releaseTurnAdmission).toHaveBeenCalledWith(ThreadId.make("thread-1"), "native-command", expect.any(Number));
-      expect(yield* Effect.promise(() => harness.readDurableIntent("native-command"))).toMatchObject({
-        desiredState: "stopped", deliveryCertainty: "completed", providerTurnId: null,
-      });
-    }),
+  effectIt.effect(
+    "acknowledges durable compaction only after completion and never repeats it",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const releaseTurnAdmission = vi.fn(supervisor.releaseTurnAdmission);
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            durableNativeCommands: true,
+            executionSupervisor: { ...supervisor, releaseTurnAdmission },
+            compactThreadEffect: () =>
+              Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+          }),
+        );
+        yield* Effect.promise(() => harness.seedNativeConversation());
+        yield* dispatchNativeCommand(harness, "/compact");
+        yield* Deferred.await(started);
+        expect(Option.isNone(yield* Deferred.poll(harness.nativeCompletion))).toBe(true);
+        expect(
+          yield* Effect.promise(() => harness.readDurableIntent("native-command")),
+        ).toMatchObject({
+          // The starting phase is promoted to uncertain if authority is lost.
+          desiredState: "running",
+          phase: "starting",
+          deliveryCertainty: "never-delivered",
+        });
+        yield* Deferred.succeed(finish, undefined);
+        yield* Deferred.await(harness.nativeCompletion);
+        yield* dispatchNativeCommand(harness, "/compact");
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.compactThread).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect(releaseTurnAdmission).toHaveBeenCalledWith(
+          ThreadId.make("thread-1"),
+          "native-command",
+          expect.any(Number),
+        );
+        expect(
+          yield* Effect.promise(() => harness.readDurableIntent("native-command")),
+        ).toMatchObject({
+          desiredState: "stopped",
+          deliveryCertainty: "completed",
+          providerTurnId: null,
+        });
+      }),
   );
 
   // T3-CUSTOM(expbkt3): atomic create wakes durable work before the RPC returns.
@@ -941,25 +1029,41 @@ describe("ProviderCommandReactor", () => {
     Effect.gen(function* () {
       const cleanupEntered = yield* Deferred.make<number>();
       const finishCleanup = yield* Deferred.make<void>();
-      const harness = yield* Effect.promise(() => createHarness({
-        durableNativeCommands: true,
-        drainDeletionThrough: (sequence) => Deferred.succeed(cleanupEntered, sequence).pipe(
-          Effect.andThen(Deferred.await(finishCleanup)),
-        ),
-        tryHandlePromptCommandEffect: () => Effect.succeed(true),
-      }));
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          durableNativeCommands: true,
+          drainDeletionThrough: (sequence) =>
+            Deferred.succeed(cleanupEntered, sequence).pipe(
+              Effect.andThen(Deferred.await(finishCleanup)),
+            ),
+          tryHandlePromptCommandEffect: () => Effect.succeed(true),
+        }),
+      );
       const receipt = yield* harness.engine.dispatch({
-        type: "thread.turn.start", commandId: CommandId.make("native-bootstrap"),
+        type: "thread.turn.start",
+        commandId: CommandId.make("native-bootstrap"),
         threadId: ThreadId.make("thread-bootstrap"),
-        message: { messageId: MessageId.make("native-bootstrap-message"), role: "user", text: "/logout", attachments: [] },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE, runtimeMode: "approval-required",
-        bootstrap: { createThread: {
-          projectId: asProjectId("project-1"), title: "Recreated thread",
-          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE, runtimeMode: "approval-required",
-          branch: null, worktreePath: null, sourceControlProfileId: null,
-          createdAt: "2026-01-01T00:00:01.000Z",
-        } },
+        message: {
+          messageId: MessageId.make("native-bootstrap-message"),
+          role: "user",
+          text: "/logout",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        bootstrap: {
+          createThread: {
+            projectId: asProjectId("project-1"),
+            title: "Recreated thread",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            sourceControlProfileId: null,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        },
         createdAt: "2026-01-01T00:00:01.000Z",
       });
       expect(yield* Deferred.await(cleanupEntered)).toBe(receipt.sequence);
@@ -1291,206 +1395,219 @@ describe("ProviderCommandReactor", () => {
   );
 
   effectIt.effect.each([
-    { label: "a ready provider", state: "ready" as const, activeProviderTurnId: null, compact: true },
+    {
+      label: "a ready provider",
+      state: "ready" as const,
+      activeProviderTurnId: null,
+      compact: true,
+    },
     {
       label: "a genuinely busy provider",
       state: "running" as const,
       activeProviderTurnId: asTurnId("provider-live-turn"),
       compact: false,
     },
-  ])("uses the shared provider inspection when admitting /compact after a retained execution snapshot", ({
-    state,
-    activeProviderTurnId,
-    compact,
-  }) =>
-    Effect.gen(function* () {
-      const threadId = ThreadId.make("thread-1");
-      const now = "2026-01-01T00:00:00.000Z";
-      const harness = yield* Effect.promise(() =>
-        createHarness({
-          durableNativeCommands: true,
-          inspectSessionEffect: () =>
-            Effect.succeed({
-              threadId,
-              generation: 1,
-              state,
-              activeProviderTurnId,
-              runtimeAlive: true,
-            }),
-        }),
-      );
-      yield* Effect.promise(() => harness.seedNativeConversation());
-
-      // The supervisor retains the prior active execution while the shared
-      // projection has already observed the provider become ready. This is
-      // the production race the compact admission guard must reconcile.
-      yield* harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make(`cmd-session-${state}`),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "codex",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("stale-projected-turn"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      });
-      yield* dispatchNativeCommand(harness, "/compact");
-      yield* Deferred.await(harness.nativeCompletion);
-      yield* Effect.promise(() => harness.drain());
-
-      expect(harness.compactThread).toHaveBeenCalledTimes(compact ? 1 : 0);
-      expect(harness.sendTurn).not.toHaveBeenCalled();
-      const model = yield* Effect.promise(() => harness.readModel());
-      const thread = model.threads.find((entry) => entry.id === threadId);
-      if (compact) {
-        expect(thread?.session?.status).toBe("ready");
-      } else {
-        expect(thread?.activities).toContainEqual(
-          expect.objectContaining({
-            kind: "provider.turn.start.failed",
-            summary: "Context compaction failed",
+  ])(
+    "uses the shared provider inspection when admitting /compact after a retained execution snapshot",
+    ({ state, activeProviderTurnId, compact }) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-1");
+        const now = "2026-01-01T00:00:00.000Z";
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            durableNativeCommands: true,
+            inspectSessionEffect: () =>
+              Effect.succeed({
+                threadId,
+                generation: 1,
+                state,
+                activeProviderTurnId,
+                runtimeAlive: true,
+              }),
           }),
         );
-      }
-    }),
+        yield* Effect.promise(() => harness.seedNativeConversation());
+
+        // The supervisor retains the prior active execution while the shared
+        // projection has already observed the provider become ready. This is
+        // the production race the compact admission guard must reconcile.
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-${state}`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("stale-projected-turn"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* dispatchNativeCommand(harness, "/compact");
+        yield* Deferred.await(harness.nativeCompletion);
+        yield* Effect.promise(() => harness.drain());
+
+        expect(harness.compactThread).toHaveBeenCalledTimes(compact ? 1 : 0);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const model = yield* Effect.promise(() => harness.readModel());
+        const thread = model.threads.find((entry) => entry.id === threadId);
+        if (compact) {
+          expect(thread?.session?.status).toBe("ready");
+        } else {
+          expect(thread?.activities).toContainEqual(
+            expect.objectContaining({
+              kind: "provider.turn.start.failed",
+              summary: "Context compaction failed",
+            }),
+          );
+        }
+      }),
   );
 
-  effectIt.effect("durably retries same-turn association persistence without resending the steer", () =>
-    Effect.gen(function* () {
-      const fallbackSupervisor = yield* ThreadExecutionSupervisor;
-      const associationDispatchStarted = yield* Deferred.make<void>();
-      const releaseAssociationDispatch = yield* Deferred.make<void>();
-      const associationDispatchGate = { value: false };
-      const baseSnapshot = yield* fallbackSupervisor.getSnapshot(ThreadId.make("thread-1"));
-      const liveSnapshot = {
-        ...baseSnapshot,
-        activity: "active" as const,
-        canStop: true,
-        providerSession: {
-          ...baseSnapshot.providerSession,
-          state: "ready" as const,
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          generation: 1,
-        },
-        turn: {
-          executionId: "existing-execution",
-          providerTurnId: asTurnId("turn-1"),
-          state: "running" as const,
-          startedAt: baseSnapshot.observedAt,
-          stopRequestedAt: null,
-          completedAt: null,
-          lastError: null,
-        },
-      };
-      const harness = yield* Effect.promise(() =>
-        createHarness({
-          durableNativeCommands: true,
-          associationDispatchFailures: 2,
-          holdAssociationDispatch: {
-            started: associationDispatchStarted,
-            release: releaseAssociationDispatch,
-            armed: associationDispatchGate,
+  effectIt.effect(
+    "durably retries same-turn association persistence without resending the steer",
+    () =>
+      Effect.gen(function* () {
+        const fallbackSupervisor = yield* ThreadExecutionSupervisor;
+        const associationDispatchStarted = yield* Deferred.make<void>();
+        const releaseAssociationDispatch = yield* Deferred.make<void>();
+        const associationDispatchGate = { value: false };
+        const baseSnapshot = yield* fallbackSupervisor.getSnapshot(ThreadId.make("thread-1"));
+        const liveSnapshot = {
+          ...baseSnapshot,
+          activity: "active" as const,
+          canStop: true,
+          providerSession: {
+            ...baseSnapshot.providerSession,
+            state: "ready" as const,
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            generation: 1,
           },
-          executionSupervisor: {
-            ...fallbackSupervisor,
-            getSnapshot: () => Effect.succeed(liveSnapshot),
+          turn: {
+            executionId: "existing-execution",
+            providerTurnId: asTurnId("turn-1"),
+            state: "running" as const,
+            startedAt: baseSnapshot.observedAt,
+            stopRequestedAt: null,
+            completedAt: null,
+            lastError: null,
           },
-        }),
-      );
-      const threadId = ThreadId.make("thread-1");
-      const now = "2026-01-01T00:00:00.000Z";
-      yield* Effect.promise(() => harness.seedNativeConversation());
-      yield* harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-live-steer"),
-        threadId,
-        session: {
+        };
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            durableNativeCommands: true,
+            associationDispatchFailures: 2,
+            holdAssociationDispatch: {
+              started: associationDispatchStarted,
+              release: releaseAssociationDispatch,
+              armed: associationDispatchGate,
+            },
+            executionSupervisor: {
+              ...fallbackSupervisor,
+              getSnapshot: () => Effect.succeed(liveSnapshot),
+            },
+          }),
+        );
+        const threadId = ThreadId.make("thread-1");
+        const now = "2026-01-01T00:00:00.000Z";
+        yield* Effect.promise(() => harness.seedNativeConversation());
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-live-steer"),
           threadId,
-          status: "running",
-          providerName: "codex",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-1"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      });
-      const turnStartFiber = yield* harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-steer-association-retry"),
-        threadId,
-        message: {
-          messageId: asMessageId("message-steer-association-retry"),
-          role: "user",
-          text: "steer exactly once",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }).pipe(Effect.forkChild);
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("turn-1"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        const turnStartFiber = yield* harness.engine
+          .dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-steer-association-retry"),
+            threadId,
+            message: {
+              messageId: asMessageId("message-steer-association-retry"),
+              role: "user",
+              text: "steer exactly once",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: now,
+          })
+          .pipe(Effect.forkChild);
 
-      yield* Effect.promise(() =>
-        waitFor(async () => {
-          const intent = await harness.readDurableIntent("cmd-steer-association-retry");
-          return intent?.lastFailureType === "turn-association-pending";
-        }),
-      );
-      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-      expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([
-        { threadId: "thread-1" },
-      ]);
-      associationDispatchGate.value = true;
-      // Hold adoption after it has read the running projection. A terminal
-      // observation arriving during that await must be fenced at acknowledgement.
-      yield* Deferred.await(associationDispatchStarted);
-      yield* harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-steer-ack"),
-        threadId,
-        session: {
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const intent = await harness.readDurableIntent("cmd-steer-association-retry");
+            return intent?.lastFailureType === "turn-association-pending";
+          }),
+        );
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([
+          { threadId: "thread-1" },
+        ]);
+        associationDispatchGate.value = true;
+        // Hold adoption after it has read the running projection. A terminal
+        // observation arriving during that await must be fenced at acknowledgement.
+        yield* Deferred.await(associationDispatchStarted);
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-steer-ack"),
           threadId,
-          status: "ready",
-          providerName: "codex",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      });
-      yield* Deferred.succeed(releaseAssociationDispatch, undefined);
-      yield* Fiber.join(turnStartFiber);
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* Deferred.succeed(releaseAssociationDispatch, undefined);
+        yield* Fiber.join(turnStartFiber);
 
-      yield* Effect.promise(() =>
-        waitFor(async () => {
-          const intent = await harness.readDurableIntent("cmd-steer-association-retry");
-          return intent?.desiredState === "stopped" && intent.runnable === 0 && intent.deliveryCertainty === "completed";
-        }),
-      );
-      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
-      expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([]);
-      expect(yield* Effect.promise(() => harness.readDurableIntent("cmd-steer-association-retry"))).toMatchObject({
-        desiredState: "stopped",
-        runnable: 0,
-        phase: "running",
-        providerTurnId: "turn-1",
-        deliveryCertainty: "completed",
-      });
-      const terminalThread = yield* harness.snapshotQuery
-        .getThreadShellById(threadId)
-        .pipe(Effect.map(Option.getOrThrow));
-      expect(terminalThread.session?.status).toBe("ready");
-      expect(terminalThread.session?.activeTurnId).toBeNull();
-    }),
+        yield* Effect.promise(() =>
+          waitFor(async () => {
+            const intent = await harness.readDurableIntent("cmd-steer-association-retry");
+            return (
+              intent?.desiredState === "stopped" &&
+              intent.runnable === 0 &&
+              intent.deliveryCertainty === "completed"
+            );
+          }),
+        );
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+        expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([]);
+        expect(
+          yield* Effect.promise(() => harness.readDurableIntent("cmd-steer-association-retry")),
+        ).toMatchObject({
+          desiredState: "stopped",
+          runnable: 0,
+          phase: "running",
+          providerTurnId: "turn-1",
+          deliveryCertainty: "completed",
+        });
+        const terminalThread = yield* harness.snapshotQuery
+          .getThreadShellById(threadId)
+          .pipe(Effect.map(Option.getOrThrow));
+        expect(terminalThread.session?.status).toBe("ready");
+        expect(terminalThread.session?.activeTurnId).toBeNull();
+      }),
   );
 
   effectIt.effect.each([
@@ -1555,20 +1672,22 @@ describe("ProviderCommandReactor", () => {
         },
         createdAt: now,
       });
-      const turnStartFiber = yield* harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make(`cmd-first-success-${status}`),
-        threadId,
-        message: {
-          messageId: asMessageId(`message-first-success-${status}`),
-          role: "user",
-          text: `first success ${status}`,
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }).pipe(Effect.forkChild);
+      const turnStartFiber = yield* harness.engine
+        .dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-first-success-${status}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`message-first-success-${status}`),
+            role: "user",
+            text: `first success ${status}`,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        })
+        .pipe(Effect.forkChild);
       yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
       yield* Deferred.await(associationDispatchStarted);
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
@@ -1593,11 +1712,17 @@ describe("ProviderCommandReactor", () => {
       yield* Effect.promise(() =>
         waitFor(async () => {
           const intent = await harness.readDurableIntent(`cmd-first-success-${status}`);
-          return intent?.desiredState === "stopped" && intent.runnable === 0 && intent.deliveryCertainty === "completed";
+          return (
+            intent?.desiredState === "stopped" &&
+            intent.runnable === 0 &&
+            intent.deliveryCertainty === "completed"
+          );
         }),
       );
       expect(yield* Effect.promise(() => harness.readPendingTurnStarts())).toEqual([]);
-      expect(yield* Effect.promise(() => harness.readDurableIntent(`cmd-first-success-${status}`))).toMatchObject({
+      expect(
+        yield* Effect.promise(() => harness.readDurableIntent(`cmd-first-success-${status}`)),
+      ).toMatchObject({
         desiredState: "stopped",
         runnable: 0,
         deliveryCertainty: "completed",
@@ -1687,7 +1812,9 @@ describe("ProviderCommandReactor", () => {
 
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
       expect(harness.associationDispatchAttempts()).toBe(0);
-      expect(yield* Effect.promise(() => harness.readDurableIntent("cmd-distinct-provider-turn"))).toMatchObject({
+      expect(
+        yield* Effect.promise(() => harness.readDurableIntent("cmd-distinct-provider-turn")),
+      ).toMatchObject({
         desiredState: "running",
         runnable: 1,
         deliveryCertainty: "provider-acknowledged",
@@ -2136,7 +2263,10 @@ describe("ProviderCommandReactor", () => {
     // T3-CUSTOM(expbkt3): subscribe before dispatch and await the completion receipt.
     const titleUpdated = await harness.runEffect(
       harness.engine.streamDomainEvents.pipe(
-        Stream.filter((event) => event.type === "thread.meta-updated" && event.payload.title === "Generated title"),
+        Stream.filter(
+          (event) =>
+            event.type === "thread.meta-updated" && event.payload.title === "Generated title",
+        ),
         Stream.take(1),
         Stream.toPull,
         Scope.provide(scope!),

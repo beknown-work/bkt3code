@@ -820,7 +820,10 @@ const make = Effect.gen(function* () {
   // otherwise fail every session start with the same ENOENT until a human
   // rebuilds the directory by hand.
   const ensureThreadWorktree = Effect.fn("ensureThreadWorktree")(function* (input: {
-    readonly thread: Pick<OrchestrationThreadShell, "id" | "modelSelection" | "worktreePath" | "branch">;
+    readonly thread: Pick<
+      OrchestrationThreadShell,
+      "id" | "modelSelection" | "worktreePath" | "branch"
+    >;
     readonly workspaceRoot: string | null;
     readonly createdAt: string;
   }) {
@@ -1058,24 +1061,26 @@ const make = Effect.gen(function* () {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
     }) =>
-      providerService.startSession(
-        threadId,
-        {
+      providerService
+        .startSession(
           threadId,
-          ...(preferredProvider ? { provider: preferredProvider } : {}),
-          providerInstanceId: desiredInstanceId,
-          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-          ...(thread.title ? { title: thread.title } : {}),
-          modelSelection: desiredModelSelection,
-          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-          runtimeMode: desiredRuntimeMode,
-        },
-        // T3-CUSTOM(expbkt3): per-turn credential actor for multi-user sessions.
-        {
-          ...sessionExecutionOptions,
-          actorUserId: desiredCredentialActor,
-        },
-      ).pipe(Effect.tap(() => refreshWorkspaceSnapshot));
+          {
+            threadId,
+            ...(preferredProvider ? { provider: preferredProvider } : {}),
+            providerInstanceId: desiredInstanceId,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+            ...(thread.title ? { title: thread.title } : {}),
+            modelSelection: desiredModelSelection,
+            ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+            runtimeMode: desiredRuntimeMode,
+          },
+          // T3-CUSTOM(expbkt3): per-turn credential actor for multi-user sessions.
+          {
+            ...sessionExecutionOptions,
+            actorUserId: desiredCredentialActor,
+          },
+        )
+        .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -1412,20 +1417,22 @@ const make = Effect.gen(function* () {
       }) ?? process.cwd();
     const { textGenerationModelSelection: modelSelection } =
       yield* serverSettingsService.getSettings;
-    const generated = yield* textGeneration.generateThreadTitle({
-      cwd,
-      message,
-      previousTitle,
-      ...(attachments.length > 0 ? { attachments } : {}),
-      modelSelection,
-    }).pipe(
-      // T3-CUSTOM(expbkt3): first-prompt naming moved here from upstream's
-      // detached helper; retain its bounded retry without changing manual refresh.
-      Effect.retry({
-        times: event.commandId?.startsWith("server:thread-title-first-prompt:") ? 2 : 0,
-        schedule: Schedule.exponential("2 seconds"),
-      }),
-    );
+    const generated = yield* textGeneration
+      .generateThreadTitle({
+        cwd,
+        message,
+        previousTitle,
+        ...(attachments.length > 0 ? { attachments } : {}),
+        modelSelection,
+      })
+      .pipe(
+        // T3-CUSTOM(expbkt3): first-prompt naming moved here from upstream's
+        // detached helper; retain its bounded retry without changing manual refresh.
+        Effect.retry({
+          times: event.commandId?.startsWith("server:thread-title-first-prompt:") ? 2 : 0,
+          schedule: Schedule.exponential("2 seconds"),
+        }),
+      );
     if (generated.title === DEFAULT_THREAD_TITLE || generated.title === previousTitle) {
       return { _tag: "Completed", title: undefined } as const;
     }
@@ -1563,54 +1570,56 @@ const make = Effect.gen(function* () {
   const processNativeAuthCommand = Effect.fn("processNativeAuthCommand")(function* (
     thread: Pick<OrchestrationThreadShell, "id" | "session" | "modelSelection" | "runtimeMode">,
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
-    message: { readonly text: string; readonly attachments?: ReadonlyArray<ChatAttachment> | undefined },
+    message: {
+      readonly text: string;
+      readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+    },
   ) {
-      // Native account commands belong to the thread's existing provider session.
-      const instanceId =
-        thread.session?.providerInstanceId ??
-        event.payload.modelSelection?.instanceId ??
-        thread.modelSelection.instanceId;
-      const handled = yield* providerAuthService.tryHandlePromptCommand({
-        instanceId,
-        text: message.text,
-        hasAttachments: (message.attachments?.length ?? 0) > 0,
-      });
-      if (!handled) {
-        return false;
-      }
+    // Native account commands belong to the thread's existing provider session.
+    const instanceId =
+      thread.session?.providerInstanceId ??
+      event.payload.modelSelection?.instanceId ??
+      thread.modelSelection.instanceId;
+    const handled = yield* providerAuthService.tryHandlePromptCommand({
+      instanceId,
+      text: message.text,
+      hasAttachments: (message.attachments?.length ?? 0) > 0,
+    });
+    if (!handled) {
+      return false;
+    }
 
-      const instanceInfo = yield* providerService.getInstanceInfo(instanceId);
-      yield* setThreadSession({
+    const instanceInfo = yield* providerService.getInstanceInfo(instanceId);
+    yield* setThreadSession({
+      threadId: thread.id,
+      session: {
         threadId: thread.id,
-        session: {
-          threadId: thread.id,
-          status: "stopped",
-          providerName: instanceInfo.driverKind,
-          providerInstanceId: instanceId,
-          runtimeMode: thread.runtimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: event.payload.createdAt,
-        },
+        status: "stopped",
+        providerName: instanceInfo.driverKind,
+        providerInstanceId: instanceId,
+        runtimeMode: thread.runtimeMode,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: event.payload.createdAt,
+      },
+      createdAt: event.payload.createdAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* serverCommandId("provider-sign-out"),
+      threadId: thread.id,
+      activity: {
+        id: yield* serverEventId(),
+        tone: "info",
+        kind: "provider.auth.signed-out",
+        summary: "Provider signed out",
+        payload: { providerInstanceId: instanceId },
+        turnId: null,
         createdAt: event.payload.createdAt,
-      });
-      yield* orchestrationEngine.dispatch({
-        type: "thread.activity.append",
-        commandId: yield* serverCommandId("provider-sign-out"),
-        threadId: thread.id,
-        activity: {
-          id: yield* serverEventId(),
-          tone: "info",
-          kind: "provider.auth.signed-out",
-          summary: "Provider signed out",
-          payload: { providerInstanceId: instanceId },
-          turnId: null,
-          createdAt: event.payload.createdAt,
-        },
-        createdAt: event.payload.createdAt,
-      });
-      return true;
-
+      },
+      createdAt: event.payload.createdAt,
+    });
+    return true;
   });
 
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
@@ -1678,11 +1687,13 @@ const make = Effect.gen(function* () {
       }
       const detail = formatFailureDetail(cause);
       return executionSupervisor.failExecution(event.payload.threadId, executionId, detail).pipe(
-        Effect.andThen(setThreadSessionErrorOnTurnStartFailure({
-          threadId: event.payload.threadId,
-          detail,
-          createdAt: event.payload.createdAt,
-        })),
+        Effect.andThen(
+          setThreadSessionErrorOnTurnStartFailure({
+            threadId: event.payload.threadId,
+            detail,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
         Effect.flatMap(() => appendTurnStartFailure("Provider turn start failed", detail)),
         Effect.asVoid,
       );
@@ -1705,7 +1716,11 @@ const make = Effect.gen(function* () {
     );
     if (authCommandHandled) {
       // T3-CUSTOM(expbkt3): native commands consume input without a provider turn.
-      yield* executionSupervisor.releaseTurnAdmission(event.payload.threadId, executionId, event.sequence);
+      yield* executionSupervisor.releaseTurnAdmission(
+        event.payload.threadId,
+        executionId,
+        event.sequence,
+      );
       return { handledCommand: true, turnId: null } as const;
     }
 
@@ -1714,7 +1729,9 @@ const make = Effect.gen(function* () {
     // recovery path (branch check, decideWorktreeRecovery, activity events), so the
     // guarantee holds without running the recovery twice per turn.
 
-    const userMessageCount = thread.messages.filter((entry) => entry.role === "user" && !isCompactCommandMessage(entry)).length;
+    const userMessageCount = thread.messages.filter(
+      (entry) => entry.role === "user" && !isCompactCommandMessage(entry),
+    ).length;
     const nonCompactUserMessageCount = userMessageCount;
     const isFirstUserMessageTurn = userMessageCount === 1;
     // T3-CUSTOM(expbkt3): BEGIN — re-derive the title as a long session drifts
@@ -1860,8 +1877,12 @@ const make = Effect.gen(function* () {
           "Context compaction failed",
           "Context compaction requires an existing conversation.",
         );
-        yield* executionSupervisor.releaseTurnAdmission(event.payload.threadId, executionId, event.sequence);
-      return { handledCommand: true, turnId: null } as const;
+        yield* executionSupervisor.releaseTurnAdmission(
+          event.payload.threadId,
+          executionId,
+          event.sequence,
+        );
+        return { handledCommand: true, turnId: null } as const;
       }
       const latestThread = yield* resolveThreadShell(event.payload.threadId);
       const projectedBusy =
@@ -1872,11 +1893,12 @@ const make = Effect.gen(function* () {
       // inspection remains safely busy.
       const confirmedIdleProvider = projectedBusy
         ? yield* providerService.inspectSession(event.payload.threadId).pipe(
-            Effect.map((inspection) =>
-              inspection !== null &&
-              inspection.runtimeAlive &&
-              inspection.state === "ready" &&
-              inspection.activeProviderTurnId === null,
+            Effect.map(
+              (inspection) =>
+                inspection !== null &&
+                inspection.runtimeAlive &&
+                inspection.state === "ready" &&
+                inspection.activeProviderTurnId === null,
             ),
             Effect.catch(() => Effect.succeed(false)),
           )
@@ -1889,8 +1911,12 @@ const make = Effect.gen(function* () {
           "Context compaction failed",
           "Context compaction is unavailable while a provider turn is running.",
         );
-        yield* executionSupervisor.releaseTurnAdmission(event.payload.threadId, executionId, event.sequence);
-      return { handledCommand: true, turnId: null } as const;
+        yield* executionSupervisor.releaseTurnAdmission(
+          event.payload.threadId,
+          executionId,
+          event.sequence,
+        );
+        return { handledCommand: true, turnId: null } as const;
       }
       compactingThreadIds.add(event.payload.threadId);
       const compact = Effect.gen(function* () {
@@ -1922,7 +1948,11 @@ const make = Effect.gen(function* () {
       } else {
         yield* compact.pipe(Effect.forkScoped);
       }
-      yield* executionSupervisor.releaseTurnAdmission(event.payload.threadId, executionId, event.sequence);
+      yield* executionSupervisor.releaseTurnAdmission(
+        event.payload.threadId,
+        executionId,
+        event.sequence,
+      );
       return { handledCommand: true, turnId: null } as const;
     }
     if (compactingThreadIds.has(event.payload.threadId)) {
@@ -2242,9 +2272,14 @@ const make = Effect.gen(function* () {
         ? providerService.stopSession({ threadId: thread.id }).pipe(
             // T3-CUSTOM(expbkt3): a hung stop cannot hold the shared command lane.
             Effect.timeoutOption(SESSION_STOP_TIMEOUT),
-            Effect.tap((stopped) => Option.isNone(stopped)
-              ? Effect.logWarning("provider session stop timed out on the reactor lane", { threadId: thread.id, timeout: SESSION_STOP_TIMEOUT })
-              : Effect.void),
+            Effect.tap((stopped) =>
+              Option.isNone(stopped)
+                ? Effect.logWarning("provider session stop timed out on the reactor lane", {
+                    threadId: thread.id,
+                    timeout: SESSION_STOP_TIMEOUT,
+                  })
+                : Effect.void,
+            ),
             Effect.asVoid,
           )
         : Effect.void
@@ -2556,27 +2591,42 @@ const make = Effect.gen(function* () {
           }
           // T3-CUSTOM(expbkt3): port upstream's legacy "start from origin"
           // fallback when origin exists but the selected remote branch does not.
-          const remoteBaseExists = resolvedPrepare !== undefined || (yield* gitWorkflow.remoteBranchExists({
-            cwd: projectCwd, refName: baseBranch, remoteName: "origin",
-          }).pipe(Effect.mapError((cause) => fail("bootstrap-worktree-base-unavailable", "Could not inspect the remote base branch.", true, cause))));
-          if (remoteBaseExists) {
-          const resolved = yield* gitWorkflow
-            .resolveRemoteTrackingCommit({
-              cwd: projectCwd,
-              refName: baseBranch,
-              fallbackRemoteName: "origin",
-            })
-            .pipe(
-              Effect.mapError((cause) =>
-                fail(
-                  "bootstrap-worktree-base-unavailable",
-                  `Could not resolve base branch '${baseBranch}'.`,
-                  false,
-                  cause,
+          const remoteBaseExists =
+            resolvedPrepare !== undefined ||
+            (yield* gitWorkflow
+              .remoteBranchExists({
+                cwd: projectCwd,
+                refName: baseBranch,
+                remoteName: "origin",
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  fail(
+                    "bootstrap-worktree-base-unavailable",
+                    "Could not inspect the remote base branch.",
+                    true,
+                    cause,
+                  ),
                 ),
-              ),
-            );
-          worktreeBaseRef = resolved.commitSha;
+              ));
+          if (remoteBaseExists) {
+            const resolved = yield* gitWorkflow
+              .resolveRemoteTrackingCommit({
+                cwd: projectCwd,
+                refName: baseBranch,
+                fallbackRemoteName: "origin",
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  fail(
+                    "bootstrap-worktree-base-unavailable",
+                    `Could not resolve base branch '${baseBranch}'.`,
+                    false,
+                    cause,
+                  ),
+                ),
+              );
+            worktreeBaseRef = resolved.commitSha;
           }
         }
         const created = yield* gitWorkflow
@@ -2904,7 +2954,9 @@ const make = Effect.gen(function* () {
         ...(terminalSession ? { completed: true } : {}),
       };
     }
-    const acceptedMessage = thread.messages.find((message) => message.id === input.intent.messageId);
+    const acceptedMessage = thread.messages.find(
+      (message) => message.id === input.intent.messageId,
+    );
     // T3-CUSTOM(expbkt3): compaction is admitted from the projected provider session,
     // which is authoritative after a completed turn. The supervisor consumes that
     // lifecycle stream asynchronously and can briefly retain the previous turn.
@@ -2925,7 +2977,8 @@ const make = Effect.gen(function* () {
       }
       return {
         providerTurnId: null,
-        providerInstanceId: thread.session?.providerInstanceId ?? input.intent.modelSelection?.instanceId ?? null,
+        providerInstanceId:
+          thread.session?.providerInstanceId ?? input.intent.modelSelection?.instanceId ?? null,
         adoptedExecutionId: input.intent.workItemId,
         completed: true,
         handledCommand: true,
@@ -2941,7 +2994,8 @@ const make = Effect.gen(function* () {
     // the session projection before the supervisor observes that runtime event.
     // Accept that id only while the supervisor independently confirms a live
     // execution, so a stale ready/stopped session cannot create a steer route.
-    const activeProviderTurnId = supervisorProviderTurnId ??
+    const activeProviderTurnId =
+      supervisorProviderTurnId ??
       ((snapshot.activity === "active" || snapshot.activity === "blocked") &&
       thread.session?.status === "running"
         ? thread.session.activeTurnId
@@ -2949,18 +3003,30 @@ const make = Effect.gen(function* () {
     if (activeProviderTurnId !== null && acceptedMessage) {
       yield* assertDurableClaimCurrent(input.intent, "native-command");
       const handled = yield* processNativeAuthCommand(thread, input.event, acceptedMessage).pipe(
-        Effect.mapError((cause) => new DurableExecutionDispatchError({
-          failureType: "native-auth-command-failed", detail: String(cause), retryable: false, cause,
-        })),
+        Effect.mapError(
+          (cause) =>
+            new DurableExecutionDispatchError({
+              failureType: "native-auth-command-failed",
+              detail: String(cause),
+              retryable: false,
+              cause,
+            }),
+        ),
       );
       if (handled) {
-        yield* executionSupervisor.releaseTurnAdmission(input.intent.threadId, input.intent.workItemId, input.event.sequence);
+        yield* executionSupervisor.releaseTurnAdmission(
+          input.intent.threadId,
+          input.intent.workItemId,
+          input.event.sequence,
+        );
         return {
-        providerTurnId: null,
-        providerInstanceId: thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
-        adoptedExecutionId: input.intent.workItemId,
-        completed: true, handledCommand: true,
-      };
+          providerTurnId: null,
+          providerInstanceId:
+            thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+          adoptedExecutionId: input.intent.workItemId,
+          completed: true,
+          handledCommand: true,
+        };
       }
     }
     if (activeProviderTurnId !== null) {

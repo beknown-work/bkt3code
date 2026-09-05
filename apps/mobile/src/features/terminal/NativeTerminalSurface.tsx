@@ -176,7 +176,7 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface(props: Ter
         </Pressable>
       </View>
     </View>
-  // T3-CUSTOM(expbkt3): bridge native keyboard-focus events to the route.
+    // T3-CUSTOM(expbkt3): bridge native keyboard-focus events to the route.
   );
 });
 
@@ -245,6 +245,7 @@ export const TerminalSurface = memo(function TerminalSurface(props: TerminalSurf
           style={{ flex: 1 }}
           themeConfig={buildGhosttyThemeConfig(theme)}
           onInput={handleNativeInput}
+          // T3-CUSTOM(expbkt3): reflect native keyboard focus so the route can offer recovery UI.
           onKeyboardFocusChange={handleNativeKeyboardFocusChange}
           onResize={handleNativeResize}
         />

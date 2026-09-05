@@ -62,6 +62,7 @@ export class ElectronSafeStorage extends Context.Service<
     readonly decryptString: (
       value: Uint8Array,
     ) => Effect.Effect<string, ElectronSafeStorageDecryptError>;
+    // T3-CUSTOM(expbkt3): preserve Electron's key-rotation signal for catalog rewrites.
     /** Preserves Electron's key-rotation signal for stores that can rewrite ciphertext. */
     readonly decryptStringWithMetadata: (
       value: Uint8Array,
@@ -75,13 +76,12 @@ export class ElectronSafeStorage extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
+  // T3-CUSTOM(expbkt3): use Electron's asynchronous Keychain decrypt and retain rotation metadata.
   const decryptStringWithMetadata = (value: Uint8Array) =>
     Effect.tryPromise({
       try: () => Electron.safeStorage.decryptStringAsync(Buffer.from(value)),
       catch: (cause) => new ElectronSafeStorageDecryptError({ cause }),
-    }).pipe(
-      Effect.map(({ result, shouldReEncrypt }) => ({ value: result, shouldReEncrypt })),
-    );
+    }).pipe(Effect.map(({ result, shouldReEncrypt }) => ({ value: result, shouldReEncrypt })));
 
   return ElectronSafeStorage.of({
     // T3-CUSTOM(expbkt3): Electron 43 provides async Keychain access. Catalog

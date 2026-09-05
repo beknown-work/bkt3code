@@ -238,7 +238,10 @@ export function PlanReviewSheet(props: PlanReviewSheetProps) {
             <Pressable
               accessibilityLabel="Request changes to this plan"
               accessibilityRole="button"
-              accessibilityState={{ disabled: isSubmitting, busy: pendingDecision === "changes-requested" }}
+              accessibilityState={{
+                disabled: isSubmitting,
+                busy: pendingDecision === "changes-requested",
+              }}
               className="flex-1 items-center rounded-lg border border-border py-3"
               disabled={isSubmitting}
               onPress={() => handleDecide("changes-requested")}
@@ -330,7 +333,9 @@ function PlanReviewDiscussionList(props: {
             </Text>
           ))}
           <Pressable
-            accessibilityLabel={thread.discussion.isResolved ? "Reopen discussion" : "Resolve discussion"}
+            accessibilityLabel={
+              thread.discussion.isResolved ? "Reopen discussion" : "Resolve discussion"
+            }
             accessibilityRole="button"
             accessibilityState={{ checked: thread.discussion.isResolved }}
             className="mt-2 self-start"

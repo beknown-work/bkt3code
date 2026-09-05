@@ -41,14 +41,17 @@ export function PhaseSidebarCounters(props: { readonly rows: ReadonlyArray<Phase
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   const counts = useMemo(() => {
     void snoozeWakeTick;
-    const shared = summarizeSidebarSessions(props.rows.map((row) => row.thread), {
-      now: new Date().toISOString(),
-      snoozeSupported: (thread) =>
-        props.rows.find(
-          (row) =>
-            row.thread.environmentId === thread.environmentId && row.thread.id === thread.id,
-        )?.snoozeSupported === true,
-    });
+    const shared = summarizeSidebarSessions(
+      props.rows.map((row) => row.thread),
+      {
+        now: new Date().toISOString(),
+        snoozeSupported: (thread) =>
+          props.rows.find(
+            (row) =>
+              row.thread.environmentId === thread.environmentId && row.thread.id === thread.id,
+          )?.snoozeSupported === true,
+      },
+    );
     return {
       ...shared,
       unread: countPhaseSidebarUnreadRows(props.rows),

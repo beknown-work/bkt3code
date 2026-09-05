@@ -76,9 +76,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -143,9 +143,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -207,51 +207,60 @@ layer("ThreadExecutionSupervisor", (it) => {
   );
 
   // T3-CUSTOM(expbkt3): native completion may precede the independent domain subscriber.
-  it.effect("ignores delayed native command delivery while allowing explicit older queued dispatch", () =>
-    Effect.gen(function* () {
-      const deliver = yield* Deferred.make<void>();
-      const subscriptionDrained = yield* Deferred.make<void>();
-      const nativeEvent = { ...startEvent("native-delayed"), sequence: 10 };
-      const providerService = {
-        inspectSession: () => Effect.succeed(null),
-        streamEvents: Stream.empty,
-      } as unknown as ProviderServiceShape;
-      const orchestration = {
-        readEvents: () => Stream.empty,
-        readThreadEvents: () => Stream.empty,
-        getThreadReplayStats: () => Effect.die("unused"),
-        subscribeDomainEvents: Effect.succeed(Stream.empty),
-        dispatch: () => Effect.succeed({ sequence: 0 }),
-        streamDomainEvents: Stream.concat(
-          Stream.fromEffect(Deferred.await(deliver).pipe(Effect.as(nativeEvent))),
-          // The next stream is pulled only after runForEach has handled the event.
-          Stream.fromEffect(Deferred.succeed(subscriptionDrained, undefined)).pipe(Stream.drain),
-        ),
-        latestSequence: Effect.succeed(10),
-      } satisfies OrchestrationEngineService["Service"];
-      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
-        Layer.provide(SessionRecoveryStateLayer),
-        Layer.provide(Layer.succeed(ProviderService, providerService)),
-        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
-        Layer.provide(NodeServices.layer),
-      );
-      yield* Effect.gen(function* () {
-        const supervisor = yield* ThreadExecutionSupervisor;
-        yield* supervisor.prepareExecution(nativeEvent);
-        const released = yield* supervisor.releaseTurnAdmission(threadId, "command-native-delayed", 10);
-        assert.strictEqual(released.turn, null);
-        yield* Deferred.succeed(deliver, undefined);
-        yield* Deferred.await(subscriptionDrained);
-        const afterDelivery = yield* supervisor.getSnapshot(threadId);
-        assert.strictEqual(afterDelivery.revision, released.revision);
-        assert.strictEqual(afterDelivery.activity, "idle");
-        assert.strictEqual(afterDelivery.canStop, false);
-        assert.strictEqual(afterDelivery.turn, null);
-        const queued = yield* supervisor.prepareExecution({ ...startEvent("older-queued"), sequence: 9 });
-        assert.strictEqual(queued.turn?.executionId, "command-older-queued");
-        assert.strictEqual(queued.activity, "active");
-      }).pipe(Effect.provide(supervisorLayer));
-    }),
+  it.effect(
+    "ignores delayed native command delivery while allowing explicit older queued dispatch",
+    () =>
+      Effect.gen(function* () {
+        const deliver = yield* Deferred.make<void>();
+        const subscriptionDrained = yield* Deferred.make<void>();
+        const nativeEvent = { ...startEvent("native-delayed"), sequence: 10 };
+        const providerService = {
+          inspectSession: () => Effect.succeed(null),
+          streamEvents: Stream.empty,
+        } as unknown as ProviderServiceShape;
+        const orchestration = {
+          readEvents: () => Stream.empty,
+          readThreadEvents: () => Stream.empty,
+          getThreadReplayStats: () => Effect.die("unused"),
+          subscribeDomainEvents: Effect.succeed(Stream.empty),
+          dispatch: () => Effect.succeed({ sequence: 0 }),
+          streamDomainEvents: Stream.concat(
+            Stream.fromEffect(Deferred.await(deliver).pipe(Effect.as(nativeEvent))),
+            // The next stream is pulled only after runForEach has handled the event.
+            Stream.fromEffect(Deferred.succeed(subscriptionDrained, undefined)).pipe(Stream.drain),
+          ),
+          latestSequence: Effect.succeed(10),
+        } satisfies OrchestrationEngineService["Service"];
+        const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+          Layer.provide(SessionRecoveryStateLayer),
+          Layer.provide(Layer.succeed(ProviderService, providerService)),
+          Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+          Layer.provide(NodeServices.layer),
+        );
+        yield* Effect.gen(function* () {
+          const supervisor = yield* ThreadExecutionSupervisor;
+          yield* supervisor.prepareExecution(nativeEvent);
+          const released = yield* supervisor.releaseTurnAdmission(
+            threadId,
+            "command-native-delayed",
+            10,
+          );
+          assert.strictEqual(released.turn, null);
+          yield* Deferred.succeed(deliver, undefined);
+          yield* Deferred.await(subscriptionDrained);
+          const afterDelivery = yield* supervisor.getSnapshot(threadId);
+          assert.strictEqual(afterDelivery.revision, released.revision);
+          assert.strictEqual(afterDelivery.activity, "idle");
+          assert.strictEqual(afterDelivery.canStop, false);
+          assert.strictEqual(afterDelivery.turn, null);
+          const queued = yield* supervisor.prepareExecution({
+            ...startEvent("older-queued"),
+            sequence: 9,
+          });
+          assert.strictEqual(queued.turn?.executionId, "command-older-queued");
+          assert.strictEqual(queued.activity, "active");
+        }).pipe(Effect.provide(supervisorLayer));
+      }),
   );
 
   // T3-CUSTOM(expbkt3): a classified compact command must not let the real
@@ -264,17 +273,27 @@ layer("ThreadExecutionSupervisor", (it) => {
         sequence: 11,
         payload: { ...startEvent("classified-compact").payload, isCompaction: true },
       };
-      const providerService = { inspectSession: () => Effect.succeed(null), streamEvents: Stream.empty } as unknown as ProviderServiceShape;
+      const providerService = {
+        inspectSession: () => Effect.succeed(null),
+        streamEvents: Stream.empty,
+      } as unknown as ProviderServiceShape;
       const orchestration = {
-        readEvents: () => Stream.empty, readThreadEvents: () => Stream.empty,
-        getThreadReplayStats: () => Effect.die("unused"), subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
-        streamDomainEvents: Stream.concat(Stream.make(compactEvent), Stream.fromEffect(Deferred.succeed(delivered, undefined)).pipe(Stream.drain)),
+        streamDomainEvents: Stream.concat(
+          Stream.make(compactEvent),
+          Stream.fromEffect(Deferred.succeed(delivered, undefined)).pipe(Stream.drain),
+        ),
         latestSequence: Effect.succeed(11),
       } satisfies OrchestrationEngineService["Service"];
       const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
-        Layer.provide(SessionRecoveryStateLayer), Layer.provide(Layer.succeed(ProviderService, providerService)),
-        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)), Layer.provide(NodeServices.layer),
+        Layer.provide(SessionRecoveryStateLayer),
+        Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+        Layer.provide(NodeServices.layer),
       );
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -282,7 +301,9 @@ layer("ThreadExecutionSupervisor", (it) => {
         yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, updated_at) VALUES (${threadId}, 'ready', ${createdAt})`;
         yield* Deferred.await(delivered);
         assert.strictEqual((yield* supervisor.getSnapshot(threadId)).activity, "idle");
-        const rows = yield* sql<{ readonly status: string }>`SELECT status FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
+        const rows = yield* sql<{
+          readonly status: string;
+        }>`SELECT status FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
         assert.strictEqual(rows[0]?.status, "ready");
       }).pipe(Effect.provide(supervisorLayer));
     }),
@@ -324,9 +345,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -399,9 +420,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -441,9 +462,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -481,9 +502,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -541,9 +562,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),
@@ -594,9 +615,9 @@ layer("ThreadExecutionSupervisor", (it) => {
       } as unknown as ProviderServiceShape;
       const orchestration = {
         readEvents: () => Stream.empty,
-      readThreadEvents: () => Stream.empty,
-      getThreadReplayStats: () => Effect.die("unused"),
-      subscribeDomainEvents: Effect.succeed(Stream.empty),
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
         dispatch: () => Effect.succeed({ sequence: 0 }),
         streamDomainEvents: Stream.empty,
         latestSequence: Effect.succeed(0),

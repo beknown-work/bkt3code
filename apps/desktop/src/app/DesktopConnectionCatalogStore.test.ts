@@ -50,7 +50,8 @@ function makeSafeStorageLayer(
   };
   return Layer.succeed(ElectronSafeStorage.ElectronSafeStorage, {
     isEncryptionAvailable: Effect.succeed(available),
-    encryptString: encryptString ?? ((value) => Effect.succeed(textEncoder.encode(`encrypted:${value}`))),
+    encryptString:
+      encryptString ?? ((value) => Effect.succeed(textEncoder.encode(`encrypted:${value}`))),
     decryptString,
     decryptStringWithMetadata:
       decryptStringWithMetadata ??
@@ -192,9 +193,7 @@ describe("DesktopConnectionCatalogStore", () => {
       yield* Ref.set(observeNextEncryption, true);
       const read = yield* store.get.pipe(Effect.forkChild);
       yield* Deferred.await(decryptStarted);
-      const save = yield* store
-        .set(replacement)
-        .pipe(Effect.forkChild({ startImmediately: true }));
+      const save = yield* store.set(replacement).pipe(Effect.forkChild({ startImmediately: true }));
       assert.isFalse(yield* Deferred.isDone(replacementEncryptionStarted));
       yield* Deferred.succeed(releaseDecrypt, undefined);
 
@@ -242,15 +241,7 @@ describe("DesktopConnectionCatalogStore", () => {
           return { value: decrypted, shouldReEncrypt: true };
         });
       const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore.pipe(
-        Effect.provide(
-          makeLayer(
-            baseDir,
-            true,
-            null,
-            fileSystemLayer,
-            decryptStringWithMetadata,
-          ),
-        ),
+        Effect.provide(makeLayer(baseDir, true, null, fileSystemLayer, decryptStringWithMetadata)),
       );
       const catalog = '{"schemaVersion":1,"targets":["original"]}';
 
@@ -265,9 +256,7 @@ describe("DesktopConnectionCatalogStore", () => {
       assert.deepStrictEqual(yield* Fiber.join(read), Option.some(catalog));
       yield* Fiber.join(clear);
       assert.isTrue(yield* Deferred.isDone(clearStarted));
-      assert.isFalse(
-        yield* fileSystem.exists(`${baseDir}/userdata/connection-catalog.json`),
-      );
+      assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/connection-catalog.json`));
       assert.deepStrictEqual(yield* store.get, Option.none());
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );

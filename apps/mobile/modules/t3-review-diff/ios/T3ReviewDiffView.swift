@@ -941,6 +941,7 @@ private final class ReviewDiffAccessibilityElement: UIAccessibilityElement {
 }
 
 private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
+  // T3-CUSTOM(expbkt3): BEGIN retain and expose native review-diff row semantics for VoiceOver.
   var rows: [ReviewDiffNativeRow] = [] {
     didSet {
       stopHorizontalDeceleration()
@@ -1387,6 +1388,7 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     tapGesture.require(toFail: longPressGesture)
   }
 
+  // T3-CUSTOM(expbkt3): END retain and expose native review-diff row semantics for VoiceOver.
   override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
     guard gestureRecognizer === horizontalPanGesture else {
       return true

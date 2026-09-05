@@ -66,9 +66,10 @@ describe("ElectronSafeStorage", () => {
     Effect.gen(function* () {
       let release!: (value: { result: string; shouldReEncrypt: boolean }) => void;
       decryptStringAsyncMock.mockImplementationOnce(
-        () => new Promise<{ result: string; shouldReEncrypt: boolean }>((resolve) => {
-          release = resolve;
-        }),
+        () =>
+          new Promise<{ result: string; shouldReEncrypt: boolean }>((resolve) => {
+            release = resolve;
+          }),
       );
       const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
       const pending = Effect.runPromise(safeStorage.decryptString(new Uint8Array([1])));
