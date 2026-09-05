@@ -238,6 +238,7 @@ describe("environment RPC", () => {
       const firstSubscribed = yield* Deferred.make<void>();
       const secondSubscribed = yield* Deferred.make<void>();
       const firstValueBlocked = yield* Deferred.make<void>();
+      const firstValuesBuffered = yield* Deferred.make<void>();
       const releaseFirstValue = yield* Deferred.make<void>();
       const firstValue = { source: "first", index: 1 } as unknown as ServerLifecycleStreamEvent;
       const bufferedFirstValue = {
@@ -250,6 +251,11 @@ describe("environment RPC", () => {
           Stream.fromEffect(Deferred.succeed(firstSubscribed, undefined)).pipe(
             Stream.drain,
             Stream.concat(Stream.fromIterable([firstValue, bufferedFirstValue])),
+            Stream.concat(
+              Stream.fromEffect(Deferred.succeed(firstValuesBuffered, undefined)).pipe(
+                Stream.drain,
+              ),
+            ),
             Stream.concat(Stream.never),
           ),
       } as unknown as WsRpcProtocolClient;
@@ -286,6 +292,7 @@ describe("environment RPC", () => {
       yield* SubscriptionRef.set(activeSession, Option.some(firstSession));
       yield* Deferred.await(firstSubscribed);
       yield* Deferred.await(firstValueBlocked);
+      yield* Deferred.await(firstValuesBuffered);
       yield* SubscriptionRef.set(activeSession, Option.some(secondSession));
       yield* Deferred.await(secondSubscribed);
       yield* Deferred.succeed(releaseFirstValue, undefined);
