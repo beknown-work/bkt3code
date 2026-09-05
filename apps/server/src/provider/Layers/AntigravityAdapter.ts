@@ -739,6 +739,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
     }
   });
 
+  // T3-CUSTOM(expbkt3): provider start validates fork-owned execution credentials.
   const startSession: Adapter["startSession"] = (input, executionOptions) =>
     withThreadLock(
       input.threadId,
