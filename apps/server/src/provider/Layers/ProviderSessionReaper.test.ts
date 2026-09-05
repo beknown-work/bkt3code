@@ -17,7 +17,8 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it as effectIt } from "@effect/vitest";
+import { it, vi } from "vite-plus/test";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -921,115 +922,135 @@ describe("ProviderSessionReaper", () => {
       ]);
   }
 
-  it("interrupts for real, then settles, a live turn that has been silent past the cap", async () => {
-    const threadId = ThreadId.make("thread-reaper-silent");
-    const turnId = TurnId.make("turn-reaper-silent");
-    const nowMs = Date.now();
-    const threeHoursAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000));
-    const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
-    const dispatched: Array<{ readonly type: string }> = [];
-    const harness = await createHarness({
-      inactivityThresholdMs: 24 * 60 * 60 * 1000,
-      readModel: makeReadModel([
-        {
-          id: threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: threeHoursAgo,
-          },
-        },
-      ]),
-      listSessions: liveCodexSession(threadId, threeHoursAgo),
-      dispatch: (command) => {
-        dispatched.push(command);
-        return Effect.succeed({ sequence: dispatched.length });
-      },
-    });
-    await seedRunningTurn({
-      threadId,
-      turnId,
-      startedAt: threeHoursAgo,
-      lastEventAt: threeHoursAgo,
-    });
-    const repository = await runtime!.runPromise(
-      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
-    );
-    await runtime!.runPromise(
-      repository.upsert({
-        threadId,
-        providerName: "codex",
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        adapterKey: "codex",
-        runtimeMode: "full-access",
-        status: "running",
-        lastSeenAt: nowIso,
-        resumeCursor: null,
-        runtimePayload: null,
-      }),
-    );
+  effectIt.live(
+    "interrupts for real, then settles, a live turn that has been silent past the cap",
+    () =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((nowMs) =>
+          Effect.promise(async () => {
+            const threadId = ThreadId.make("thread-reaper-silent");
+            const turnId = TurnId.make("turn-reaper-silent");
+            const threeHoursAgo = DateTime.formatIso(
+              DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000),
+            );
+            const nowIso = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+            const dispatched: Array<{ readonly type: string }> = [];
+            const harness = await createHarness({
+              inactivityThresholdMs: 24 * 60 * 60 * 1000,
+              readModel: makeReadModel([
+                {
+                  id: threadId,
+                  session: {
+                    threadId,
+                    status: "running",
+                    providerName: "codex",
+                    runtimeMode: "full-access",
+                    activeTurnId: turnId,
+                    lastError: null,
+                    updatedAt: threeHoursAgo,
+                  },
+                },
+              ]),
+              listSessions: liveCodexSession(threadId, threeHoursAgo),
+              dispatch: (command) => {
+                dispatched.push(command);
+                return Effect.succeed({ sequence: dispatched.length });
+              },
+            });
+            await seedRunningTurn({
+              threadId,
+              turnId,
+              startedAt: threeHoursAgo,
+              lastEventAt: threeHoursAgo,
+            });
+            const repository = await runtime!.runPromise(
+              Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+            );
+            await runtime!.runPromise(
+              repository.upsert({
+                threadId,
+                providerName: "codex",
+                providerInstanceId: ProviderInstanceId.make("codex"),
+                adapterKey: "codex",
+                runtimeMode: "full-access",
+                status: "running",
+                lastSeenAt: nowIso,
+                resumeCursor: null,
+                runtimePayload: null,
+              }),
+            );
 
-    await startReaper();
-    await waitFor(() => dispatched.length >= 3);
+            await startReaper();
+            await waitFor(() => dispatched.length >= 3);
 
-    expect(dispatched.map((command) => command.type)).toEqual([
-      "thread.turn.interrupt",
-      "thread.activity.append",
-      "thread.session.set",
-    ]);
-    const interrupt = dispatched[0] as { readonly turnId?: string };
-    expect(interrupt.turnId).toBe(turnId);
-    const settle = dispatched[2] as unknown as { readonly session: { readonly status: string } };
-    expect(settle.session.status).toBe("interrupted");
-    expect(harness.terminateSession).not.toHaveBeenCalled();
-  });
+            expect(dispatched.map((command) => command.type)).toEqual([
+              "thread.turn.interrupt",
+              "thread.activity.append",
+              "thread.session.set",
+            ]);
+            const interrupt = dispatched[0] as { readonly turnId?: string };
+            expect(interrupt.turnId).toBe(turnId);
+            const settle = dispatched[2] as unknown as {
+              readonly session: { readonly status: string };
+            };
+            expect(settle.session.status).toBe("interrupted");
+            expect(harness.terminateSession).not.toHaveBeenCalled();
+          }),
+        ),
+      ),
+  );
 
-  it("leaves a live turn alone while it is still emitting events, however old it is", async () => {
-    const threadId = ThreadId.make("thread-reaper-busy");
-    const turnId = TurnId.make("turn-reaper-busy");
-    const nowMs = Date.now();
-    const threeHoursAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000));
-    const oneMinuteAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 60 * 1000));
-    const dispatched: Array<{ readonly type: string }> = [];
-    const harness = await createHarness({
-      inactivityThresholdMs: 24 * 60 * 60 * 1000,
-      readModel: makeReadModel([
-        {
-          id: threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: turnId,
-            lastError: null,
-            updatedAt: threeHoursAgo,
-          },
-        },
-      ]),
-      listSessions: liveCodexSession(threadId, threeHoursAgo),
-      dispatch: (command) => {
-        dispatched.push(command);
-        return Effect.succeed({ sequence: dispatched.length });
-      },
-    });
-    await seedRunningTurn({
-      threadId,
-      turnId,
-      startedAt: threeHoursAgo,
-      lastEventAt: oneMinuteAgo,
-    });
+  effectIt.live(
+    "leaves a live turn alone while it is still emitting events, however old it is",
+    () =>
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((nowMs) =>
+          Effect.promise(async () => {
+            const threadId = ThreadId.make("thread-reaper-busy");
+            const turnId = TurnId.make("turn-reaper-busy");
+            const threeHoursAgo = DateTime.formatIso(
+              DateTime.makeUnsafe(nowMs - 3 * 60 * 60 * 1000),
+            );
+            const oneMinuteAgo = DateTime.formatIso(DateTime.makeUnsafe(nowMs - 60 * 1000));
+            const dispatched: Array<{ readonly type: string }> = [];
+            const harness = await createHarness({
+              inactivityThresholdMs: 24 * 60 * 60 * 1000,
+              readModel: makeReadModel([
+                {
+                  id: threadId,
+                  session: {
+                    threadId,
+                    status: "running",
+                    providerName: "codex",
+                    runtimeMode: "full-access",
+                    activeTurnId: turnId,
+                    lastError: null,
+                    updatedAt: threeHoursAgo,
+                  },
+                },
+              ]),
+              listSessions: liveCodexSession(threadId, threeHoursAgo),
+              dispatch: (command) => {
+                dispatched.push(command);
+                return Effect.succeed({ sequence: dispatched.length });
+              },
+            });
+            await seedRunningTurn({
+              threadId,
+              turnId,
+              startedAt: threeHoursAgo,
+              lastEventAt: oneMinuteAgo,
+            });
 
-    await startReaper();
-    await runtime!.runPromise(Effect.sleep("200 millis"));
+            await startReaper();
+            await runtime!.runPromise(Effect.sleep("200 millis"));
 
-    expect(dispatched).toEqual([]);
-    expect(harness.terminateSession).not.toHaveBeenCalled();
-  });
+            expect(dispatched).toEqual([]);
+            expect(harness.terminateSession).not.toHaveBeenCalled();
+          }),
+        ),
+      ),
+  );
 
   async function seedThreadEvent(threadId: ThreadId, occurredAt: string) {
     await seedRow("orchestration_events", {
