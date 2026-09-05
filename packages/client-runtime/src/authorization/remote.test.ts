@@ -7,6 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { EnvironmentAuthInvalidError } from "@t3tools/contracts";
 import {
+  appendClientConnectionParams,
   bootstrapRemoteBearerSession,
   exchangeRemoteDpopAccessToken,
   fetchRemoteDpopSessionState,
@@ -278,6 +279,47 @@ describe("remote environment authorization", () => {
   );
   // T3-CUSTOM(expbkt3): END
 
+  it.effect("keeps OS sentinels in telemetry but out of display metadata", () =>
+    Effect.gen(function* () {
+      const tokenResponse = () =>
+        Response.json(
+          {
+            access_token: "bearer-token",
+            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            token_type: "Bearer",
+            expires_in: 3600,
+            scope: "orchestration:read",
+          },
+          { status: 200 },
+        );
+      const fetch = recordedFetch(tokenResponse(), tokenResponse());
+
+      for (const os of ["unknown", "other"] as const) {
+        yield* bootstrapRemoteBearerSession({
+          httpBaseUrl: "https://remote.example.com/",
+          credential: "pairing-token",
+          clientMetadata: {
+            label: "T3 Code Web",
+            deviceType: "desktop",
+            os,
+          },
+        }).pipe(provideRemoteHttp(fetch.fetchFn));
+      }
+
+      for (const [, init] of fetch.calls) {
+        expect(String(init.body)).not.toContain("client_os=");
+      }
+
+      const websocketUrl = new URL("wss://remote.example.com/ws");
+      appendClientConnectionParams(websocketUrl, {
+        surface: "web",
+        deviceType: "desktop",
+        os: "unknown",
+      });
+      expect(websocketUrl.searchParams.get("clientOs")).toBe("unknown");
+    }),
+  );
+
   it.effect("allows a client to explicitly narrow a pairing grant", () =>
     Effect.gen(function* () {
       const fetch = recordedFetch(
@@ -539,14 +581,16 @@ describe("remote environment authorization", () => {
         clientMetadata: {
           surface: "mobile",
           appVersion: "1.2.3",
+          deviceType: "mobile",
           os: "Android",
           osMajorVersion: 15,
           deviceModel: "Pixel 9",
         },
+        connectionMethod: "relay",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       expect(url).toBe(
-        "wss://remote.example.com/ws?wsTicket=ws-ticket&clientSurface=mobile&clientAppVersion=1.2.3&clientOs=Android&clientOsMajorVersion=15&clientDeviceModel=Pixel+9",
+        "wss://remote.example.com/ws?wsTicket=ws-ticket&clientSurface=mobile&clientAppVersion=1.2.3&clientDeviceType=phone&clientOs=Android&clientOsMajorVersion=15&clientDeviceModel=Pixel+9&connectionMethod=relay",
       );
     }),
   );

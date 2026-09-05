@@ -1,6 +1,50 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
 import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
+/**
+ * A queued turn start lives for at most this long: session adoption takes
+ * seconds, so a user message still unadopted after the grace window is a
+ * failed start (or stale data — shells from older servers can carry user
+ * messages with no latestTurn at all), not pending work. Without this bound
+ * such threads would be permanently unsettleable.
+ */
+export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * A user message no turn has picked up yet: the turn.start command was
+ * dispatched (message-sent + turn-start-requested) but no session has
+ * adopted it, so `session` is still null and the pending work is invisible
+ * to the session-status checks. Detectable as a user message strictly newer
+ * than every timestamp on the latest turn — on adoption the new turn's
+ * requestedAt equals the message time, clearing the condition — and only
+ * within the adoption grace window.
+ */
+export function hasQueuedTurnStart(
+  shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn" | "session">,
+  options: { readonly now: string },
+): boolean {
+  if (shell.latestUserMessageAt == null) return false;
+  // A failed session start clears the queued state: the failure is already
+  // visible (status edge / error).
+  if (shell.session?.status === "error") return false;
+  const messageAt = Date.parse(shell.latestUserMessageAt);
+  if (Number.isNaN(messageAt)) return false;
+  const nowMs = Date.parse(options.now);
+  if (Number.isNaN(nowMs)) return false;
+  // Bounded on both sides: message timestamps originate on whichever device
+  // sent the message, so a clock ahead of this one yields a negative age
+  // that would otherwise hold the queued state for the whole skew. Mirrors
+  // the decider's guard.
+  if (Math.abs(nowMs - messageAt) > QUEUED_TURN_START_GRACE_MS) return false;
+  const turn = shell.latestTurn;
+  if (turn === null) return true;
+  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
+    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
+  );
+}
+
+// T3-CUSTOM(expbkt3): compatibility policy for the fork phase sidebar.
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
 
 /**
@@ -69,8 +113,6 @@ export function changeRequestAutoSettles(
   return updatedAtMs >= anchorAtMs;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1_000;
-
 export function threadLastActivityAt(
   shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn">,
 ): string | null {
@@ -95,55 +137,7 @@ export function threadLastActivityAt(
   return latest;
 }
 
-/**
- * A queued turn start lives for at most this long: session adoption takes
- * seconds, so a user message still unadopted after the grace window is a
- * failed start (or stale data — shells from older servers can carry user
- * messages with no latestTurn at all), not pending work. Without this bound
- * such threads would be permanently unsettleable.
- */
-export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
-
-/**
- * A user message no turn has picked up yet: the turn.start command was
- * dispatched (message-sent + turn-start-requested) but no session has
- * adopted it, so `session` is still null and the pending work is invisible
- * to the session-status checks. Detectable as a user message strictly newer
- * than every timestamp on the latest turn — on adoption the new turn's
- * requestedAt equals the message time, clearing the condition — and only
- * within the adoption grace window.
- */
-export function hasQueuedTurnStart(
-  shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn" | "session">,
-  options: { readonly now: string },
-): boolean {
-  if (shell.latestUserMessageAt == null) return false;
-  // A failed session start clears the queued state: the failure is already
-  // visible (status edge / error).
-  if (shell.session?.status === "error") return false;
-  const messageAt = Date.parse(shell.latestUserMessageAt);
-  if (Number.isNaN(messageAt)) return false;
-  const nowMs = Date.parse(options.now);
-  if (Number.isNaN(nowMs)) return false;
-  // Bounded on both sides: message timestamps originate on whichever device
-  // sent the message, so a clock ahead of this one yields a negative age
-  // that would otherwise hold the queued state for the whole skew. Mirrors
-  // the decider's guard.
-  if (Math.abs(nowMs - messageAt) > QUEUED_TURN_START_GRACE_MS) return false;
-  const turn = shell.latestTurn;
-  if (turn === null) return true;
-  return [turn.requestedAt, turn.startedAt, turn.completedAt].every(
-    (candidate) => candidate == null || Date.parse(candidate) < messageAt,
-  );
-}
-
-/**
- * A thread may be settled only when none of effectiveSettled's activity
- * blockers hold. This is deliberately the same list: anything the partition
- * refuses to CLASSIFY as settled must also be refused as a settle TARGET.
- * The server enforces its own invariants; this client-side twin exists so
- * the UI can disable/reject before a round trip.
- */
+// T3-CUSTOM(expbkt3): retained with the fork compatibility settle policy.
 export function canSettle(
   shell: Pick<
     OrchestrationThreadShell,
@@ -181,8 +175,7 @@ export type ThreadSnoozeShell = Pick<
  * the session failed, or a run completed after the snooze was set — the
  * v1 taste of event-based snooze ("something happened" wakes early).
  * Raising a hand never clears the server-side snooze fields; it only stops
- * the thread from CLASSIFYING as snoozed, exactly like blocked work and
- * effectiveSettled.
+ * the thread from classifying as snoozed.
  */
 export function threadRaisedHandWhileSnoozed(shell: ThreadSnoozeShell): boolean {
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return true;
@@ -397,7 +390,9 @@ function addSnoozeDays(base: Date, days: number): Date {
 /**
  * Shared "snooze until" choices for every client. "This evening" only
  * appears while it is meaningfully before evening; after that the calendar
- * choices start at "Tomorrow".
+ * choices start at "Tomorrow". Calendar presets that land on the same
+ * instant collapse: on Sundays "Tomorrow" and "Next week" are both Monday
+ * morning, so only "Tomorrow" is offered.
  */
 export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
   const inAnHour = new Date(now.getTime() + HOUR_MS);
@@ -437,12 +432,14 @@ export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
 
   const daysUntilMonday = (1 - now.getDay() + 7) % 7 || 7;
   const nextWeek = snoozeAtHour(addSnoozeDays(now, daysUntilMonday), MORNING_HOUR);
-  presets.push({
-    id: "next-week",
-    label: "Next week",
-    whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${snoozeTimeOfDayLabel(nextWeek)}`,
-    snoozedUntil: nextWeek.toISOString(),
-  });
+  if (nextWeek.getTime() !== tomorrow.getTime()) {
+    presets.push({
+      id: "next-week",
+      label: "Next week",
+      whenLabel: `${nextWeek.toLocaleDateString(undefined, { weekday: "short" })} ${snoozeTimeOfDayLabel(nextWeek)}`,
+      snoozedUntil: nextWeek.toISOString(),
+    });
+  }
 
   return presets;
 }

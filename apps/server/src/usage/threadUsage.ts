@@ -62,6 +62,7 @@ export function aggregateThreadUsage(input: {
   readonly sessionIds: ReadonlyArray<string>;
   readonly records: Iterable<UsageRecord>;
   readonly rates: RateTable;
+  readonly priceOverrides?: RateTable;
   readonly timeZone: string;
   readonly readAt: string;
   readonly pricing: ThreadUsage["pricing"];
@@ -83,8 +84,8 @@ export function aggregateThreadUsage(input: {
       if (seen.has(record.dedupeKey)) continue;
       seen.add(record.dedupeKey);
     }
-    const priced = priceUsage(input.rates, record.model, record.totals, record.reportedCostUsd);
-    const savings = cacheSavingsUsd(input.rates, record.model, record.totals);
+    const priced = priceUsage(input.rates, record.model, record.totals, record.reportedCostUsd, input.priceOverrides);
+    const savings = cacheSavingsUsd(input.rates, record.model, record.totals, input.priceOverrides);
     const apply = (row: MutableRow) => {
       row.totals = addTotals(row.totals, record.totals);
       row.costUsd += priced.costUsd;

@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -28,6 +29,7 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import { ThreadBootstrapCoordinator, layer } from "./Coordinator.ts";
+import { ThreadDeletionReactor } from "../orchestration/Services/ThreadDeletionReactor.ts";
 import { ThreadCreationDefaultsResolver } from "./DefaultsResolver.ts";
 
 const NOW = "2026-08-03T00:00:00.000Z";
@@ -120,6 +122,7 @@ function testLayer(input: {
   readonly commands: Ref.Ref<ReadonlyArray<OrchestrationCommand>>;
   readonly turnStarted: Deferred.Deferred<void>;
   readonly bootstrapCompleted: Deferred.Deferred<void>;
+  readonly drainDeletionThrough?: (sequence: number) => Effect.Effect<void>;
   readonly setup: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly request?: ResolvedThreadBootstrapRequest;
   readonly bootstrap?: ProjectionThreadBootstrap;
@@ -129,6 +132,9 @@ function testLayer(input: {
 }) {
   return layer.pipe(
     Layer.provideMerge(NodeServices.layer),
+    Layer.provide(Layer.mock(ThreadDeletionReactor)({
+      drainThrough: input.drainDeletionThrough ?? (() => Effect.void),
+    })),
     Layer.provide(
       Layer.mock(ThreadCreationDefaultsResolver)({
         resolve: () => Effect.succeed(input.request ?? resolvedRequest()),
@@ -232,6 +238,40 @@ function testLayer(input: {
 }
 
 describe("ThreadBootstrapCoordinator", () => {
+  it.effect("waits for deletion cleanup before workspace-only bootstrap can launch setup", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const cleanupEntered = yield* Deferred.make<number>();
+      const finishCleanup = yield* Deferred.make<void>();
+      const setupStarted = yield* Deferred.make<void>();
+      const { initialTurn: _initialTurn, ...workspaceRequest } = resolvedRequest();
+      const dependencies = testLayer({
+        commands, turnStarted, bootstrapCompleted, request: workspaceRequest,
+        drainDeletionThrough: (sequence) => Deferred.succeed(cleanupEntered, sequence).pipe(
+          Effect.andThen(Deferred.await(finishCleanup)),
+        ),
+        setup: () => Deferred.succeed(setupStarted, undefined).pipe(Effect.as({
+          status: "completed" as const, scriptId: "setup", scriptName: "Setup",
+          terminalId: "setup-bootstrap-1-1", cwd: "/tmp/worktrees/project/t3code-bootstrap-1",
+          exitCode: 0 as const,
+        })),
+      });
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        const request = yield* Effect.forkChild(coordinator.request(requestCommand()));
+        expect(yield* Deferred.await(cleanupEntered)).toBe(1);
+        expect((yield* Ref.get(commands)).map((command) => command.type)).toEqual(["thread.create"]);
+        expect(Option.isNone(yield* Deferred.poll(setupStarted))).toBe(true);
+        yield* Deferred.succeed(finishCleanup, undefined);
+        yield* Fiber.join(request);
+        yield* Deferred.await(setupStarted);
+        yield* Deferred.await(bootstrapCompleted);
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
   it.effect("atomically accepts a durable turn without launching bootstrap side effects", () =>
     Effect.gen(function* () {
       const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);

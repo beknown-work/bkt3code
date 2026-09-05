@@ -1,3 +1,5 @@
+import { EnvironmentId } from "@t3tools/contracts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthCreatePairingCredentialInput,
@@ -107,7 +109,7 @@ describe("pairing credential payload", () => {
   });
 });
 
-it.layer(NodeServices.layer)("issuePairingCredentialForPrincipal", (it) => {
+it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("issuePairingCredentialForPrincipal", (it) => {
   it.effect("carries the authenticated operator through to the paired session", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

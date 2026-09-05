@@ -506,8 +506,15 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     });
   }
 
-  const prepareExecution: ThreadExecutionSupervisorShape["prepareExecution"] = (event) =>
+  // T3-CUSTOM(expbkt3): native commands can finish before the hot event subscriber
+  // catches up. Fence only that subscriber; explicit queued dispatch still prepares.
+  const handledCommandSequences = new Map<ThreadId, number>();
+  const prepareExecutionEvent = (
+    event: Parameters<ThreadExecutionSupervisorShape["prepareExecution"]>[0],
+    fromSubscription = false,
+  ) =>
     transition(event.payload.threadId, (current, observedAt) => {
+      if (fromSubscription && event.sequence <= (handledCommandSequences.get(event.payload.threadId) ?? -1)) return null;
       const executionId = String(event.commandId ?? event.eventId);
       if (
         current.turn?.executionId === executionId ||
@@ -549,6 +556,9 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         },
       };
     });
+
+  const prepareExecution: ThreadExecutionSupervisorShape["prepareExecution"] = (event) =>
+    prepareExecutionEvent(event);
 
   // T3-CUSTOM(expbkt3): durable recovery deliberately reuses the original
   // execution id while opening a new provider turn under a fenced claim.
@@ -653,8 +663,12 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const releaseTurnAdmission: ThreadExecutionSupervisorShape["releaseTurnAdmission"] = (
     threadId,
     executionId,
+    handledCommandSequence,
   ) =>
     transition(threadId, (current, observedAt) => {
+      if (handledCommandSequence !== undefined) {
+        handledCommandSequences.set(threadId, Math.max(handledCommandSequence, handledCommandSequences.get(threadId) ?? -1));
+      }
       if (
         current.turn?.executionId !== executionId ||
         current.turn.providerTurnId !== null ||
@@ -1226,7 +1240,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     );
 
   yield* Stream.runForEach(orchestration.streamDomainEvents, (event) =>
-    event.type === "thread.turn-start-requested" ? prepareExecution(event) : Effect.void,
+    event.type === "thread.turn-start-requested" ? prepareExecutionEvent(event, true) : Effect.void,
   ).pipe(Effect.forkScoped);
   yield* Stream.runForEach(provider.streamEvents, observeProviderEvent).pipe(Effect.forkScoped);
 

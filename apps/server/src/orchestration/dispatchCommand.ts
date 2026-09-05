@@ -27,6 +27,8 @@ import { ProjectionThreadBootstrapRepositoryLive } from "../persistence/Layers/P
 import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+// T3-CUSTOM(expbkt3): shared creation fence covers HTTP/MCP as well as WebSocket.
+import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 // T3-CUSTOM(expbkt3): high-level creation is resolved and queued by one durable coordinator.
 import * as ThreadBootstrapCoordinator from "../thread-bootstrap/Coordinator.ts";
@@ -119,6 +121,8 @@ export const make = Effect.gen(function* () {
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const executionSupervisor = yield* ThreadExecutionSupervisor;
+  // T3-CUSTOM(expbkt3): reuse the runtime deletion subscriber, never start a second one.
+  const threadDeletionReactor = yield* ThreadDeletionReactor;
   // T3-CUSTOM(expbkt3): shared web/HTTP/WebSocket/MCP bootstrap path.
   const threadBootstrapCoordinator = yield* ThreadBootstrapCoordinator.ThreadBootstrapCoordinator;
   // T3-CUSTOM(expbkt3): attach-to-external-session seeds the provider binding
@@ -537,6 +541,8 @@ export const make = Effect.gen(function* () {
           ),
         );
 
+      // T3-CUSTOM(expbkt3): old cleanup must finish before installing the new resume binding.
+      yield* threadDeletionReactor.drainThrough(result.sequence);
       yield* providerSessionDirectory
         .upsert({
           threadId: createCommand.threadId,
@@ -710,6 +716,9 @@ export const make = Effect.gen(function* () {
                   : orchestrationEngine
                       .dispatch(command, dispatchOptions)
                       .pipe(
+                        // T3-CUSTOM(expbkt3): the create receipt is the resource handoff fence.
+                        Effect.tap(({ sequence }) => command.type === "thread.create"
+                          ? threadDeletionReactor.drainThrough(sequence) : Effect.void),
                         Effect.mapError((cause) =>
                           toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
                         ),

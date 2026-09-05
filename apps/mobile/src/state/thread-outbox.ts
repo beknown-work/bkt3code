@@ -1,4 +1,3 @@
-import type { EnvironmentId } from "@t3tools/contracts";
 // T3-CUSTOM(expbkt3): BEGIN — identity-scoped shared outbox model.
 import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import { ANONYMOUS_OUTBOX_IDENTITY } from "@t3tools/client-runtime/outbox";
@@ -32,6 +31,7 @@ export async function flushThreadOutbox(): Promise<void> {
   await flushThreadOutboxWrites();
 }
 
+// T3-CUSTOM(expbkt3): retain the fork eager-load entry point.
 export function ensureThreadOutboxLoaded(): void {
   void threadOutboxManager.load();
 }
@@ -50,31 +50,42 @@ export function confirmThreadOutboxMessageQueued(message: QueuedThreadMessage): 
   return threadOutboxManager.confirmQueued(message);
 }
 
-/** Rewrite a queued message; no-op (false) if it was removed in the meantime. */
-export function updateThreadOutboxMessage(message: QueuedThreadMessage): Promise<boolean> {
-  const identityKey =
-    message.identityKey ??
-    appAtomRegistry.get(managedRelaySessionAtom)?.accountId ??
-    ANONYMOUS_OUTBOX_IDENTITY;
-  return threadOutboxManager.update(asPendingMessage(message, identityKey));
+/**
+ * Rewrite a queued message; no-op (false) if it was removed in the meantime,
+ * or (with `expectedRevision` from `threadOutboxRevision`) if any other write
+ * was accepted since the revision was read.
+ */
+export function updateThreadOutboxMessage(
+  message: QueuedThreadMessage,
+  expectedRevision?: number,
+): Promise<boolean> {
+  // T3-CUSTOM(expbkt3): identity survives upload CAS and editor retry.
+  const identityKey = message.identityKey ?? appAtomRegistry.get(managedRelaySessionAtom)?.accountId ?? ANONYMOUS_OUTBOX_IDENTITY;
+  // Upload CAS requires the exact published object for its post-write ownership check.
+  return threadOutboxManager.update(
+    expectedRevision === undefined ? asPendingMessage(message, identityKey) : message,
+    expectedRevision,
+  );
+}
+
+/** Snapshot of a queued message's write revision, for update's CAS. */
+export function threadOutboxRevision(messageId: QueuedThreadMessage["messageId"]): number {
+  return threadOutboxManager.revisionOf(messageId);
 }
 
 export function markThreadOutboxMessageFailed(
   message: QueuedThreadMessage,
   failureDetail: string,
+  expectedRevision?: number,
 ): Promise<boolean> {
   return threadOutboxManager.update({
     ...message,
     deliveryState: "failed",
     failureDetail,
-  });
+  }, expectedRevision);
 }
 // T3-CUSTOM(expbkt3): END
 
-export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
-  return threadOutboxManager.remove(message);
-}
-
-export function clearThreadOutboxEnvironment(environmentId: EnvironmentId): Promise<void> {
-  return threadOutboxManager.clearEnvironment(environmentId);
-}
+// Removal lives in `thread-outbox-removal.ts`: taking a message out of the
+// outbox must also release its local attachment files, and that owner needs
+// the composer draft state this module must not depend on.

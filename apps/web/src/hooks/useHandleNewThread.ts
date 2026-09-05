@@ -29,8 +29,11 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
-import { readThreadShell, useProjects, useThread } from "../state/entities";
-import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import { readProjects, readThreadShell, useProjects, useThread } from "../state/entities";
+import {
+  hasExplicitComposerModelSelection,
+  resolveNewDraftStartFromOrigin,
+} from "../lib/chatThreadActions";
 import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
@@ -68,7 +71,6 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
-  const projects = useProjects();
   // T3-CUSTOM(expbkt3): a remote project inherits the settings of the server
   // that owns it, matching HTTP, WebSocket, and MCP resolution.
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -93,19 +95,12 @@ export function useNewThreadHandler() {
         // T3-CUSTOM(expbkt3): the parent's environment, when the child is being
         // started on a different machine from the session it continues.
         parentEnvironmentId?: EnvironmentId | null;
-        /**
-         * Move the viewed draft's typed content (prompt + images) into the
-         * draft this request lands on. Set by the draft repo picker: the
-         * user started writing in the wrong project and the text should
-         * follow them. Explicit new-thread surfaces leave this unset and
-         * keep mint-fresh semantics.
-         */
-        carryComposerContent?: boolean;
       },
       // Which draft the thread ended up in, so a caller that has something to put in it — a
       // prepared checkout, a task to write — addresses that one rather than looking the project
       // up again and finding whichever draft it happens to hold.
     ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
+      const projects = readProjects();
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -114,35 +109,16 @@ export function useNewThreadHandler() {
         // T3-CUSTOM(expbkt3): no applyStickyState/setModelSelection — new
         // threads inherit target project and environment defaults instead of
         // carrying the viewed thread's model selection or sticky state.
-        moveComposerPromptAndImages,
+        setModelSelection,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
+      const requestingRouteHref = router.state.location.href;
+      const routeChangedSinceRequest = () => router.state.location.href !== requestingRouteHref;
       const currentRouteTarget = getCurrentRouteTarget();
       // T3-CUSTOM(expbkt3): the upstream carry-of-working-mode block (model
       // selection, runtime mode, interaction mode from the viewed thread) is
       // removed — new threads inherit target project and environment defaults.
-      // Content only moves when the caller opted in and the user is looking
-      // at a draft. The content check happens at move time, not here: the
-      // paths below await, and text typed during those awaits must still
-      // come along.
-      const carryContentSourceDraftId =
-        options?.carryComposerContent === true && currentRouteTarget?.kind === "draft"
-          ? currentRouteTarget.draftId
-          : null;
-      const carryComposerContentTo = (destinationDraftId: DraftId) => {
-        if (
-          carryContentSourceDraftId &&
-          carryContentSourceDraftId !== destinationDraftId &&
-          // Never clobber a destination the user already invested in — the
-          // move overwrites the destination prompt, so a concurrent repo
-          // change that carried content first must win.
-          !composerDraftHasUserContent(getComposerDraft(destinationDraftId)) &&
-          composerDraftHasUserContent(getComposerDraft(carryContentSourceDraftId))
-        ) {
-          moveComposerPromptAndImages(carryContentSourceDraftId, destinationDraftId);
-        }
-      };
       const project = projects.find(
         (candidate) =>
           candidate.id === projectRef.projectId &&
@@ -238,8 +214,10 @@ export function useNewThreadHandler() {
           // env context resets to the configured defaults so drafts seeded
           // before a defaults change (or by the old carry-over behavior) stop
           // landing on "current checkout" branches forever. When the draft is
-          // already open and no options were passed, leave it alone entirely —
-          // the user may have just picked a branch in the composer.
+          // already open and no options were passed, leave its workspace
+          // context alone entirely — the user may have just picked a branch
+          // in the composer. Model selection has its own explicit-pick rule
+          // below and does not follow this guard.
           let workspaceContext: NewThreadWorkspaceOptions | null = null;
           if (hasExplicitWorkspaceOption) {
             workspaceContext = {
@@ -252,6 +230,9 @@ export function useNewThreadHandler() {
             };
           } else if (!isDraftAlreadyOpen) {
             const defaultEnvMode = await resolveDefaultEnvMode();
+            if (routeChangedSinceRequest()) {
+              return null;
+            }
             // The await yields. If the draft was opened (a concurrent
             // invocation's navigation landed), promoted to a real thread,
             // remapped away (a concurrent invocation registered a fresh
@@ -296,6 +277,10 @@ export function useNewThreadHandler() {
               interactionMode: inheritedInteractionMode,
             });
           }
+          // T3-CUSTOM(expbkt3): upstream explicit picks stand; stale seeds return to inherited defaults.
+          if (!hasExplicitComposerModelSelection(getComposerDraft(emptyStoredDraftThread.draftId))) {
+            setModelSelection(emptyStoredDraftThread.draftId, null, { replaceOptions: true });
+          }
           // The workspace context must also ride along here: when projectRef
           // targets a different physical member of the logical project,
           // createDraftThreadState treats the remap as a project change and
@@ -311,7 +296,6 @@ export function useNewThreadHandler() {
               interactionMode: inheritedInteractionMode,
             },
           );
-          carryComposerContentTo(emptyStoredDraftThread.draftId);
           const opened = {
             draftId: emptyStoredDraftThread.draftId,
             threadId: emptyStoredDraftThread.threadId,
@@ -371,6 +355,9 @@ export function useNewThreadHandler() {
       const createdAt = new Date().toISOString();
       return (async () => {
         const initialEnvMode = options?.envMode ?? (await resolveDefaultEnvMode());
+        if (routeChangedSinceRequest()) {
+          return null;
+        }
         // The await yields, so a concurrent invocation may have registered a
         // draft for this logical project in the meantime. Registering ours
         // too would evict that draft while its navigation is in flight —
@@ -400,7 +387,6 @@ export function useNewThreadHandler() {
             interactionMode: racedDraft.interactionMode,
             ...pickExplicitWorkspaceOptions(options),
           });
-          carryComposerContentTo(racedDraft.draftId);
           await router.navigate({
             to: "/draft/$draftId",
             params: { draftId: racedDraft.draftId },
@@ -425,7 +411,6 @@ export function useNewThreadHandler() {
           runtimeMode: inheritedRuntimeMode,
           interactionMode: inheritedInteractionMode,
         });
-        carryComposerContentTo(draftId);
 
         await router.navigate({
           to: "/draft/$draftId",
@@ -435,7 +420,7 @@ export function useNewThreadHandler() {
         return { draftId, threadId };
       })();
     },
-    [getCurrentRouteTarget, projectGroupingSettings, projects, router, serverConfigs],
+    [getCurrentRouteTarget, projectGroupingSettings, router, serverConfigs],
   );
 }
 // T3-CUSTOM(expbkt3): END

@@ -2,58 +2,73 @@
 
 ## Using T3 Code
 
-- [Install and first run](./user/install.md)
+- [Install T3 Code](./user/install.md)
+- [Messages and context](./user/composer.md)
+- [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
+- [Terminal history](./user/terminal.md)
+- [Source control](./user/source-control.md)
+- [Project settings](./user/project-settings.md)
+- [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)
-- [Organizing threads](./user/thread-sidebar.md)
-- [Review usage](./user/usage.md)
-- [Customize a project icon](./user/project-settings.md)
-- [Mobile appearance](./user/mobile-appearance.md)
-- [Remote access](./user/remote-access.md)
+- [Import browser sessions](./user/browser-import.md)
+- [Usage and limits](./user/usage.md)
+- [Product usage data](./user/telemetry.md)
+<!-- T3-CUSTOM(expbkt3): fork user guides. -->
 - [Opening a worktree in another app](./user/open-in-app.md)
-- [Keeping app and server in sync](./user/updating.md)
 - [User management](./user/user-management.md)
-- [Source control integrations](./user/source-control.md)
 - [Worktree setup and new-thread defaults](./user/worktree-setup.md)
 - [T3 Code MCP control center](./user/t3-mcp-control.md)
 - [Agent views in chat](./user/agent-views.md)
-- [Background service (Linux)](./user/background-service.md)
 - [Provider usage limits](./user/provider-limits.md)
-- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md)
-
-Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
+- [Remote access](./user/remote-access.md)
+- [Running in the background](./user/background-service.md)
+- [Updating T3 Code](./user/updating.md)
+- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md)
 
 ---
 
 ## Working on T3 Code
 
-Everything below is for maintainers. Setup lives in the [root README](../README.md);
-policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../AGENTS.md).
+Start with the [development runbook](./operations/development.md) and
+[contribution policy](../CONTRIBUTING.md).
+
+Internal notes preserve architectural decisions, constraints, and implementation traps that the
+source alone does not explain. Most code changes do not need an internal documentation update. Follow the
+[documentation rules](../AGENTS.md#documentation) before adding one.
 
 - [Architecture overview](./internals/overview.md)
-- [Workspace layout](./internals/workspace-layout.md)
+<!-- T3-CUSTOM(expbkt3): fork architecture and operation references. -->
 - [Durable thread bootstrap](./internals/thread-bootstrap.md)
+- [Execution reliability](./internals/execution-reliability.md)
+- [Provider rate limits](./internals/provider-rate-limits.md)
+- [Thread-owned source-control identity](./internals/source-control-identity.md)
+- [expbkt3 customization boundaries](./operations/expbkt3-customizations.md)
+- [Personal MCP identity architecture](./internals/t3-personal-mcp-architecture.md)
 - [Glossary](./internals/glossary.md)
-- [Scripts](./internals/scripts.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [Providers](./internals/providers.md)
-- [Provider rate limits](./internals/provider-rate-limits.md)
+- [Model classification](./internals/model-manifest.md)
 - [Remote environments](./internals/remote.md)
 - [Server updates](./internals/server-updates.md)
 - [Resource telemetry](./internals/resource-telemetry.md)
+- [Product analytics](./internals/product-analytics.md)
 - [Environment auth](./internals/environment-auth.md)
-- [Thread-owned source-control identity](./internals/source-control-identity.md)
 - [T3 Connect](./internals/t3-connect.md)
-- [CI gates](./internals/ci.md)
-- [Engineering work artifacts](./internals/work-artifacts.md)
-- [Beknown deployments](./operations/deployments.md)
-- [expbkt3 customization boundaries](./operations/expbkt3-customizations.md)
-- [Personal MCP identity architecture](./internals/t3-personal-mcp-architecture.md)
+- [Assistant citations](./internals/assistant-citations.md)
+- [Mobile navigation](./internals/mobile-navigation.md)
+- [Mobile development lifecycle](./internals/mobile-development.md)
+- [Terminal runtime](./internals/terminal-runtime.md)
+- [Voice input](./internals/voice-input.md)
 
 ### Runbooks
 
+<!-- T3-CUSTOM(expbkt3): deployment runbook remains the CI/install authority. -->
+- [Beknown deployments](./operations/deployments.md)
+
+- [Development and local builds](./operations/development.md)
+- [T3 Connect setup](./operations/connect-setup.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)
-- [Claude account switching on dev-server-1](./operations/claude-account-switching.md)

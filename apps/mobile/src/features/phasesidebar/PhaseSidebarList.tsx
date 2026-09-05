@@ -55,7 +55,7 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { PhaseSidebarRowView, type PhaseSidebarRowSwipe } from "./PhaseSidebarRowView";
 import type { MobileEnvironmentAppearance } from "../environments/environmentAppearance";
@@ -155,7 +155,7 @@ export function PhaseSidebarList(props: PhaseSidebarListProps) {
   const sortOrder = props.sortOrder ?? DEFAULT_SIDEBAR_THREAD_SORT_ORDER;
   const { grouping, onChangeGrouping, onSectionAction } = props;
   const [collapsedKeys, setCollapsedKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const mutedColor = String(useThemeColor("--color-icon"));
+  const mutedColor = String(useUniwindTheme()["--color-icon"]);
   // One open row at a time, as in the stock list: opening another closes the
   // first, and starting a scroll closes whichever is open.
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);

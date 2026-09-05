@@ -71,10 +71,13 @@ it.effect("adopts a replacement generation while a ready session starts a turn",
     } as unknown as ProviderServiceShape;
     const orchestration = {
       readEvents: () => Stream.empty,
+      readThreadEvents: () => Stream.empty,
+      getThreadReplayStats: () => Effect.die("unused"),
+      subscribeDomainEvents: Effect.succeed(Stream.empty),
       dispatch: () => Effect.succeed({ sequence: 0 }),
       streamDomainEvents: Stream.empty,
       latestSequence: Effect.succeed(0),
-    } as OrchestrationEngineService["Service"];
+    } satisfies OrchestrationEngineService["Service"];
     const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
       Layer.provide(SessionRecoveryStateLayer),
       Layer.provide(Layer.succeed(ProviderService, providerService)),

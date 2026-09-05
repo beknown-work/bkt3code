@@ -98,6 +98,8 @@ export interface DurableExecutionDispatchResult {
   readonly adoptedExecutionId?: string;
   readonly deferred?: boolean;
   readonly completed?: boolean;
+  /** A native prompt command completed without creating a provider turn. */
+  readonly handledCommand?: boolean;
 }
 
 type TurnStartEvent = Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
@@ -303,13 +305,14 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
             });
             return;
           }
-          if (result.completed === true && result.providerTurnId !== null) {
+          if (result.completed === true && (result.providerTurnId !== null || result.handledCommand === true)) {
             const reconciled = yield* repository.markCompletedFromHistory({
               workItemId: intent.workItemId,
               owner: options.ownerId,
               generation: intent.claimGeneration,
               providerTurnId: result.providerTurnId,
               providerInstanceId: result.providerInstanceId,
+              completionKind: result.handledCommand === true ? "handled-command" : "history-completed",
               at: yield* now(),
             });
             if (reconciled && recovery && options.onRecoveryActivity) {

@@ -1,26 +1,19 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { ClerkProvider } from "@clerk/react";
-import { passkeys } from "@clerk/electron/passkeys";
-import { ClerkProvider as ElectronClerkProvider } from "@clerk/electron/react";
 import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
 import "./index.css";
 
 import { isElectron } from "./env";
-import { ManagedClerkIdentityAuthProvider, ManagedRelayAuthProvider } from "./cloud/managedAuth";
+// T3-CUSTOM(expbkt3): standalone identity mode also loads the lazy auth shell.
 import { resolveAppClerkMode, resolveClerkPublishableKey } from "./cloud/publicConfig";
-// T3-CUSTOM(expbkt3): BEGIN - desktop blank-window diagnostic.
-import { DesktopAuthStallNotice } from "./components/clerk/DesktopAuthStallNotice";
-// T3-CUSTOM(expbkt3): END
-import { TeamIdentityBridge } from "./components/clerk/TeamIdentityBridge";
 import { getRouter } from "./router";
 import {
   syncDocumentElectronPlatformClasses,
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
-import { clerkAppearance } from "./components/clerk/clerkAppearance";
+import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
@@ -35,46 +28,59 @@ if (isElectron) {
 const clerkPublishableKey = resolveClerkPublishableKey();
 const clerkMode = resolveAppClerkMode();
 
+// A failed split-chunk fetch usually means the hashed assets went stale under
+// a deploy; one guarded reload picks up the fresh index.html.
+let chunkLoadFailed = false;
+let reloadScheduled = false;
+window.addEventListener("vite:preloadError", (event) => {
+  chunkLoadFailed = true;
+  if (reloadOnceForChunkLoadError()) {
+    reloadScheduled = true;
+    event.preventDefault();
+  }
+});
+
 const app = <AppRoot router={router} />;
-const authenticatedApp =
-  clerkMode === "cloud" ? <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider> : app;
+// T3-CUSTOM(expbkt3): managed or identity-only auth uses the selected lazy runtime.
+// The Electron Clerk provider bundles the full
+// clerk-js runtime. Loading only the selected runtime as a split chunk keeps
+// every Clerk byte out of the startup graph for local-mode users, and keeps
+// the bundled clerk-js out of the browser build entirely.
+const managedAuthShellModule =
+  clerkPublishableKey && clerkMode !== "disabled"
+    ? isElectron
+      ? import("./components/clerk/ElectronManagedAuthShell")
+      : import("./components/clerk/BrowserManagedAuthShell")
+    : null;
 
-// Inside Clerk, expose the token to standalone identity binding and mirror the
-// signed-in user for the existing team-mode access controls. Full cloud builds
-// additionally activate the managed relay session.
-const clerkChildren = (
-  <ManagedClerkIdentityAuthProvider>
-    <TeamIdentityBridge />
-    {authenticatedApp}
-  </ManagedClerkIdentityAuthProvider>
-);
-
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    {clerkPublishableKey && clerkMode !== "disabled" ? (
-      isElectron ? (
-        // T3-CUSTOM(expbkt3): BEGIN - the desktop provider renders nothing until
-        // Clerk's Native API answers, so a disabled Native API leaves a blank
-        // window with no explanation. The notice is a sibling, not a child, so it
-        // still renders in exactly that case.
-        <>
-          <ElectronClerkProvider
-            appearance={clerkAppearance}
-            publishableKey={clerkPublishableKey}
-            passkeys={passkeys}
-          >
-            {clerkChildren}
-          </ElectronClerkProvider>
-          <DesktopAuthStallNotice />
-        </>
-      ) : (
-        // T3-CUSTOM(expbkt3): END
-        <ClerkProvider appearance={clerkAppearance} publishableKey={clerkPublishableKey}>
-          {clerkChildren}
-        </ClerkProvider>
-      )
-    ) : (
-      app
-    )}
-  </React.StrictMode>,
-);
+// The index.html boot splash lives inside #root, and React's first commit
+// clears it. Resolve everything that first commit needs, the selected
+// managed-auth runtime and the initial route's split chunks, before
+// rendering, so the splash holds until real UI paints instead of dropping to
+// a blank window while chunks download.
+export const startup = Promise.all([
+  managedAuthShellModule?.then((module) => module.default) ?? null,
+  router.load(),
+])
+  .then(([ManagedAuthShell]) => {
+    // A route chunk failure still resolves router.load(): the error is parked in
+    // the lazy component and surfaces through the route error boundary. Skip the
+    // paint when a reload is on its way, and only re-arm the guard after a boot
+    // that fetched every chunk it asked for.
+    if (reloadScheduled) return;
+    if (!chunkLoadFailed) clearChunkReloadGuard();
+    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+      <React.StrictMode>
+        {ManagedAuthShell && clerkPublishableKey ? (
+          <ManagedAuthShell publishableKey={clerkPublishableKey}>{app}</ManagedAuthShell>
+        ) : (
+          app
+        )}
+      </React.StrictMode>,
+    );
+  })
+  .catch((error: unknown) => {
+    // Let the bootstrap entry show the error unless a reload is already scheduled.
+    if (reloadScheduled) return;
+    throw error;
+  });

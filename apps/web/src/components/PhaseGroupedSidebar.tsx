@@ -1,3 +1,4 @@
+import { resolveSettledTimestamp } from "@t3tools/client-runtime/state/phase-sidebar";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
 import {
@@ -122,7 +123,6 @@ import {
   canReconnectThreadSession,
   hasUnseenCompletion,
   isTrailingDoubleClick,
-  resolveSettledTimestamp,
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
 import {
@@ -484,6 +484,8 @@ function PhaseFilterPopover({
                   <ProjectFavicon
                     environmentId={option.project.environmentId}
                     cwd={option.project.workspaceRoot}
+                    projectName={option.project.title}
+                    projectIcon={option.project.projectIcon}
                     className="size-3"
                   />
                 }
@@ -1585,6 +1587,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   <ProjectFavicon
                     environmentId={project.environmentId}
                     cwd={project.workspaceRoot}
+                    projectName={project.title}
+                    projectIcon={project.projectIcon}
                     className="size-2.5"
                   />
                 ) : null}

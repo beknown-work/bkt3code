@@ -105,4 +105,23 @@ describe("shared durable thread outbox", () => {
       }),
     ).toBe("wait");
   });
+  it("round-trips upstream file-backed uploads alongside fork identity and failure state", () => {
+    const message: QueuedThreadMessage = {
+      ...queued("user_123"),
+      deliveryState: "failed",
+      failureDetail: "retry explicitly",
+      attachments: [{
+        id: "file-1",
+        type: "file",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        fileUri: "file:///documents/report.pdf",
+        uploadedAttachmentId: "pending-report",
+        uploadEnvironmentId: EnvironmentId.make("environment-1"),
+      }],
+    };
+    expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message))).toEqual(message);
+  });
+
 });

@@ -10,6 +10,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  ProjectIconOverride,
   ProjectId,
   ProjectScript,
   ProjectThreadCreationDefaults,
@@ -30,7 +31,9 @@ export const ProjectionProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   threadCreationDefaults: ProjectThreadCreationDefaults,
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
+  autoPull: Schema.Boolean,
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
   ownerUserId: Schema.NullOr(UserId),
   createdAt: IsoDateTime,

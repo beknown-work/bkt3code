@@ -73,6 +73,7 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — fork summary generation inputs.
 export interface RollingSummaryGenerationInput {
   cwd: string;
   threadTitle: string;
@@ -130,23 +131,7 @@ export interface WorkSummaryGenerationResult {
 }
 // T3-CUSTOM(expbkt3): END
 
-export interface TextGenerationService {
-  generateCommitMessage(
-    input: CommitMessageGenerationInput,
-  ): Promise<CommitMessageGenerationResult>;
-  generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
-  generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
-  generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
-  updateRollingSummary(
-    input: RollingSummaryGenerationInput,
-  ): Promise<RollingSummaryGenerationResult>;
-  generateCatchupSummary(
-    input: CatchupSummaryGenerationInput,
-  ): Promise<CatchupSummaryGenerationResult>;
-  // T3-CUSTOM(expbkt3): BEGIN — bulk session manager work summary.
-  generateWorkSummary(input: WorkSummaryGenerationInput): Promise<WorkSummaryGenerationResult>;
-  // T3-CUSTOM(expbkt3): END
-}
+// T3-CUSTOM(expbkt3): END
 
 /**
  * TextGeneration - Service tag for commit and change request text generation.
@@ -205,10 +190,7 @@ export class TextGeneration extends Context.Service<
   }
 >()("t3/textGeneration/TextGeneration") {}
 
-/** @deprecated Use `TextGeneration["Service"]`. */
-export type TextGenerationShape = TextGeneration["Service"];
-
-export type TextGenerationOp =
+type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"

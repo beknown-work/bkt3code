@@ -2,11 +2,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
 // T3-CUSTOM(expbkt3): persist per-project thread creation defaults additively.
-import { ModelSelection, ProjectScript, ProjectThreadCreationDefaults } from "@t3tools/contracts";
+import { ModelSelection, ProjectIconOverride, ProjectScript, ProjectThreadCreationDefaults } from "@t3tools/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionProjectInput,
@@ -20,6 +21,8 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     threadCreationDefaults: Schema.fromJsonString(ProjectThreadCreationDefaults),
+    autoPull: Schema.Number,
+    projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -39,7 +42,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json,
           thread_creation_defaults_json,
           default_thread_env_mode,
+          auto_pull,
           favicon_path,
+          project_icon_json,
           scripts_json,
           owner_user_id,
           created_at,
@@ -53,7 +58,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${JSON.stringify(row.threadCreationDefaults)},
           ${row.defaultThreadEnvMode},
+          ${row.autoPull ? 1 : 0},
           ${row.faviconPath ?? null},
+          ${row.projectIcon ? JSON.stringify(row.projectIcon) : null},
           ${JSON.stringify(row.scripts)},
           ${row.ownerUserId},
           ${row.createdAt},
@@ -67,7 +74,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json = excluded.default_model_selection_json,
           thread_creation_defaults_json = excluded.thread_creation_defaults_json,
           default_thread_env_mode = excluded.default_thread_env_mode,
+          auto_pull = excluded.auto_pull,
           favicon_path = excluded.favicon_path,
+          project_icon_json = excluded.project_icon_json,
           scripts_json = excluded.scripts_json,
           owner_user_id = COALESCE(excluded.owner_user_id, projection_projects.owner_user_id),
           created_at = excluded.created_at,
@@ -88,7 +97,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           thread_creation_defaults_json AS "threadCreationDefaults",
           default_thread_env_mode AS "defaultThreadEnvMode",
+          auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
+          project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -111,7 +122,9 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           thread_creation_defaults_json AS "threadCreationDefaults",
           default_thread_env_mode AS "defaultThreadEnvMode",
+          auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
+          project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -138,11 +151,13 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
 
   const getById: ProjectionProjectRepositoryShape["getById"] = (input) =>
     getProjectionProjectRow(input).pipe(
+      Effect.map(Option.map((row) => ({ ...row, autoPull: row.autoPull === 1 }))),
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.getById:query")),
     );
 
   const listAll: ProjectionProjectRepositoryShape["listAll"] = () =>
     listProjectionProjectRows().pipe(
+      Effect.map((rows) => rows.map((row) => ({ ...row, autoPull: row.autoPull === 1 }))),
       Effect.mapError(toPersistenceSqlError("ProjectionProjectRepository.listAll:query")),
     );
 

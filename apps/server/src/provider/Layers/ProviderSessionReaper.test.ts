@@ -232,6 +232,7 @@ describe("ProviderSessionReaper", () => {
     const providerService: ProviderServiceShape = {
       startSession: () => unsupported(),
       sendTurn: () => unsupported(),
+      compactThread: () => unsupported(),
       interruptTurn: () => unsupported(),
       inspectSession: input.inspectSession ?? (() => Effect.succeed(null)),
       requestTurnInterrupt: () => unsupported(),
@@ -247,6 +248,7 @@ describe("ProviderSessionReaper", () => {
           activeTurnInput: "steer",
           durableResume: "supported",
         }),
+      assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
         return Effect.succeed({
@@ -283,6 +285,7 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
+          getUserInputActivity: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
           // T3-CUSTOM(expbkt3): required bounded projection-query test doubles.
@@ -293,12 +296,15 @@ describe("ProviderSessionReaper", () => {
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: input.readModel.snapshotSequence }),
           getCounts: () => Effect.die("unused"),
+          getEventReplayStats: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getImportedAgentSessionSources: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadAccessById: () => Effect.succeed(Option.none()),
+          getThreadRuntimeContext: () => Effect.die("unused"),
           getThreadShellById: (threadId) =>
             Effect.succeed(
               input.readModel.threads.find((thread) => thread.id === threadId)
@@ -316,7 +322,11 @@ describe("ProviderSessionReaper", () => {
       // the engine is never actually dispatched to.
       Layer.provideMerge(
         Layer.succeed(OrchestrationEngineService, {
+          // T3-CUSTOM(expbkt3): reaper harness supplies the expanded engine API.
           readEvents: () => Stream.empty,
+          readThreadEvents: () => Stream.empty,
+          getThreadReplayStats: () => Effect.die("unused"),
+          subscribeDomainEvents: Effect.succeed(Stream.empty),
           dispatch: input.dispatch ?? (() => Effect.die("unused")),
           streamDomainEvents: Stream.empty,
           latestSequence: Effect.succeed(0),

@@ -1,5 +1,4 @@
 import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
-import { RelayEnvironmentConnectScope } from "@t3tools/contracts/relay";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -9,7 +8,6 @@ import * as Schema from "effect/Schema";
 
 import { appendClientConnectionParams } from "../authorization/remote.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
   BearerConnectionCredential,
@@ -18,12 +16,7 @@ import {
   SshConnectionProfile,
 } from "./catalog.ts";
 import * as ConnectionCredentialStore from "./credentialStore.ts";
-import {
-  credentialMissingError,
-  environmentMismatchError,
-  mapManagedRelayError,
-  profileMissingError,
-} from "./errors.ts";
+import { credentialMissingError, environmentMismatchError, profileMissingError } from "./errors.ts";
 import type {
   BearerConnectionTarget,
   ConnectionTarget,
@@ -56,7 +49,7 @@ function primarySocketUrl(
   if (url.pathname === "" || url.pathname === "/") {
     url.pathname = "/ws";
   }
-  appendClientConnectionParams(url, clientMetadata);
+  appendClientConnectionParams(url, clientMetadata, "direct");
   return url.toString();
 }
 
@@ -80,7 +73,11 @@ const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary
         socketUrl: yield* dpopAuthorization.value.resolveSocketUrl({
           wsBaseUrl: target.wsBaseUrl,
         }),
-        httpAuthorization: { _tag: "Dpop", accessToken: dpopAuthorization.value.accessToken },
+        httpAuthorization: {
+          _tag: "Dpop",
+          accessToken: dpopAuthorization.value.accessToken,
+          expiresAtEpochMs: dpopAuthorization.value.expiresAtEpochMs,
+        },
         target,
       } satisfies PreparedConnection;
     }
@@ -102,6 +99,7 @@ const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary
       httpBaseUrl: target.httpBaseUrl,
       wsBaseUrl: target.wsBaseUrl,
       bearerToken: bearerToken.value,
+      connectionMethod: "direct",
     });
     return {
       ...authorized,
@@ -150,6 +148,7 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
       httpBaseUrl: profile.httpBaseUrl,
       wsBaseUrl: profile.wsBaseUrl,
       bearerToken: credential.token,
+      connectionMethod: "direct",
     });
     return {
       environmentId: authorized.environmentId,
@@ -163,39 +162,12 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
 });
 
 const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(function* () {
-  const relay = yield* ManagedRelay.ManagedRelayClient;
-  const session = yield* ClientCapabilities.CloudSession;
-  const identity = yield* ClientCapabilities.RelayDeviceIdentity;
   const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
 
   return Effect.fnUntraced(
     function* (target: RelayConnectionTarget) {
-      const clerkToken = yield* session.clerkToken.pipe(
-        Effect.withSpan("relay.connection.cloudSessionToken.resolve"),
-      );
       const authorized = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
-        identityToken: clerkToken,
-        obtainBootstrap: Effect.gen(function* () {
-          const deviceId = yield* identity.deviceId.pipe(
-            Effect.withSpan("relay.connection.deviceIdentity.resolve"),
-          );
-          const connected = yield* relay
-            .connectEnvironment({
-              clerkToken,
-              scopes: [RelayEnvironmentConnectScope],
-              environmentId: target.environmentId,
-              ...(Option.isSome(deviceId) ? { deviceId: deviceId.value } : {}),
-            })
-            .pipe(Effect.mapError(mapManagedRelayError));
-          if (connected.environmentId !== target.environmentId) {
-            return yield* environmentMismatchError({
-              expected: target.environmentId,
-              actual: connected.environmentId,
-            });
-          }
-          return connected;
-        }).pipe(Effect.withSpan("relay.connection.bootstrap.obtain")),
       });
       return {
         environmentId: authorized.environmentId,
@@ -254,6 +226,7 @@ const makeSshBroker = Effect.fn("clientRuntime.connection.broker.makeSsh")(funct
       httpBaseUrl: prepared.bootstrap.httpBaseUrl,
       wsBaseUrl: prepared.bootstrap.wsBaseUrl,
       bearerToken: prepared.bearerToken,
+      connectionMethod: "ssh",
     });
     return {
       environmentId: authorized.environmentId,

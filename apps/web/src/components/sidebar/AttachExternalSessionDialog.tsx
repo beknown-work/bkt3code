@@ -211,6 +211,8 @@ export function AttachExternalSessionDialog({
                   <ProjectFavicon
                     environmentId={candidate.environmentId}
                     cwd={candidate.workspaceRoot}
+                    projectName={candidate.title}
+                    projectIcon={candidate.projectIcon}
                   />
                   <span className="min-w-0 flex-1 truncate">{candidate.title}</span>
                 </button>

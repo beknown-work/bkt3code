@@ -329,7 +329,8 @@ export interface DurableExecutionIntentRepositoryShape {
     readonly workItemId: string;
     readonly owner: string;
     readonly generation: number;
-    readonly providerTurnId: string;
+    readonly providerTurnId: string | null;
+    readonly completionKind?: "handled-command" | "history-completed";
     readonly providerInstanceId: string | null;
     readonly at: string;
   }) => Effect.Effect<boolean, ProjectionRepositoryError>;
@@ -1088,7 +1089,7 @@ const make = Effect.gen(function* () {
       );
 
   const markCompletedFromHistory: DurableExecutionIntentRepositoryShape["markCompletedFromHistory"] =
-    ({ workItemId, owner, generation, providerTurnId, providerInstanceId, at }) =>
+    ({ workItemId, owner, generation, providerTurnId, providerInstanceId, completionKind = "history-completed", at }) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
@@ -1111,7 +1112,7 @@ const make = Effect.gen(function* () {
             if (row.attempt > 0) {
               yield* sql`
               UPDATE thread_execution_recovery_attempts
-              SET completed_at = ${at}, outcome = 'history-completed',
+              SET completed_at = ${at}, outcome = ${completionKind},
                   provider_instance_id = COALESCE(${providerInstanceId}, provider_instance_id),
                   provider_turn_id = ${providerTurnId}
               WHERE work_item_id = ${workItemId}

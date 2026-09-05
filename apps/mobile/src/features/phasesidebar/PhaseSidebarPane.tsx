@@ -34,7 +34,7 @@ import { Alert, FlatList, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentAppearances } from "../environments/useEnvironmentAppearance";
@@ -67,7 +67,7 @@ function HeaderButton(props: {
   readonly active: boolean;
   readonly onPress: () => void;
 }) {
-  const iconColor = String(useThemeColor("--color-icon"));
+  const iconColor = String(useUniwindTheme()["--color-icon"]);
   return (
     <Pressable
       accessibilityRole="button"

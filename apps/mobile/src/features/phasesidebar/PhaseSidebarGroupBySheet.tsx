@@ -27,7 +27,7 @@ import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { EnvironmentBadge } from "../environments/EnvironmentBadge";
 import type { MobileEnvironmentAppearance } from "../environments/environmentAppearance";
 
@@ -80,8 +80,8 @@ export function PhaseSidebarGroupBySheet(props: {
   readonly onOpenEnvironment: (environmentId: EnvironmentId) => void;
 }) {
   const { grouping, intent, onChange } = props;
-  const iconColor = String(useThemeColor("--color-icon"));
-  const placeholderColor = String(useThemeColor("--color-foreground-tertiary"));
+  const iconColor = String(useUniwindTheme()["--color-icon"]);
+  const placeholderColor = String(useUniwindTheme()["--color-foreground-tertiary"]);
   // The inline editor: null when closed, otherwise what it is naming.
   const [editor, setEditor] = useState<
     | { readonly kind: "create"; readonly seedThreadKey: string | null; readonly label: string }

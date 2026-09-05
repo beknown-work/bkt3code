@@ -71,7 +71,7 @@ function firstValidTimestamp(
  * otherwise last activity, with updatedAt as the final net. See the note on
  * firstValidTimestamp above for why this is a copy.
  */
-function resolveSettledTimestamp(
+export function resolveSettledTimestamp(
   thread: Pick<ThreadShell, "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt">,
 ): string | null {
   const settledAt = firstValidTimestamp(thread.settledAt);

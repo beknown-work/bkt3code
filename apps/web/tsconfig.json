@@ -28,6 +28,7 @@
   // T3-CUSTOM(expbkt3): BEGIN - vite.config.ts bakes the managed environment in.
   "include": [
     "src",
+    "vite",
     "vite.config.ts",
     "vercel.ts",
     "test",

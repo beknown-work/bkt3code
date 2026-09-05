@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentQuery } from "../../state/query";
 import { planReviewEnvironment } from "../../state/planReview";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -77,7 +77,7 @@ function PlanReviewLine(props: {
 export function PlanReviewSheet(props: PlanReviewSheetProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const iconTint = String(useThemeColor("--color-icon"));
+  const iconTint = String(useUniwindTheme()["--color-icon"]);
   const { environmentId, threadId, documentId } = props.route.params;
   const selection = usePlanReviewSelection();
   const [pendingDecision, setPendingDecision] = useState<PlanReviewDecision | null>(null);

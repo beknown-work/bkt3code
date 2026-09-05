@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentSession } from "../../state/session";
 import { threadEnvironment } from "../../state/threads";
@@ -39,7 +39,7 @@ function MemberRow(props: {
   readonly onTransferOwnership: (entry: ThreadMemberEntry) => void;
 }) {
   const { entry } = props;
-  const iconTint = String(useThemeColor("--color-icon"));
+  const iconTint = String(useUniwindTheme()["--color-icon"]);
   const handleToggle = useCallback(() => props.onToggle(entry), [entry, props]);
   const handleTransfer = useCallback(() => props.onTransferOwnership(entry), [entry, props]);
 

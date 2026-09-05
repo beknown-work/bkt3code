@@ -13,7 +13,7 @@ import { Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { EnvironmentBadge } from "./EnvironmentBadge";
 import { environmentIconSymbol, type MobileEnvironmentAppearance } from "./environmentAppearance";
 import {
@@ -38,7 +38,7 @@ export function EnvironmentAppearanceEditor(props: {
   const { environmentId, appearance } = props;
   const stored = useStoredEnvironmentAppearance(environmentId);
   const update = useUpdateEnvironmentAppearance();
-  const checkColor = String(useThemeColor("--color-primary-foreground"));
+  const checkColor = String(useUniwindTheme()["--color-primary-foreground"]);
 
   const patch = (changes: EnvironmentAppearance) => {
     update(environmentId, { ...stored, ...changes });

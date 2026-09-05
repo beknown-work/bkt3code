@@ -137,6 +137,9 @@ const startThreadTurnDurably = Effect.fn("ThreadCommands.startThreadTurnDurably"
         sizeBytes: attachment.sizeBytes,
         id: "id" in attachment ? attachment.id : `${serverInput.message.messageId}-${index}`,
         ...(dataUrl === undefined ? {} : { dataUrl, previewUri: dataUrl }),
+        ...("id" in attachment
+          ? { uploadedAttachmentId: attachment.id, uploadEnvironmentId: environmentId }
+          : {}),
       };
     }),
     ...(serverInput.modelSelection === undefined

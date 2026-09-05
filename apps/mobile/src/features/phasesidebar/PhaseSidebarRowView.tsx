@@ -33,7 +33,7 @@ import { Pressable, useWindowDimensions, View, type LayoutChangeEvent } from "re
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { EnvironmentBadge } from "../environments/EnvironmentBadge";
 import type { MobileEnvironmentAppearance } from "../environments/environmentAppearance";
@@ -113,7 +113,7 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
   const thread = row.thread;
   const unread = row.isUnreadCompletion;
   const { width: windowWidth } = useWindowDimensions();
-  const screenColor = String(useThemeColor("--color-screen"));
+  const screenColor = String(useUniwindTheme()["--color-screen"]);
   const worktree = phaseSidebarWorktreeRowProps(worktreeView, thread.worktreePath);
   const linearIssue = row.linearIssueSupported
     ? resolvePhaseSidebarLinearIssue(thread.branch, thread.linearIssueUrl)

@@ -19,7 +19,7 @@ function invariantError(commandType: string, detail: string): OrchestrationComma
   });
 }
 
-export function findThreadById(
+function findThreadById(
   readModel: OrchestrationReadModel,
   threadId: ThreadId,
 ): OrchestrationThread | undefined {
@@ -173,13 +173,11 @@ export function requireThreadAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  // Thread deletion is a soft delete and a draft keeps its client-minted id
+  // across retries, so only a live row blocks creation. Projectors reset the
+  // thread's rows when the id is created again.
   const existing = findThreadById(input.readModel, input.threadId);
-  // Bootstrap is a multi-step operation: create thread, prepare worktree,
-  // then start the turn. A later step can fail after thread.created has been
-  // persisted. The dispatcher compensates with thread.deleted; allow the
-  // same stable client thread ID to be recreated when the durable command is
-  // retried. Active and archived threads remain protected from duplication.
-  if (!existing || existing.deletedAt !== null) {
+  if (existing === undefined || existing.deletedAt !== null) {
     return Effect.void;
   }
   return Effect.fail(

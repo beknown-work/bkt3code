@@ -108,7 +108,7 @@ it.effect("keeps provider instances isolated and exposes an initial stream snaps
         providerInstanceId: codexId,
         threadId: ThreadId.make("thread-codex"),
         createdAt: "2026-08-01T10:00:00.000Z",
-        payload: { rateLimits: update() },
+        payload: { limits: { windows: [] }, rateLimits: update() },
       },
       {
         type: "account.rate-limits.updated",
@@ -118,6 +118,7 @@ it.effect("keeps provider instances isolated and exposes an initial stream snaps
         threadId: ThreadId.make("thread-claude"),
         createdAt: "2026-08-01T10:01:00.000Z",
         payload: {
+          limits: { windows: [] },
           rateLimits: update({
             windows: [window("five-hour", 80)],
             observedAt: at("2026-08-01T10:01:00.000Z"),
@@ -161,7 +162,7 @@ it.effect("streams live revisions after the initial snapshot", () =>
       providerInstanceId: codexId,
       threadId: ThreadId.make("thread-live-codex"),
       createdAt: "2026-08-01T10:00:00.000Z",
-      payload: { rateLimits: update() },
+      payload: { limits: { windows: [] }, rateLimits: update() },
     });
 
     const live = yield* Queue.take(received);

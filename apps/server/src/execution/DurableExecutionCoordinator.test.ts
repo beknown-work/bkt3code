@@ -86,6 +86,37 @@ const acceptEvent = Effect.fnUntraced(function* (
 });
 
 layer("DurableExecutionCoordinator", (it) => {
+  it.effect("completes handled native commands without provider acknowledgement or retry", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("native-command", 50);
+      yield* acceptEvent(repository, event);
+      const calls = yield* Ref.make(0);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "native-command-owner",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () => Ref.update(calls, (n) => n + 1).pipe(Effect.as({
+          providerTurnId: null,
+          providerInstanceId: "codex",
+          completed: true,
+          handledCommand: true,
+        })),
+        recover: () => Effect.die("A handled command must not recover"),
+      });
+      yield* coordinator.run(event.commandId);
+      yield* coordinator.run(event.commandId);
+      const current = yield* repository.getByWorkItemId({ workItemId: event.commandId });
+      assert.isTrue(Option.isSome(current));
+      if (Option.isNone(current)) return;
+      assert.strictEqual(current.value.desiredState, "stopped");
+      assert.strictEqual(current.value.deliveryCertainty, "completed");
+      assert.strictEqual(current.value.providerTurnId, null);
+      assert.strictEqual(current.value.recoveryAttempts, 0);
+      assert.strictEqual(yield* Ref.get(calls), 1);
+    }),
+  );
+
   it.effect("does not charge the original delivery and guards the first recovery", () =>
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;

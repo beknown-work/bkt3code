@@ -6,14 +6,14 @@ import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { EnvironmentBadge } from "./EnvironmentBadge";
 import { useEnvironmentAppearance } from "./useEnvironmentAppearance";
 
 export function EnvironmentAppearanceButton(props: { readonly environmentId: EnvironmentId }) {
   const navigation = useNavigation();
   const appearance = useEnvironmentAppearance(props.environmentId);
-  const mutedColor = useThemeColor("--color-icon-subtle");
+  const mutedColor = useUniwindTheme()["--color-icon-subtle"];
   if (appearance === null) return null;
   return (
     <Pressable

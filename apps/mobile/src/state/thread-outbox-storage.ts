@@ -47,9 +47,14 @@ export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutb
   }
 }
 
+export interface ThreadOutboxLoadResult {
+  readonly messages: ReadonlyArray<QueuedThreadMessage>;
+  readonly errors: ReadonlyArray<ThreadOutboxStorageError>;
+}
+
 // T3-CUSTOM(expbkt3): BEGIN — environment/account namespaced storage keys.
 export interface ThreadOutboxStorage {
-  readonly load: () => Promise<ReadonlyArray<QueuedThreadMessage>>;
+  readonly load: () => Promise<ThreadOutboxLoadResult>;
   readonly write: (message: QueuedThreadMessage) => Promise<void>;
   readonly remove: (
     message: Pick<QueuedThreadMessage, "environmentId" | "identityKey" | "messageId">,
@@ -80,6 +85,7 @@ async function getMessageFile(
 export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   load: async () => {
     const messages: QueuedThreadMessage[] = [];
+    const errors: ThreadOutboxStorageError[] = [];
     try {
       const { File } = await import("expo-file-system");
       const directory = await getOutboxDirectory();
@@ -91,8 +97,9 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         try {
           messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
         } catch (cause) {
-          console.warn(
-            "[thread-outbox] ignored invalid persisted message",
+          // Recover readable messages without treating their attachment
+          // owners as the complete inventory needed for cleanup.
+          errors.push(
             new ThreadOutboxStorageError({
               operation: "read-message",
               environmentId: null,
@@ -114,7 +121,7 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         cause,
       });
     }
-    return messages;
+    return { messages, errors };
   },
   // T3-CUSTOM(expbkt3): BEGIN — write the namespaced file.
   write: async (message) => {

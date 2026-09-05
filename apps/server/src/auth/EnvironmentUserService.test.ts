@@ -1,3 +1,5 @@
+import { EnvironmentId } from "@t3tools/contracts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { EnvironmentUserId, SourceControlProfileId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -45,7 +47,7 @@ const serviceLayer = EnvironmentUserService.layer.pipe(
   Layer.provide(SqlitePersistenceMemory),
 );
 
-it.layer(NodeServices.layer)("EnvironmentUserService", (it) => {
+it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("EnvironmentUserService", (it) => {
   it.effect("registers verified users, derives presence, and connects GitHub ownership", () =>
     Effect.gen(function* () {
       const users = yield* EnvironmentUserService.EnvironmentUserService;

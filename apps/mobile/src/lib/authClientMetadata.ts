@@ -13,7 +13,12 @@ export function authClientMetadata(appVersion?: string): AuthClientPresentationM
 
   return {
     label: "T3 Code Mobile",
-    deviceType: "mobile",
+    deviceType:
+      Device.deviceType === Device.DeviceType.TABLET
+        ? "tablet"
+        : Device.deviceType === Device.DeviceType.PHONE
+          ? "mobile"
+          : "unknown",
     // T3-CUSTOM(expbkt3): always expose the native version to connected servers;
     // a caller-provided version still wins. Fork builds append their source SHA
     // so a stale sideloaded binary is identifiable from the server's audit of

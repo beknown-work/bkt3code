@@ -1,3 +1,5 @@
+import { EnvironmentId } from "@t3tools/contracts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentUserId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -20,7 +22,7 @@ const authLayer = EnvironmentAuth.layer.pipe(
   Layer.provide(testConfig),
 );
 
-it.layer(NodeServices.layer)("Clerk browser sessions", (it) => {
+it.layer(Layer.merge(NodeServices.layer, Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, { getEnvironmentId: Effect.succeed(EnvironmentId.make("fork-auth-test")) })))("Clerk browser sessions", (it) => {
   it.effect("persist the verified environment user id on the issued session", () =>
     Effect.gen(function* () {
       const auth = yield* EnvironmentAuth.EnvironmentAuth;

@@ -522,6 +522,7 @@ const makeStubSessionStore = (input: {
   readonly changes: PubSub.PubSub<SessionStore.SessionCredentialChange>;
 }) =>
   SessionStore.SessionStore.of({
+    legacyCookieName: undefined,
     cookieName: "t3-session",
     issue: () => Effect.die("unused"),
     verify: () => Effect.die("unused"),

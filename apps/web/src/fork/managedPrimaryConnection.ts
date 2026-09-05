@@ -25,7 +25,7 @@ import * as Option from "effect/Option";
 import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
 import { runPrimaryHttp } from "../lib/runtime";
 import { isBkManagedPrimary } from "./managedEnvironment";
-import { readManagedPrimaryAccessToken } from "./managedPrimaryCredential";
+import { readManagedPrimaryCredential } from "./managedPrimaryCredential";
 
 /** `wsBaseUrl` plus the issued ticket, matching the remote/relay socket URL shape. */
 export function managedPrimarySocketUrl(wsBaseUrl: string, ticket: string): string {
@@ -46,9 +46,13 @@ async function issueManagedPrimaryWebSocketTicket(): Promise<string> {
   return issued.ticket;
 }
 
-export function makeManagedPrimaryDpopAuthorization(accessToken: string): PrimaryDpopAuthorization {
+export function makeManagedPrimaryDpopAuthorization(
+  accessToken: string,
+  expiresAtEpochMs: number,
+): PrimaryDpopAuthorization {
   return {
     accessToken,
+    expiresAtEpochMs,
     resolveSocketUrl: (input: { readonly wsBaseUrl: string }) =>
       Effect.tryPromise({
         try: issueManagedPrimaryWebSocketTicket,
@@ -68,11 +72,13 @@ export const readManagedPrimaryDpopAuthorization: Effect.Effect<
   if (!isBkManagedPrimary()) {
     return Effect.succeed(Option.none());
   }
-  return Effect.promise(readManagedPrimaryAccessToken).pipe(
-    Effect.map((accessToken) =>
-      accessToken === null
+  return Effect.promise(readManagedPrimaryCredential).pipe(
+    Effect.map((credential) =>
+      credential === null
         ? Option.none()
-        : Option.some(makeManagedPrimaryDpopAuthorization(accessToken)),
+        : Option.some(
+            makeManagedPrimaryDpopAuthorization(credential.accessToken, credential.expiresAtEpochMs),
+          ),
     ),
   );
 });

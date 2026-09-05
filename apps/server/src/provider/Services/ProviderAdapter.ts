@@ -37,6 +37,11 @@ export interface ProviderAdapterCapabilities {
   readonly activeTurnInput: "steer" | "queue";
   /** T3-CUSTOM(expbkt3): whether a persisted resume cursor is sufficient for guarded recovery. */
   readonly durableResume: "supported" | "unsupported";
+  /** Starts a resumed turn with no synthetic user prompt. Omitted means the
+      adapter needs an explicit continuation instruction. */
+  readonly promptlessTurnContinuation?: boolean;
+  /** False when native conversation history cannot be rewound. */
+  readonly supportsConversationRollback?: boolean;
 }
 
 export interface ProviderSessionExecutionOptions {
@@ -103,6 +108,11 @@ export interface ProviderAdapterShape<TError> {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  readonly compactThread?: (
+    threadId: ThreadId,
+    modelSelection?: ProviderSendTurnInput["modelSelection"],
+  ) => Effect.Effect<void, TError>;
 
   /**
    * Interrupt an active turn.

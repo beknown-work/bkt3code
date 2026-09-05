@@ -13,6 +13,7 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 // T3-CUSTOM(expbkt3): archive-time session history export.
 import { ArchiveExportReactor } from "../Services/ArchiveExportReactor.ts";
+import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
@@ -27,7 +28,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, catch-up summary, work summary, and thread deletion reactors", async () => {
+  it("starts every orchestration reactor", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -83,6 +84,15 @@ describe("OrchestrationReactor", () => {
               started.push("thread-deletion-reactor");
               return Effect.void;
             },
+            drainThrough: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ThreadSettlementReactor.ThreadSettlementReactor, {
+            start: () => {
+              started.push("thread-settlement-reactor");
+              return Effect.void;
+            },
             drain: Effect.void,
           }),
         ),
@@ -120,6 +130,7 @@ describe("OrchestrationReactor", () => {
       "work-summary-reactor",
       "thread-deletion-reactor",
       "archive-export-reactor",
+      "thread-settlement-reactor",
       "agent-awareness-relay",
     ]);
 

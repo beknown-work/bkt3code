@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { costSourceLabel, formatThreadCost, useThreadUsage } from "./useThreadUsage";
 
 type ThreadUsageSheetProps = StaticScreenProps<{
@@ -69,7 +69,7 @@ export function ThreadUsageSheet({ route }: ThreadUsageSheetProps) {
   const { environmentId, threadId } = route.params;
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const iconColor = String(useThemeColor("--color-icon"));
+  const iconColor = String(useUniwindTheme()["--color-icon"]);
   const { usage, isPending, refresh, label } = useThreadUsage(environmentId, threadId);
 
   return (

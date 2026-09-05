@@ -14,8 +14,8 @@ export interface NormalizedGitHubPullRequestRecord {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state: "open" | "closed" | "merged";
-  readonly updatedAt: Option.Option<DateTime.Utc>;
   readonly isDraft?: boolean;
+  readonly updatedAt: Option.Option<DateTime.Utc>;
   readonly mergeability?: "mergeable" | "conflicting" | "unknown";
   readonly mergeStateStatus?: string;
   readonly reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown";
@@ -33,9 +33,9 @@ const GitHubPullRequestSchema = Schema.Struct({
   baseRefName: TrimmedNonEmptyString,
   headRefName: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.Boolean),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
   updatedAt: Schema.optional(Schema.OptionFromNullOr(Schema.DateTimeUtcFromString)),
-  isDraft: Schema.optional(Schema.Boolean),
   mergeable: Schema.optional(Schema.NullOr(Schema.String)),
   mergeStateStatus: Schema.optional(Schema.NullOr(Schema.String)),
   reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
@@ -145,6 +145,7 @@ function normalizeGitHubPullRequestRecord(
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
     state: normalizeGitHubPullRequestState(raw),
+    ...(raw.isDraft === true ? { isDraft: true } : {}),
     updatedAt: raw.updatedAt ?? Option.none(),
     ...(typeof raw.isDraft === "boolean" ? { isDraft: raw.isDraft } : {}),
     ...(raw.mergeable !== undefined ? { mergeability: normalizeMergeability(raw.mergeable) } : {}),

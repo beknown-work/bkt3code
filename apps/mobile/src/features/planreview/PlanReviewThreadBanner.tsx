@@ -11,7 +11,7 @@ import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { planReviewEnvironment } from "../../state/planReview";
 import { useEnvironmentQuery } from "../../state/query";
@@ -23,7 +23,7 @@ export function PlanReviewThreadBanner(props: {
   readonly hasActionableProposedPlan: boolean;
 }) {
   const navigation = useNavigation();
-  const iconTint = String(useThemeColor("--color-icon"));
+  const iconTint = String(useUniwindTheme()["--color-icon"]);
   // Per-environment rather than the whole configs map: this banner sits on the
   // thread screen and should not re-render when an unrelated environment's
   // config changes.

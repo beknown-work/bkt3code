@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as MobileDatabase from "../persistence/mobile-database";
 // T3-CUSTOM(expbkt3): BEGIN — expose the existing file-backed mobile outbox through
 // the same cache-store contract used by web and desktop.
+import { decodeQueuedThreadMessage, encodeQueuedThreadMessage } from "../state/thread-outbox-model";
 import { expoThreadOutboxStorage } from "../state/thread-outbox-storage";
 // T3-CUSTOM(expbkt3): END
 
@@ -249,19 +250,20 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         try: () =>
           expoThreadOutboxStorage
             .load()
-            .then((messages) =>
-              messages.filter(
+            .then(({ messages, errors }) => {
+              if (errors.length > 0) throw new AggregateError(errors, "Could not load all queued messages.");
+              return messages.filter(
                 (message) =>
                   message.environmentId === environmentId &&
                   (message.identityKey ?? ANONYMOUS_OUTBOX_IDENTITY) === identityKey,
-              ),
-            ),
+              );
+            }),
         catch: (cause) => persistenceError("load-outbox", cause),
       }),
     ),
     saveOutbox: Effect.fn("MobileEnvironmentCache.saveOutbox")((message) =>
       Effect.tryPromise({
-        try: () => expoThreadOutboxStorage.write(message),
+        try: () => expoThreadOutboxStorage.write(decodeQueuedThreadMessage(encodeQueuedThreadMessage(message))),
         catch: (cause) => persistenceError("save-outbox", cause),
       }),
     ),

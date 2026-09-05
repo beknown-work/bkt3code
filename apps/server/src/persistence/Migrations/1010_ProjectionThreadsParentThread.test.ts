@@ -5,7 +5,8 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+// T3-CUSTOM(expbkt3): upstream moved the node SQLite client to shared.
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))(
   "1010_ProjectionThreadsParentThread",

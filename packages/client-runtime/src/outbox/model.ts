@@ -1,8 +1,10 @@
 // T3-CUSTOM(expbkt3): durable client outbox shared by web, desktop, and mobile.
 import { isTransportConnectionErrorMessage } from "../errors/transport.ts";
+import { clampFileAttachmentUploadBytes, fileAttachmentTooLargeMessage } from "../state/attachments.ts";
 import type { EnvironmentShellStatus } from "../state/shell.ts";
 import {
   CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
   IsoDateTime,
   MessageId,
@@ -23,10 +25,11 @@ import {
   type RuntimeMode as RuntimeModeType,
   type SourceControlProfileId as SourceControlProfileIdType,
   type ThreadId as ThreadIdType,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-const THREAD_OUTBOX_SCHEMA_VERSION = 6;
+const THREAD_OUTBOX_SCHEMA_VERSION = 7;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 export const ANONYMOUS_OUTBOX_IDENTITY = "anonymous";
 
@@ -70,18 +73,44 @@ export const QueuedThreadImageAttachmentSchema = Schema.Struct({
   // for queue entries written by older clients.
   previewUri: Schema.optional(Schema.String),
   dataUrl: Schema.optional(Schema.String),
+  fileUri: Schema.optional(Schema.String),
+  uploadedAttachmentId: Schema.optional(Schema.String),
+  uploadEnvironmentId: Schema.optional(EnvironmentId),
   // T3-CUSTOM(expbkt3): END
 });
 
+export const QueuedThreadFileAttachmentSchema = Schema.Struct({
+  id: Schema.String,
+  type: Schema.Literal("file"),
+  name: Schema.String,
+  mimeType: Schema.String,
+  sizeBytes: Schema.Number,
+  fileUri: Schema.optional(Schema.String),
+  uploadedAttachmentId: Schema.optional(Schema.String),
+  uploadEnvironmentId: Schema.optional(EnvironmentId),
+});
+
+// T3-CUSTOM(expbkt3): retain newer uploaded attachment types across durable replay.
+export const QueuedThreadUnknownAttachmentSchema = Schema.Struct({
+  ...QueuedThreadImageAttachmentSchema.fields,
+  type: Schema.String.check(Schema.isPattern(/^(?!(?:image|file)$)/)),
+});
+
+export const QueuedThreadAttachmentSchema = Schema.Union([
+  QueuedThreadImageAttachmentSchema,
+  QueuedThreadFileAttachmentSchema,
+  QueuedThreadUnknownAttachmentSchema,
+]);
+
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, 3, 4, 5, 6, THREAD_OUTBOX_SCHEMA_VERSION]),
   environmentId: EnvironmentId,
   identityKey: Schema.optional(Schema.String),
   threadId: ThreadId,
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
-  attachments: Schema.Array(QueuedThreadImageAttachmentSchema),
+  attachments: Schema.Array(QueuedThreadAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
@@ -119,7 +148,16 @@ export interface QueuedThreadImageAttachment {
   readonly sizeBytes: number;
   readonly dataUrl?: string | undefined;
   readonly previewUri?: string | undefined;
+  readonly fileUri?: string | undefined;
+  readonly uploadedAttachmentId?: string | undefined;
+  readonly uploadEnvironmentId?: EnvironmentIdType | undefined;
 }
+
+export type QueuedThreadFileAttachment = typeof QueuedThreadFileAttachmentSchema.Type;
+export type QueuedThreadAttachment =
+  | QueuedThreadImageAttachment
+  | QueuedThreadFileAttachment
+  | typeof QueuedThreadUnknownAttachmentSchema.Type;
 
 export interface QueuedThreadMessage {
   readonly environmentId: EnvironmentIdType;
@@ -129,7 +167,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageIdType;
   readonly commandId: CommandId;
   readonly text: string;
-  readonly attachments: ReadonlyArray<QueuedThreadImageAttachment>;
+  readonly attachments: ReadonlyArray<QueuedThreadAttachment>;
   readonly modelSelection?: ModelSelectionType | undefined;
   readonly runtimeMode?: RuntimeModeType | undefined;
   readonly interactionMode?: ProviderInteractionModeType | undefined;
@@ -151,11 +189,16 @@ export interface ThreadSettingsSnapshot {
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
 ): ThreadSettingsSnapshot {
+  const modelSelection = message.modelSelection ?? thread.modelSelection;
+  const provider = providers.find((candidate) => candidate.instanceId === modelSelection.instanceId);
   return {
-    modelSelection: message.modelSelection ?? thread.modelSelection,
+    modelSelection,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: message.interactionMode ?? thread.interactionMode,
+    interactionMode: provider?.showInteractionModeToggle === false
+      ? DEFAULT_PROVIDER_INTERACTION_MODE
+      : message.interactionMode ?? thread.interactionMode,
   };
 }
 
@@ -186,11 +229,11 @@ export function outboxIdentityNamespace(
 }
 
 /** A user-requested retry is distinct from transport replay of the same command. */
-export function retryQueuedThreadMessage(
-  message: QueuedThreadMessage,
+export function retryQueuedThreadMessage<Message extends QueuedThreadMessage>(
+  message: Message,
   commandId: CommandId,
-): QueuedThreadMessage {
-  const { failureDetail: _failureDetail, ...pending } = message;
+): Omit<Message, "deliveryState" | "failureDetail"> & { readonly deliveryState: "pending" } {
+  const { failureDetail: _failureDetail, deliveryState: _deliveryState, ...pending } = message;
   return { ...pending, commandId, deliveryState: "pending" };
 }
 
@@ -201,13 +244,13 @@ export function scopedOutboxThreadKey(
   return `${environmentId}:${threadId}`;
 }
 
-export function groupQueuedThreadMessages(
-  messages: ReadonlyArray<QueuedThreadMessage>,
-): Record<string, ReadonlyArray<QueuedThreadMessage>> {
-  const deduplicated = new Map<MessageIdType, QueuedThreadMessage>();
+export function groupQueuedThreadMessages<Message extends QueuedThreadMessage>(
+  messages: ReadonlyArray<Message>,
+): Record<string, ReadonlyArray<Message>> {
+  const deduplicated = new Map<MessageIdType, Message>();
   for (const message of messages) deduplicated.set(message.messageId, message);
 
-  const grouped: Record<string, Array<QueuedThreadMessage>> = {};
+  const grouped: Record<string, Array<Message>> = {};
   for (const message of deduplicated.values()) {
     const threadKey = scopedOutboxThreadKey(message.environmentId, message.threadId);
     (grouped[threadKey] ??= []).push(message);
@@ -218,9 +261,9 @@ export function groupQueuedThreadMessages(
   return grouped;
 }
 
-export function flattenQueuedThreadMessages(
-  queues: Record<string, ReadonlyArray<QueuedThreadMessage>>,
-): ReadonlyArray<QueuedThreadMessage> {
+export function flattenQueuedThreadMessages<Message extends QueuedThreadMessage>(
+  queues: Record<string, ReadonlyArray<Message>>,
+): ReadonlyArray<Message> {
   return Object.values(queues).flat();
 }
 
@@ -246,6 +289,46 @@ export function resolveThreadOutboxDeliveryAction(input: {
   // T3-CUSTOM(expbkt3): relocated from apps/mobile thread-outbox-model.ts; follows
   // upstream #6543 (steer active turns by default) — `threadBusy` no longer gates sends.
   return input.environmentConnected ? "send" : "wait";
+}
+
+export type ThreadOutboxDispatchStep =
+  | { readonly step: "wait" }
+  | { readonly step: "remove" }
+  | { readonly step: "retry" }
+  | { readonly step: "restore"; readonly reason: string }
+  | { readonly step: "send" };
+
+/**
+ * Wait for provider and file capabilities before sending. Cleanup does not
+ * need config: a creation whose thread exists, or a message whose thread is
+ * gone, can still be removed while config loads.
+ */
+export function resolveThreadOutboxDispatchStep(input: {
+  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
+  /** Null while the environment's server config has not synced yet. */
+  readonly serverConfig: { readonly maxFileUploadBytes: number | undefined } | null;
+}): ThreadOutboxDispatchStep {
+  if (input.deliveryAction !== "send") {
+    return { step: input.deliveryAction };
+  }
+  if (input.serverConfig === null) {
+    return { step: "retry" };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
+  }
+  const maxBytes = input.serverConfig.maxFileUploadBytes;
+  if (maxBytes === undefined) {
+    return { step: "restore", reason: "This server does not support file attachments." };
+  }
+  const effectiveMaxBytes = clampFileAttachmentUploadBytes(maxBytes);
+  const oversized = input.fileAttachments.find(
+    (attachment) => attachment.sizeBytes > effectiveMaxBytes,
+  );
+  return oversized
+    ? { step: "restore", reason: fileAttachmentTooLargeMessage(oversized.name, effectiveMaxBytes) }
+    : { step: "send" };
 }
 
 export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): boolean {

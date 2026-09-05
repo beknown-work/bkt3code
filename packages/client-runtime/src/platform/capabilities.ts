@@ -21,9 +21,15 @@ export interface ProvisionedSshEnvironment extends PreparedSshEnvironment {
   readonly label: string;
 }
 
+/** Stable for one signed-in session, including same-account token refreshes. */
+export interface CloudSessionIdentity {
+  readonly accountId: string;
+}
+
 export class CloudSession extends Context.Service<
   CloudSession,
   {
+    readonly identity: Effect.Effect<Option.Option<CloudSessionIdentity>>;
     readonly clerkToken: Effect.Effect<string, ConnectionAttemptError>;
   }
 >()("@t3tools/client-runtime/platform/capabilities/CloudSession") {}
@@ -68,6 +74,7 @@ export class EnvironmentIdentity extends Context.Service<
 // key; the runtime never sees the key itself.
 export interface PrimaryDpopAuthorization {
   readonly accessToken: string;
+  readonly expiresAtEpochMs: number;
   /**
    * Issues the websocket ticket and returns the socket URL. Supplied by the
    * client rather than resolved here, so the connection resolver keeps its

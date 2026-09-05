@@ -70,6 +70,9 @@ export const ProviderSendTurnInput = Schema.Struct({
   // T3-CUSTOM(expbkt3): BEGIN — stable durable dispatch/adoption correlation.
   clientExecutionId: Schema.optional(TrimmedNonEmptyString),
   // T3-CUSTOM(expbkt3): END
+  /** Internal recovery signal. Allows an empty turn only for adapters that
+      explicitly support promptless continuation. */
+  continuation: Schema.optional(Schema.Boolean),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),

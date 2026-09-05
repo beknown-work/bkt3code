@@ -118,13 +118,16 @@ function hydrate(): void {
 }
 
 /**
- * The access token to present to the managed primary environment, or null.
+ * The credential to present to the managed primary environment, or null.
+ * Includes its validated expiry so shared HTTP authorization can reject stale tokens.
  *
  * Async because validity now depends on the device key: a token whose thumbprint
  * no longer matches this device is dead weight, and presenting it would just
  * produce a 401 loop instead of the pairing gate.
  */
-export async function readManagedPrimaryAccessToken(): Promise<string | null> {
+export async function readManagedPrimaryCredential(): Promise<
+  Pick<StoredManagedPrimaryCredential, "accessToken" | "expiresAtEpochMs"> | null
+> {
   hydrate();
   const managed = readBkManagedEnvironment();
   if (managed === null) {
@@ -136,7 +139,14 @@ export async function readManagedPrimaryAccessToken(): Promise<string | null> {
   ) {
     return null;
   }
-  return cachedCredential?.accessToken ?? null;
+  return cachedCredential === null
+    ? null
+    : { accessToken: cachedCredential.accessToken, expiresAtEpochMs: cachedCredential.expiresAtEpochMs };
+}
+
+/** The validated token for callers that do not need the refresh deadline. */
+export async function readManagedPrimaryAccessToken(): Promise<string | null> {
+  return (await readManagedPrimaryCredential())?.accessToken ?? null;
 }
 
 /** Records the token a pairing exchange produced. */

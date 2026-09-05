@@ -28,6 +28,12 @@ const CLAUDE_RATE_LIMIT_WINDOWS = {
     windowDurationMinutes: 10_080,
     category: "weekly",
   },
+  seven_day_overage_included: {
+    windowId: "claude:overage-included",
+    label: "Weekly · included overage",
+    windowDurationMinutes: 10_080,
+    category: "model",
+  },
   seven_day_opus: {
     windowId: "claude:opus",
     label: "Opus",

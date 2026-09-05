@@ -28,6 +28,7 @@ import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfigura
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopAppActivation from "../app/DesktopAppActivation.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopClerk from "../app/DesktopClerk.ts";
@@ -138,6 +139,13 @@ export const bootstrapBkManagedDesktop = (dependencies: BkManagedDesktopDependen
 
     if (!(yield* Ref.get(state.quitting))) {
       yield* desktopWindow.handleBackendReady(renderer.backendOrigin);
+      // T3-CUSTOM(expbkt3): upstream starts activation in its bootstrap, which this
+      // managed path replaces. Its socket belongs to the app, not a backend.
+      const appActivation = yield* DesktopAppActivation.DesktopAppActivation;
+      yield* appActivation.start.pipe(
+        Effect.tap(() => logInfo("desktop app control socket ready")),
+        Effect.catch((error) => logWarning("desktop app control socket unavailable", { error })),
+      );
     }
 
     // After the window: a slow or failed local backend must never delay or

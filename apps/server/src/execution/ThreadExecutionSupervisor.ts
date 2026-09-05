@@ -44,6 +44,7 @@ export interface ThreadExecutionSupervisorShape {
   readonly releaseTurnAdmission: (
     threadId: ThreadId,
     executionId: string,
+    handledCommandSequence?: number,
   ) => Effect.Effect<ThreadExecutionSnapshot, SqlError>;
   readonly canContinueExecution: (
     threadId: ThreadId,

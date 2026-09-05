@@ -43,6 +43,7 @@ function rateLimitEvent(input: {
     threadId: input.threadId,
     createdAt: "2026-08-20T13:15:49.000Z",
     payload: {
+      limits: { windows: [] },
       rateLimits: {
         mode: "merge",
         availability: "available",

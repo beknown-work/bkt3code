@@ -128,7 +128,21 @@ export const makeProviderRateLimits = Effect.fn("ProviderRateLimits.make")(funct
       return;
     }
     const instanceKey = String(event.providerInstanceId);
-    const update = event.payload.rateLimits;
+    const update: ProviderRateLimitUpdate = event.payload.rateLimits ?? {
+      mode: "merge",
+      availability: "available",
+      observedAt: DateTime.makeUnsafe(event.createdAt),
+      windows: event.payload.limits.windows.map((window) => ({
+        windowId: window.id,
+        label: window.label,
+        usedPercent: window.usedPercent,
+        resetsAt: window.resetsAt === undefined ? null : DateTime.makeUnsafe(window.resetsAt),
+        ...(window.windowDurationMins === undefined
+          ? {}
+          : { windowDurationMinutes: window.windowDurationMins }),
+        category: window.kind === "session" ? "rolling" : window.kind === "weekly" ? "weekly" : "other",
+      })),
+    };
     const changed = yield* Ref.modify(state, (current) => {
       const existing = current.entries.get(instanceKey);
       if (

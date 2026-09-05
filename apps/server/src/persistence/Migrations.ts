@@ -1,15 +1,16 @@
 /**
- * MigrationsLive - Migration runner with inline loader
+ * Migration runner with an inline loader.
  *
  * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
- * Migrations run automatically when the MigrationLayer is provided,
- * ensuring the database schema is always up-to-date before the application starts.
+ * `runMigrations` is called by the SQLite persistence layer at startup, so the
+ * schema is always up to date before the application starts.
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
+// T3-CUSTOM(expbkt3): compatibility for fork service test layers.
 import * as Layer from "effect/Layer";
 
 // Import all migrations statically
@@ -117,6 +118,11 @@ import Migration1018 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
 import Migration1019 from "./Migrations/041_AuthSessionClientConnection.ts";
 import Migration1020 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts";
 import Migration1021 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
+// T3-CUSTOM(expbkt3): new upstream migrations must follow the highest applied fork ID.
+import Migration1025 from "./Migrations/044_ClearAutomaticProjectModelDefaults.ts";
+import Migration1026 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
+import Migration1027 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
+import Migration1028 from "./Migrations/047_ProjectionProjectIcon.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -233,6 +239,11 @@ const migrationEntries = [
   [1023, "ProjectionThreadsMattermostLink", Migration1023],
   // T3-CUSTOM(expbkt3): cross-environment session lineage.
   [1024, "ProjectionThreadsParentEnvironment", Migration1024],
+  // T3-CUSTOM(expbkt3): upstream 44–47 remapped above the shipped 1024 migration.
+  [1025, "ClearAutomaticProjectModelDefaults", Migration1025],
+  [1026, "ProjectionProjectsAutoPull", Migration1026],
+  [1027, "RepairAutomaticSettlementTimestamps", Migration1027],
+  [1028, "ProjectionProjectIcon", Migration1028],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -277,21 +288,5 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   return executedMigrations;
 });
 
-/**
- * Layer that runs migrations when the layer is built.
- *
- * Use this to ensure migrations run before your application starts.
- * Migrations are run automatically - no separate script is needed.
- *
- * @example
- * ```typescript
- * import { MigrationsLive } from "@acme/db/Migrations"
- * import * as SqliteClient from "@acme/db/SqliteClient"
- *
- * // Migrations run automatically when SqliteClient is provided
- * const AppLayer = MigrationsLive.pipe(
- *   Layer.provideMerge(SqliteClient.layer({ filename: "database.sqlite" }))
- * )
- * ```
- */
+// T3-CUSTOM(expbkt3): fork layers still compose migration startup explicitly.
 export const MigrationsLive = Layer.effectDiscard(runMigrations());

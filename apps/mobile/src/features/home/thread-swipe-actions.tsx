@@ -388,34 +388,45 @@ function SwipeActionButton(props: {
   readonly stretchesOnFullSwipe: boolean;
   readonly translation: SharedValue<number>;
 }) {
+  const {
+    actionsWidth,
+    entryRange: [entryRangeStart, entryRangeEnd],
+    fullSwipeThreshold,
+    stretchesOnFullSwipe,
+    translation,
+  } = props;
   const circleSize = props.compact ? COMPACT_ACTION_CIRCLE_SIZE : ACTION_CIRCLE_SIZE;
   const iconSize = props.compact ? COMPACT_ACTION_ICON_SIZE : ACTION_ICON_SIZE;
   const actionStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(-props.translation.value, 0);
-    const entryProgress = interpolate(reveal, props.entryRange, [0, 1], Extrapolation.CLAMP);
-    const stretch = Math.max(reveal - props.actionsWidth, 0);
+    const reveal = Math.max(-translation.value, 0);
+    const entryProgress = interpolate(
+      reveal,
+      [entryRangeStart, entryRangeEnd],
+      [0, 1],
+      Extrapolation.CLAMP,
+    );
+    const stretch = Math.max(reveal - actionsWidth, 0);
     const fullSwipeProgress = interpolate(
       reveal,
-      [props.actionsWidth, props.fullSwipeThreshold + 20],
+      [actionsWidth, fullSwipeThreshold + 20],
       [0, 1],
       Extrapolation.CLAMP,
     );
 
     return {
-      opacity: props.stretchesOnFullSwipe ? entryProgress : entryProgress * (1 - fullSwipeProgress),
+      opacity: stretchesOnFullSwipe ? entryProgress : entryProgress * (1 - fullSwipeProgress),
       transform: [
         {
           translateX:
-            interpolate(entryProgress, [0, 1], [22, 0]) -
-            (props.stretchesOnFullSwipe ? 0 : stretch),
+            interpolate(entryProgress, [0, 1], [22, 0]) - (stretchesOnFullSwipe ? 0 : stretch),
         },
         { scale: interpolate(entryProgress, [0, 1], [0.78, 1]) },
       ],
     };
   });
   const circleStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(-props.translation.value, 0);
-    const stretch = props.stretchesOnFullSwipe ? Math.max(reveal - props.actionsWidth, 0) : 0;
+    const reveal = Math.max(-translation.value, 0);
+    const stretch = stretchesOnFullSwipe ? Math.max(reveal - actionsWidth, 0) : 0;
 
     return {
       transform: [{ translateX: -stretch }],
@@ -423,11 +434,11 @@ function SwipeActionButton(props: {
     };
   });
   const iconStyle = useAnimatedStyle(() => {
-    const reveal = Math.max(-props.translation.value, 0);
-    const stretch = props.stretchesOnFullSwipe ? Math.max(reveal - props.actionsWidth, 0) : 0;
+    const reveal = Math.max(-translation.value, 0);
+    const stretch = stretchesOnFullSwipe ? Math.max(reveal - actionsWidth, 0) : 0;
     const armedProgress = interpolate(
       reveal,
-      [props.fullSwipeThreshold, props.fullSwipeThreshold + 20],
+      [fullSwipeThreshold, fullSwipeThreshold + 20],
       [0, 1],
       Extrapolation.CLAMP,
     );
@@ -437,16 +448,16 @@ function SwipeActionButton(props: {
     };
   });
   const labelStyle = useAnimatedStyle(() => {
-    if (!props.stretchesOnFullSwipe) {
+    if (!stretchesOnFullSwipe) {
       return { opacity: 1 };
     }
 
-    const reveal = Math.max(-props.translation.value, 0);
-    const stretch = Math.max(reveal - props.actionsWidth, 0);
+    const reveal = Math.max(-translation.value, 0);
+    const stretch = Math.max(reveal - actionsWidth, 0);
     return {
       opacity: interpolate(
         reveal,
-        [props.fullSwipeThreshold - 24, props.fullSwipeThreshold],
+        [fullSwipeThreshold - 24, fullSwipeThreshold],
         [1, 0],
         Extrapolation.CLAMP,
       ),
@@ -552,19 +563,19 @@ export function ThreadSwipeActions(props: {
   readonly tertiaryAction?: ThreadSwipeAction | null;
   readonly translation: SharedValue<number>;
 }) {
-  const secondaryAction = props.secondaryAction;
+  const { fullSwipeThreshold, onFullSwipeArmedChange, secondaryAction, translation } = props;
   // T3-CUSTOM(expbkt3): third slot.
   const tertiaryAction = props.tertiaryAction ?? null;
   const fullSwipeIsPrimary = props.fullSwipeAction === "primary" || secondaryAction === null;
   const actionsWidth = swipeActionsWidth(secondaryAction !== null, tertiaryAction !== null);
   useAnimatedReaction(
-    () => -props.translation.value >= props.fullSwipeThreshold,
+    () => -translation.value >= fullSwipeThreshold,
     (armed, previous) => {
       if (armed !== previous) {
-        runOnJS(props.onFullSwipeArmedChange)(armed);
+        runOnJS(onFullSwipeArmedChange)(armed);
       }
     },
-    [props.fullSwipeThreshold, props.onFullSwipeArmedChange],
+    [fullSwipeThreshold, onFullSwipeArmedChange, translation],
   );
 
   return (

@@ -31,6 +31,7 @@ import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
+import { ThreadDeletionReactor } from "../orchestration/Services/ThreadDeletionReactor.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import {
   type ProjectionThreadBootstrap,
@@ -121,6 +122,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const defaultsResolver = yield* ThreadCreationDefaultsResolver;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const threadDeletionReactor = yield* ThreadDeletionReactor;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const terminalManager = yield* TerminalManager.TerminalManager;
@@ -134,6 +136,9 @@ const make = Effect.gen(function* () {
 
   const dispatch = (command: OrchestrationCommand, actorUserId: UserId | null = null) =>
     engine.dispatch(command, { actorUserId }).pipe(
+      // A reused thread id cannot own setup terminals before prior deletion cleanup.
+      Effect.tap(({ sequence }) => command.type === "thread.create"
+        ? threadDeletionReactor.drainThrough(sequence) : Effect.void),
       Effect.mapError(
         (cause) =>
           new ThreadBootstrapCoordinatorError({

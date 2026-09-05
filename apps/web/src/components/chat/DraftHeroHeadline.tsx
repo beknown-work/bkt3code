@@ -1,13 +1,15 @@
 // T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker imports.
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
+import type { DraftId } from "~/composerDraftStore";
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 // T3-CUSTOM(expbkt3): END
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
-import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
+import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
 import { selectProjectGroupingSettings } from "~/logicalProject";
 // T3-CUSTOM(expbkt3): BEGIN — environment-qualified project picker dependencies.
 import {
@@ -39,6 +41,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface DraftHeroHeadlineProps {
+  readonly draftId: DraftId | null;
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
 }
@@ -55,6 +58,7 @@ interface ProjectPickerItem {
 
 // T3-CUSTOM(expbkt3): END
 export function DraftHeroHeadline({
+  draftId,
   activeProjectRef,
   activeProjectTitle,
 }: DraftHeroHeadlineProps) {
@@ -64,7 +68,11 @@ export function DraftHeroHeadline({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
-  const handleNewThread = useNewThreadHandler();
+  const setLogicalProjectDraftThreadId = useComposerDraftStore(
+    (store) => store.setLogicalProjectDraftThreadId,
+  );
+  const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
+  const setModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
 
   const environmentLabelById = useMemo(
@@ -198,24 +206,33 @@ export function DraftHeroHeadline({
             // letting the group choose its representative.
             const selected = pickerItems.find((item) => item.value === value);
             const explicit = selected?.project ?? null;
-            if (explicit) {
-              void handleNewThread(scopeProjectRef(explicit.environmentId, explicit.id), {
-                replace: true,
-              });
-              return;
-            }
-            const entry = projectEntryByKey.get(value as string);
+            const entry = explicit
+              ? projectPickerEntries.find((candidate) =>
+                  candidate.group.memberProjects.some((member) =>
+                    member.id === explicit.id && member.environmentId === explicit.environmentId,
+                  ),
+                )
+              : projectEntryByKey.get(value as string);
             if (!entry) {
               return;
             }
-            const project = entry.targetProject;
-            // Changing the repo of a draft moves the typed content along:
-            // the user started writing in the wrong project, not a new task.
-            void handleNewThread(scopeProjectRef(project.environmentId, project.id), {
-              replace: true,
-              carryComposerContent: true,
-            });
-            // T3-CUSTOM(expbkt3): END
+            const project = explicit ?? entry.targetProject;
+            if (!draftId) {
+              return;
+            }
+            // Project selection changes the target of the open draft in
+            // place. The prompt stays in the same composer session, so the
+            // sidebar only gets a draft row if the user later navigates away.
+            const currentDraft = getComposerDraft(draftId);
+            setLogicalProjectDraftThreadId(
+              entry.group.projectKey,
+              scopeProjectRef(project.environmentId, project.id),
+              draftId,
+            );
+            if (!hasExplicitComposerModelSelection(currentDraft)) {
+              // T3-CUSTOM(expbkt3): clear old seeds so the target project/environment defaults win.
+              setModelSelection(draftId, null, { replaceOptions: true });
+            }
           }}
         >
           {/* T3-CUSTOM(expbkt3): BEGIN — render per-environment project rows. */}
