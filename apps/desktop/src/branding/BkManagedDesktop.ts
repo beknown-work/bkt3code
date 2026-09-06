@@ -18,12 +18,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
-import * as NetService from "@t3tools/shared/Net";
-
-// Type-only: erased at runtime, so this does not create an import cycle with
-// the DesktopApp module that calls into this bootstrap.
-import type { DesktopBackendPortUnavailableError } from "../app/DesktopApp.ts";
-
 import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
@@ -40,23 +34,13 @@ import {
   readBkManagedEnvironment,
   resolveBkClientRendererSource,
 } from "./BkManagedEnvironment.ts";
+import { resolveBkBundledBackendPort } from "./BkBundledBackendRuntime.ts";
 
 const { logInfo, logWarning } = DesktopObservability.makeComponentLogger("bk-managed-bootstrap");
 
 /** The bundled backend's pool id, branded for the pool registry. */
 export const BK_BUNDLED_BACKEND_INSTANCE_ID: DesktopBackendPool.BackendInstanceId =
   DesktopBackendPool.BackendInstanceId(BK_BUNDLED_BACKEND_ID);
-
-/** The one thing the upstream bootstrap owns that this module needs. */
-export interface BkManagedDesktopDependencies {
-  readonly resolveBackendPort: (
-    configuredPort: Option.Option<number>,
-  ) => Effect.Effect<
-    { readonly port: number; readonly selectedByScan: boolean },
-    DesktopBackendPortUnavailableError,
-    NetService.NetService
-  >;
-}
 
 /**
  * Bring up the bundled local backend as a secondary pool instance.
@@ -66,7 +50,7 @@ export interface BkManagedDesktopDependencies {
  * install). The renderer shows the instance through the desktop bootstrap
  * topology once it reports a config, exactly like a WSL secondary.
  */
-const startBkBundledBackend = (dependencies: BkManagedDesktopDependencies) =>
+const startBkBundledBackend = (channel: "staging" | "production") =>
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     if (environment.isDevelopment && Option.isNone(environment.configuredBackendPort)) {
@@ -78,7 +62,10 @@ const startBkBundledBackend = (dependencies: BkManagedDesktopDependencies) =>
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const state = yield* DesktopState.DesktopState;
 
-    const selection = yield* dependencies.resolveBackendPort(environment.configuredBackendPort);
+    const selection = yield* resolveBkBundledBackendPort({
+      channel,
+      configuredPort: environment.configuredBackendPort,
+    });
     // resolvePrimary reads its port, bind host and exposure mode from
     // DesktopServerExposure, so configure it before the first start cycle.
     yield* serverExposure.configureFromSettings({ port: selection.port });
@@ -105,7 +92,7 @@ const startBkBundledBackend = (dependencies: BkManagedDesktopDependencies) =>
   );
 
 /** Returns true when this managed bootstrap handled desktop startup. */
-export const bootstrapBkManagedDesktop = (dependencies: BkManagedDesktopDependencies) =>
+export const bootstrapBkManagedDesktop = () =>
   Effect.gen(function* () {
     const managedEnvironment = readBkManagedEnvironment();
     if (managedEnvironment === null) return false;
@@ -150,6 +137,6 @@ export const bootstrapBkManagedDesktop = (dependencies: BkManagedDesktopDependen
 
     // After the window: a slow or failed local backend must never delay or
     // block the managed client, so it comes up on a forked fiber.
-    yield* Effect.forkScoped(startBkBundledBackend(dependencies));
+    yield* Effect.forkScoped(startBkBundledBackend(managedEnvironment.channel));
     return true;
   }).pipe(Effect.withSpan("desktop.bootstrap.bkManaged"));

@@ -12,7 +12,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 // T3-CUSTOM(expbkt3): BEGIN - fork desktop brand baked in at build time.
-import { resolveRuntimeBrand } from "../branding/BkBrand.ts";
+import { resolveRuntimeBrand, type BkRuntimeBrand } from "../branding/BkBrand.ts";
+import { resolveBkDesktopBaseDir } from "../branding/BkDesktopState.ts";
 // T3-CUSTOM(expbkt3): END
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -29,6 +30,9 @@ export interface MakeDesktopEnvironmentInput {
   readonly isPackaged: boolean;
   readonly resourcesPath: string;
   readonly runningUnderArm64Translation: boolean;
+  // T3-CUSTOM(expbkt3): test hook for exercising each baked fork brand without
+  // depending on a Vite build-time define.
+  readonly runtimeBrand?: BkRuntimeBrand;
 }
 
 export class DesktopEnvironment extends Context.Service<
@@ -174,11 +178,25 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const baseDir = resolveDesktopBaseDir({
+  // T3-CUSTOM(expbkt3): BEGIN - staging owns a full desktop-state root,
+  // including the backend database, settings, logs, and activation socket.
+  // Production keeps its existing default and both channels preserve explicit
+  // homes and development behavior.
+  const defaultBaseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
   });
+  const runtimeBrand = input.runtimeBrand ?? resolveRuntimeBrand();
+  const baseDir = resolveBkDesktopBaseDir({
+    appDataDirectory,
+    defaultBaseDir,
+    isDevelopment,
+    joinPath: path.join,
+    runtimeBrand,
+    configuredT3Home: config.t3Home,
+  });
+  // T3-CUSTOM(expbkt3): END
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const serverRoot =
@@ -201,7 +219,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
   // DesktopAppIdentity.ts prefers the legacy directory when it exists, so leaving
   // upstream's "T3 Code (Alpha)" here would make a fork build adopt an installed
   // upstream app's state instead of starting clean beside it.
-  const runtimeBrand = resolveRuntimeBrand();
   const userDataDirName = runtimeBrand
     ? runtimeBrand.userDataDirName
     : isDevelopment

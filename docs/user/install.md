@@ -39,6 +39,18 @@ there. Install Node.js and provider CLIs inside that distro. T3 Code installs it
 matching server runtime there automatically; the first launch after an app
 update can take longer.
 
+### BK desktop channels
+
+**BK T3 Code** and **Stage BK T3 Code** can run on the same computer. Their
+bundled local environments use separate default port ranges and separate state:
+production starts at port 3773 and retains its existing local data; staging
+starts at port 4773 and stores new local data with the staging app. If a default
+port is busy, the app chooses the next available port in its range.
+
+`T3CODE_PORT` sets a specific bundled-backend port and `T3CODE_HOME` sets a
+specific state directory. Those overrides apply exactly as supplied, so use
+different values for the two apps when running both.
+
 ### Open a project from a terminal
 
 With the desktop app already running on the same machine:

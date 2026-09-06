@@ -23,16 +23,23 @@ connect their **primary** environment to the managed HTTPS server selected by
 the release branch — that is where identity, the member roster and thread
 tagging live. Each build also carries the **bundled T3 backend**: Electron
 starts it on launch as a _secondary_ local environment (pool id `bk-local`,
-the same rails a WSL backend rides), listening loopback-only on the first free
-port from 3773. Local projects and threads run on this machine — including
+the same rails a WSL backend rides). Production scans ports 3773–3872 and keeps
+its existing `~/.t3` state for compatibility; staging scans 4773–4872 and stores
+its bundled backend state below its own Application Support directory. Local
+projects and threads run on this machine — including
 fully offline: with the central server unreachable, a previously paired app
 still opens and the local environment keeps working while the primary
 reconnects in the background (`apps/web/src/fork/managedOfflineGate.ts`).
 
+`T3CODE_PORT` and `T3CODE_HOME` remain explicit overrides for either channel.
+They bypass the channel defaults, so an operator running both apps must choose
+distinct override values. No data is copied or migrated automatically: production
+continues using its existing data and staging begins with its own state.
+
 The bundled backend is single-user and keyless — no Clerk configuration ever
 reaches it, so it advertises no team capability and member surfaces stay
-hidden on local threads by design. Its state lives inside the app's own
-user-data directory. The Connections settings intentionally do not show the
+hidden on local threads by design. Its state follows the channel rules above.
+The Connections settings intentionally do not show the
 local-backend admin rows (network exposure, WSL, pairing-link management):
 those manage a _primary_ local backend, which a managed build does not have.
 
