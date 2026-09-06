@@ -117,11 +117,12 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Experimental deployment          | `.github/workflows/deploy-expbkt3.yml`, `deploy/expbkt3/`                                                                                                                                                                                          | none                                                                                                                                                                                                                                                                                                                                      |
 | BK mobile distribution           | `apps/mobile/app.config.bk.ts`, `apps/mobile/plugins/withBkAndroidReleaseSigning.cjs`, `apps/mobile/src/lib/bkBuildIdentity.ts`, `scripts/build-bk-mobile.ts`, `scripts/generate-bk-mobile-source.ts`, `.github/workflows/mobile-bk-release.yml`   | two lines in `app.config.ts` (import + export), one linking prefix in `App.tsx`, one version call in `authClientMetadata.ts`                                                                                                                                                                                                              |
 
-Agent views currently have an enforced runtime-off gate in
-`apps/web/src/fork/agentUiRuntime.ts`. Framed collaboration apps can decline to
-join the URL-selected room and render unrelated origin-local state instead, so
-the persisted client preference cannot enable the surface until the generic URL
-contract can render truthfully.
+Agent views are scoped by `apps/web/src/fork/agentUiRuntime.ts`. Framed
+collaboration apps can decline to join the URL-selected room and render
+unrelated origin-local state instead, so `url` renders stay blocked until the
+generic URL contract can render truthfully. Agent-authored `html` renders are
+unaffected — the document is what the agent produced and mounts from `srcDoc` in
+an opaque-origin sandbox — and follow the client setting alone.
 
 Generated files such as `apps/web/src/routeTree.gen.ts` do not receive hand-written
 markers; they are regenerated from marked route sources.
