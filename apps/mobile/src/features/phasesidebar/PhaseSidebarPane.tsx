@@ -29,7 +29,7 @@ import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settl
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { useCallback, useMemo, useState, type ComponentProps } from "react";
-import { Alert, FlatList, Pressable, View } from "react-native";
+import { Alert, FlatList, Platform, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
@@ -361,7 +361,10 @@ export function PhaseSidebarPane(props: {
     () => (
       <View>
         <View className="px-4 pb-1 pt-2">
-          <PhaseSidebarCounters rows={rows} />
+          <View className="flex-row items-start justify-between gap-3">
+            <PhaseSidebarCounters rows={rows} />
+            {Platform.OS === "ios" ? <PhaseSidebarRateLimits /> : null}
+          </View>
           <View className="mt-2 flex-row items-center justify-end gap-2">
             <HeaderButton
               active={sheet?.kind === "group"}
@@ -383,7 +386,7 @@ export function PhaseSidebarPane(props: {
             />
           </View>
         </View>
-        <PhaseSidebarRateLimits />
+        {Platform.OS === "ios" ? null : <PhaseSidebarRateLimits />}
       </View>
     ),
     [filters, grouping.groupBy, rows, sheet?.kind],
