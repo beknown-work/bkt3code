@@ -39,7 +39,10 @@ export interface ProjectThreadStartTurnSpec {
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** The effective origin setting, including an inherited display default. */
   readonly startFromOrigin: boolean;
+  /** True only when the user chose the displayed base. */
+  readonly baseRefExplicit?: boolean;
   /** Generated temp branch for worktree mode; unused for local mode. */
   readonly worktreeBranchName: string;
 }
@@ -84,6 +87,9 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
               baseBranch: spec.branch!,
               branch: spec.worktreeBranchName,
               ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
+              // T3-CUSTOM(expbkt3): missing-origin validation uses provenance,
+              // while startFromOrigin remains the effective normal-repository base.
+              ...(spec.baseRefExplicit ? { baseRefExplicit: true } : {}),
             },
             runSetupScript: true,
           }

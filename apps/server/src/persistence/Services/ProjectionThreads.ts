@@ -79,6 +79,8 @@ export const ProjectionThread = Schema.Struct({
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
+  // T3-CUSTOM(expbkt3): visible async questions never set the blocking count.
+  pendingAsyncUserInputCount: Schema.optional(NonNegativeInt),
   hasActionableProposedPlan: NonNegativeInt,
   // Rolling catch-up summary maintained incrementally per turn completion.
   rollingSummary: Schema.NullOr(Schema.String),

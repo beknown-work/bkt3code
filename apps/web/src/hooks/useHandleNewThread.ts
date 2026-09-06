@@ -45,6 +45,8 @@ interface NewThreadWorkspaceOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
+  // T3-CUSTOM(expbkt3): true only when a caller chose a worktree base.
+  baseRefExplicit?: boolean;
   // T3-CUSTOM(expbkt3): promote the eventual thread as a child of this thread.
   parentThreadId?: ThreadId | null;
   // T3-CUSTOM(expbkt3): the environment that parent lives on, when the child is
@@ -61,6 +63,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     ...(options?.startFromOrigin !== undefined ? { startFromOrigin: options.startFromOrigin } : {}),
+    ...(options?.baseRefExplicit !== undefined ? { baseRefExplicit: options.baseRefExplicit } : {}),
     // T3-CUSTOM(expbkt3): explicit parent-thread picks ride along with the
     // other explicit workspace options.
     ...(options?.parentThreadId !== undefined ? { parentThreadId: options.parentThreadId } : {}),
@@ -89,6 +92,7 @@ export function useNewThreadHandler() {
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
+        baseRefExplicit?: boolean;
         replace?: boolean;
         // T3-CUSTOM(expbkt3): promote the eventual thread as a child of this thread.
         parentThreadId?: ThreadId | null;
@@ -166,6 +170,7 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const hasBaseRefExplicitOption = options?.baseRefExplicit !== undefined;
       const hasParentThreadIdOption = options?.parentThreadId !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
@@ -207,6 +212,7 @@ export function useNewThreadHandler() {
             hasWorktreePathOption ||
             hasEnvModeOption ||
             hasStartFromOriginOption ||
+            hasBaseRefExplicitOption ||
             // T3-CUSTOM(expbkt3)
             hasParentThreadIdOption;
           // Resurrecting an empty stored draft must not resurrect its stale
@@ -267,6 +273,8 @@ export function useNewThreadHandler() {
                 envMode: defaultEnvMode,
                 newWorktreesStartFromOrigin: inheritedStartFromOrigin, // T3-CUSTOM(expbkt3)
               }),
+              // T3-CUSTOM(expbkt3): these are shown inherited defaults, not a base pick.
+              baseRefExplicit: false,
               parentThreadId: null, // T3-CUSTOM(expbkt3)
             };
           }
@@ -410,6 +418,11 @@ export function useNewThreadHandler() {
               envMode: initialEnvMode,
               newWorktreesStartFromOrigin: inheritedStartFromOrigin,
             }),
+          // T3-CUSTOM(expbkt3): caller-supplied branch/origin options are picks;
+          // automatic draft defaults are intentionally omitted from bootstrap overrides.
+          baseRefExplicit:
+            options?.baseRefExplicit ??
+            (options?.branch !== undefined || options?.startFromOrigin !== undefined),
           runtimeMode: inheritedRuntimeMode,
           interactionMode: inheritedInteractionMode,
         });

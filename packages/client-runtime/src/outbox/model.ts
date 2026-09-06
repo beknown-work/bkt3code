@@ -61,6 +61,8 @@ const QueuedThreadCreationSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): distinguish a user-picked remote base from an inherited display default.
+  baseRefExplicit: Schema.optional(Schema.Boolean),
   sourceControlProfileId: Schema.optional(SourceControlProfileId),
 });
 
@@ -137,6 +139,7 @@ export interface QueuedThreadCreation {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean | undefined;
+  readonly baseRefExplicit?: boolean | undefined;
   readonly sourceControlProfileId?: SourceControlProfileIdType | undefined;
 }
 

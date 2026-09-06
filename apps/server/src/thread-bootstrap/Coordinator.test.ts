@@ -331,6 +331,73 @@ describe("ThreadBootstrapCoordinator", () => {
     }),
   );
 
+  // T3-CUSTOM(expbkt3): a client may select New worktree while the displayed
+  // base is inherited from settings. Its `{ mode: "new-worktree" }` override
+  // must keep origin optional through accepted bootstrap provenance.
+  it.effect("keeps an inherited origin base non-explicit in an accepted worktree request", () =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const request: ResolvedThreadBootstrapRequest = {
+        ...resolvedRequest(),
+        workspace: {
+          mode: "new-worktree",
+          projectCwd: "/repo/project",
+          baseRef: { kind: "repository-default", source: "origin" },
+          newBranch: "t3code/bootstrap-1",
+          intendedPath: "/tmp/worktrees/project/t3code-bootstrap-1",
+        },
+      };
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        request,
+        setup: () => Effect.die("setup must be owned by the durable execution coordinator"),
+      });
+
+      const originalTurn: Extract<OrchestrationCommand, { type: "thread.turn.start" }> = {
+        type: "thread.turn.start",
+        commandId: CommandId.make("original-turn-command"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: MessageId.make("message-1"),
+          role: "user",
+          text: "Build it",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: NOW,
+      };
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* coordinator.request(
+          {
+            ...requestCommand(),
+            overrides: { workspace: { mode: "new-worktree" } },
+          },
+          { createThread: true, turnStart: originalTurn },
+        );
+        yield* Deferred.await(turnStarted);
+
+        const accepted = (yield* Ref.get(commands)).find(
+          (command) => command.type === "thread.turn.start",
+        );
+        if (accepted?.type !== "thread.turn.start") return;
+        expect(accepted.bootstrap?.resolvedRequest?.workspace).toEqual({
+          mode: "new-worktree",
+          projectCwd: "/repo/project",
+          baseRef: { kind: "repository-default", source: "origin" },
+          newBranch: "t3code/bootstrap-1",
+          intendedPath: "/tmp/worktrees/project/t3code-bootstrap-1",
+        });
+      }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
   // T3-CUSTOM(expbkt3): session lineage on the ATOMIC path. A prompt-bearing
   // t3_create_session commits thread, message and intent in one turn.start
   // rather than a separate thread.create, so lineage has to ride along in

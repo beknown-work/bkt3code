@@ -196,6 +196,7 @@ function derivePendingUserInputCountFromActivities(
   const openRequestIds = new Set<string>();
   const ordered = [...activities].toSorted(
     (left, right) =>
+      (left.sequence ?? -1) - (right.sequence ?? -1) ||
       left.createdAt.localeCompare(right.createdAt) ||
       left.activityId.localeCompare(right.activityId),
   );
@@ -212,12 +213,15 @@ function derivePendingUserInputCountFromActivities(
     const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
 
     if (activity.kind === "user-input.requested") {
-      // T3-CUSTOM(expbkt3): async message replies survive turn completion; native requests do not.
-      if (
-        payload?.responseMode !== "message" &&
-        activity.turnId !== null &&
-        terminalTurnIds.has(activity.turnId)
-      ) {
+      // T3-CUSTOM(expbkt3): message-mode questions survive turn completion,
+      // but they do not block execution or contribute to the shell's
+      // Needs input state. The activity ledger remains the source for their
+      // neutral UI indicator.
+      if (payload?.responseMode === "message") {
+        continue;
+      }
+      // T3-CUSTOM(expbkt3): native requests do not survive turn completion.
+      if (activity.turnId !== null && terminalTurnIds.has(activity.turnId)) {
         continue;
       }
       openRequestIds.add(requestId);
@@ -241,6 +245,34 @@ function derivePendingUserInputCountFromActivities(
     }
   }
 
+  return openRequestIds.size;
+}
+
+// T3-CUSTOM(expbkt3): message-mode requests remain answerable after a turn,
+// but only expose a neutral shell indicator; they never contribute to Needs Input.
+function derivePendingAsyncUserInputCountFromActivities(
+  activities: ReadonlyArray<ProjectionThreadActivity>,
+): number {
+  const openRequestIds = new Set<string>();
+  const ordered = [...activities].toSorted(
+    (left, right) =>
+      (left.sequence ?? -1) - (right.sequence ?? -1) ||
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.activityId.localeCompare(right.activityId),
+  );
+  for (const activity of ordered) {
+    const requestId = extractActivityRequestId(activity.payload);
+    if (requestId === null) continue;
+    const payload =
+      typeof activity.payload === "object" && activity.payload !== null
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    if (activity.kind === "user-input.requested" && payload?.responseMode === "message") {
+      openRequestIds.add(requestId);
+    } else if (activity.kind === "user-input.resolved") {
+      openRequestIds.delete(requestId);
+    }
+  }
   return openRequestIds.size;
 }
 
@@ -725,6 +757,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         activities,
         terminalTurnIds,
       );
+      const pendingAsyncUserInputCount = derivePendingAsyncUserInputCountFromActivities(activities);
       const hasActionableProposedPlan = deriveHasActionableProposedPlan({
         latestTurnId: existingRow.value.latestTurnId,
         proposedPlans,
@@ -735,6 +768,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         latestUserMessageAt,
         pendingApprovalCount,
         pendingUserInputCount,
+        pendingAsyncUserInputCount,
         hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
       });
     });
@@ -787,6 +821,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             latestUserMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
+            pendingAsyncUserInputCount: 0,
             hasActionableProposedPlan: 0,
             rollingSummary: null,
             deletedAt: null,
@@ -2385,9 +2420,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             event.payload.activity.kind === "user-input.requested" ||
             event.payload.activity.kind === "user-input.resolved"
           ) {
+            // T3-CUSTOM(expbkt3): durable reconciliation reads the request
+            // ledger so async responses cannot clear native blockers.
+            const activityPayload = event.payload.activity.payload;
+            const responseMode =
+              typeof activityPayload === "object" &&
+              activityPayload !== null &&
+              (activityPayload as Record<string, unknown>).responseMode === "message"
+                ? "message"
+                : undefined;
+            const requestId = extractActivityRequestId(activityPayload);
             yield* durableExecutionIntentRepository.observeBlockingActivity({
               threadId: event.payload.threadId,
               kind: event.payload.activity.kind,
+              ...(requestId ? { requestId } : {}),
+              ...(responseMode ? { responseMode } : {}),
               at: event.payload.activity.createdAt,
             });
           }

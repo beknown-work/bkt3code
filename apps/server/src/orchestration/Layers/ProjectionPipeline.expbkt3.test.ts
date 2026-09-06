@@ -111,9 +111,9 @@ layer("ProjectionPipeline expbkt3 hot paths", (it) => {
         activity: {
           id: EventId.make("activity-projection-hot-path-current"),
           tone: "info",
-          kind: "tool.completed",
-          summary: "Current activity",
-          payload: { tool: "exec" },
+          kind: "user-input.requested",
+          summary: "Async question",
+          payload: { requestId: "async-question", questions: [], responseMode: "message" },
           turnId: null,
           createdAt: "2026-08-03T16:30:03.000Z",
         },
@@ -126,6 +126,7 @@ layer("ProjectionPipeline expbkt3 hot paths", (it) => {
       assert.equal(projectedShell.updatedAt, "2026-08-03T16:30:03.000Z");
       assert.isFalse(projectedShell.hasPendingApprovals);
       assert.isFalse(projectedShell.hasPendingUserInput);
+      assert.isTrue(projectedShell.hasPendingAsyncUserInput);
     }),
   );
 });

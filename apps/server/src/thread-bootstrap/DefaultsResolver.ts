@@ -30,7 +30,10 @@ export function resolveExactBranch(
   if (baseRef.kind === "repository-default") {
     const match = refs.find(
       (ref) =>
-        ref.isDefault &&
+        // T3-CUSTOM(expbkt3): Git only reports a default branch from
+        // origin/HEAD. A repository with no remotes still has a safe local
+        // base: its checked-out branch.
+        (ref.isDefault || (baseRef.source === "local" && ref.current)) &&
         (baseRef.source === "origin"
           ? ref.isRemote === true && ref.remoteName === "origin"
           : ref.isRemote !== true),

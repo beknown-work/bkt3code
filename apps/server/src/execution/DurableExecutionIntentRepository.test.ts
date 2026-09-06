@@ -132,6 +132,37 @@ layer("DurableExecutionIntentRepository", (it) => {
       });
       assert.isTrue(claim._tag === "Some");
       if (claim._tag === "None") return;
+      // T3-CUSTOM(expbkt3): replay-safe base validation must not become a
+      // false restart uncertainty. The running marker starts at creation.
+      const worktreeValidation = yield* repository.beginBootstrapStep({
+        workItemId: "command-1",
+        owner: "worker-bootstrap",
+        generation: claim.value.claimGeneration,
+        step: "worktree",
+        at: acceptedAt,
+      });
+      assert.strictEqual(
+        worktreeValidation._tag === "Some" ? worktreeValidation.value : null,
+        "pending",
+      );
+      const beforeCreation = yield* repository.getBootstrapOperation({ workItemId: "command-1" });
+      assert.strictEqual(
+        beforeCreation._tag === "Some" ? beforeCreation.value.worktreePhase : null,
+        "pending",
+      );
+      assert.isTrue(
+        yield* repository.beginWorktreeCreation({
+          workItemId: "command-1",
+          owner: "worker-bootstrap",
+          generation: claim.value.claimGeneration,
+          at: acceptedAt,
+        }),
+      );
+      const duringCreation = yield* repository.getBootstrapOperation({ workItemId: "command-1" });
+      assert.strictEqual(
+        duringCreation._tag === "Some" ? duringCreation.value.worktreePhase : null,
+        "running",
+      );
       const started = yield* repository.beginBootstrapStep({
         workItemId: "command-1",
         owner: "worker-bootstrap",
@@ -569,6 +600,82 @@ layer("DurableExecutionIntentRepository", (it) => {
       assert.strictEqual(next.value.phase, "recovering");
       assert.strictEqual(next.value.desiredState, "running");
       assert.isNull(next.value.terminalAt);
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): upgrades can retain a waiting snapshot after the
+  // provider emitted only an async message-mode request. Startup must repair
+  // that persisted durable blocker before the coordinator scans it.
+  it.effect("repairs a persisted stale async-only waiting intent on startup", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const repository = yield* DurableExecutionIntentRepository;
+      const staleThreadId = ThreadId.make("thread-stale-async-wait");
+      yield* sql`
+        INSERT INTO projection_thread_execution_intents (
+          work_item_id, thread_id, message_id, command_id, request_event_sequence,
+          desired_state, phase, delivery_certainty, runnable, accepted_at, updated_at
+        ) VALUES (
+          'stale-async-wait', ${staleThreadId}, 'message-stale', 'command-stale', 10,
+          'running', 'waiting-for-input', 'never-delivered', 0,
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES (
+          'stale-async-request', ${staleThreadId}, NULL, 'info', 'user-input.requested',
+          'Async message request', '{"requestId":"async-stale","responseMode":"message"}',
+          11, '2026-01-01T00:00:01.000Z'
+        )
+      `;
+
+      yield* repository.reconcileStartup({ at: "2026-01-01T00:00:02.000Z" });
+      const repaired = yield* repository.getByWorkItemId({ workItemId: "stale-async-wait" });
+      assert.isTrue(repaired._tag === "Some");
+      if (repaired._tag === "None") return;
+      assert.strictEqual(repaired.value.phase, "recovering");
+      assert.isTrue(repaired.value.runnable);
+      assert.strictEqual(repaired.value.nextAttemptAt, "2026-01-01T00:00:02.000Z");
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): Codex can report a stale request through its provider
+  // response failure instead of a matching `user-input.resolved` activity.
+  it.effect("closes the legacy Codex stale-request failure during startup repair", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const repository = yield* DurableExecutionIntentRepository;
+      const staleThreadId = ThreadId.make("thread-stale-codex-wait");
+      yield* sql`
+        INSERT INTO projection_thread_execution_intents (
+          work_item_id, thread_id, message_id, command_id, request_event_sequence,
+          desired_state, phase, delivery_certainty, runnable, accepted_at, updated_at
+        ) VALUES (
+          'stale-codex-wait', ${staleThreadId}, 'message-stale-codex', 'command-stale-codex', 20,
+          'running', 'waiting-for-input', 'never-delivered', 0,
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES
+          ('codex-stale-request', ${staleThreadId}, NULL, 'info', 'user-input.requested',
+           'Native request', '{"requestId":"codex-stale","responseMode":"native"}', 21,
+           '2026-01-01T00:00:01.000Z'),
+          ('codex-stale-failure', ${staleThreadId}, NULL, 'info', 'provider.user-input.respond.failed',
+           'Stale response', '{"requestId":"codex-stale","detail":"unknown pending codex user input request"}', 22,
+           '2026-01-01T00:00:02.000Z')
+      `;
+
+      yield* repository.reconcileStartup({ at: "2026-01-01T00:00:03.000Z" });
+      const repaired = yield* repository.getByWorkItemId({ workItemId: "stale-codex-wait" });
+      assert.isTrue(repaired._tag === "Some");
+      if (repaired._tag === "None") return;
+      assert.strictEqual(repaired.value.phase, "recovering");
+      assert.isTrue(repaired.value.runnable);
     }),
   );
 });

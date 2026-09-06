@@ -40,6 +40,7 @@ export function useCreateProjectThread() {
       readonly branch: string | null;
       readonly worktreePath: string | null;
       readonly startFromOrigin?: boolean;
+      readonly baseRefExplicit?: boolean;
       readonly runtimeMode: RuntimeMode;
       readonly interactionMode: ProviderInteractionMode;
       readonly initialMessageText: string;
@@ -151,6 +152,8 @@ export function useCreateProjectThread() {
           branch: input.branch,
           worktreePath: input.worktreePath,
           startFromOrigin: input.startFromOrigin ?? false,
+          // T3-CUSTOM(expbkt3): the marker controls missing-origin validation only.
+          baseRefExplicit: input.baseRefExplicit,
           worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
         }),
       });

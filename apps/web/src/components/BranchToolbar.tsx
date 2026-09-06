@@ -16,6 +16,8 @@ import {
   type EnvMode,
   type EnvironmentOption,
   resolveContextStripLabelsCompact,
+  // T3-CUSTOM(expbkt3): label a retained/pending bootstrap by accepted mode.
+  resolveBootstrapWorkspaceMode,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveEffectiveEnvMode,
@@ -104,11 +106,14 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
       : activeWorktreePath
         ? FolderGitIcon
         : FolderIcon;
-  const workspaceLabel = envModeLocked
-    ? resolveLockedWorkspaceLabel(activeWorktreePath)
-    : effectiveEnvMode === "worktree"
+  // T3-CUSTOM(expbkt3): a locked bootstrap can have no path yet; its accepted
+  // worktree mode still takes precedence over the null-path local fallback.
+  const workspaceLabel =
+    effectiveEnvMode === "worktree"
       ? resolveEnvModeLabel("worktree")
-      : resolveCurrentWorkspaceLabel(activeWorktreePath);
+      : envModeLocked
+        ? resolveLockedWorkspaceLabel(activeWorktreePath)
+        : resolveCurrentWorkspaceLabel(activeWorktreePath);
   const isLocked = envLocked || envModeLocked;
   const icon = showEnvironmentIndicator ? (
     // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
@@ -446,8 +451,13 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeProject = useProject(activeProjectRef);
   const hasActiveThread = serverThread !== null || draftThread !== null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  // T3-CUSTOM(expbkt3): accepted worktree intent exists before its path.
+  const bootstrapWorkspaceMode = resolveBootstrapWorkspaceMode(
+    serverThread?.execution?.intent?.bootstrap,
+  );
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
+    bootstrapWorkspaceMode ??
     resolveEffectiveEnvMode({
       activeWorktreePath,
       hasServerThread: serverThread !== null,

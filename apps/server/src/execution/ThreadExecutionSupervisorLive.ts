@@ -38,6 +38,8 @@ import {
   type SessionRecoveryStateRepositoryError,
 } from "../persistence/SessionRecoveryState.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
+// T3-CUSTOM(expbkt3): direct WebSocket Stop must cancel its setup child too.
+import { TerminalManager } from "../terminal/Manager.ts";
 // T3-CUSTOM(expbkt3): user Stop fences durable recovery before provider side effects.
 import { DurableExecutionIntentRepository } from "./DurableExecutionIntentRepository.ts";
 import {
@@ -80,6 +82,81 @@ interface ExecutionIntentSnapshotRow {
   readonly lastFailureDetail: string | null;
   readonly acceptedAt: string;
   readonly updatedAt: string;
+  readonly bootstrapJson: string | null;
+  readonly worktreePhase:
+    | "pending"
+    | "running"
+    | "acknowledged"
+    | "failed"
+    | "uncertain"
+    | "not-required"
+    | null;
+  readonly setupPhase:
+    | "pending"
+    | "running"
+    | "acknowledged"
+    | "failed"
+    | "uncertain"
+    | "not-required"
+    | null;
+  readonly setupTerminalId: string | null;
+}
+
+interface PersistedBlockerRow {
+  readonly kind: "approval.requested" | "user-input.requested";
+}
+
+interface PersistedResolutionRow {
+  readonly requestId: string;
+}
+
+type ExecutionIntentBootstrapSnapshot = NonNullable<
+  NonNullable<ThreadExecutionSnapshot["intent"]>["bootstrap"]
+>;
+
+function bootstrapSnapshotFromRow(
+  row: ExecutionIntentSnapshotRow,
+): ExecutionIntentBootstrapSnapshot | undefined {
+  if (row.bootstrapJson === null || row.worktreePhase === null || row.setupPhase === null)
+    return undefined;
+  try {
+    const bootstrap = JSON.parse(row.bootstrapJson) as {
+      readonly resolvedRequest?: {
+        readonly workspace?: {
+          readonly mode?: "local" | "existing-worktree" | "new-worktree";
+          readonly path?: string;
+          readonly intendedPath?: string;
+          readonly newBranch?: string;
+          readonly baseRef?: {
+            readonly kind?: string;
+            readonly source?: string;
+            readonly branch?: string;
+          };
+        };
+      };
+    };
+    const workspace = bootstrap.resolvedRequest?.workspace;
+    if (workspace?.mode === undefined) return undefined;
+    const baseRef = workspace.baseRef;
+    const base =
+      baseRef?.kind === "branch" && baseRef.source && baseRef.branch
+        ? `${baseRef.source}/${baseRef.branch}`
+        : baseRef?.kind === "repository-default" && baseRef.source
+          ? `${baseRef.source} default`
+          : null;
+    return {
+      workspaceMode: workspace.mode,
+      base,
+      intendedPath: workspace.intendedPath ?? workspace.path ?? null,
+      newBranch: workspace.newBranch ?? null,
+      worktreePhase: row.worktreePhase,
+      setupPhase: row.setupPhase,
+      failureDetail: row.lastFailureDetail,
+      setupTerminalId: row.setupTerminalId,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 const isActiveActivity = (activity: ThreadExecutionSnapshot["activity"]) =>
@@ -133,6 +210,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const recoveryState = yield* SessionRecoveryStateRepository;
   // T3-CUSTOM(expbkt3): optional keeps isolated/upstream supervisor layers compatible.
   const durableIntentRepository = yield* Effect.serviceOption(DurableExecutionIntentRepository);
+  const terminalManager = yield* Effect.serviceOption(TerminalManager);
   const authorityEpoch = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
   const state = new Map<ThreadId, ThreadExecutionSnapshot>();
   const stopOperations = new Map<string, string>();
@@ -142,31 +220,155 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
   const snapshots = yield* PubSub.unbounded<ThreadExecutionSnapshot>();
   const observedGaugeKeys = new Set<string>();
   const terminalWaiters = new Map<string, Set<Deferred.Deferred<ThreadExecutionSnapshot>>>();
+  // T3-CUSTOM(expbkt3): provider resolutions are per request. A second native
+  // prompt must keep the snapshot blocked after the first answer arrives.
+  const blockingRequestIds = new Map<ThreadId, Set<string>>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
   // T3-CUSTOM(expbkt3): desired state and provider observation travel together.
   const withCurrentIntent = (snapshot: ThreadExecutionSnapshot) =>
-    sql<ExecutionIntentSnapshotRow>`
-      SELECT work_item_id AS "workItemId", message_id AS "messageId",
-             desired_state AS "desiredState", phase,
-             recovery_attempts AS "recoveryAttempts",
-             maximum_recovery_attempts AS "maximumRecoveryAttempts",
-             next_attempt_at AS "nextAttemptAt",
-             last_failure_type AS "lastFailureType",
-             last_failure_detail AS "lastFailureDetail",
-             accepted_at AS "acceptedAt", updated_at AS "updatedAt"
-      FROM projection_thread_execution_intents
-      WHERE thread_id = ${snapshot.threadId}
-        AND dismissed_at IS NULL
-        AND (desired_state = 'running' OR phase = 'recovery-exhausted')
-      ORDER BY CASE WHEN desired_state = 'running' THEN 0 ELSE 1 END,
-               request_event_sequence DESC, accepted_at DESC
+    Effect.all([
+      sql<ExecutionIntentSnapshotRow>`
+      SELECT intent.work_item_id AS "workItemId", intent.message_id AS "messageId",
+             intent.desired_state AS "desiredState", intent.phase,
+             intent.recovery_attempts AS "recoveryAttempts",
+             intent.maximum_recovery_attempts AS "maximumRecoveryAttempts",
+             intent.next_attempt_at AS "nextAttemptAt",
+             intent.last_failure_type AS "lastFailureType",
+             intent.last_failure_detail AS "lastFailureDetail",
+             intent.accepted_at AS "acceptedAt", intent.updated_at AS "updatedAt",
+             intent.bootstrap_json AS "bootstrapJson",
+             bootstrap.worktree_phase AS "worktreePhase",
+             bootstrap.setup_phase AS "setupPhase",
+             bootstrap.setup_terminal_id AS "setupTerminalId"
+      FROM projection_thread_execution_intents AS intent
+      LEFT JOIN thread_execution_bootstrap_operations AS bootstrap
+        ON bootstrap.work_item_id = intent.work_item_id
+      WHERE intent.thread_id = ${snapshot.threadId}
+        AND intent.dismissed_at IS NULL
+        AND (intent.desired_state = 'running' OR intent.phase = 'recovery-exhausted')
+      ORDER BY CASE WHEN intent.desired_state = 'running' THEN 0 ELSE 1 END,
+               intent.request_event_sequence DESC, intent.accepted_at DESC
       LIMIT 1
-    `.pipe(
-      Effect.map((rows) => {
-        const { intent: _staleIntent, ...withoutIntent } = snapshot;
+      `,
+      // T3-CUSTOM(expbkt3): The durable activity ledger, rather than the
+      // newest queued intent or this process's event history, owns blocking.
+      // This makes reconnects and simultaneous native requests deterministic.
+      sql<PersistedBlockerRow>`
+        WITH unresolved AS (
+          SELECT requested.kind, requested.turn_id
+          FROM projection_thread_activities AS requested
+          WHERE requested.thread_id = ${snapshot.threadId}
+            AND requested.kind IN ('approval.requested', 'user-input.requested')
+            AND json_extract(requested.payload_json, '$.requestId') IS NOT NULL
+            AND COALESCE(json_extract(requested.payload_json, '$.responseMode'), '') <> 'message'
+            AND NOT EXISTS (
+              SELECT 1 FROM projection_thread_activities AS resolved
+              WHERE resolved.thread_id = requested.thread_id
+                AND json_extract(resolved.payload_json, '$.requestId') = json_extract(requested.payload_json, '$.requestId')
+                AND (
+                  resolved.kind IN ('approval.resolved', 'user-input.resolved')
+                  OR (
+                    resolved.kind = 'provider.user-input.respond.failed'
+                    AND (
+                      lower(COALESCE(json_extract(resolved.payload_json, '$.detail'), '')) LIKE '%stale pending user-input request%'
+                      OR lower(COALESCE(json_extract(resolved.payload_json, '$.detail'), '')) LIKE '%unknown pending user-input request%'
+                      OR lower(COALESCE(json_extract(resolved.payload_json, '$.detail'), '')) LIKE '%unknown pending user input request%'
+                      OR lower(COALESCE(json_extract(resolved.payload_json, '$.detail'), '')) LIKE '%unknown pending codex user input request%'
+                    )
+                  )
+                )
+                AND (
+                  COALESCE(resolved.sequence, -1) > COALESCE(requested.sequence, -1)
+                  OR (COALESCE(resolved.sequence, -1) = COALESCE(requested.sequence, -1)
+                    AND (resolved.created_at > requested.created_at OR (resolved.created_at = requested.created_at AND resolved.activity_id > requested.activity_id)))
+                )
+            )
+            AND (
+              requested.turn_id IS NULL
+              OR (
+                requested.turn_id = ${snapshot.turn?.providerTurnId ?? ""}
+                AND NOT EXISTS (
+                SELECT 1 FROM projection_turns AS turn
+                WHERE turn.thread_id = requested.thread_id AND turn.turn_id = requested.turn_id
+                  AND turn.state IN ('completed', 'interrupted', 'error')
+                )
+              )
+            )
+        )
+        SELECT kind FROM unresolved
+      `,
+      // T3-CUSTOM(expbkt3): A persisted terminal stale response retires the
+      // short-lived live-event fallback map once its projection lands.
+      sql<PersistedResolutionRow>`
+        SELECT DISTINCT json_extract(payload_json, '$.requestId') AS "requestId"
+        FROM projection_thread_activities
+        WHERE thread_id = ${snapshot.threadId}
+          AND json_extract(payload_json, '$.requestId') IS NOT NULL
+          AND (
+            kind IN ('approval.resolved', 'user-input.resolved')
+            OR (
+              kind = 'provider.user-input.respond.failed'
+              AND (
+                lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%stale pending user-input request%'
+                OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending user-input request%'
+                OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending user input request%'
+                OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending codex user input request%'
+              )
+            )
+          )
+      `,
+    ]).pipe(
+      Effect.map(([rows, blockers, resolutions]) => {
         const row = rows[0];
+        const hasPersistedApprovalBlocker = blockers.some(
+          (blocker) => blocker.kind === "approval.requested",
+        );
+        // The map protects events that arrive before their activity projection;
+        // it is never trusted after a restart, where the SQL ledger above wins.
+        const inMemoryBlockers = blockingRequestIds.get(snapshot.threadId);
+        if (inMemoryBlockers !== undefined) {
+          for (const resolution of resolutions) inMemoryBlockers.delete(resolution.requestId);
+          if (inMemoryBlockers.size === 0) blockingRequestIds.delete(snapshot.threadId);
+        }
+        const hasInMemoryBlocker = (blockingRequestIds.get(snapshot.threadId)?.size ?? 0) > 0;
+        const hasBlocker = blockers.length > 0 || hasInMemoryBlocker;
+        const hasApprovalBlocker =
+          hasPersistedApprovalBlocker ||
+          (blockers.length === 0 &&
+            hasInMemoryBlocker &&
+            snapshot.turn?.state === "waiting-for-approval");
+        const canReconcileTurn =
+          snapshot.turn !== null &&
+          !isTerminalTurn(snapshot) &&
+          snapshot.activity !== "stopping" &&
+          snapshot.turn.state !== "stopping";
+        const repairedSnapshot =
+          hasBlocker && canReconcileTurn
+            ? {
+                ...snapshot,
+                activity: "blocked" as const,
+                turn: {
+                  ...snapshot.turn,
+                  state: hasApprovalBlocker
+                    ? ("waiting-for-approval" as const)
+                    : ("waiting-for-input" as const),
+                },
+              }
+            : !hasBlocker &&
+                canReconcileTurn &&
+                snapshot.activity === "blocked" &&
+                (snapshot.turn?.state === "waiting-for-approval" ||
+                  snapshot.turn?.state === "waiting-for-input")
+              ? {
+                  ...snapshot,
+                  activity: "active" as const,
+                  turn: { ...snapshot.turn, state: "running" as const },
+                }
+              : snapshot;
+        const { intent: _staleIntent, ...withoutIntent } = repairedSnapshot;
         if (row === undefined) return withoutIntent;
+        const bootstrap = bootstrapSnapshotFromRow(row);
         return {
           ...withoutIntent,
           intent: {
@@ -176,6 +378,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
             phase: row.phase,
             acceptedAt: row.acceptedAt,
             updatedAt: row.updatedAt,
+            ...(bootstrap === undefined ? {} : { bootstrap }),
             recovery: {
               attempt: row.recoveryAttempts,
               maximumAttempts: row.maximumRecoveryAttempts,
@@ -824,6 +1027,19 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         case "request.opened":
         case "user-input.requested":
           if (!current.turn || isTerminalTurn(current)) return current;
+          // T3-CUSTOM(expbkt3): Codex message-mode questions are an invitation
+          // to steer the active agent, not a provider-stream pause.  Keeping
+          // this snapshot active is important because the matching answer is
+          // appended as a normal message and therefore has no runtime
+          // `user-input.resolved` event to undo a synthetic blocked state.
+          if (event.type === "user-input.requested" && event.payload.responseMode === "message") {
+            return current;
+          }
+          {
+            const blockers = blockingRequestIds.get(event.threadId) ?? new Set<string>();
+            blockers.add(event.requestId ?? "legacy-blocking-request");
+            blockingRequestIds.set(event.threadId, blockers);
+          }
           return {
             ...current,
             activity: "blocked",
@@ -840,6 +1056,15 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         case "request.resolved":
         case "user-input.resolved":
           if (!current.turn || isTerminalTurn(current)) return current;
+          {
+            const blockers = blockingRequestIds.get(event.threadId);
+            if (blockers !== undefined) {
+              if (event.requestId === undefined) blockers.delete("legacy-blocking-request");
+              else blockers.delete(event.requestId);
+              if (blockers.size === 0) blockingRequestIds.delete(event.threadId);
+              else return current;
+            }
+          }
           return {
             ...current,
             activity: current.activity === "stopping" ? "stopping" : "active",
@@ -859,6 +1084,7 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
           )
             return null;
           const interrupted = event.type === "turn.aborted";
+          blockingRequestIds.delete(event.threadId);
           return {
             ...current,
             activity: "idle",
@@ -1017,6 +1243,24 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
     "ThreadExecutionSupervisor.stopExecution",
   )(function* (input) {
     let initial = yield* getSnapshot(input.threadId);
+    // T3-CUSTOM(expbkt3): the latest snapshot can describe a queued follow-up
+    // while an earlier item owns the active setup. Inspect durable operations
+    // before the stop fence so the child cannot outlive a UI Stop.
+    let ownedSetupTerminal: string | null = null;
+    if (Option.isSome(durableIntentRepository)) {
+      const items = yield* durableIntentRepository.value.listByThreadId({
+        threadId: input.threadId,
+      });
+      for (const item of items.toReversed()) {
+        const operation = yield* durableIntentRepository.value.getBootstrapOperation({
+          workItemId: item.workItemId,
+        });
+        if (Option.isSome(operation) && operation.value.setupPhase === "running") {
+          ownedSetupTerminal = operation.value.setupTerminalId;
+          break;
+        }
+      }
+    }
     // T3-CUSTOM(expbkt3): the user asked for this stop. Record the intent
     // before anything else — including on the already-stopped path, where the
     // intent is just as real — so recovery can never race a stop request and
@@ -1028,6 +1272,14 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         reason: "user-stop",
         at: stoppedAt,
       });
+      // T3-CUSTOM(expbkt3): WebSocket Stop fences the durable item directly,
+      // without a later ProviderCommandReactor event. Capture the terminal
+      // before that fence and stop only its running setup child afterwards.
+      if (ownedSetupTerminal !== null && Option.isSome(terminalManager)) {
+        yield* terminalManager.value
+          .stopCommand({ threadId: input.threadId, terminalId: ownedSetupTerminal })
+          .pipe(Effect.catch(() => Effect.void));
+      }
       // Queued work may not have a provider snapshot to transition below. Publish
       // the fenced desired state now so every connected client drops active UI.
       initial = yield* refreshIntent(input.threadId);

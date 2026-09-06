@@ -577,6 +577,9 @@ const make = Effect.gen(function* () {
           ),
         );
       if (resolved.workspace.mode === "new-worktree") {
+        const originBaseExplicitlyRequested =
+          command.overrides?.workspace?.mode === "new-worktree" &&
+          command.overrides.workspace.baseRef?.source === "origin";
         let allocatedBranch = resolved.workspace.newBranch;
         if (!allocatedBranch) {
           const uuid = yield* crypto.randomUUIDv4.pipe(
@@ -637,6 +640,7 @@ const make = Effect.gen(function* () {
           ...resolved,
           workspace: {
             ...resolved.workspace,
+            ...(originBaseExplicitlyRequested ? { originBaseExplicitlyRequested: true } : {}),
             newBranch: identity?.branchName ?? allocatedBranch,
             intendedPath:
               resolved.workspace.intendedPath ?? path.join(projectWorktreesDir, directoryName),

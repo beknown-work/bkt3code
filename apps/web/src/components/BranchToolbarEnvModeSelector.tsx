@@ -55,7 +55,10 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
         data-composer-context-control
       >
-        {activeWorktreePath ? (
+        {effectiveEnvMode === "worktree" ? (
+          // T3-CUSTOM(expbkt3): creation may still be pending with no path.
+          <FolderGit2Icon className="size-3 shrink-0" />
+        ) : activeWorktreePath ? (
           <FolderGitIcon className="size-3 shrink-0" />
         ) : (
           <FolderIcon className="size-3 shrink-0" />
@@ -68,7 +71,10 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
             data-composer-label-motion
             className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
           >
-            {resolveLockedWorkspaceLabel(activeWorktreePath)}
+            {/* T3-CUSTOM(expbkt3): preserve the accepted pending worktree label. */}
+            {effectiveEnvMode === "worktree"
+              ? resolveEnvModeLabel("worktree")
+              : resolveLockedWorkspaceLabel(activeWorktreePath)}
           </span>
         </span>
       </span>

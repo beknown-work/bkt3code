@@ -185,6 +185,8 @@ export function BranchToolbarBranchSelector({
         branch,
         worktreePath,
         envMode: nextDraftEnvMode,
+        // T3-CUSTOM(expbkt3): a branch-picker result is an explicit worktree base.
+        baseRefExplicit: true,
         projectRef: scopeProjectRef(environmentId, activeProject.id),
       });
     },

@@ -322,6 +322,9 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // T3-CUSTOM(expbkt3): preserve whether the shown worktree base was actually
+  // chosen, rather than treating an inherited origin default as a requirement.
+  baseRefExplicit: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): BEGIN — a draft seeded from another session's context
   // can be promoted as a child of that session; the lineage must survive
   // reloads.
@@ -442,6 +445,8 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  // T3-CUSTOM(expbkt3): effective origin display and explicit origin choice differ.
+  baseRefExplicit: boolean;
   // T3-CUSTOM(expbkt3): BEGIN
   /** When set, the promoted thread is created as a child of this thread. */
   parentThreadId?: ThreadId | null;
@@ -515,6 +520,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      baseRefExplicit?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       // T3-CUSTOM(expbkt3): BEGIN
@@ -534,6 +540,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      baseRefExplicit?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       // T3-CUSTOM(expbkt3): BEGIN
@@ -552,6 +559,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      baseRefExplicit?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
       // T3-CUSTOM(expbkt3): BEGIN
@@ -1558,6 +1566,7 @@ function createDraftThreadState(
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
+    baseRefExplicit?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
     // T3-CUSTOM(expbkt3): BEGIN
@@ -1590,6 +1599,10 @@ function createDraftThreadState(
     options?.startFromOrigin === undefined
       ? (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
+  const nextBaseRefExplicit =
+    options?.baseRefExplicit === undefined
+      ? (existingThread?.baseRefExplicit ?? false)
+      : options.baseRefExplicit;
   // T3-CUSTOM(expbkt3): a parent in another project — including one on another
   // machine — can be linked now, so a project change no longer drops it. Moving
   // a seeded draft somewhere the work can actually run, while its parent's host
@@ -1624,6 +1637,7 @@ function createDraftThreadState(
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    baseRefExplicit: nextBaseRefExplicit,
     parentThreadId: nextParentThreadId,
     parentEnvironmentId: nextParentEnvironmentId,
     promotedTo: null,
@@ -1658,6 +1672,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    left.baseRefExplicit === right.baseRefExplicit &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     // T3-CUSTOM(expbkt3): two drafts with the same parent id on different
     // machines are different drafts; without this the store would treat a
@@ -1763,6 +1778,9 @@ function normalizePersistedDraftThreads(
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
       const startFromOrigin = candidateDraftThread.startFromOrigin === true;
+      // T3-CUSTOM(expbkt3): older drafts stored only the effective display
+      // default, so missing provenance must remain inherited after upgrading.
+      const baseRefExplicit = candidateDraftThread.baseRefExplicit === true;
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const promotedToCandidate = candidateDraftThread.promotedTo;
       const promotedToRecord =
@@ -1811,6 +1829,7 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        baseRefExplicit,
         parentThreadId:
           typeof candidateDraftThread.parentThreadId === "string" &&
           candidateDraftThread.parentThreadId.length > 0
@@ -2515,6 +2534,8 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    // T3-CUSTOM(expbkt3): pre-provenance drafts have display state only.
+    baseRefExplicit: persistedDraftThread.baseRefExplicit ?? false,
     parentThreadId: persistedDraftThread.parentThreadId ?? null,
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
@@ -2770,6 +2791,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               options.startFromOrigin === undefined
                 ? existing.startFromOrigin
                 : options.startFromOrigin;
+            const nextBaseRefExplicit =
+              options.baseRefExplicit === undefined
+                ? existing.baseRefExplicit
+                : options.baseRefExplicit;
             const nextParentThreadId =
               options.parentThreadId === undefined
                 ? projectChanged
@@ -2792,6 +2817,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              baseRefExplicit: nextBaseRefExplicit,
               parentThreadId: nextParentThreadId,
               promotedTo: existing.promotedTo ?? null,
             };
@@ -2806,6 +2832,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              nextDraftThread.baseRefExplicit === existing.baseRefExplicit &&
               (nextDraftThread.parentThreadId ?? null) === (existing.parentThreadId ?? null) &&
               // T3-CUSTOM(expbkt3): the parent's environment is part of the identity.
               (nextDraftThread.parentEnvironmentId ?? null) ===

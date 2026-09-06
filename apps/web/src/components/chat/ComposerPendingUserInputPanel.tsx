@@ -185,6 +185,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           <span className="shrink-0 font-medium text-muted-foreground">
             {activeQuestion.header}
           </span>
+          {prompt.responseMode === "message" ? (
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-medium text-[10px] text-muted-foreground">
+              Async
+            </span>
+          ) : null}
           {isCollapsed ? (
             <span className="min-w-0 flex-1 truncate text-secondary-label">
               {activeQuestion.question}
@@ -203,6 +208,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       <CollapsiblePanel>
         <ComposerBanner.Body className="pe-1 pb-1">
           <p className="text-sm text-foreground/85">{activeQuestion.question}</p>
+          {prompt.responseMode === "message" ? (
+            <p className="text-secondary-label text-xs">Agent can continue while you decide.</p>
+          ) : null}
           {activeQuestion.multiSelect ? (
             <p className="mt-1 text-secondary-label text-xs">Select one or more options.</p>
           ) : null}

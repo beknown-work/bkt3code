@@ -87,6 +87,50 @@ const acceptEvent = Effect.fnUntraced(function* (
 });
 
 layer("DurableExecutionCoordinator", (it) => {
+  // T3-CUSTOM(expbkt3): one setup command may wait indefinitely without
+  // preventing the scheduler from claiming a different thread.
+  it.effect("keeps scheduling unrelated work while setup waits", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const first = makeSequentialAcceptedEvent("held-setup", 60);
+      const second = makeSequentialAcceptedEvent("unrelated", 61);
+      const setupStarted = yield* Deferred.make<void>();
+      const releaseSetup = yield* Deferred.make<void>();
+      const secondDispatched = yield* Deferred.make<void>();
+      yield* acceptEvent(repository, first);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "scheduler-owner",
+        safetyPollIntervalMs: 1_000,
+        loadEvent: (intent) =>
+          Effect.succeed(intent.workItemId === first.commandId ? first : second),
+        prepare: ({ intent }) =>
+          intent.workItemId === first.commandId
+            ? Deferred.succeed(setupStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSetup)),
+              )
+            : Effect.void,
+        dispatchOriginal: ({ intent }) =>
+          (intent.workItemId === second.commandId
+            ? Deferred.succeed(secondDispatched, undefined)
+            : Effect.void
+          ).pipe(Effect.as({ providerTurnId: "provider-turn", providerInstanceId: "codex" })),
+        recover: () => Effect.die("unexpected recovery"),
+      });
+      yield* coordinator.start();
+      yield* TestClock.adjust(Duration.millis(1));
+      yield* Deferred.await(setupStarted);
+      yield* acceptEvent(repository, second);
+      yield* coordinator.wake(second.commandId);
+      yield* TestClock.adjust(Duration.millis(1));
+      yield* Deferred.await(secondDispatched);
+      const dispatched = yield* repository.getByWorkItemId({ workItemId: second.commandId });
+      assert.isTrue(Option.isSome(dispatched));
+      if (Option.isNone(dispatched)) return;
+      assert.strictEqual(dispatched.value.phase, "running");
+      yield* Deferred.succeed(releaseSetup, undefined);
+    }),
+  );
+
   it.effect("completes handled native commands without provider acknowledgement or retry", () =>
     Effect.gen(function* () {
       const repository = yield* DurableExecutionIntentRepository;
@@ -180,6 +224,37 @@ layer("DurableExecutionCoordinator", (it) => {
       assert.strictEqual(recovered.value.phase, "running");
       assert.strictEqual(recovered.value.providerTurnId, "provider-turn-1");
       assert.deepStrictEqual(yield* Ref.get(recoveryModes), ["inspect-or-continue"]);
+    }),
+  );
+
+  it.effect("does not spend recovery budget while a known turn defers the queue", () =>
+    Effect.gen(function* () {
+      const repository = yield* DurableExecutionIntentRepository;
+      const event = makeSequentialAcceptedEvent("known-busy", 14);
+      yield* acceptEvent(repository, event);
+      const coordinator = yield* makeDurableExecutionCoordinator({
+        ownerId: "known-busy-owner",
+        now: () => Effect.succeed(event.occurredAt),
+        loadEvent: () => Effect.succeed(event),
+        dispatchOriginal: () =>
+          Effect.fail(
+            new DurableExecutionDispatchError({
+              failureType: "transport-lost",
+              detail: "lost acknowledgement",
+              retryable: true,
+            }),
+          ),
+        recover: () =>
+          Effect.succeed({ providerTurnId: null, providerInstanceId: null, deferred: true }),
+      });
+      yield* coordinator.run(event.commandId);
+      yield* coordinator.run(event.commandId);
+      const deferred = yield* repository.getByWorkItemId({ workItemId: event.commandId });
+      assert.isTrue(Option.isSome(deferred));
+      if (Option.isNone(deferred)) return;
+      assert.strictEqual(deferred.value.phase, "recovering");
+      assert.strictEqual(deferred.value.recoveryAttempts, 0);
+      assert.isFalse(deferred.value.runnable);
     }),
   );
 

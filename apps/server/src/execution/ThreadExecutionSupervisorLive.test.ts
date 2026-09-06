@@ -30,6 +30,7 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../provider/Services/ProviderService.ts";
+import { TerminalManager } from "../terminal/Manager.ts";
 import { ThreadExecutionSupervisor } from "./ThreadExecutionSupervisor.ts";
 import { ThreadExecutionSupervisorLive } from "./ThreadExecutionSupervisorLive.ts";
 // T3-CUSTOM(expbkt3): verifies Stop fences the durable coordinator claim.
@@ -70,6 +71,110 @@ layer("ThreadExecutionSupervisor", (it) => {
   // T3-CUSTOM(expbkt3): durable desired state is streamed with provider observation.
   it.effect("joins and refreshes the durable intent in execution snapshots", () =>
     Effect.gen(function* () {
+      const stoppedSetupTerminals: Array<{
+        readonly threadId: string;
+        readonly terminalId: string;
+      }> = [];
+      const providerService = {
+        inspectSession: () => Effect.succeed(null),
+        streamEvents: Stream.empty,
+      } as unknown as ProviderServiceShape;
+      const orchestration = {
+        readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.empty,
+        getThreadReplayStats: () => Effect.die("unused"),
+        subscribeDomainEvents: Effect.succeed(Stream.empty),
+        dispatch: () => Effect.succeed({ sequence: 0 }),
+        streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
+      } satisfies OrchestrationEngineService["Service"];
+      const supervisorLayer = ThreadExecutionSupervisorLive.pipe(
+        Layer.provide(DurableExecutionIntentRepositoryLive),
+        Layer.provide(SessionRecoveryStateLayer),
+        Layer.provide(Layer.succeed(ProviderService, providerService)),
+        Layer.provide(Layer.succeed(OrchestrationEngineService, orchestration)),
+        Layer.provide(
+          Layer.succeed(TerminalManager, {
+            stopCommand: (input: { readonly threadId: string; readonly terminalId: string }) =>
+              Effect.sync(() => void stoppedSetupTerminals.push(input)),
+          } as unknown as TerminalManager["Service"]),
+        ),
+        Layer.provide(NodeServices.layer),
+      );
+
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const supervisor = yield* ThreadExecutionSupervisor;
+        const intentThreadId = ThreadId.make("thread-execution-intent-snapshot");
+        yield* sql`
+          INSERT INTO projection_thread_execution_intents (
+            work_item_id, thread_id, message_id, command_id,
+            desired_state, phase, delivery_certainty, runnable, bootstrap_json,
+            accepted_at, updated_at
+          ) VALUES (
+            'command-intent', ${intentThreadId}, 'message-intent', 'command-intent',
+            'running', 'recovering', 'uncertain', 1,
+            '{"resolvedRequest":{"workspace":{"mode":"new-worktree","projectCwd":"/project","baseRef":{"kind":"branch","source":"local","branch":"main"},"intendedPath":"/worktree","newBranch":"t3code/setup"}}}',
+            ${createdAt}, ${createdAt}
+          )
+        `;
+        yield* sql`
+          INSERT INTO thread_execution_bootstrap_operations (
+            work_item_id, thread_id, worktree_phase, worktree_path,
+            setup_phase, setup_terminal_id, updated_at
+          ) VALUES (
+            'command-intent', ${intentThreadId}, 'acknowledged', '/worktree',
+            'running', 'setup-command-intent', ${createdAt}
+          )
+        `;
+        // A queued follow-up is newer in the snapshot order but does not own
+        // the running setup that this Stop must terminate.
+        yield* sql`
+          INSERT INTO projection_thread_execution_intents (
+            work_item_id, thread_id, message_id, command_id, request_event_sequence,
+            desired_state, phase, delivery_certainty, runnable, accepted_at, updated_at
+          ) VALUES (
+            'command-followup', ${intentThreadId}, 'message-followup', 'command-followup', 9001,
+            'running', 'queued', 'never-delivered', 0, ${createdAt}, ${createdAt}
+          )
+        `;
+
+        const refreshed = yield* supervisor.refreshIntent(intentThreadId);
+        const snapshot = yield* supervisor.getSnapshot(intentThreadId);
+
+        assert.strictEqual(refreshed.revision, 1);
+        assert.strictEqual(snapshot.intent?.workItemId, "command-followup");
+        assert.strictEqual(snapshot.intent?.phase, "queued");
+        assert.strictEqual(snapshot.intent?.recovery.maximumAttempts, 10);
+
+        const stopped = yield* supervisor.stopExecution({ threadId: intentThreadId });
+        const rows = yield* sql<{
+          readonly desiredState: string;
+          readonly runnable: number;
+          readonly claimGeneration: number;
+        }>`
+          SELECT desired_state AS "desiredState", runnable,
+                 claim_generation AS "claimGeneration"
+          FROM projection_thread_execution_intents
+          WHERE work_item_id = 'command-intent'
+        `;
+
+        assert.strictEqual(stopped.disposition, "already-stopped");
+        assert.strictEqual(stopped.snapshot.intent, undefined);
+        assert.strictEqual(rows[0]?.desiredState, "stopped");
+        assert.strictEqual(rows[0]?.runnable, 0);
+        assert.strictEqual(rows[0]?.claimGeneration, 1);
+        assert.deepStrictEqual(stoppedSetupTerminals, [
+          { threadId: intentThreadId, terminalId: "setup-command-intent" },
+        ]);
+      }).pipe(Effect.provide(supervisorLayer));
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): persisted request ownership wins over a newer queued
+  // follow-up and survives a supervisor restart with no in-memory request map.
+  it.effect("reconciles simultaneous persisted native blockers before a queued follow-up", () =>
+    Effect.gen(function* () {
       const providerService = {
         inspectSession: () => Effect.succeed(null),
         streamEvents: Stream.empty,
@@ -94,43 +199,53 @@ layer("ThreadExecutionSupervisor", (it) => {
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const supervisor = yield* ThreadExecutionSupervisor;
-        const intentThreadId = ThreadId.make("thread-execution-intent-snapshot");
+        const persistedThreadId = ThreadId.make("thread-persisted-native-blockers");
+        yield* supervisor.admitIdleTurn({
+          threadId: persistedThreadId,
+          executionId: "persisted-execution",
+          expectedExecutionRevision: 0,
+          providerInstanceId,
+          startedAt: createdAt,
+        });
         yield* sql`
           INSERT INTO projection_thread_execution_intents (
-            work_item_id, thread_id, message_id, command_id,
-            desired_state, phase, delivery_certainty, runnable,
-            accepted_at, updated_at
-          ) VALUES (
-            'command-intent', ${intentThreadId}, 'message-intent', 'command-intent',
-            'running', 'recovering', 'uncertain', 1, ${createdAt}, ${createdAt}
-          )
+            work_item_id, thread_id, message_id, command_id, desired_state, phase,
+            delivery_certainty, runnable, request_event_sequence, accepted_at, updated_at
+          ) VALUES
+            ('blocked-intent', ${persistedThreadId}, 'blocked-message', 'blocked-command', 'running', 'waiting-for-input', 'provider-acknowledged', 0, 1, ${createdAt}, ${createdAt}),
+            ('queued-followup', ${persistedThreadId}, 'queued-message', 'queued-command', 'running', 'queued', 'provider-acknowledged', 1, 2, ${createdAt}, ${createdAt})
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            ('native-a-request', ${persistedThreadId}, NULL, 'info', 'user-input.requested', 'Question A', '{"requestId":"native-a"}', 10, ${createdAt}),
+            ('native-b-request', ${persistedThreadId}, NULL, 'info', 'user-input.requested', 'Question B', '{"requestId":"native-b"}', 11, ${createdAt}),
+            ('async-question', ${persistedThreadId}, NULL, 'info', 'user-input.requested', 'Async question', '{"requestId":"async-only","responseMode":"message"}', 12, ${createdAt})
         `;
 
-        const refreshed = yield* supervisor.refreshIntent(intentThreadId);
-        const snapshot = yield* supervisor.getSnapshot(intentThreadId);
+        let snapshot = yield* supervisor.refreshIntent(persistedThreadId);
+        assert.strictEqual(snapshot.activity, "blocked");
+        assert.strictEqual(snapshot.turn?.state, "waiting-for-input");
+        assert.strictEqual(snapshot.intent?.workItemId, "queued-followup");
 
-        assert.strictEqual(refreshed.revision, 1);
-        assert.strictEqual(snapshot.intent?.workItemId, "command-intent");
-        assert.strictEqual(snapshot.intent?.phase, "recovering");
-        assert.strictEqual(snapshot.intent?.recovery.maximumAttempts, 10);
-
-        const stopped = yield* supervisor.stopExecution({ threadId: intentThreadId });
-        const rows = yield* sql<{
-          readonly desiredState: string;
-          readonly runnable: number;
-          readonly claimGeneration: number;
-        }>`
-          SELECT desired_state AS "desiredState", runnable,
-                 claim_generation AS "claimGeneration"
-          FROM projection_thread_execution_intents
-          WHERE work_item_id = 'command-intent'
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES ('native-a-resolved', ${persistedThreadId}, NULL, 'info', 'user-input.resolved', 'Answered', '{"requestId":"native-a"}', 13, ${createdAt})
         `;
+        snapshot = yield* supervisor.refreshIntent(persistedThreadId);
+        assert.strictEqual(snapshot.activity, "blocked");
+        assert.strictEqual(snapshot.turn?.state, "waiting-for-input");
 
-        assert.strictEqual(stopped.disposition, "already-stopped");
-        assert.strictEqual(stopped.snapshot.intent, undefined);
-        assert.strictEqual(rows[0]?.desiredState, "stopped");
-        assert.strictEqual(rows[0]?.runnable, 0);
-        assert.strictEqual(rows[0]?.claimGeneration, 1);
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES ('native-b-resolved', ${persistedThreadId}, NULL, 'info', 'user-input.resolved', 'Answered', '{"requestId":"native-b"}', 14, ${createdAt})
+        `;
+        snapshot = yield* supervisor.refreshIntent(persistedThreadId);
+        assert.strictEqual(snapshot.activity, "active");
+        assert.strictEqual(snapshot.turn?.state, "running");
       }).pipe(Effect.provide(supervisorLayer));
     }),
   );
@@ -159,6 +274,7 @@ layer("ThreadExecutionSupervisor", (it) => {
       );
 
       yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
         const supervisor = yield* ThreadExecutionSupervisor;
         const results = yield* Effect.all(
           ["automatic-a", "automatic-b"].map((executionId) =>
@@ -361,6 +477,7 @@ layer("ThreadExecutionSupervisor", (it) => {
       );
 
       yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
         const supervisor = yield* ThreadExecutionSupervisor;
         yield* Effect.yieldNow;
         const firstEvent = startEvent("one");
@@ -631,6 +748,7 @@ layer("ThreadExecutionSupervisor", (it) => {
       );
 
       yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
         const supervisor = yield* ThreadExecutionSupervisor;
         yield* Effect.yieldNow;
         const prepared = yield* supervisor.prepareExecution(startEvent("exit"));
@@ -650,6 +768,97 @@ layer("ThreadExecutionSupervisor", (it) => {
         const adopted = yield* supervisor.getSnapshot(threadId);
         assert.strictEqual(adopted.providerSession.generation, 7);
         assert.strictEqual(adopted.turn?.providerTurnId, TurnId.make("provider-turn"));
+
+        yield* PubSub.publish(runtimeEvents, {
+          type: "user-input.requested",
+          eventId: EventId.make("async-question"),
+          provider,
+          providerInstanceId,
+          threadId,
+          sessionGeneration: 7,
+          turnId: TurnId.make("provider-turn"),
+          createdAt,
+          payload: { questions: [], responseMode: "message" },
+        });
+        for (let attempt = 0; attempt < 10; attempt += 1) yield* Effect.yieldNow;
+        const afterAsyncQuestion = yield* supervisor.getSnapshot(threadId);
+        assert.strictEqual(afterAsyncQuestion.activity, "active");
+        assert.strictEqual(afterAsyncQuestion.turn?.state, "running");
+
+        // T3-CUSTOM(expbkt3): resolving one native request must not clear a
+        // second outstanding blocker from the same provider turn.
+        for (const requestId of ["approval-a", "approval-b"] as const) {
+          yield* PubSub.publish(runtimeEvents, {
+            type: "request.opened",
+            eventId: EventId.make(`opened-${requestId}`),
+            provider,
+            providerInstanceId,
+            threadId,
+            sessionGeneration: 7,
+            turnId: TurnId.make("provider-turn"),
+            requestId: requestId as never,
+            createdAt,
+            payload: { requestType: "command_execution_approval" },
+          });
+        }
+        for (let attempt = 0; attempt < 10; attempt += 1) yield* Effect.yieldNow;
+        yield* PubSub.publish(runtimeEvents, {
+          type: "request.resolved",
+          eventId: EventId.make("resolved-approval-a"),
+          provider,
+          providerInstanceId,
+          threadId,
+          sessionGeneration: 7,
+          turnId: TurnId.make("provider-turn"),
+          requestId: "approval-a" as never,
+          createdAt,
+          payload: { requestType: "command_execution_approval" },
+        });
+        for (let attempt = 0; attempt < 10; attempt += 1) yield* Effect.yieldNow;
+        const afterFirstNativeResolution = yield* supervisor.getSnapshot(threadId);
+        assert.strictEqual(afterFirstNativeResolution.activity, "blocked");
+        assert.strictEqual(afterFirstNativeResolution.turn?.state, "waiting-for-approval");
+
+        // T3-CUSTOM(expbkt3): A stale provider response is terminal once its
+        // projection lands, even if this process saw the opening event first.
+        yield* PubSub.publish(runtimeEvents, {
+          type: "user-input.requested",
+          eventId: EventId.make("opened-stale-input"),
+          provider,
+          providerInstanceId,
+          threadId,
+          sessionGeneration: 7,
+          turnId: TurnId.make("provider-turn"),
+          requestId: "stale-input" as never,
+          createdAt,
+          payload: { questions: [] },
+        });
+        for (let attempt = 0; attempt < 10; attempt += 1) yield* Effect.yieldNow;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES ('stale-input-failure', ${threadId}, 'provider-turn', 'error',
+            'provider.user-input.respond.failed', 'Stale',
+            '{"requestId":"stale-input","detail":"Unknown pending codex user input request"}', 99, ${createdAt})
+        `;
+        yield* supervisor.refreshIntent(threadId);
+
+        yield* PubSub.publish(runtimeEvents, {
+          type: "request.resolved",
+          eventId: EventId.make("resolved-approval-b"),
+          provider,
+          providerInstanceId,
+          threadId,
+          sessionGeneration: 7,
+          turnId: TurnId.make("provider-turn"),
+          requestId: "approval-b" as never,
+          createdAt,
+          payload: { requestType: "command_execution_approval" },
+        });
+        for (let attempt = 0; attempt < 10; attempt += 1) yield* Effect.yieldNow;
+        const afterStaleClosure = yield* supervisor.getSnapshot(threadId);
+        assert.strictEqual(afterStaleClosure.activity, "active");
+        assert.strictEqual(afterStaleClosure.turn?.state, "running");
 
         yield* PubSub.publish(runtimeEvents, {
           type: "turn.started",

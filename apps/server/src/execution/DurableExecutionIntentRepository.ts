@@ -287,6 +287,13 @@ export interface DurableExecutionIntentRepositoryShape {
     readonly step: "worktree" | "setup";
     readonly at: string;
   }) => Effect.Effect<Option.Option<DurableBootstrapPhase>, ProjectionRepositoryError>;
+  /** Marks the actual worktree creation side-effect boundary after validation. */
+  readonly beginWorktreeCreation: (input: {
+    readonly workItemId: string;
+    readonly owner: string;
+    readonly generation: number;
+    readonly at: string;
+  }) => Effect.Effect<boolean, ProjectionRepositoryError>;
   readonly acknowledgeBootstrapStep: (input: {
     readonly workItemId: string;
     readonly owner: string;
@@ -309,6 +316,8 @@ export interface DurableExecutionIntentRepositoryShape {
     readonly owner: string;
     readonly generation: number;
     readonly at: string;
+    /** A known earlier durable turn is ordinary queueing, not a failed recovery. */
+    readonly restoreRecoveryAttempt?: boolean;
   }) => Effect.Effect<boolean, ProjectionRepositoryError>;
   readonly beginRecoveryAttempt: (input: {
     readonly workItemId: string;
@@ -410,6 +419,9 @@ export interface DurableExecutionIntentRepositoryShape {
       | "user-input.requested"
       | "user-input.resolved";
     readonly at: string;
+    readonly requestId?: string;
+    /** `message` questions remain visible but do not pause provider execution. */
+    readonly responseMode?: "message";
   }) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
@@ -620,7 +632,62 @@ const make = Effect.gen(function* () {
         )
       RETURNING work_item_id
     `.pipe(
-      Effect.map((rows) => rows.length),
+      Effect.flatMap((rows) =>
+        // T3-CUSTOM(expbkt3): the supervisor can retain a persisted
+        // waiting-for-input snapshot across an upgrade or reconnect. Repair it
+        // from the request ledger before any coordinator work starts; an async
+        // message-mode question is visible but never a durable blocker.
+        sql`
+          WITH request_lifecycle AS (
+            SELECT
+              thread_id,
+              kind,
+              turn_id,
+              json_extract(payload_json, '$.responseMode') AS response_mode,
+              ROW_NUMBER() OVER (
+                PARTITION BY thread_id, json_extract(payload_json, '$.requestId')
+                ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                         sequence DESC, created_at DESC, activity_id DESC
+              ) AS request_order
+            FROM projection_thread_activities
+            WHERE (
+              kind IN ('approval.requested', 'approval.resolved', 'user-input.requested', 'user-input.resolved')
+              OR (
+                kind = 'provider.user-input.respond.failed'
+                AND (
+                  lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%stale pending user-input request%'
+                  OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending user-input request%'
+                  OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending user input request%'
+                  OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending codex user input request%'
+                )
+              )
+            )
+            AND json_extract(payload_json, '$.requestId') IS NOT NULL
+          ), blocking_threads AS (
+            SELECT DISTINCT thread_id
+            FROM request_lifecycle
+            WHERE request_order = 1
+              AND (
+                kind = 'approval.requested'
+                OR (kind = 'user-input.requested' AND COALESCE(response_mode, '') <> 'message')
+              )
+              AND (
+                turn_id IS NULL
+                OR NOT EXISTS (
+                  SELECT 1 FROM projection_turns AS turn
+                  WHERE turn.thread_id = request_lifecycle.thread_id
+                    AND turn.turn_id = request_lifecycle.turn_id
+                    AND turn.state IN ('completed', 'interrupted', 'error')
+                )
+              )
+          )
+          UPDATE projection_thread_execution_intents
+          SET phase = 'recovering', runnable = 1, next_attempt_at = ${at}, updated_at = ${at}
+          WHERE desired_state = 'running'
+            AND phase IN ('waiting-for-approval', 'waiting-for-input')
+            AND thread_id NOT IN (SELECT thread_id FROM blocking_threads)
+        `.pipe(Effect.as(rows.length)),
+      ),
       Effect.mapError((cause) =>
         persistenceError("DurableExecutionIntentRepository.reconcileStartup", cause),
       ),
@@ -871,11 +938,10 @@ const make = Effect.gen(function* () {
           const phase = step === "worktree" ? row.worktreePhase : row.setupPhase;
           if (phase !== "pending") return Option.some(phase);
           if (step === "worktree") {
-            yield* sql`
-            UPDATE thread_execution_bootstrap_operations
-            SET worktree_phase = 'running', updated_at = ${at}
-            WHERE work_item_id = ${workItemId} AND worktree_phase = 'pending'
-          `;
+            // T3-CUSTOM(expbkt3): validation and fetches are replay-safe. Do
+            // not turn them into a crash uncertainty boundary; only the actual
+            // createWorktree call is non-idempotent.
+            return Option.some<DurableBootstrapPhase>("pending");
           } else {
             yield* sql`
             UPDATE thread_execution_bootstrap_operations
@@ -940,6 +1006,32 @@ const make = Effect.gen(function* () {
         ),
       );
     };
+
+  const beginWorktreeCreation: DurableExecutionIntentRepositoryShape["beginWorktreeCreation"] = ({
+    workItemId,
+    owner,
+    generation,
+    at,
+  }) =>
+    sql<{ readonly workItemId: string }>`
+      UPDATE thread_execution_bootstrap_operations AS bootstrap
+      SET worktree_phase = 'running', updated_at = ${at}
+      WHERE work_item_id = ${workItemId}
+        AND worktree_phase = 'pending'
+        AND EXISTS (
+          SELECT 1 FROM projection_thread_execution_intents AS intent
+          WHERE intent.work_item_id = bootstrap.work_item_id
+            AND intent.desired_state = 'running'
+            AND intent.claim_owner = ${owner}
+            AND intent.claim_generation = ${generation}
+        )
+      RETURNING work_item_id AS "workItemId"
+    `.pipe(
+      Effect.map((rows) => rows.length === 1),
+      Effect.mapError((cause) =>
+        persistenceError("DurableExecutionIntentRepository.beginWorktreeCreation", cause),
+      ),
+    );
 
   const markBootstrapStepFailed: DurableExecutionIntentRepositoryShape["markBootstrapStepFailed"] =
     ({ workItemId, owner, generation, step, phase, detail, at }) => {
@@ -1034,10 +1126,18 @@ const make = Effect.gen(function* () {
     owner,
     generation,
     at,
+    restoreRecoveryAttempt = false,
   }) =>
     sql<{ readonly workItemId: string }>`
       UPDATE projection_thread_execution_intents
-      SET phase = 'queued', runnable = 0, next_attempt_at = NULL,
+      -- T3-CUSTOM(expbkt3): a known earlier provider turn only defers this
+      -- recovery claim; it must retain guarded-continuation certainty.
+      SET phase = CASE WHEN ${restoreRecoveryAttempt ? 1 : 0} THEN 'recovering' ELSE 'queued' END,
+          runnable = 0, next_attempt_at = NULL,
+          recovery_attempts = CASE
+            WHEN ${restoreRecoveryAttempt ? 1 : 0} THEN MAX(0, recovery_attempts - 1)
+            ELSE recovery_attempts
+          END,
           claim_owner = NULL, claim_expires_at = NULL, updated_at = ${at}
       WHERE work_item_id = ${workItemId}
         AND desired_state = 'running'
@@ -1256,7 +1356,7 @@ const make = Effect.gen(function* () {
             WHERE work_item_id = (
               SELECT work_item_id FROM projection_thread_execution_intents
               WHERE thread_id = ${row.threadId} AND desired_state = 'running'
-                AND phase = 'queued' AND runnable = 0
+                AND phase IN ('queued', 'recovering') AND runnable = 0
               ORDER BY request_event_sequence ASC LIMIT 1
             )
           `;
@@ -1619,7 +1719,7 @@ const make = Effect.gen(function* () {
             WHERE work_item_id = (
               SELECT work_item_id FROM projection_thread_execution_intents
               WHERE thread_id = ${input.threadId} AND desired_state = 'running'
-                AND phase = 'queued' AND runnable = 0
+                AND phase IN ('queued', 'recovering') AND runnable = 0
               ORDER BY request_event_sequence ASC LIMIT 1
             )
           `;
@@ -1698,18 +1798,76 @@ const make = Effect.gen(function* () {
   };
 
   const observeBlockingActivity: DurableExecutionIntentRepositoryShape["observeBlockingActivity"] =
-    ({ threadId, kind, at }) => {
+    ({ threadId, kind, at, responseMode }) => {
       const requested = kind === "approval.requested" || kind === "user-input.requested";
-      const requestedValue = requested ? 1 : 0;
-      const phase = kind.startsWith("approval") ? "waiting-for-approval" : "waiting-for-input";
+      const requestIsBlocking =
+        requested && !(kind === "user-input.requested" && responseMode === "message");
       return sql`
+        WITH request_lifecycle AS (
+          SELECT
+            kind,
+            turn_id,
+            json_extract(payload_json, '$.requestId') AS request_id,
+            json_extract(payload_json, '$.responseMode') AS response_mode,
+            lower(COALESCE(json_extract(payload_json, '$.detail'), '')) AS detail,
+            ROW_NUMBER() OVER (
+              PARTITION BY json_extract(payload_json, '$.requestId')
+              ORDER BY CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                       sequence DESC, created_at DESC, activity_id DESC
+            ) AS request_order
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            AND (
+              kind IN ('approval.requested', 'approval.resolved', 'user-input.requested', 'user-input.resolved')
+              OR (
+                kind = 'provider.user-input.respond.failed'
+                AND (
+                  lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%stale pending user-input request%'
+                  OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending user-input request%'
+                  OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending user input request%'
+                  OR lower(COALESCE(json_extract(payload_json, '$.detail'), '')) LIKE '%unknown pending codex user input request%'
+                )
+              )
+            )
+            AND json_extract(payload_json, '$.requestId') IS NOT NULL
+        ), blockers AS (
+          SELECT COUNT(*) AS count
+          FROM request_lifecycle
+          WHERE request_order = 1
+            AND (
+              kind = 'approval.requested'
+              OR (kind = 'user-input.requested' AND COALESCE(response_mode, '') <> 'message')
+            )
+            AND (
+              turn_id IS NULL
+              OR NOT EXISTS (
+                SELECT 1 FROM projection_turns AS turn
+                WHERE turn.thread_id = ${threadId}
+                  AND turn.turn_id = request_lifecycle.turn_id
+                  AND turn.state IN ('completed', 'interrupted', 'error')
+              )
+            )
+        )
         UPDATE projection_thread_execution_intents
-        SET phase = ${requested ? phase : "running"},
-            runnable = ${requested ? 0 : 1},
-            next_attempt_at = NULL,
-            claim_owner = CASE WHEN ${requestedValue} THEN NULL ELSE claim_owner END,
-            claim_generation = claim_generation + CASE WHEN ${requestedValue} THEN 1 ELSE 0 END,
-            claim_expires_at = CASE WHEN ${requestedValue} THEN NULL ELSE claim_expires_at END,
+        SET phase = CASE
+              WHEN (SELECT count FROM blockers) > 0 THEN CASE
+                WHEN EXISTS (SELECT 1 FROM request_lifecycle WHERE request_order = 1 AND kind = 'approval.requested')
+                THEN 'waiting-for-approval'
+                ELSE 'waiting-for-input'
+              END
+              WHEN ${requestIsBlocking ? 1 : 0} THEN ${kind.startsWith("approval") ? "waiting-for-approval" : "waiting-for-input"}
+              WHEN phase IN ('waiting-for-approval', 'waiting-for-input') THEN 'running'
+              ELSE phase
+            END,
+            runnable = CASE
+              WHEN (SELECT count FROM blockers) > 0 OR ${requestIsBlocking ? 1 : 0} THEN 0
+              WHEN phase IN ('waiting-for-approval', 'waiting-for-input') THEN 1
+              ELSE runnable
+            END,
+            next_attempt_at = CASE WHEN (SELECT count FROM blockers) > 0 OR ${requestIsBlocking ? 1 : 0} THEN NULL ELSE next_attempt_at END,
+            claim_owner = CASE WHEN (SELECT count FROM blockers) > 0 OR ${requestIsBlocking ? 1 : 0} THEN NULL ELSE claim_owner END,
+            claim_generation = claim_generation + CASE WHEN (SELECT count FROM blockers) > 0 OR ${requestIsBlocking ? 1 : 0} THEN 1 ELSE 0 END,
+            claim_expires_at = CASE WHEN (SELECT count FROM blockers) > 0 OR ${requestIsBlocking ? 1 : 0} THEN NULL ELSE claim_expires_at END,
             updated_at = ${at}
         WHERE work_item_id = (
           SELECT work_item_id FROM projection_thread_execution_intents
@@ -1743,6 +1901,7 @@ const make = Effect.gen(function* () {
     markProviderStarting,
     getBootstrapOperation,
     beginBootstrapStep,
+    beginWorktreeCreation,
     acknowledgeBootstrapStep,
     markBootstrapStepFailed,
     deferClaim,

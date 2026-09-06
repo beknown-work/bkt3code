@@ -68,6 +68,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
+          -- T3-CUSTOM(expbkt3): non-blocking async question counter.
+          pending_async_user_input_count,
           has_actionable_proposed_plan,
           rolling_summary,
           deleted_at
@@ -109,6 +111,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.latestUserMessageAt},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
+          -- T3-CUSTOM(expbkt3): non-blocking async question counter.
+          ${row.pendingAsyncUserInputCount ?? 0},
           ${row.hasActionableProposedPlan},
           ${row.rollingSummary},
           ${row.deletedAt}
@@ -150,6 +154,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at = excluded.latest_user_message_at,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
+          -- T3-CUSTOM(expbkt3): non-blocking async question counter.
+          pending_async_user_input_count = excluded.pending_async_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
           rolling_summary = excluded.rolling_summary,
           deleted_at = excluded.deleted_at
@@ -198,6 +204,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): non-blocking async question counter.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -248,6 +256,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): non-blocking async question counter.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -304,6 +314,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): non-blocking async question counter.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"

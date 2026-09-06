@@ -386,12 +386,27 @@ export const make = Effect.gen(function* () {
           // remote fall back to the local base branch instead of failing the
           // whole bootstrap on `git fetch origin`. Upstream applies this in
           // ws.ts; the fork relocated this block here, so it carries the guard.
-          const startFromOrigin =
+          const originExists = yield* gitWorkflow.remoteExists({
+            cwd: bootstrap.prepareWorktree.projectCwd,
+            remoteName: "origin",
+          });
+          // T3-CUSTOM(expbkt3): keep inherited origin defaults working where
+          // available, but surface an explicitly chosen missing origin base.
+          if (
             bootstrap.prepareWorktree.startFromOrigin === true &&
-            (yield* gitWorkflow.remoteExists({
-              cwd: bootstrap.prepareWorktree.projectCwd,
-              remoteName: "origin",
-            }));
+            !originExists &&
+            bootstrap.prepareWorktree.baseRefExplicit === true
+          ) {
+            return yield* Effect.fail(
+              new OrchestrationDispatchCommandError({
+                message:
+                  "The selected origin worktree base is unavailable because this repository has no origin remote.",
+                cause: null,
+              }),
+            );
+          }
+          const startFromOrigin =
+            bootstrap.prepareWorktree.startFromOrigin === true && originExists;
           if (startFromOrigin) {
             yield* gitWorkflow.fetchRemote({
               cwd: bootstrap.prepareWorktree.projectCwd,

@@ -58,4 +58,20 @@ describe("ComposerPendingUserInputPanel", () => {
     expect(markup).toContain("Incremental");
     expect(markup).toContain("Big bang");
   });
+
+  it("marks message-mode questions as async without presenting a blocking state", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerPendingUserInputPanel
+        pendingUserInputs={[{ ...prompt, responseMode: "message" }]}
+        respondingRequestIds={[]}
+        answers={{}}
+        questionIndex={0}
+        onToggleOption={() => {}}
+        onAdvance={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Async");
+    expect(markup).toContain("Agent can continue while you decide.");
+  });
 });

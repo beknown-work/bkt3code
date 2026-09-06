@@ -533,6 +533,34 @@ export const ThreadExecutionIntentPhase = Schema.Literals([
 ]);
 export type ThreadExecutionIntentPhase = typeof ThreadExecutionIntentPhase.Type;
 
+// T3-CUSTOM(expbkt3): durable bootstrap survives atomic turn acceptance even
+// when the legacy bootstrap projection has no record to expose to clients.
+export const ThreadExecutionIntentBootstrap = Schema.Struct({
+  workspaceMode: Schema.Literals(["local", "existing-worktree", "new-worktree"]),
+  base: Schema.NullOr(Schema.String),
+  intendedPath: Schema.NullOr(Schema.String),
+  newBranch: Schema.NullOr(Schema.String),
+  worktreePhase: Schema.Literals([
+    "pending",
+    "running",
+    "acknowledged",
+    "failed",
+    "uncertain",
+    "not-required",
+  ]),
+  setupPhase: Schema.Literals([
+    "pending",
+    "running",
+    "acknowledged",
+    "failed",
+    "uncertain",
+    "not-required",
+  ]),
+  failureDetail: Schema.NullOr(Schema.String),
+  setupTerminalId: Schema.NullOr(Schema.String),
+});
+export type ThreadExecutionIntentBootstrap = typeof ThreadExecutionIntentBootstrap.Type;
+
 export const ThreadExecutionIntent = Schema.Struct({
   workItemId: TrimmedNonEmptyString,
   messageId: MessageId,
@@ -540,6 +568,7 @@ export const ThreadExecutionIntent = Schema.Struct({
   phase: ThreadExecutionIntentPhase,
   acceptedAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  bootstrap: Schema.optionalKey(ThreadExecutionIntentBootstrap),
   recovery: Schema.Struct({
     attempt: NonNegativeInt,
     maximumAttempts: NonNegativeInt,
@@ -1003,6 +1032,10 @@ export const OrchestrationThreadShell = Schema.Struct({
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
+  // T3-CUSTOM(expbkt3): async questions remain answerable without parking the agent.
+  hasPendingAsyncUserInput: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   hasActionableProposedPlan: Schema.Boolean,
   /**
    * Native background work alive after the turn settles: "working" while
@@ -1361,6 +1394,9 @@ export const ResolvedThreadBootstrapWorkspace = Schema.Union([
     mode: Schema.Literal("new-worktree"),
     projectCwd: TrimmedNonEmptyString,
     baseRef: WorktreeBaseRef,
+    // T3-CUSTOM(expbkt3): resolved defaults retain whether origin came from
+    // the caller. Only an inherited origin selection may fall back locally.
+    originBaseExplicitlyRequested: Schema.optional(Schema.Literal(true)),
     newBranch: Schema.optional(TrimmedNonEmptyString),
     // T3-CUSTOM(expbkt3): deterministic crash-recovery identity. Older
     // persisted requests may omit it and are recovered as a visible failure.
@@ -1627,6 +1663,9 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   baseBranch: TrimmedNonEmptyString,
   branch: Schema.optional(TrimmedNonEmptyString),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): startFromOrigin is the effective default; this marker
+  // says the user chose that remote base and wants a missing-origin error.
+  baseRefExplicit: Schema.optional(Schema.Boolean),
 });
 
 // T3-CUSTOM(expbkt3): durable client outboxes validate bootstrap before replay.

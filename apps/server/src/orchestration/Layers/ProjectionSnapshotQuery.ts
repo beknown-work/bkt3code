@@ -672,6 +672,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): async input is visible but never blocking.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -762,6 +764,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): async input is visible but never blocking.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -815,6 +819,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): async input is visible but never blocking.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -1322,6 +1328,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): async input is visible but never blocking.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -1396,6 +1404,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
+          -- T3-CUSTOM(expbkt3): async input is visible but never blocking.
+          pending_async_user_input_count AS "pendingAsyncUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           rolling_summary AS "rollingSummary",
           deleted_at AS "deletedAt"
@@ -3079,6 +3089,8 @@ pending_approval_requests AS (
                         latestUserMessageAt: row.latestUserMessageAt,
                         hasPendingApprovals: row.pendingApprovalCount > 0,
                         hasPendingUserInput: row.pendingUserInputCount > 0,
+                        // T3-CUSTOM(expbkt3): neutral async-question sidebar signal.
+                        hasPendingAsyncUserInput: (row.pendingAsyncUserInputCount ?? 0) > 0,
                         hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                           row.threadId,
@@ -3271,6 +3283,8 @@ pending_approval_requests AS (
                   latestUserMessageAt: row.latestUserMessageAt,
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
+                  // T3-CUSTOM(expbkt3): neutral async-question sidebar signal.
+                  hasPendingAsyncUserInput: (row.pendingAsyncUserInputCount ?? 0) > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
                   backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
                     row.threadId,
@@ -3644,6 +3658,8 @@ pending_approval_requests AS (
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
+        // T3-CUSTOM(expbkt3): neutral async-question sidebar signal.
+        hasPendingAsyncUserInput: (threadRow.value.pendingAsyncUserInputCount ?? 0) > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,

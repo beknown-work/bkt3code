@@ -922,6 +922,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // T3-CUSTOM(expbkt3): END
   const isInFlight =
     status === "working" || status === "monitoring" || status === "approval" || status === "input";
+  // T3-CUSTOM(expbkt3): a message-mode question is visible without changing
+  // the row's truthful Running/Ready state or promoting it to Needs Input.
+  const asyncQuestionSuffix = thread.hasPendingAsyncUserInput ? " · Question" : "";
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
   // an explicit act, so the pill clears only when the user re-engages:
@@ -952,7 +955,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     status === "working"
       ? {
           // T3-CUSTOM(expbkt3): Sending is distinct from provider-observed Running.
-          label: executionPresentation.label ?? "Working",
+          label: `${executionPresentation.label ?? "Working"}${asyncQuestionSuffix}`,
           icon: "working" as const,
           // No shimmer: a label that animates forever is noise in a sidebar
           // full of them (and repaints every vsync on high-refresh displays).
@@ -965,41 +968,43 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         ? {
             // Monitoring is calm background presence, not active progress
             // (monitoring-pill D6), so it keeps the label at full strength.
-            label: "Monitoring",
+            label: `Monitoring${asyncQuestionSuffix}`,
             icon: null,
             className: "text-sky-600 dark:text-sky-400",
           }
         : status === "approval"
           ? {
-              label: "Approval",
+              label: `Approval${asyncQuestionSuffix}`,
               icon: null,
               className: "text-amber-700 dark:text-amber-300",
             }
           : status === "input"
             ? {
-                label: "Input",
+                label: `Input${asyncQuestionSuffix}`,
                 icon: null,
                 className: "text-indigo-600 dark:text-indigo-300",
               }
             : status === "failed"
               ? {
-                  label: "Failed",
+                  label: `Failed${asyncQuestionSuffix}`,
                   icon: null,
                   className: "text-red-700 dark:text-red-300",
                 }
               : isWoke
                 ? {
-                    label: "Woke",
+                    label: `Woke${asyncQuestionSuffix}`,
                     icon: "woke" as const,
                     className: "text-amber-700 dark:text-amber-300",
                   }
                 : isUnread
                   ? {
-                      label: "Done",
+                      label: `Done${asyncQuestionSuffix}`,
                       icon: "done" as const,
                       className: "text-emerald-700 dark:text-emerald-300",
                     }
-                  : null;
+                  : thread.hasPendingAsyncUserInput
+                    ? { label: "Question", icon: null, className: "text-muted-foreground" }
+                    : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({

@@ -195,6 +195,8 @@ import { closePreviewSession } from "./preview/closePreviewSession";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 // T3-CUSTOM(expbkt3): durable workspace-readiness checklist.
 import { ThreadBootstrapPanel } from "./thread-bootstrap/ThreadBootstrapPanel";
+// T3-CUSTOM(expbkt3): durable accepted bootstrap has no legacy projection row.
+import { DurableBootstrapStatus } from "./thread-bootstrap/DurableBootstrapStatus";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
@@ -353,6 +355,8 @@ import { NoActiveThreadState } from "./NoActiveThreadState";
 import { WorkspacePageHeader } from "./WorkspacePageHeader";
 import {
   type EnvironmentOption,
+  // T3-CUSTOM(expbkt3): show accepted workspace before a worktree path exists.
+  resolveBootstrapWorkspaceMode,
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
@@ -4215,6 +4219,8 @@ export default function ChatView(props: ChatViewProps) {
       worktreePath: null,
       branch: inheritedBaseRef.kind === "branch" ? inheritedBaseRef.branch : null,
       startFromOrigin: inheritedBaseRef.source === "origin",
+      // T3-CUSTOM(expbkt3): resetting restores an inherited base, not a user choice.
+      baseRefExplicit: false,
       runtimeMode: inheritedRuntimeMode,
       interactionMode: inheritedInteractionMode,
     });
@@ -5562,11 +5568,16 @@ export default function ChatView(props: ChatViewProps) {
   }, []);
 
   const activeWorktreePath = activeThread?.worktreePath ?? null;
-  const derivedEnvMode: DraftThreadEnvMode = resolveEffectiveEnvMode({
-    activeWorktreePath,
-    hasServerThread: isServerThread,
-    draftThreadEnvMode: isLocalDraftThread ? draftThread?.envMode : undefined,
-  });
+  // T3-CUSTOM(expbkt3): worktreePath remains null while creation is pending
+  // (and after a retained failure), but the accepted bootstrap is authoritative
+  // about the workspace the user asked for.
+  const derivedEnvMode: DraftThreadEnvMode =
+    resolveBootstrapWorkspaceMode(activeThread?.execution?.intent?.bootstrap) ??
+    resolveEffectiveEnvMode({
+      activeWorktreePath,
+      hasServerThread: isServerThread,
+      draftThreadEnvMode: isLocalDraftThread ? draftThread?.envMode : undefined,
+    });
   const canOverrideServerThreadEnvMode = Boolean(
     isServerThread &&
     activeThread &&
@@ -7308,6 +7319,7 @@ export default function ChatView(props: ChatViewProps) {
     };
     const normalizedDraftBranch = sendWorkspace.branch?.replace(/^origin\//, "") ?? null;
     const workspaceMatchesInheritedDefault =
+      !draftThread?.baseRefExplicit &&
       sendWorkspace.worktreePath === null &&
       sendWorkspace.envMode === inheritedEnvMode &&
       (sendWorkspace.envMode === "local" ||
@@ -7327,16 +7339,22 @@ export default function ChatView(props: ChatViewProps) {
         : sendWorkspace.envMode === "worktree"
           ? {
               mode: "new-worktree" as const,
-              baseRef: sendWorkspace.branch
+              // T3-CUSTOM(expbkt3): the branch shown for an inherited default
+              // must not turn an absent origin into an explicit origin request.
+              ...(draftThread?.baseRefExplicit
                 ? {
-                    kind: "branch" as const,
-                    source: startFromOrigin ? ("origin" as const) : ("local" as const),
-                    branch: sendWorkspace.branch.replace(/^origin\//, ""),
+                    baseRef: sendWorkspace.branch
+                      ? {
+                          kind: "branch" as const,
+                          source: startFromOrigin ? ("origin" as const) : ("local" as const),
+                          branch: sendWorkspace.branch.replace(/^origin\//, ""),
+                        }
+                      : {
+                          kind: "repository-default" as const,
+                          source: startFromOrigin ? ("origin" as const) : ("local" as const),
+                        },
                   }
-                : {
-                    kind: "repository-default" as const,
-                    source: startFromOrigin ? ("origin" as const) : ("local" as const),
-                  },
+                : {}),
             }
           : { mode: "local" as const };
     const bootstrapOverrides = {
@@ -8309,10 +8327,14 @@ export default function ChatView(props: ChatViewProps) {
             settings.newWorktreesStartFromOrigin);
         setDraftThreadContext(composerDraftTarget, {
           envMode: mode,
-          startFromOrigin: resolveNewDraftStartFromOrigin({
-            envMode: mode,
-            newWorktreesStartFromOrigin: inheritedStartFromOrigin,
-          }),
+          // T3-CUSTOM(expbkt3): a mode toggle keeps an explicit branch/source
+          // pair intact; only inherited drafts recompute their display default.
+          startFromOrigin: draftThread?.baseRefExplicit
+            ? draftThread.startFromOrigin
+            : resolveNewDraftStartFromOrigin({
+                envMode: mode,
+                newWorktreesStartFromOrigin: inheritedStartFromOrigin,
+              }),
           ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
         });
       }
@@ -8322,6 +8344,8 @@ export default function ChatView(props: ChatViewProps) {
       canOverrideServerThreadEnvMode,
       activeProject?.threadCreationDefaults?.worktreeBaseRef,
       composerDraftTarget,
+      draftThread?.baseRefExplicit,
+      draftThread?.startFromOrigin,
       draftThread?.worktreePath,
       isLocalDraftThread,
       settings.newWorktreesStartFromOrigin,
@@ -8343,6 +8367,8 @@ export default function ChatView(props: ChatViewProps) {
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, {
         startFromOrigin: nextStartFromOrigin,
+        // T3-CUSTOM(expbkt3): toggling origin is an explicit base choice.
+        baseRefExplicit: true,
       });
     }
   };
@@ -8715,6 +8741,11 @@ export default function ChatView(props: ChatViewProps) {
                   onContinue={continueBootstrapSetup}
                   {...(bootstrapBaseRefTarget ? { baseRefTarget: bootstrapBaseRefTarget } : {})}
                 />
+              ) : null}
+              {/* T3-CUSTOM(expbkt3): show accepted durable workspace progress when
+                  the resolved-request path never materialized a legacy bootstrap. */}
+              {!activeThread.bootstrap && activeThread.execution?.intent?.bootstrap ? (
+                <DurableBootstrapStatus bootstrap={activeThread.execution.intent.bootstrap} />
               ) : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline

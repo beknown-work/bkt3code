@@ -403,6 +403,9 @@ export async function restoreRejectedQueuedMessage(
               ...(queuedMessage.creation.startFromOrigin !== undefined
                 ? { startFromOrigin: queuedMessage.creation.startFromOrigin }
                 : {}),
+              ...(queuedMessage.creation.baseRefExplicit !== undefined
+                ? { baseRefExplicit: queuedMessage.creation.baseRefExplicit }
+                : {}),
             },
           }
         : {}),
@@ -905,6 +908,8 @@ export function useThreadOutboxDrain(): void {
           branch: creation.branch,
           worktreePath: creation.worktreePath,
           startFromOrigin: creation.startFromOrigin ?? false,
+          // T3-CUSTOM(expbkt3): effective origin and explicit-base provenance differ.
+          baseRefExplicit: creation.baseRefExplicit,
           worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
         }),
       });

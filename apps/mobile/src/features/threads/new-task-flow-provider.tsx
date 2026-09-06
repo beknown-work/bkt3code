@@ -176,7 +176,7 @@ type NewTaskFlowContextValue = {
     options?: ReadonlyArray<ProviderOptionSelection>,
   ) => void;
   readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
-  readonly selectBranch: (branch: VcsRef) => void;
+  readonly selectBranch: (branch: VcsRef, baseRefExplicit?: boolean) => void;
   readonly setStartFromOrigin: (value: boolean) => void;
   readonly beginEditingPendingTask: (messageId: string) => boolean;
   readonly finishEditingPendingTask: () => void;
@@ -699,6 +699,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: mode === "local" ? localSelection.branch : selectedBranchName,
           worktreePath: mode === "local" ? localSelection.worktreePath : selectedWorktreePath,
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
+          ...(selectedProjectDraft.workspaceSelection?.baseRefExplicit
+            ? { baseRefExplicit: true }
+            : {}),
         },
       });
     },
@@ -707,6 +710,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       draftStartFromOrigin,
       selectedBranchName,
       selectedProject,
+      selectedProjectDraft.workspaceSelection?.baseRefExplicit,
       selectedProjectDraftKey,
       selectedWorktreePath,
     ],
@@ -736,18 +740,22 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         branch: localSelection.branch,
         worktreePath: localSelection.worktreePath,
         ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
+        ...(selectedProjectDraft.workspaceSelection?.baseRefExplicit
+          ? { baseRefExplicit: true }
+          : {}),
       },
     });
   }, [
     availableBranches,
     draftStartFromOrigin,
     selectedProject,
+    selectedProjectDraft.workspaceSelection?.baseRefExplicit,
     selectedProjectDraftKey,
     workspaceMode,
   ]);
 
   const selectBranch = useCallback(
-    (branch: VcsRef) => {
+    (branch: VcsRef, baseRefExplicit = true) => {
       if (!selectedProject || !selectedProjectDraftKey) {
         return;
       }
@@ -762,6 +770,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
             branchWorktreePath: branch.worktreePath,
           }),
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
+          // T3-CUSTOM(expbkt3): an automatic default branch is display-only.
+          ...(baseRefExplicit ? { baseRefExplicit: true } : {}),
         },
       });
     },
@@ -779,6 +789,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: selectedBranchName,
           worktreePath: selectedWorktreePath,
           startFromOrigin: value,
+          // T3-CUSTOM(expbkt3): the origin control is an explicit base choice.
+          baseRefExplicit: true,
         },
       });
     },
@@ -810,7 +822,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       availableBranches.find((branch) => branch.current) ??
       null;
     if (preferredBranch) {
-      selectBranch(preferredBranch);
+      // T3-CUSTOM(expbkt3): filling the display default must retain fallback semantics.
+      selectBranch(preferredBranch, false);
     }
   }, [
     allBranchRefs,
@@ -859,6 +872,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
+          ...(message.creation.baseRefExplicit ? { baseRefExplicit: true } : {}),
         },
       });
     }
@@ -937,12 +951,13 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           // to a thread that ran somewhere else.
           branch: workspaceSelection?.branch ?? null,
           worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
-          // The draft only carries the flag when the user touched it; fall
-          // back to the resolved default (server settings) so queued tasks
-          // drain with the same origin mode the composer displayed.
+          // T3-CUSTOM(expbkt3): preserve the effective default and its separate
+          // provenance so normal repos still use origin while no-origin repos
+          // distinguish a user request from fallback.
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
             : {}),
+          ...(workspaceSelection?.baseRefExplicit ? { baseRefExplicit: true } : {}),
           ...((sourceControlProfileId ?? editingPendingTask?.creation?.sourceControlProfileId)
             ? {
                 sourceControlProfileId:

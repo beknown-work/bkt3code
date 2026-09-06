@@ -13,6 +13,7 @@ import {
   resolveEnvModeLabel,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
+  resolveBootstrapWorkspaceMode,
   resolveBranchToolbarValue,
   resolveLockedWorkspaceLabel,
   resolveLocalCheckoutBranchMismatch,
@@ -490,6 +491,20 @@ describe("resolveEffectiveEnvMode", () => {
         draftThreadEnvMode: "worktree",
       }),
     ).toBe("worktree");
+  });
+});
+
+describe("resolveBootstrapWorkspaceMode", () => {
+  const bootstrap = (workspaceMode: "local" | "existing-worktree" | "new-worktree") =>
+    ({ workspaceMode }) as const;
+
+  it("keeps an accepted durable worktree visible before a path exists and after failure", () => {
+    expect(resolveBootstrapWorkspaceMode(bootstrap("new-worktree"))).toBe("worktree");
+    expect(resolveBootstrapWorkspaceMode(bootstrap("existing-worktree"))).toBe("worktree");
+  });
+
+  it("shows the project checkout for a durable local workspace", () => {
+    expect(resolveBootstrapWorkspaceMode(bootstrap("local"))).toBeNull();
   });
 });
 

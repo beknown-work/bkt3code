@@ -123,6 +123,8 @@ import Migration1025 from "./Migrations/044_ClearAutomaticProjectModelDefaults.t
 import Migration1026 from "./Migrations/045_ProjectionProjectsAutoPull.ts";
 import Migration1027 from "./Migrations/046_RepairAutomaticSettlementTimestamps.ts";
 import Migration1028 from "./Migrations/047_ProjectionProjectIcon.ts";
+// T3-CUSTOM(expbkt3): non-blocking async question indicator for shell rows.
+import Migration1029 from "./Migrations/1029_ProjectionThreadsAsyncQuestions.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -244,6 +246,7 @@ const migrationEntries = [
   [1026, "ProjectionProjectsAutoPull", Migration1026],
   [1027, "RepairAutomaticSettlementTimestamps", Migration1027],
   [1028, "ProjectionProjectIcon", Migration1028],
+  [1029, "ProjectionThreadsAsyncQuestions", Migration1029],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

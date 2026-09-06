@@ -303,7 +303,39 @@ describe("derivePendingUserInputs", () => {
         payload: { requestId: "async-1", responseMode: "message", questions: [question] },
       }),
     ];
-    expect(derivePendingUserInputs(activities)[0]?.questions).toEqual([question]);
+    expect(derivePendingUserInputs(activities)[0]).toMatchObject({
+      responseMode: "message",
+      questions: [question],
+    });
+  });
+
+  it("keeps an unanswered async question after its requesting turn completed", () => {
+    const activities = [
+      makeActivity({
+        id: "terminal-async-question",
+        turnId: "turn-terminal",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "async-terminal",
+          responseMode: "message",
+          questions: [
+            {
+              id: "answer",
+              header: "Question",
+              question: "Continue?",
+              options: [],
+              allowCustomAnswer: true,
+              multiSelect: false,
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities, new Set(["turn-terminal"]))).toMatchObject([
+      { requestId: "async-terminal", responseMode: "message" },
+    ]);
   });
 
   it("preserves native choice values and the custom-answer restriction", () => {

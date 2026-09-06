@@ -62,6 +62,9 @@ After sending the first message, the thread opens immediately and shows these du
 2. Running the setup script.
 3. Starting the agent, or marking a prompt-free workspace ready.
 
+The thread continues to identify a pending or failed new worktree as **New
+worktree** until preparation finishes, including after reconnecting.
+
 Setup output is hidden by default. Select **Show output** to open that setup attempt in the terminal
 panel. Interactive prompts can be answered there; closing the panel does not stop the command.
 

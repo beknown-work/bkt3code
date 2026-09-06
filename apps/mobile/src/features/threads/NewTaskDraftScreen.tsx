@@ -879,6 +879,7 @@ export function NewTaskDraftScreen(props: {
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const selectedWorktreePath =
       draft.workspaceSelection?.worktreePath ?? flow.selectedWorktreePath;
+    const baseRefExplicit = draft.workspaceSelection?.baseRefExplicit === true;
     const startFromOrigin = draft.workspaceSelection?.startFromOrigin ?? flow.startFromOrigin;
     const runtimeMode = draft.runtimeMode ?? flow.runtimeMode;
     const interactionMode = resolveProviderInteractionMode(
@@ -985,6 +986,8 @@ export function NewTaskDraftScreen(props: {
       branch: creationBranch,
       worktreePath: workspaceMode === "worktree" ? null : selectedWorktreePath,
       startFromOrigin,
+      // T3-CUSTOM(expbkt3): the effective setting and explicit selection differ.
+      ...(baseRefExplicit ? { baseRefExplicit: true } : {}),
       runtimeMode,
       interactionMode,
       // T3-CUSTOM(expbkt3): The server binds the creator's assigned GitHub

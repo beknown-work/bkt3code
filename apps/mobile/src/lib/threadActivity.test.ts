@@ -104,7 +104,9 @@ describe("pending user input answers", () => {
       createdAt: "2026-09-03T00:00:00.000Z",
       payload: { requestId: "async-1", responseMode: "message", questions: [question] },
     });
-    const questions = derivePendingUserInputs([requested])[0]?.questions;
+    const pending = derivePendingUserInputs([requested])[0];
+    expect(pending?.responseMode).toBe("message");
+    const questions = pending?.questions;
     expect(questions).toEqual([question]);
     expect(buildPendingUserInputAnswers(questions!, { "0": { customAnswer: "Example" } })).toEqual({
       "0": "Example",

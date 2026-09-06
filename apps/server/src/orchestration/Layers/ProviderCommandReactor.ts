@@ -109,6 +109,8 @@ import {
   makeDurableExecutionCoordinator,
 } from "../../execution/DurableExecutionCoordinator.ts";
 import { DurableExecutionIntentRepository } from "../../execution/DurableExecutionIntentRepository.ts";
+// T3-CUSTOM(expbkt3): stop a setup command by its owned durable terminal id.
+import { TerminalManager } from "../../terminal/Manager.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderWorkspaceMissingError = Schema.is(ProviderWorkspaceMissingError);
@@ -202,6 +204,23 @@ type ProviderIntentEvent = Extract<
       | "thread.settled";
   }
 >;
+
+// T3-CUSTOM(expbkt3): projection fences a Stop before the reactor processes
+// it. A later accepted turn must never be mistaken for that Stop's setup.
+export function isSetupOwnedByStop(
+  item: Pick<
+    import("../../execution/DurableExecutionIntentRepository.ts").DurableExecutionIntent,
+    "desiredState" | "phase" | "requestEventSequence"
+  >,
+  stopEventSequence: number,
+): boolean {
+  return (
+    item.desiredState === "stopped" &&
+    item.phase === "stopping" &&
+    item.requestEventSequence !== null &&
+    item.requestEventSequence <= stopEventSequence
+  );
+}
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -502,6 +521,7 @@ const make = Effect.gen(function* () {
   const projectSetupScriptRunner = yield* Effect.serviceOption(ProjectSetupScriptRunner);
   // T3-CUSTOM(expbkt3): optional keeps isolated upstream reactor tests lightweight.
   const durableIntentRepository = yield* Effect.serviceOption(DurableExecutionIntentRepository);
+  const terminalManager = yield* Effect.serviceOption(TerminalManager);
   const sourceControlProfiles = yield* Effect.serviceOption(SourceControlProfileService);
   // T3-CUSTOM(expbkt3): optional for the same reason as the profile service —
   // isolated upstream reactor tests do not build the user directory.
@@ -2267,71 +2287,101 @@ const make = Effect.gen(function* () {
     const wasCompacting = compactingThreadIds.has(thread.id);
     stoppingThreadIds.add(thread.id);
     const clearStopping = Effect.sync(() => void stoppingThreadIds.delete(thread.id));
-    yield* (
-      thread.session
-        ? providerService.stopSession({ threadId: thread.id }).pipe(
-            // T3-CUSTOM(expbkt3): a hung stop cannot hold the shared command lane.
-            Effect.timeoutOption(SESSION_STOP_TIMEOUT),
-            Effect.tap((stopped) =>
-              Option.isNone(stopped)
-                ? Effect.logWarning("provider session stop timed out on the reactor lane", {
-                    threadId: thread.id,
-                    timeout: SESSION_STOP_TIMEOUT,
-                  })
-                : Effect.void,
-            ),
-            Effect.asVoid,
-          )
-        : Effect.void
-    ).pipe(
-      Effect.matchCauseEffect({
-        onFailure: (cause) => {
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.interrupt;
-          }
-          const detail = formatFailureDetail(cause);
-          return Effect.sync(() => {
-            stoppingThreadIds.delete(thread.id);
-            return wasCompacting && !compactingThreadIds.has(thread.id);
-          }).pipe(
-            Effect.flatMap((compactionSettled) =>
-              compactionSettled ? restoreCompaction(thread.id) : Effect.void,
-            ),
-            Effect.andThen(
-              appendProviderFailureActivity({
-                threadId: thread.id,
-                kind: "provider.session.stop.failed",
-                summary: "Provider session stop failed",
-                detail,
-                turnId: null,
-                createdAt: now,
-              }),
-            ),
-          );
-        },
-        onSuccess: () =>
-          setThreadSession({
-            threadId: thread.id,
-            session: {
+    // T3-CUSTOM(expbkt3): a setup is a one-shot command owned by the durable
+    // bootstrap operation. Stopping the thread must unblock that exact waiter,
+    // without closing unrelated terminals in the same project.
+    const stopOwnedSetup =
+      Option.isSome(durableIntentRepository) && Option.isSome(terminalManager)
+        ? Effect.gen(function* () {
+            const items = yield* durableIntentRepository.value.listByThreadId({
               threadId: thread.id,
-              status: "stopped",
-              providerName: thread.session?.providerName ?? null,
-              ...(thread.session?.providerInstanceId !== undefined
-                ? { providerInstanceId: thread.session.providerInstanceId }
-                : {}),
-              // T3-CUSTOM(expbkt3): retain conversation identity for reconnect.
-              providerThreadId: thread.session?.providerThreadId ?? null,
-              runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-              activeTurnId: null,
-              lastError: thread.session?.lastError ?? null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
-      }),
-      Effect.tap(() => Effect.sync(() => threadCredentialActors.delete(thread.id))),
-      Effect.ensuring(clearStopping),
-    );
+            });
+            // T3-CUSTOM(expbkt3): Stop is projected before this reactor sees
+            // its event, so the operation's owning intent is usually already
+            // stopped. Its stop-fenced state and sequence prove ownership;
+            // a later accepted setup is deliberately ignored.
+            for (const item of items.toReversed()) {
+              if (!isSetupOwnedByStop(item, event.sequence)) continue;
+              const operation = yield* durableIntentRepository.value.getBootstrapOperation({
+                workItemId: item.workItemId,
+              });
+              if (Option.isNone(operation) || operation.value.setupPhase !== "running") continue;
+              yield* terminalManager.value
+                .stopCommand({ threadId: thread.id, terminalId: operation.value.setupTerminalId })
+                .pipe(Effect.catch(() => Effect.void));
+              return;
+            }
+          })
+        : Effect.void;
+    yield* stopOwnedSetup
+      .pipe(
+        Effect.andThen(
+          thread.session
+            ? providerService.stopSession({ threadId: thread.id }).pipe(
+                // T3-CUSTOM(expbkt3): a hung stop cannot hold the shared command lane.
+                Effect.timeoutOption(SESSION_STOP_TIMEOUT),
+                Effect.tap((stopped) =>
+                  Option.isNone(stopped)
+                    ? Effect.logWarning("provider session stop timed out on the reactor lane", {
+                        threadId: thread.id,
+                        timeout: SESSION_STOP_TIMEOUT,
+                      })
+                    : Effect.void,
+                ),
+                Effect.asVoid,
+              )
+            : Effect.void,
+        ),
+      )
+      .pipe(
+        Effect.matchCauseEffect({
+          onFailure: (cause) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.interrupt;
+            }
+            const detail = formatFailureDetail(cause);
+            return Effect.sync(() => {
+              stoppingThreadIds.delete(thread.id);
+              return wasCompacting && !compactingThreadIds.has(thread.id);
+            }).pipe(
+              Effect.flatMap((compactionSettled) =>
+                compactionSettled ? restoreCompaction(thread.id) : Effect.void,
+              ),
+              Effect.andThen(
+                appendProviderFailureActivity({
+                  threadId: thread.id,
+                  kind: "provider.session.stop.failed",
+                  summary: "Provider session stop failed",
+                  detail,
+                  turnId: null,
+                  createdAt: now,
+                }),
+              ),
+            );
+          },
+          onSuccess: () =>
+            setThreadSession({
+              threadId: thread.id,
+              session: {
+                threadId: thread.id,
+                status: "stopped",
+                providerName: thread.session?.providerName ?? null,
+                ...(thread.session?.providerInstanceId !== undefined
+                  ? { providerInstanceId: thread.session.providerInstanceId }
+                  : {}),
+                // T3-CUSTOM(expbkt3): retain conversation identity for reconnect.
+                providerThreadId: thread.session?.providerThreadId ?? null,
+                runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+                activeTurnId: null,
+                lastError: thread.session?.lastError ?? null,
+                updatedAt: now,
+              },
+              createdAt: now,
+            }),
+        }),
+        Effect.tap(() => Effect.sync(() => threadCredentialActors.delete(thread.id))),
+        Effect.ensuring(clearStopping),
+      );
   });
 
   const processSessionRestartRequested = Effect.fn("processSessionRestartRequested")(function* (
@@ -2521,13 +2571,49 @@ const make = Effect.gen(function* () {
         // remote fall back to the local base branch instead of failing the
         // whole bootstrap on `git fetch origin`. Upstream applies this in
         // ws.ts; the fork relocated this block here, so it carries the guard.
-        let startFromOrigin =
+        const legacyOriginExists = yield* gitWorkflow
+          .remoteExists({ cwd: projectCwd, remoteName: "origin" })
+          .pipe(Effect.orElseSucceed(() => false));
+        // T3-CUSTOM(expbkt3): legacy mobile carries the effective origin
+        // default separately from user provenance, matching durable bootstrap.
+        if (
           prepare?.startFromOrigin === true &&
-          (yield* gitWorkflow
-            .remoteExists({ cwd: projectCwd, remoteName: "origin" })
-            .pipe(Effect.orElseSucceed(() => false)));
+          !legacyOriginExists &&
+          prepare.baseRefExplicit === true
+        ) {
+          return yield* fail(
+            "bootstrap-worktree-base-unavailable",
+            "The selected origin worktree base is unavailable because this repository has no origin remote.",
+            false,
+          );
+        }
+        let startFromOrigin = prepare?.startFromOrigin === true && legacyOriginExists;
         if (resolvedPrepare !== undefined) {
-          startFromOrigin = resolvedPrepare.baseRef.source === "origin";
+          const explicitlyRequestedOrigin = resolvedPrepare.originBaseExplicitlyRequested === true;
+          const originExists =
+            resolvedPrepare.baseRef.source !== "origin" ||
+            (yield* gitWorkflow
+              .remoteExists({ cwd: projectCwd, remoteName: "origin" })
+              .pipe(Effect.orElseSucceed(() => false)));
+          if (
+            resolvedPrepare.baseRef.source === "origin" &&
+            !originExists &&
+            explicitlyRequestedOrigin
+          ) {
+            return yield* fail(
+              "bootstrap-worktree-base-unavailable",
+              "The selected origin worktree base is unavailable because this repository has no origin remote.",
+              false,
+            );
+          }
+          // A resolved origin base inherited from defaults is a preference, not
+          // an explicit remote selection. Preserve the local default fallback
+          // used by the legacy path when this repository has no origin.
+          const baseRef =
+            resolvedPrepare.baseRef.source === "origin" && !originExists
+              ? { kind: "repository-default" as const, source: "local" as const }
+              : resolvedPrepare.baseRef;
+          startFromOrigin = baseRef.source === "origin";
           if (startFromOrigin) {
             yield* gitWorkflow
               .fetchRemote({ cwd: projectCwd, remoteName: "origin" })
@@ -2544,7 +2630,7 @@ const make = Effect.gen(function* () {
           }
           const exactBaseRef = yield* resolveAvailableWorktreeBase({
             cwd: projectCwd,
-            baseRef: resolvedPrepare.baseRef,
+            baseRef,
             listRefs: gitWorkflow.listRefs,
             resolveRemoteTrackingCommit: gitWorkflow.resolveRemoteTrackingCommit,
           }).pipe(
@@ -2565,6 +2651,7 @@ const make = Effect.gen(function* () {
             );
           }
           baseBranch = exactBaseRef.branch;
+          startFromOrigin = exactBaseRef.source === "origin";
         }
         if (baseBranch === null) {
           return yield* fail(
@@ -2628,6 +2715,20 @@ const make = Effect.gen(function* () {
               );
             worktreeBaseRef = resolved.commitSha;
           }
+        }
+        if (
+          !(yield* repository.beginWorktreeCreation({
+            workItemId: input.intent.workItemId,
+            owner: input.owner,
+            generation: input.generation,
+            at: yield* currentTime(),
+          }))
+        ) {
+          return yield* fail(
+            "bootstrap-claim-fenced",
+            "Bootstrap preparation lost its execution claim before worktree creation.",
+            false,
+          );
         }
         const created = yield* gitWorkflow
           .createWorktree({
@@ -3370,6 +3471,26 @@ const make = Effect.gen(function* () {
               };
             }
             if (activeProviderTurnId !== null) {
+              const knownEarlierOwner = Option.isSome(durableIntentRepository)
+                ? (yield* durableIntentRepository.value.listByThreadId({
+                    threadId: intent.threadId,
+                  })).some(
+                    (item) =>
+                      item.workItemId !== intent.workItemId &&
+                      item.requestEventSequence !== null &&
+                      (intent.requestEventSequence === null ||
+                        item.requestEventSequence < intent.requestEventSequence) &&
+                      item.providerTurnId === activeProviderTurnId &&
+                      item.desiredState === "running",
+                  )
+                : false;
+              if (knownEarlierOwner) {
+                // T3-CUSTOM(expbkt3): a provider turn owned by an earlier
+                // durable item is normal per-thread queueing. It is neither an
+                // ownership breach nor a recovery failure, so release this
+                // claim without spending the recovery budget.
+                return { providerTurnId: null, providerInstanceId: null, deferred: true };
+              }
               return yield* new DurableExecutionDispatchError({
                 failureType: "provider-active-turn-mismatch",
                 detail: `Provider turn '${activeProviderTurnId}' is active, but it cannot be correlated with work item '${intent.workItemId}'.`,

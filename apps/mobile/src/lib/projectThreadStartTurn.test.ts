@@ -14,6 +14,60 @@ import {
 } from "./projectThreadStartTurn";
 
 describe("project thread title", () => {
+  it("keeps an inherited origin display default effective without marking it explicit", () => {
+    const input = buildProjectThreadStartTurnInput({
+      projectId: ProjectId.make("project"),
+      projectCwd: "/workspace",
+      threadId: "new-thread",
+      commandId: "command",
+      messageId: "message",
+      createdAt: "2026-09-01T00:00:00Z",
+      text: "Use the inherited worktree base",
+      uploadedAttachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceMode: "worktree",
+      branch: "main",
+      worktreePath: null,
+      startFromOrigin: true,
+      worktreeBranchName: "t3code/temporary",
+    });
+
+    // T3-CUSTOM(expbkt3): normal repositories still use their inherited origin;
+    // only baseRefExplicit turns a missing remote into an actionable error.
+    expect(input.bootstrap.prepareWorktree).toEqual({
+      projectCwd: "/workspace",
+      baseBranch: "main",
+      branch: "t3code/temporary",
+      startFromOrigin: true,
+    });
+  });
+
+  it("marks a user-picked origin base without changing its effective origin setting", () => {
+    const input = buildProjectThreadStartTurnInput({
+      projectId: ProjectId.make("project"),
+      projectCwd: "/workspace",
+      threadId: "new-thread",
+      commandId: "command",
+      messageId: "message",
+      createdAt: "2026-09-01T00:00:00Z",
+      text: "Use this origin base",
+      uploadedAttachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceMode: "worktree",
+      branch: "main",
+      worktreePath: null,
+      startFromOrigin: true,
+      baseRefExplicit: true,
+      worktreeBranchName: "t3code/temporary",
+    });
+
+    expect(input.bootstrap.prepareWorktree?.baseRefExplicit).toBe(true);
+  });
+
   it("keeps ordinary titles and the empty-prompt fallback", () => {
     expect(deriveThreadTitleFromPrompt("  Fix\n the parser  ")).toBe("Fix the parser");
     expect(deriveThreadTitleFromPrompt(" \n ")).toBe("New thread");

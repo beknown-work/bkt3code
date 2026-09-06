@@ -48,6 +48,8 @@ const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
 export interface PendingUserInput {
   readonly requestId: ApprovalRequestId;
   readonly createdAt: string;
+  /** Message-mode questions let the agent continue while the user decides. */
+  readonly responseMode?: "message";
   readonly questions: ReadonlyArray<UserInputQuestion>;
 }
 
@@ -1879,6 +1881,7 @@ export function derivePendingUserInputs(
     const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
 
     if (activity.kind === "user-input.requested" && requestId) {
+      const responseMode = payload?.responseMode === "message" ? "message" : undefined;
       const questions = parseUserInputQuestions(payload);
       if (!questions) {
         continue;
@@ -1886,6 +1889,7 @@ export function derivePendingUserInputs(
       openByRequestId.set(requestId, {
         requestId,
         createdAt: activity.createdAt,
+        ...(responseMode ? { responseMode } : {}),
         questions,
       });
       continue;

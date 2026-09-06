@@ -452,6 +452,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           : "text-adaptive-sky-600-400",
       }
     : STATUS_LABEL_BY_STATUS[status];
+  // T3-CUSTOM(expbkt3): non-blocking async questions remain discoverable in
+  // the list while the lifecycle status stays Working or Ready.
+  const displayedStatusLabel = thread.hasPendingAsyncUserInput
+    ? statusLabel
+      ? { ...statusLabel, label: `${statusLabel.label} · Question` }
+      : { label: "Question", className: "text-foreground-tertiary" }
+    : statusLabel;
   // T3-CUSTOM(expbkt3): END
   // Settled rows label by the same stamp they sort by, so order and label
   // can't disagree. updatedAt is always present, so the resolver never
@@ -766,10 +773,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             "text-xs tabular-nums",
             selected
               ? "text-user-bubble-foreground"
-              : (statusLabel?.className ?? "text-foreground-tertiary"),
+              : (displayedStatusLabel?.className ?? "text-foreground-tertiary"),
           )}
         >
-          {statusLabel?.label ?? timeLabel}
+          {displayedStatusLabel?.label ?? timeLabel}
         </Text>
       </View>
       <Text

@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -166,6 +167,11 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     const repository = yield* DurableExecutionIntentRepository;
     const globalConcurrency = yield* Semaphore.make(MAX_GLOBAL_CONCURRENCY);
     const wakeQueue = yield* Queue.unbounded<string>();
+    // T3-CUSTOM(expbkt3): the scheduler must keep consuming wakes while an
+    // individual preparation waits for a setup command. Track only admitted
+    // workers, rather than forking an unbounded set of fibers that wait on the
+    // semaphore themselves.
+    const trackedWorkItems = yield* Ref.make(new Set<string>());
     const now = options.now ?? (() => Effect.map(DateTime.now, DateTime.formatIso));
     const safetyPollIntervalMs = options.safetyPollIntervalMs ?? DEFAULT_SAFETY_POLL_INTERVAL_MS;
     const notifyTransition = (intent: DurableExecutionIntent) =>
@@ -323,6 +329,7 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
               owner: options.ownerId,
               generation: intent.claimGeneration,
               at: yield* now(),
+              restoreRecoveryAttempt: recovery,
             });
             return;
           }
@@ -435,6 +442,23 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
             });
         const failedAt = yield* now();
         if (!dispatchError.retryable) {
+          // T3-CUSTOM(expbkt3): input validation before worktree creation is
+          // safe to retry after the user corrects it. Keep genuine creation
+          // uncertainty intact so Retry cannot duplicate a worktree.
+          if (
+            dispatchError.failureType.startsWith("bootstrap-worktree-") &&
+            dispatchError.failureType !== "bootstrap-worktree-uncertain"
+          ) {
+            yield* repository.markBootstrapStepFailed({
+              workItemId: intent.workItemId,
+              owner: options.ownerId,
+              generation: intent.claimGeneration,
+              step: "worktree",
+              phase: "failed",
+              detail: dispatchError.detail,
+              at: failedAt,
+            });
+          }
           const paused = yield* repository.markFailedAttention({
             workItemId: intent.workItemId,
             owner: options.ownerId,
@@ -549,6 +573,48 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
           ),
         );
 
+    const launch = Effect.fn("DurableExecutionCoordinator.launch")(function* (workItemId: string) {
+      const admitted = yield* Ref.modify(trackedWorkItems, (tracked) => {
+        if (tracked.has(workItemId) || tracked.size >= MAX_GLOBAL_CONCURRENCY) {
+          return [false, tracked] as const;
+        }
+        const next = new Set(tracked);
+        next.add(workItemId);
+        return [true, next] as const;
+      });
+      if (!admitted) return;
+      yield* Effect.forkScoped(
+        run(workItemId).pipe(
+          Effect.ensuring(
+            Ref.update(trackedWorkItems, (tracked) => {
+              const next = new Set(tracked);
+              next.delete(workItemId);
+              return next;
+            }).pipe(Effect.andThen(Queue.offer(wakeQueue, "")), Effect.asVoid),
+          ),
+        ),
+      );
+    });
+
+    const launchDue = Effect.gen(function* () {
+      if ((yield* Ref.get(trackedWorkItems)).size >= MAX_GLOBAL_CONCURRENCY) return;
+      const due = yield* repository.listRunnable({
+        now: yield* now(),
+        limit: MAX_GLOBAL_CONCURRENCY,
+      });
+      yield* Effect.forEach(due, (intent) => launch(intent.workItemId), { discard: true });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("durable execution coordinator due scan failed", {
+          owner: options.ownerId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+
+    // Keep the public one-shot drain deterministic for callers and focused
+    // tests. The long-lived scheduler below uses launchDue so no in-flight
+    // setup can stall wake processing.
     const runDue: DurableExecutionCoordinatorShape["runDue"] = Effect.gen(function* () {
       const due = yield* repository.listRunnable({ now: yield* now(), limit: 100 });
       yield* Effect.forEach(due, (intent) => run(intent.workItemId), {
@@ -565,6 +631,14 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     );
 
     const waitForWakeOrDue = Effect.gen(function* () {
+      // T3-CUSTOM(expbkt3): a due row remains due while both bounded workers
+      // are occupied. Worker release wakes this queue, avoiding a tight scan.
+      if ((yield* Ref.get(trackedWorkItems)).size >= MAX_GLOBAL_CONCURRENCY) {
+        return yield* Effect.race(
+          Queue.take(wakeQueue),
+          Effect.sleep(Duration.millis(safetyPollIntervalMs)).pipe(Effect.as("")),
+        );
+      }
       const at = yield* now();
       const next = yield* repository.nextRunnableAt({ now: at });
       if (Option.isSome(next) && next.value <= at) return "";
@@ -600,9 +674,11 @@ export const makeDurableExecutionCoordinator = Effect.fn("makeDurableExecutionCo
     );
 
     const loop = Effect.forever(
-      runDue.pipe(
+      launchDue.pipe(
         Effect.andThen(waitForWakeOrDue),
-        Effect.flatMap((workItemId) => (workItemId.length === 0 ? Effect.void : run(workItemId))),
+        Effect.flatMap((workItemId) =>
+          workItemId.length === 0 ? Effect.void : launch(workItemId),
+        ),
       ),
     );
 

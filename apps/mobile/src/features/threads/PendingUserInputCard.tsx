@@ -87,6 +87,7 @@ const CARD_LAYOUT_TRANSITION = LinearTransition.duration(200);
 
 export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const questionCount = props.pendingUserInput.questions.length;
+  const isAsync = props.pendingUserInput.responseMode === "message";
 
   const cardCoverage = props.cardCoverage;
   const barHeightRef = useRef(0);
@@ -172,7 +173,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         className="min-h-10 flex-1 flex-row items-center gap-2 active:opacity-70"
       >
         <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-sky-700-300">
-          User input needed
+          {isAsync ? "Async question" : "User input needed"}
         </Text>
         <Text className="font-sans text-xs text-adaptive-neutral-500-400">
           {questionCount} question{questionCount === 1 ? "" : "s"}
@@ -231,10 +232,10 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       >
         <View className="flex-1 gap-2.5">
           <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-sky-700-300">
-            User input needed
+            {isAsync ? "Async question" : "User input needed"}
           </Text>
           <Text className="font-t3-bold text-lg text-adaptive-neutral-950-50">
-            Fill in the pending answers
+            {isAsync ? "Agent can continue while you decide" : "Fill in the pending answers"}
           </Text>
         </View>
         <View className="h-8 w-8 items-center justify-center rounded-full bg-adaptive-neutral-200-a70-white-a8">

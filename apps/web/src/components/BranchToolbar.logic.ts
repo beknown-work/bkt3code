@@ -1,4 +1,10 @@
-import type { EnvironmentId, EnvironmentMachineKind, VcsRef, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  EnvironmentMachineKind,
+  ProjectId,
+  ThreadExecutionIntentBootstrap,
+  VcsRef,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 // T3-CUSTOM(expbkt3): BEGIN — memorable worktree codenames.
 import { resolveWorktreeCodename } from "@t3tools/shared/worktreeCodename";
@@ -159,6 +165,20 @@ export function resolveEffectiveEnvMode(input: {
     return draftThreadEnvMode === "worktree" ? "worktree" : "local";
   }
   return activeWorktreePath ? "worktree" : "local";
+}
+
+/**
+ * T3-CUSTOM(expbkt3): A bootstrap records the accepted workspace choice
+ * before a worktree path exists.  Keep showing that choice through creation
+ * and failure rather than treating a null path as the project checkout.
+ */
+export function resolveBootstrapWorkspaceMode(
+  bootstrap: Pick<ThreadExecutionIntentBootstrap, "workspaceMode"> | null | undefined,
+): EnvMode | null {
+  return bootstrap?.workspaceMode === "new-worktree" ||
+    bootstrap?.workspaceMode === "existing-worktree"
+    ? "worktree"
+    : null;
 }
 
 export function resolveDraftEnvModeAfterBranchChange(input: {

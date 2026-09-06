@@ -72,6 +72,8 @@ export interface ComposerDraftWorkspaceSelection {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  // T3-CUSTOM(expbkt3): a displayed origin default is not an explicit remote base.
+  readonly baseRefExplicit?: boolean;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -84,6 +86,8 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): retain base provenance across draft and outbox replay.
+  baseRefExplicit: Schema.optional(Schema.Boolean),
 });
 
 const ComposerDraftSchema = Schema.Struct({
@@ -712,7 +716,9 @@ export async function removeDeliveredCloudQueuedMessage(
             editor.workspaceSelection.branch !== message.creation?.branch ||
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
-              (message.creation?.startFromOrigin ?? false))))
+              (message.creation?.startFromOrigin ?? false) ||
+            (editor.workspaceSelection.baseRefExplicit ?? false) !==
+              (message.creation?.baseRefExplicit ?? false))))
     )
       continue;
     const drafts = { ...saved.drafts };
