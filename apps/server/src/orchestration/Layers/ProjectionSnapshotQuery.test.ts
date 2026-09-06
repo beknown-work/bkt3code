@@ -539,6 +539,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           latestUserMessageAt: "2026-02-24T00:00:04.000Z",
           hasPendingApprovals: true,
           hasPendingUserInput: false,
+          // T3-CUSTOM(expbkt3): async questions are surfaced separately.
+          hasPendingAsyncUserInput: false,
           hasActionableProposedPlan: false,
           ownerUserId: null,
           memberUserIds: [],
