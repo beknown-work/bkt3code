@@ -1,3 +1,4 @@
+// T3-CUSTOM(expbkt3): durable bootstrap workspace state is rendered before a path exists.
 import type {
   EnvironmentId,
   EnvironmentMachineKind,
@@ -167,6 +168,7 @@ export function resolveEffectiveEnvMode(input: {
   return activeWorktreePath ? "worktree" : "local";
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — resolve durable bootstrap workspace before a path exists.
 /**
  * T3-CUSTOM(expbkt3): A bootstrap records the accepted workspace choice
  * before a worktree path exists.  Keep showing that choice through creation
@@ -180,6 +182,7 @@ export function resolveBootstrapWorkspaceMode(
     ? "worktree"
     : null;
 }
+// T3-CUSTOM(expbkt3): END
 
 export function resolveDraftEnvModeAfterBranchChange(input: {
   nextWorktreePath: string | null;

@@ -879,6 +879,7 @@ export function NewTaskDraftScreen(props: {
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const selectedWorktreePath =
       draft.workspaceSelection?.worktreePath ?? flow.selectedWorktreePath;
+    // T3-CUSTOM(expbkt3): retain whether the displayed worktree base was user-picked.
     const baseRefExplicit = draft.workspaceSelection?.baseRefExplicit === true;
     const startFromOrigin = draft.workspaceSelection?.startFromOrigin ?? flow.startFromOrigin;
     const runtimeMode = draft.runtimeMode ?? flow.runtimeMode;

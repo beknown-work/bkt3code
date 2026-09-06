@@ -55,6 +55,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
         data-composer-context-control
       >
+        {/* T3-CUSTOM(expbkt3): BEGIN — retain the worktree icon while bootstrap has no path. */}
         {effectiveEnvMode === "worktree" ? (
           // T3-CUSTOM(expbkt3): creation may still be pending with no path.
           <FolderGit2Icon className="size-3 shrink-0" />
@@ -63,6 +64,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         ) : (
           <FolderIcon className="size-3 shrink-0" />
         )}
+        {/* T3-CUSTOM(expbkt3): END */}
         <span
           data-composer-label
           className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"

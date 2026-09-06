@@ -48,7 +48,7 @@ const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
 export interface PendingUserInput {
   readonly requestId: ApprovalRequestId;
   readonly createdAt: string;
-  /** Message-mode questions let the agent continue while the user decides. */
+  // T3-CUSTOM(expbkt3): message-mode questions let the agent continue while the user decides.
   readonly responseMode?: "message";
   readonly questions: ReadonlyArray<UserInputQuestion>;
 }
@@ -1881,6 +1881,7 @@ export function derivePendingUserInputs(
     const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
 
     if (activity.kind === "user-input.requested" && requestId) {
+      // T3-CUSTOM(expbkt3): preserve provider response mode for non-blocking cards.
       const responseMode = payload?.responseMode === "message" ? "message" : undefined;
       const questions = parseUserInputQuestions(payload);
       if (!questions) {
@@ -1889,6 +1890,7 @@ export function derivePendingUserInputs(
       openByRequestId.set(requestId, {
         requestId,
         createdAt: activity.createdAt,
+        // T3-CUSTOM(expbkt3): expose message-mode state to mobile presentation.
         ...(responseMode ? { responseMode } : {}),
         questions,
       });

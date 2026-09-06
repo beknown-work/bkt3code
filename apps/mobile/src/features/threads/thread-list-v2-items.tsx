@@ -768,6 +768,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             type="monochrome"
           />
         ) : null}
+        {/* T3-CUSTOM(expbkt3): BEGIN — show the neutral async-question thread status. */}
         <Text
           className={cn(
             "text-xs tabular-nums",
@@ -778,6 +779,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         >
           {displayedStatusLabel?.label ?? timeLabel}
         </Text>
+        {/* T3-CUSTOM(expbkt3): END */}
       </View>
       <Text
         className={cn(

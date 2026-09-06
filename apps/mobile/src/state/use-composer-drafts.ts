@@ -715,10 +715,12 @@ export async function removeDeliveredCloudQueuedMessage(
           (editor.workspaceSelection.mode !== message.creation?.workspaceMode ||
             editor.workspaceSelection.branch !== message.creation?.branch ||
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
+            // T3-CUSTOM(expbkt3): BEGIN — queued worktree base provenance must survive draft merge.
             (editor.workspaceSelection.startFromOrigin ?? false) !==
               (message.creation?.startFromOrigin ?? false) ||
             (editor.workspaceSelection.baseRefExplicit ?? false) !==
               (message.creation?.baseRefExplicit ?? false))))
+      // T3-CUSTOM(expbkt3): END
     )
       continue;
     const drafts = { ...saved.drafts };
