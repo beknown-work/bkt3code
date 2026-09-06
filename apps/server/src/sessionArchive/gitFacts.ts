@@ -22,7 +22,13 @@ export interface WorktreeGitFacts extends ReclaimGitFacts {
   readonly changedFiles: ReadonlyArray<HistoryFileChange>;
   /** Tracked paths relative to the worktree root, for the slim guard. */
   readonly trackedPaths: ReadonlySet<string>;
+  /** Whether the ordinary git facts above were read successfully. */
+  readonly inspection: "complete" | "unknown";
 }
+
+export type SlimTrackedPathInventory =
+  | { readonly state: "complete"; readonly trackedPaths: ReadonlySet<string> }
+  | { readonly state: "unknown" };
 
 /**
  * What we assume when git cannot tell us anything.
@@ -40,6 +46,7 @@ export const UNKNOWN_GIT_FACTS: WorktreeGitFacts = {
   hasUnpushedCommits: true,
   changedFiles: [],
   trackedPaths: new Set(),
+  inspection: "unknown",
 };
 
 /** Split `-z` output, which is NUL-terminated rather than NUL-separated. */
@@ -67,13 +74,12 @@ const runGit = (cwd: string, operation: string, args: ReadonlyArray<string>) =>
 export const readWorktreeGitFacts = Effect.fn("SessionArchive.readWorktreeGitFacts")(function* (
   worktreePath: string,
 ) {
-  const [status, head, upstream, tracked] = yield* Effect.all(
+  const [status, head, upstream] = yield* Effect.all(
     [
       runGit(worktreePath, "status", ["status", "--porcelain=1", "-z", "--untracked-files=normal"]),
       runGit(worktreePath, "head", ["rev-parse", "--short", "HEAD"]),
       // Empty stdout means no upstream, which we treat as "nothing is pushed".
       runGit(worktreePath, "upstream", ["rev-list", "--count", "@{upstream}..HEAD"]),
-      runGit(worktreePath, "lsFiles", ["ls-files", "-z"]),
     ],
     { concurrency: 2 },
   );
@@ -123,6 +129,46 @@ export const readWorktreeGitFacts = Effect.fn("SessionArchive.readWorktreeGitFac
     // branch as unpushed rather than as "zero commits ahead".
     hasUnpushedCommits: upstream.exitCode !== 0 || Number.parseInt(upstream.stdout.trim(), 10) > 0,
     changedFiles,
-    trackedPaths: new Set(tracked.exitCode === 0 ? splitNulSeparated(tracked.stdout) : []),
+    // A complete repository-wide `ls-files` listing can exceed the driver's
+    // 1 MB capture limit. Slim reads only its actual candidates below, where a
+    // failed or truncated answer blocks deletion instead of looking empty.
+    trackedPaths: new Set(),
+    inspection: "complete",
   } satisfies WorktreeGitFacts;
+});
+
+/**
+ * Read tracked paths only below proposed slim directories.
+ *
+ * This deliberately avoids raising the generic Git output limit. A huge
+ * repository with an untracked `node_modules` still returns an empty,
+ * complete answer; a candidate whose own tracked inventory cannot be read is
+ * unknown and must not be deleted.
+ */
+export const readSlimTrackedPathInventory = Effect.fn(
+  "SessionArchive.readSlimTrackedPathInventory",
+)(function* (input: {
+  readonly worktreePath: string;
+  readonly candidatePaths: ReadonlyArray<string>;
+}) {
+  const trackedPaths = new Set<string>();
+  for (const candidatePath of input.candidatePaths) {
+    const result = yield* runGit(input.worktreePath, "lsFilesCandidate", [
+      // T3-CUSTOM(expbkt3): Filesystem names can begin with Git pathspec
+      // magic (for example `:foo`). They are data from the worktree, never
+      // user-authored pathspecs, so Git must treat every byte literally.
+      "--literal-pathspecs",
+      "ls-files",
+      "-z",
+      "--",
+      candidatePath,
+    ]).pipe(Effect.catch(() => Effect.succeed(undefined)));
+    if (result === undefined || result.exitCode !== 0 || result.stdoutTruncated) {
+      return { state: "unknown" } satisfies SlimTrackedPathInventory;
+    }
+    for (const entry of splitNulSeparated(result.stdout)) {
+      trackedPaths.add(entry);
+    }
+  }
+  return { state: "complete", trackedPaths } satisfies SlimTrackedPathInventory;
 });

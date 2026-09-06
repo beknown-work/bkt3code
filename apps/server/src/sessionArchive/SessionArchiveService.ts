@@ -61,7 +61,11 @@ import {
   sessionHistoryPaths,
 } from "./archivePaths.ts";
 import { renderThreadContextDigest } from "./contextDigest.ts";
-import { readWorktreeGitFacts, UNKNOWN_GIT_FACTS } from "./gitFacts.ts";
+import {
+  readSlimTrackedPathInventory,
+  readWorktreeGitFacts,
+  UNKNOWN_GIT_FACTS,
+} from "./gitFacts.ts";
 import {
   renderSessionManifest,
   summarizeMessageSenders,
@@ -323,6 +327,28 @@ export const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => UNKNOWN_GIT_FACTS),
       );
     });
+
+  /**
+   * A slim must prove the tracked state of each target directory. Start with
+   * an unfiltered walk only to discover candidates, then ask Git about those
+   * candidates rather than buffering the entire repository inventory.
+   */
+  const scanSlimWorktree = Effect.fn("SessionArchive.scanSlimWorktree")(function* (
+    worktreePath: string,
+  ) {
+    const discovered = yield* scanWorktree({ worktreePath, trackedPaths: new Set() });
+    const inventory = yield* readSlimTrackedPathInventory({
+      worktreePath,
+      candidatePaths: discovered.slimCandidates.map((candidate) => candidate.relativePath),
+    });
+    if (inventory.state === "unknown") {
+      return { state: "unknown" as const };
+    }
+    return {
+      state: "complete" as const,
+      sized: yield* scanWorktree({ worktreePath, trackedPaths: inventory.trackedPaths }),
+    };
+  });
 
   const digestPathFor = (historyDir: string, source: ArchiveExportSource, projectName: string) =>
     sessionHistoryPaths({
@@ -848,19 +874,15 @@ export const make = Effect.gen(function* () {
               sizedCount += 1;
             }
 
-            const sized = shouldSize
-              ? yield* scanWorktree({
-                  worktreePath: thread.worktreePath ?? "",
-                  trackedPaths: git?.trackedPaths ?? new Set(),
-                }).pipe(
-                  Effect.orElseSucceed(() => ({
-                    totalBytes: null,
-                    reclaimableBytes: 0,
-                    slimCandidates: [],
-                    budgetExhausted: true,
-                  })),
+            const slimScan = shouldSize
+              ? yield* scanSlimWorktree(thread.worktreePath ?? "").pipe(
+                  Effect.orElseSucceed(() => ({ state: "unknown" as const })),
                 )
               : null;
+            const sized = slimScan?.state === "complete" ? slimScan.sized : null;
+            if (slimScan?.state === "unknown") {
+              sizingIncomplete = true;
+            }
 
             if (sized?.budgetExhausted === true) {
               sizingIncomplete = true;
@@ -1010,6 +1032,9 @@ export const make = Effect.gen(function* () {
       if (worktreePath === null || git === null) {
         return skipped("This session has no worktree on disk.");
       }
+      if (mode === "slim" && git.inspection === "unknown") {
+        return skipped("Git inspection is incomplete, so this worktree was left alone.");
+      }
 
       const note =
         mode === "slim"
@@ -1061,14 +1086,29 @@ export const make = Effect.gen(function* () {
       }
 
       if (mode === "slim") {
-        const sized = yield* scanWorktree({
-          worktreePath,
-          trackedPaths: git.trackedPaths,
-        });
+        const slimScan = yield* scanSlimWorktree(worktreePath).pipe(
+          Effect.orElseSucceed(() => ({ state: "unknown" as const })),
+        );
+        if (slimScan.state === "unknown") {
+          return skipped(
+            "Git tracked-file inspection is incomplete, so this worktree was left alone.",
+          );
+        }
+        const sized = slimScan.sized;
         const freedBytes = yield* slimWorktree({
           worktreePath,
           candidates: sized.slimCandidates,
-          trackedPaths: git.trackedPaths,
+          trackedPaths: new Set(),
+          canDeleteCandidate: (candidate) =>
+            readSlimTrackedPathInventory({
+              worktreePath,
+              candidatePaths: [candidate.relativePath],
+            }).pipe(
+              Effect.map(
+                (inventory) => inventory.state === "complete" && inventory.trackedPaths.size === 0,
+              ),
+              Effect.orElseSucceed(() => false),
+            ),
         });
         return {
           threadId: thread.id,

@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import type { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import {
   decideSlimCandidate,
   outermostCandidates,
@@ -208,6 +209,12 @@ export const slimWorktree = Effect.fn("SessionArchive.slimWorktree")(function* (
   readonly worktreePath: string;
   readonly candidates: ReadonlyArray<SlimCandidate>;
   readonly trackedPaths: ReadonlySet<string>;
+  /** Re-check Git immediately before each destructive removal. */
+  readonly canDeleteCandidate?: (
+    candidate: SlimCandidate,
+    /** Proves this final guard runs only after the potentially long sizing walk. */
+    measuredBytes: number,
+  ) => Effect.Effect<boolean, never, GitVcsDriver | FileSystem.FileSystem | Path.Path>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -219,6 +226,15 @@ export const slimWorktree = Effect.fn("SessionArchive.slimWorktree")(function* (
     }
     const absolutePath = path.join(input.worktreePath, candidate.relativePath);
     const measured = yield* measureDirectory(absolutePath, { remaining: WALK_ENTRY_BUDGET });
+    // T3-CUSTOM(expbkt3): Sizing can walk 200k entries. Re-read Git after
+    // that work and immediately beside remove so a file tracked during the
+    // walk cannot be deleted from a stale approval.
+    if (
+      input.canDeleteCandidate !== undefined &&
+      !(yield* input.canDeleteCandidate(candidate, measured.bytes))
+    ) {
+      continue;
+    }
     const removed = yield* fs.remove(absolutePath, { recursive: true }).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
