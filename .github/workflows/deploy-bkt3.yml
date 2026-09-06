@@ -41,12 +41,14 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
-      - name: Install Linux arm64 linker
+      - name: Install Linux build prerequisites
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross
+            libc6-dev-arm64-cross \
+            libsecret-1-dev \
+            pkg-config
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -60,26 +62,12 @@ jobs:
             '+refs/tags/v*:refs/tags/upstream-v*'
 
           upstream_sha="$(git merge-base HEAD refs/remotes/upstream/main)"
-          mapfile -t nightly_tags < <(
-            git tag --points-at "$upstream_sha" \
-              --list 'upstream-v*-nightly.*' \
-              --sort=-version:refname
-          )
-          nightly_tag="${nightly_tags[0]:-}"
-          if [[ -z "$nightly_tag" ]]; then
-            echo "No upstream nightly release tags integrated upstream commit $upstream_sha." >&2
-            exit 1
-          fi
-
-          nightly_version="${nightly_tag#upstream-v}"
-          if [[ ! "$nightly_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
-            echo "Invalid upstream nightly version: $nightly_version" >&2
-            exit 1
-          fi
-
-          echo "Resolved upstream nightly $nightly_version at $upstream_sha"
-          echo "APP_VERSION=$nightly_version" >> "$GITHUB_ENV"
-          echo "UPSTREAM_NIGHTLY_SHA=$upstream_sha" >> "$GITHUB_ENV"
+          # T3-CUSTOM(expbkt3): raw upstream main can advance between nightlies.
+          # Keep exact tags unchanged; label an untagged integrated SHA from its
+          # closest tagged ancestor so the deployed version stays truthful.
+          node scripts/resolve-integrated-upstream-nightly.ts \
+            --upstream-sha "$upstream_sha" \
+            --github-env "$GITHUB_ENV"
 
       - name: Align package versions to upstream nightly
         run: node scripts/update-release-package-versions.ts "$APP_VERSION"
