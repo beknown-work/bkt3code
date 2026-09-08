@@ -2,10 +2,13 @@
 # T3-CUSTOM(expbkt3): Starts only the isolated experimental T3 service.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXPECTED_BRANCH="expbkmain"
 SERVER_BUNDLE="$REPO_DIR/apps/server/dist/bin.mjs"
 BASE_DIR="/home/ubuntu/.t3/expbkt3-dev"
+BIND_HOST="10.31.39.131"
+PORT="18085"
 
 CURRENT_BRANCH="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [[ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]]; then
@@ -29,10 +32,16 @@ export PATH="/home/ubuntu/.nvm/versions/node/v24.16.0/bin:/home/ubuntu/.local/bi
 export TMPDIR="$BASE_DIR/tmp"
 mkdir -p "$TMPDIR"
 
+# Give tailnet peers a path to this port. The server binds the VPC address, which
+# no tailnet route reaches; publishing it here keeps the documented
+# dev-server-1.tailab6257.ts.net URL working without widening the bind. Best
+# effort on purpose: a T3 reachable only on the VPC beats a T3 that never starts.
+"$SCRIPT_DIR/../tailnet-serve.sh" --best-effort "$PORT" "$BIND_HOST"
+
 exec node "$SERVER_BUNDLE" serve \
   --mode web \
-  --host "10.31.39.131" \
-  --port "18085" \
+  --host "$BIND_HOST" \
+  --port "$PORT" \
   --base-dir "$BASE_DIR" \
   --no-browser \
   "/home/ubuntu/repos"

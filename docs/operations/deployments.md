@@ -143,6 +143,35 @@ These exist on the box and are not in the repository:
   `beknown-dev_traefik`. There is no nginx or caddy on this host. Each
   environment's `proxy.sh` recreates its service idempotently.
 
+## Tailnet access
+
+Each service binds the VPC address `10.31.39.131`, not `0.0.0.0`: this host is
+reachable from the public internet at `13.232.74.51` behind an `-P INPUT ACCEPT`
+firewall, so a wildcard bind would expose T3 to anything the AWS security group
+lets through. Tailscale advertises no subnet route for `10.31.39.0/24`, so that
+address is unreachable from the tailnet, and the documented
+`http://dev-server-1.tailab6257.ts.net:<port>` URLs would 000 without help.
+
+`deploy/tailnet-serve.sh` bridges the two. Every `start.sh` calls it before
+`exec`, so each service republishes its own port on every start:
+
+```bash
+deploy/tailnet-serve.sh <port> 10.31.39.131      # fails if the publish does not take
+deploy/tailnet-serve.sh --best-effort <port> ... # what start.sh uses
+```
+
+It needs root to write serve config and reaches it through passwordless `sudo`;
+the units run as `ubuntu`, which is the tailscale operator but is still refused
+with a 401 on a bare `tailscale serve`. Under `--best-effort` a failure is
+reported on stderr and the service starts anyway, reachable on the VPC address
+only — so a tailnet URL that stopped working is a `journalctl -u <unit>` search
+for `tailnet-serve`, not a mystery.
+
+> Never run `tailscale serve reset` or `tailscale serve clear` on this host.
+> Both drop every entry, including serves owned by unrelated work (46261-46263
+> at the time of writing). To retire a single port, use
+> `sudo tailscale serve --http=<port> off`.
+
 ## Common operations
 
 Check what is deployed:
