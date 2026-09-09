@@ -28,9 +28,16 @@ jobs:
           # merge-base against the upstream mirror needs full history.
           fetch-depth: 0
 
-      - name: Fetch upstream mirror
-        run: git fetch origin main --no-tags
+      - name: Fetch upstream
+        run: >-
+          git fetch https://github.com/pingdotgg/t3code.git
+          '+refs/heads/main:refs/remotes/upstream/main'
+          --no-tags
 
       # Node built-ins only — no dependency install, so this stays under a minute.
       - name: Check fork markers
         run: node scripts/check-fork-markers.ts
+        env:
+          # Compare with the newest upstream commit actually integrated into HEAD,
+          # even when the byte-pure origin/main mirror has not caught up yet.
+          FORK_UPSTREAM_REF: refs/remotes/upstream/main
