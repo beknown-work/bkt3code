@@ -11,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -28,6 +29,11 @@ const threadId = ThreadId.make("indexed-snapshot");
 const otherThreadId = ThreadId.make("indexed-snapshot-other");
 const providerInstanceId = ProviderInstanceId.make("codex");
 const turnId = TurnId.make("indexed-turn");
+const encodePayload = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ requestId: Schema.String, detail: Schema.optionalKey(Schema.String) }),
+  ),
+);
 
 it.layer(SqlitePersistenceMemory)("indexed snapshot activity reads", (it) => {
   it.effect("keeps concurrent blockers scoped to their thread, kind, order and active turn", () =>
@@ -93,7 +99,7 @@ it.layer(SqlitePersistenceMemory)("indexed snapshot activity reads", (it) => {
           yield* sql`INSERT INTO projection_thread_activities
             (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
             VALUES (${id}, ${target}, ${turnId}, 'info', ${kind}, ${id},
-              ${JSON.stringify({ requestId, ...(detail === undefined ? {} : { detail }) })}, ${sequence}, ${createdAt})`;
+              ${encodePayload({ requestId, ...(detail === undefined ? {} : { detail }) })}, ${sequence}, ${createdAt})`;
         });
         const expectState = Effect.fn(function* (state: string) {
           const single = yield* supervisor.getSnapshot(threadId);
