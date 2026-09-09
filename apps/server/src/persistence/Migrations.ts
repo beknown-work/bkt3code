@@ -125,6 +125,8 @@ import Migration1027 from "./Migrations/046_RepairAutomaticSettlementTimestamps.
 import Migration1028 from "./Migrations/047_ProjectionProjectIcon.ts";
 // T3-CUSTOM(expbkt3): non-blocking async question indicator for shell rows.
 import Migration1029 from "./Migrations/1029_ProjectionThreadsAsyncQuestions.ts";
+// T3-CUSTOM(expbkt3): keep execution-status sync reads bounded to lifecycle activities.
+import Migration1030 from "./Migrations/1030_ActivityThreadKindIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -247,6 +249,8 @@ const migrationEntries = [
   [1027, "RepairAutomaticSettlementTimestamps", Migration1027],
   [1028, "ProjectionProjectIcon", Migration1028],
   [1029, "ProjectionThreadsAsyncQuestions", Migration1029],
+  // T3-CUSTOM(expbkt3): activity-kind lookup index for execution snapshots.
+  [1030, "ActivityThreadKindIndex", Migration1030],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
