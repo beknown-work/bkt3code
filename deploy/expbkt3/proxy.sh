@@ -5,6 +5,9 @@ set -euo pipefail
 SERVICE_NAME="expbkt3-proxy"
 NETWORK_NAME="bk-dev"
 TARGET_ADDRESS="10.31.39.131:18085"
+# A page load fans out across many JS chunks; socat's default backlog of 5
+# overflows during that burst and leaves clients with asset 502s/timeouts.
+LISTEN_ADDRESS="tcp-listen:18085,fork,reuseaddr,backlog=1024"
 
 labels=(
   --label-add "traefik.enable=true"
@@ -31,7 +34,7 @@ if sudo docker service inspect "$SERVICE_NAME" >/dev/null 2>&1; then
   sudo docker service update \
     --force \
     "${labels[@]}" \
-    --args "tcp-listen:18085,fork,reuseaddr tcp:$TARGET_ADDRESS" \
+    --args "$LISTEN_ADDRESS tcp:$TARGET_ADDRESS" \
     "$SERVICE_NAME"
 else
   sudo docker service create \
@@ -39,6 +42,6 @@ else
     --network "$NETWORK_NAME" \
     "${labels[@]/--label-add/--label}" \
     alpine/socat:latest \
-    "tcp-listen:18085,fork,reuseaddr" \
+    "$LISTEN_ADDRESS" \
     "tcp:$TARGET_ADDRESS"
 fi
