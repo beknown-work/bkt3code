@@ -265,6 +265,8 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
             AND NOT EXISTS (
               SELECT 1 FROM projection_thread_activities AS resolved
               WHERE resolved.thread_id = requested.thread_id
+                -- T3-CUSTOM(expbkt3): restrict the indexed kinds before reading activity JSON.
+                AND resolved.kind IN ('approval.resolved', 'user-input.resolved', 'provider.user-input.respond.failed')
                 AND json_extract(resolved.payload_json, '$.requestId') = json_extract(requested.payload_json, '$.requestId')
                 AND (
                   resolved.kind IN ('approval.resolved', 'user-input.resolved')
@@ -304,6 +306,8 @@ const make = Effect.fn("ThreadExecutionSupervisor.make")(function* () {
         SELECT DISTINCT json_extract(payload_json, '$.requestId') AS "requestId"
         FROM projection_thread_activities
         WHERE thread_id = ${snapshot.threadId}
+          -- T3-CUSTOM(expbkt3): avoid decoding unrelated tool history during every sync.
+          AND kind IN ('approval.resolved', 'user-input.resolved', 'provider.user-input.respond.failed')
           AND json_extract(payload_json, '$.requestId') IS NOT NULL
           AND (
             kind IN ('approval.resolved', 'user-input.resolved')
