@@ -16,6 +16,8 @@
         "src/bin.ts!",
         "src/service-launcher.ts!",
         "scripts/cli.ts",
+        // T3-CUSTOM(expbkt3): production backfill invoked directly by operators.
+        "scripts/compact-activity-payloads.ts",
         "src/provider/testFixtures/*.mjs",
       ],
       // Native msgpack acceleration and the Vite+ web build prerequisite.
@@ -44,6 +46,8 @@
       // Fonts are configured as asset paths; Expo autolinks the native packages.
       "ignoreDependencies": [
         "@expo-google-fonts/dm-sans",
+        // T3-CUSTOM(expbkt3): module augmentation and fixture resolution are invisible to Knip.
+        "@react-navigation/core",
         "@t3tools/mobile-review-diff-native",
         "@t3tools/mobile-terminal-native",
       ],
