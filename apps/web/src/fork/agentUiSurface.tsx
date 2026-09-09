@@ -16,12 +16,17 @@ import {
   AGENT_UI_MIN_HEIGHT,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { Maximize2Icon, XIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useClientSettings } from "../hooks/useSettings";
 import { agentUiEnvironment } from "../state/agentUi";
-import { useAgentUiExpandedStore } from "../agentUiExpandedStore";
+import {
+  selectExpandedAgentUiView,
+  useAgentUiExpandedStore,
+  type ExpandedAgentUiView,
+} from "../agentUiExpandedStore";
 import { useEnvironmentQuery } from "../state/query";
 import { cn } from "../lib/utils";
 import { isAgentUiSurfaceRenderable } from "./agentUiRuntime";
@@ -228,28 +233,38 @@ export const AgentUiSurfaceRow = memo(function AgentUiSurfaceRow(props: {
  * timeline row that opened it: those rows are virtualized, so they clip and get
  * recycled out from under an overlay.
  */
-export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
+export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface({
+  threadRef,
+}: {
+  readonly threadRef: ScopedThreadRef | null;
+}) {
   const enabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
-  const expanded = useAgentUiExpandedStore((state) => state.expanded);
+  const expanded = useAgentUiExpandedStore((state) => selectExpandedAgentUiView(state, threadRef));
+  if (!enabled || expanded === null) return null;
+  return (
+    <ExpandedSurfaceContent
+      key={`${scopedThreadKey(expanded.threadRef)}:${expanded.renderId}`}
+      expanded={expanded}
+    />
+  );
+});
+
+function ExpandedSurfaceContent({ expanded }: { readonly expanded: ExpandedAgentUiView }) {
   const collapse = useAgentUiExpandedStore((state) => state.collapse);
   const [title, setTitle] = useState("Agent view");
 
-  const open = enabled && expanded !== null;
   useEffect(() => {
-    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        collapse();
+        collapse(expanded.threadRef);
       }
     };
     // Capture phase: the composer and the timeline both handle Escape, and the
     // expanded view is the frontmost surface, so it answers first.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, collapse]);
-
-  if (!open || expanded === null) return null;
+  }, [expanded.threadRef, collapse]);
 
   return (
     <div
@@ -264,7 +279,7 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
         <button
           type="button"
           className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[0.6875rem] text-secondary-label/70 hover:bg-accent/20 hover:text-secondary-label"
-          onClick={collapse}
+          onClick={() => collapse(expanded.threadRef)}
           aria-label="Close the expanded view"
         >
           <XIcon className="size-3" aria-hidden />
@@ -281,4 +296,4 @@ export const AgentUiExpandedSurface = memo(function AgentUiExpandedSurface() {
       </div>
     </div>
   );
-});
+}

@@ -8846,7 +8846,7 @@ export default function ChatView(props: ChatViewProps) {
               ) : null}
               {/* T3-CUSTOM(expbkt3): END */}
               {/* T3-CUSTOM(expbkt3): an expanded agent view covers the transcript, not the composer. */}
-              <AgentUiExpandedSurface />
+              <AgentUiExpandedSurface threadRef={activeThreadRef} />
             </div>
 
             {/* Input bar — centered hero while a draft has no messages, docked at the bottom otherwise */}

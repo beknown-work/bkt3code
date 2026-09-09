@@ -170,7 +170,7 @@ describe("Agent view runtime mitigation", () => {
   beforeEach(() => {
     testState.queryCalls.length = 0;
     testState.queries.clear();
-    useAgentUiExpandedStore.getState().collapse();
+    useAgentUiExpandedStore.setState({ expandedByThread: {} });
   });
 
   afterEach(async () => {
@@ -254,9 +254,54 @@ describe("Agent view runtime mitigation", () => {
     useAgentUiExpandedStore.getState().expand({ threadRef: THREAD_REF, renderId: "aui_alpha" });
 
     try {
-      await render(root, <AgentUiExpandedSurface />);
+      await render(root, <AgentUiExpandedSurface threadRef={THREAD_REF} />);
       expect(renderedText(container)).toContain("Loading view");
       expect(testState.queryCalls).toEqual(["aui_alpha"]);
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
+
+  it("shows only the active thread’s fullscreen view and restores each selection on return", async () => {
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const container = document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const otherThread = { ...THREAD_REF, threadId: ThreadId.make("other-thread") };
+    const otherEnvironment = {
+      ...THREAD_REF,
+      environmentId: EnvironmentId.make("other-environment"),
+    };
+    for (const renderId of ["aui_alpha", "aui_beta"]) {
+      testState.queries.set(renderId, {
+        data: { render: { renderId, title: renderId, kind: "html", html: `<p>${renderId}</p>` } },
+        isPending: false,
+      });
+    }
+    useAgentUiExpandedStore.getState().expand({ threadRef: THREAD_REF, renderId: "aui_alpha" });
+
+    try {
+      await render(root, <AgentUiExpandedSurface threadRef={THREAD_REF} />);
+      expect(attribute(iframeNodes(container)[0]!, "srcdoc")).toContain("aui_alpha");
+      await render(root, <AgentUiExpandedSurface threadRef={otherThread} />);
+      expect(iframeNodes(container)).toHaveLength(0);
+      expect(renderedText(container)).toBe("");
+      const callsBeforeHiddenNavigation = testState.queryCalls.length;
+      await render(root, <AgentUiExpandedSurface threadRef={otherEnvironment} />);
+      await render(root, <AgentUiExpandedSurface threadRef={null} />);
+      expect(iframeNodes(container)).toHaveLength(0);
+      expect(testState.queryCalls).toHaveLength(callsBeforeHiddenNavigation);
+
+      flushSync(() => {
+        useAgentUiExpandedStore.getState().expand({ threadRef: otherThread, renderId: "aui_beta" });
+      });
+      await render(root, <AgentUiExpandedSurface threadRef={otherThread} />);
+      expect(attribute(iframeNodes(container)[0]!, "srcdoc")).toContain("aui_beta");
+      await render(root, <AgentUiExpandedSurface threadRef={THREAD_REF} />);
+      expect(attribute(iframeNodes(container)[0]!, "srcdoc")).toContain("aui_alpha");
+      expect(renderedText(container)).not.toContain("aui_beta");
+      await render(root, <AgentUiExpandedSurface threadRef={otherThread} />);
+      expect(attribute(iframeNodes(container)[0]!, "srcdoc")).toContain("aui_beta");
     } finally {
       flushSync(() => root.unmount());
     }
