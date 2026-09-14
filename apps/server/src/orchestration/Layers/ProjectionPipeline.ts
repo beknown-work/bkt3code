@@ -22,7 +22,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 // T3-CUSTOM(expbkt3): BEGIN — encodes the durable work-summary blob.
-import * as Schema from "effect/Schema";
 // T3-CUSTOM(expbkt3): END
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {

@@ -22,7 +22,6 @@ import {
 } from "react-native-keyboard-controller";
 
 import { AndroidHeaderIconButton, AndroidScreenHeader } from "../../components/AndroidScreenHeader";
-import { AppText as Text } from "../../components/AppText";
 import {
   ComposerToolbarButton,
   ComposerToolbarRow,

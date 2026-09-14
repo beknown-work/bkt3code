@@ -1224,6 +1224,39 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     setNeedsDisplay()
   }
 
+  // T3-CUSTOM(expbkt3): fast path for `updateAccessibilityElementsIfNeeded`. Split
+  // out to keep that function under SwiftLint's cyclomatic_complexity limit; the
+  // fork's accessibility support is the only reason either exists.
+  //
+  // Reuses the elements already built for these rows and only refreshes their
+  // frames, so scrolling and resizing never drop VoiceOver focus. Returns false
+  // when any row lacks a cached element, in which case the caller rebuilds.
+  private func repositionAccessibilityElements(first: Int, last: Int) -> Bool {
+    var movedElements: [Any] = []
+    var movedRowIds = Set<String>()
+    movedElements.reserveCapacity(last - first + 1)
+    for index in first...last {
+      let row = rows[index]
+      guard let rowFrame = frameForRow(at: index),
+            rowFrame.height > 0,
+            let element = accessibilityElementsByRowId[row.id] else {
+        return false
+      }
+      movedRowIds.insert(row.id)
+      element.accessibilityFrameInContainerSpace = CGRect(
+        x: rowFrame.minX,
+        y: rowFrame.minY - verticalOffset,
+        width: max(rowFrame.width, bounds.width),
+        height: rowFrame.height
+      )
+      movedElements.append(element)
+    }
+    guard !movedElements.isEmpty else { return false }
+    accessibilityElements = movedElements
+    pruneAccessibilityElements(keeping: movedRowIds)
+    return true
+  }
+
   private func updateAccessibilityElementsIfNeeded() {
     guard bounds.width > 0, bounds.height > 0 else {
       accessibilityElements = []
@@ -1251,32 +1284,8 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     let needsSemanticUpdate = key != lastAccessibilityRange
     lastAccessibilityRange = key
 
-    if !needsSemanticUpdate {
-      var movedElements: [Any] = []
-      var movedRowIds = Set<String>()
-      movedElements.reserveCapacity(last - first + 1)
-      for index in first...last {
-        let row = rows[index]
-        guard let rowFrame = frameForRow(at: index),
-              rowFrame.height > 0,
-              let element = accessibilityElementsByRowId[row.id] else {
-          movedElements = []
-          break
-        }
-        movedRowIds.insert(row.id)
-        element.accessibilityFrameInContainerSpace = CGRect(
-          x: rowFrame.minX,
-          y: rowFrame.minY - verticalOffset,
-          width: max(rowFrame.width, bounds.width),
-          height: rowFrame.height
-        )
-        movedElements.append(element)
-      }
-      if !movedElements.isEmpty {
-        accessibilityElements = movedElements
-        pruneAccessibilityElements(keeping: movedRowIds)
-        return
-      }
+    if !needsSemanticUpdate, repositionAccessibilityElements(first: first, last: last) {
+      return
     }
 
     var elements: [Any] = []

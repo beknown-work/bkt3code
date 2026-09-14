@@ -274,7 +274,7 @@ import {
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 // T3-CUSTOM(expbkt3): a fresh command id is used by the fork's durable outbox sends.
-import { randomUUID, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { useBrowserHistoryStore } from "~/browserHistoryStore";
 import { registerFaviconProjectForThread } from "~/browserFaviconStore";
 import { getProviderModelCapabilities } from "../providerModels";
