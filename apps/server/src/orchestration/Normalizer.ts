@@ -342,6 +342,9 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         clientAttachmentIds.add(attachment.id);
       }
     }
+    // T3-CUSTOM(expbkt3): BEGIN — upstream normalizes attachments inline here; the
+    // fork calls its own `normalizeAttachments` helper. Upstream's per-attachment
+    // rename bookkeeping is threaded through the helper so it is not lost.
     // Context records bind to attachments by the id the client knew; they follow the rename.
     const finalAttachmentIdByClientId = new Map<string, string>();
     const normalizedAttachments = yield* normalizeAttachments({
@@ -349,6 +352,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       attachments,
       finalAttachmentIdByClientId,
     });
+    // T3-CUSTOM(expbkt3): END
 
     if (canonicalCommand.type === "thread.user-input.respond") {
       let index = 0;
@@ -385,6 +389,9 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
                 : record,
             ),
           };
+    // T3-CUSTOM(expbkt3): BEGIN — `normalizedAttachments` comes from the fork's
+    // shared helper rather than upstream's inline loop; the context spread is
+    // upstream's and is preserved verbatim.
     return {
       ...canonicalCommand,
       message: {

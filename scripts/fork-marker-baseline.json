@@ -1,7 +1,6 @@
 {
   "files": [
     ".env.example",
-    "apps/mobile/src/features/home/homeThreadList.ts",
     "apps/mobile/src/features/review/ReviewSheet.tsx",
     "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
     "apps/mobile/src/features/settings/components/settings-sheet-targets.ts",
@@ -13,12 +12,10 @@
     "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
     "apps/mobile/src/features/threads/new-task-flow-provider.tsx",
     "apps/mobile/src/features/threads/threadPresentation.ts",
-    "apps/mobile/src/features/threads/use-project-actions.ts",
     "apps/mobile/src/lib/projectThreadStartTurn.ts",
     "apps/mobile/src/state/use-selected-thread-git-actions.ts",
     "apps/mobile/src/state/use-thread-composer-state.ts",
     "apps/mobile/src/state/use-thread-outbox-drain.ts",
-    "apps/mobile/src/state/use-thread-pr.ts",
     "apps/mobile/src/state/use-thread-selection.ts",
     "apps/server/integration/OrchestrationEngineHarness.integration.ts",
     "apps/server/integration/TestProviderAdapter.integration.ts",
@@ -78,8 +75,6 @@
     "apps/server/src/server.ts",
     "apps/server/src/serverRuntimeStartup.ts",
     "apps/server/src/serverSettings.ts",
-    "apps/server/src/sourceControl/GitHubCli.ts",
-    "apps/server/src/sourceControl/GitHubSourceControlProvider.ts",
     "apps/server/src/sourceControl/gitHubPullRequests.ts",
     "apps/server/src/terminal/Manager.ts",
     "apps/server/src/textGeneration/ClaudeTextGeneration.ts",
@@ -106,7 +101,6 @@
     "apps/web/src/components/Icons.tsx",
     "apps/web/src/components/PullRequestThreadDialog.tsx",
     "apps/web/src/components/Sidebar.logic.ts",
-    "apps/web/src/components/ThreadStatusIndicators.tsx",
     "apps/web/src/components/chat/ChatComposer.tsx",
     "apps/web/src/components/chat/ChatHeader.tsx",
     "apps/web/src/components/chat/ComposerPrimaryActions.tsx",
@@ -120,7 +114,6 @@
     "apps/web/src/connection/platform.ts",
     "apps/web/src/connection/runtime.ts",
     "apps/web/src/environments/primary/auth.ts",
-    "apps/web/src/environments/primary/index.ts",
     "apps/web/src/hooks/useThreadActions.ts",
     "apps/web/src/main.tsx",
     "apps/web/src/proposedPlan.ts",
@@ -165,6 +158,6 @@
     "packages/shared/src/devProxy.ts",
     "packages/shared/src/orchestrationTiming.ts",
     "packages/shared/src/serverSettings.ts",
-    "patches/effect@4.0.0-beta.103.patch"
+    "patches/effect@4.0.0-rc.112.patch"
   ]
 }
