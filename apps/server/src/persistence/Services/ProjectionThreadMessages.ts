@@ -9,6 +9,7 @@
 import {
   ChatAttachment,
   MessageId,
+  OrchestrationMessageContext,
   OrchestrationMessageRole,
   ThreadId,
   TurnId,
@@ -30,6 +31,7 @@ export const ProjectionThreadMessage = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  context: Schema.optional(OrchestrationMessageContext),
   isStreaming: Schema.Boolean,
   sentByUserId: Schema.NullOr(UserId),
   createdAt: IsoDateTime,
@@ -61,6 +63,7 @@ export const AppendProjectionThreadMessageDeltaInput = Schema.Struct({
   role: OrchestrationMessageRole,
   delta: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  context: Schema.optional(OrchestrationMessageContext),
   isStreaming: Schema.Boolean,
   sentByUserId: Schema.NullOr(UserId),
   createdAt: IsoDateTime,
@@ -68,6 +71,14 @@ export const AppendProjectionThreadMessageDeltaInput = Schema.Struct({
 });
 export type AppendProjectionThreadMessageDeltaInput =
   typeof AppendProjectionThreadMessageDeltaInput.Type;
+
+export const HasProjectionThreadAssistantMessageInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  streamingOnly: Schema.Boolean,
+});
+export type HasProjectionThreadAssistantMessageInput =
+  typeof HasProjectionThreadAssistantMessageInput.Type;
 
 export const DeleteProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
@@ -103,6 +114,13 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly appendTextDelta: (
     input: AppendProjectionThreadMessageDeltaInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Check for an assistant message in a turn without hydrating message text.
+   */
+  readonly hasAssistantMessageForTurn: (
+    input: HasProjectionThreadAssistantMessageInput,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
 
   /**
    * List projected thread messages for a thread.

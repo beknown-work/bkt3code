@@ -16,6 +16,8 @@ import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 // T3-CUSTOM(expbkt3): archive-time session history export.
 import { ArchiveExportReactor } from "../Services/ArchiveExportReactor.ts";
 import * as ThreadSettlementReactor from "../ThreadSettlementReactor.ts";
+import * as PullRequestSyncReactor from "../PullRequestSyncReactor.ts";
+import * as ThreadPullRequestReactor from "../ThreadPullRequestReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
@@ -30,6 +32,8 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   // T3-CUSTOM(expbkt3): archive-time session history export.
   const archiveExportReactor = yield* ArchiveExportReactor;
   const threadSettlementReactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+  const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+  const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
@@ -43,7 +47,9 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadDeletionReactor.start();
     // T3-CUSTOM(expbkt3): archive-time session history export.
     yield* archiveExportReactor.start();
+    yield* threadPullRequestReactor.start();
     yield* threadSettlementReactor.start();
+    yield* pullRequestSyncReactor.start();
     yield* agentAwarenessRelay.start();
   });
 

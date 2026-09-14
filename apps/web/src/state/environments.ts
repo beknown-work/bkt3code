@@ -19,6 +19,7 @@ import {
 // T3-CUSTOM(expbkt3): END
 import { environmentPresentations, useEnvironmentPresentation } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
+// T3-CUSTOM(expbkt3): retained for useEnvironmentConnectionState below.
 import { useEnvironmentQuery } from "./query";
 import { relayEnvironmentDiscovery } from "./relay";
 import { usePreparedConnection } from "./session";
@@ -131,6 +132,8 @@ export function useRelayEnvironmentDiscovery(): Discovery.RelayEnvironmentDiscov
   return useAtomValue(relayEnvironmentDiscovery.stateValueAtom);
 }
 
+// T3-CUSTOM(expbkt3): upstream removed this as unused (#10225); the fork's
+// thread context actions control still reads per-environment connection state.
 export function useEnvironmentConnectionState(environmentId: EnvironmentId) {
   return useEnvironmentQuery(environmentCatalog.stateAtom(environmentId));
 }

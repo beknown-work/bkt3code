@@ -42,6 +42,7 @@ function makeReadModel(input: {
         branch: null,
         worktreePath: null,
         sourceControlProfileId: null,
+        pullRequests: [],
         latestTurn: null,
         ownerUserId: null,
         memberUserIds: [],

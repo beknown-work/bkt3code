@@ -127,6 +127,13 @@ import Migration1028 from "./Migrations/047_ProjectionProjectIcon.ts";
 import Migration1029 from "./Migrations/1029_ProjectionThreadsAsyncQuestions.ts";
 // T3-CUSTOM(expbkt3): keep execution-status sync reads bounded to lifecycle activities.
 import Migration1030 from "./Migrations/1030_ActivityThreadKindIndex.ts";
+// T3-CUSTOM(expbkt3): upstream ships these as migrations 48-51. The legacy fork
+// block (33-42) and the shipped 1000+ lane already occupy those slots, so they
+// register at the next free IDs in the 1000+ lane; the files keep upstream names.
+import Migration1031 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
+import Migration1032 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
+import Migration1033 from "./Migrations/050_ProjectionThreadPullRequests.ts";
+import Migration1034 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -138,7 +145,7 @@ import Migration1030 from "./Migrations/1030_ActivityThreadKindIndex.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
-export // T3-CUSTOM(expbkt3): migration index allocation rule. Do not re-decide this
+// T3-CUSTOM(expbkt3): migration index allocation rule. Do not re-decide this
 // on every upstream merge — apply it mechanically.
 //
 //   * 1-32      shared history, identical to upstream.
@@ -251,11 +258,16 @@ const migrationEntries = [
   [1029, "ProjectionThreadsAsyncQuestions", Migration1029],
   // T3-CUSTOM(expbkt3): activity-kind lookup index for execution snapshots.
   [1030, "ActivityThreadKindIndex", Migration1030],
+  // T3-CUSTOM(expbkt3): upstream 48-51 remapped above the shipped 1030 migration.
+  [1031, "ProjectionThreadBranchPullRequest", Migration1031],
+  [1032, "ProjectionThreadsActiveOrderKey", Migration1032],
+  [1033, "ProjectionThreadPullRequests", Migration1033],
+  [1034, "ProjectionThreadMessageContext", Migration1034],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
 
-export const makeMigrationLoader = (throughId?: number) =>
+const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       migrationEntries

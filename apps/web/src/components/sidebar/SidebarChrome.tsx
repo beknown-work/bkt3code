@@ -130,6 +130,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 
   return (
+    // T3-CUSTOM(expbkt3): the brand link sits inside a flex row that also carries
+    // the lifecycle counters, so upstream's outer <Link> became this wrapper and
+    // its collapse rule moved onto the brand link itself.
     <div
       className="relative z-10 ml-[var(--workspace-titlebar-content-left)] flex min-w-0 max-w-full flex-1 flex-wrap items-center gap-x-1.5 overflow-hidden"
       data-testid="sidebar-brand-layout"
@@ -137,7 +140,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       <Link
         aria-label="Go to threads"
         className={cn(
-          "sidebar-brand hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex",
+          "sidebar-brand hidden h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2 md:flex group-data-[collapsible=icon]:hidden",
           onBackdrop ? "text-white" : "text-foreground",
         )}
         to="/"
@@ -343,12 +346,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [canGoBack, closeMobileSidebar, navigate]);
 
   return (
-    <SidebarMenu className="flex-row items-center">
+    <SidebarMenu className="flex-row items-center group-data-[collapsible=icon]:flex-col">
       {currentFooterPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
-          <SidebarMenuButton onClick={handleBackClick}>
+          <SidebarMenuButton onClick={handleBackClick} aria-label="Back" tooltip="Back">
             <ArrowLeftIcon />
-            <span>Back</span>
+            <span className="group-data-[collapsible=icon]:hidden">Back</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       ) : (
@@ -379,10 +382,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="p-[var(--sidebar-content-inset)]">
-      <SidebarResourceMonitorPill />
-      <SidebarProviderUpdatePill />
-      <SidebarUpdateArchitectureWarning />
+    <SidebarFooter className="px-[var(--sidebar-content-inset)] py-1">
+      <div className="contents group-data-[collapsible=icon]:hidden">
+        {/* T3-CUSTOM(expbkt3): host resource monitor pill. */}
+        <SidebarResourceMonitorPill />
+        <SidebarProviderUpdatePill />
+        <SidebarUpdateArchitectureWarning />
+      </div>
       <SidebarUtilityMenu />
     </SidebarFooter>
   );

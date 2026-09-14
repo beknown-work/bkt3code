@@ -74,7 +74,7 @@ export const PersonalMcpTokenResult = Schema.Struct({
 });
 export type PersonalMcpTokenResult = typeof PersonalMcpTokenResult.Type;
 
-export class PersonalMcpSettingsError extends Schema.TaggedErrorClass<PersonalMcpSettingsError>()(
+export class PersonalMcpSettingsError extends Schema.TaggedError<PersonalMcpSettingsError>()(
   "PersonalMcpSettingsError",
   {
     operation: TrimmedNonEmptyString,

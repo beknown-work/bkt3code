@@ -45,7 +45,7 @@ export interface TraceDiagnosticsOptions {
   readonly readAt?: DateTime.Utc;
 }
 
-export class TraceFileReadError extends Schema.TaggedErrorClass<TraceFileReadError>()(
+export class TraceFileReadError extends Schema.TaggedError<TraceFileReadError>()(
   "TraceFileReadError",
   {
     traceFilePath: Schema.String,
@@ -477,6 +477,7 @@ function readTraceFile(
   );
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const readLock = yield* Semaphore.make(1);

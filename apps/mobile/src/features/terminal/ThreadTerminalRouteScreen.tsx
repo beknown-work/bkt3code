@@ -1,3 +1,4 @@
+import { BlurTargetView } from "expo-blur";
 import { DEFAULT_TERMINAL_ID, EnvironmentId, ThreadId } from "@t3tools/contracts";
 // T3-CUSTOM(expbkt3): adapt upstream chunk output to the native full-buffer surface.
 import { terminalOutputText } from "@t3tools/client-runtime/state/terminal";
@@ -7,7 +8,10 @@ import { SymbolView } from "../../components/AppSymbol";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, View } from "react-native";
+import { Alert, Platform, Pressable, View } from "react-native";
+import { AppText as Text } from "../../components/AppText";
+import { TerminalContextSheet } from "./TerminalContextSheet";
+import { hasNativeTerminalSurface } from "./nativeTerminalModule";
 import * as Clipboard from "expo-clipboard";
 import * as Schema from "effect/Schema";
 import {
@@ -85,7 +89,7 @@ const DEFAULT_TERMINAL_ROWS = 24;
 const TERMINAL_ACCESSORY_HEIGHT = 52;
 const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
 
-class TerminalClipboardReadError extends Schema.TaggedErrorClass<TerminalClipboardReadError>()(
+class TerminalClipboardReadError extends Schema.TaggedError<TerminalClipboardReadError>()(
   "TerminalClipboardReadError",
   { terminalId: Schema.String, cause: Schema.Defect() },
 ) {
@@ -157,6 +161,7 @@ type ThreadTerminalRouteScreenProps = StaticScreenProps<{
 }>;
 
 export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps) {
+  const terminalBlurTarget = useRef<View>(null);
   const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const resizeTerminal = useAtomCommand(terminalEnvironment.resize, "terminal resize");
@@ -180,6 +185,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const isEnvironmentReady = environment.presentation?.connection.phase === "connected";
   const requestedTerminalId = firstRouteParam(params.terminalId);
   const terminalId = requestedTerminalId ?? DEFAULT_TERMINAL_ID;
+  const [captureRequest, setCaptureRequest] = useState(0);
+  const [capturedOutput, setCapturedOutput] = useState<string | null>(null);
   const {
     isReady: hasResolvedFontPreference,
     appearance,
@@ -869,6 +876,19 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     [navigation, selectedThread, terminalId],
   );
 
+  const handleCloseTerminal = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    navigation.dispatch(
+      StackActions.replace("Thread", {
+        environmentId: params.environmentId,
+        threadId: params.threadId,
+      }),
+    );
+  }, [navigation, params.environmentId, params.threadId]);
+
   const navigateAwayAfterExit = useCallback(() => {
     // With other shells still live, fall through to the previous one instead
     // of dropping the user back on the thread.
@@ -1150,6 +1170,20 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
 
   return (
     <>
+      {capturedOutput !== null && selectedThread ? (
+        <TerminalContextSheet
+          text={capturedOutput}
+          environmentId={selectedThread.environmentId}
+          threadId={selectedThread.id}
+          terminalId={terminalId}
+          terminalLabel={resolveTerminalSessionLabel(terminalId, terminal.summary)}
+          onClose={() => setCapturedOutput(null)}
+          onAttach={() => {
+            setCapturedOutput(null);
+            if (navigation.canGoBack()) navigation.goBack();
+          }}
+        />
+      ) : null}
       <NativeStackScreenOptions
         options={{
           // Static header config lives in Stack.tsx (SOLID_HEADER_OPTIONS — the pty
@@ -1168,7 +1202,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
         <AndroidScreenHeader
           title="Terminal"
           subtitle={headerSubtitle}
-          onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
+          onBack={handleCloseTerminal}
           trailing={
             <>
               {layout.usesSplitView ? (
@@ -1204,6 +1238,12 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
 
       {layout.usesSplitView ? (
         <NativeHeaderToolbar placement="left">
+          <NativeHeaderToolbar.Button
+            accessibilityLabel="Close terminal"
+            icon="xmark"
+            onPress={handleCloseTerminal}
+            separateBackground
+          />
           <NativeHeaderToolbar.Button
             accessibilityLabel={panes.primarySidebarVisible ? "Maximize terminal" : "Show threads"}
             // T3-CUSTOM(expbkt3): preserve the split-pane terminal/sidebar action in the native header.
@@ -1292,7 +1332,21 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
           />
         ) : (
           <>
-            <View className="flex-1" style={{ paddingBottom: terminalBottomInset }}>
+            <BlurTargetView
+              ref={terminalBlurTarget}
+              style={{
+                flex: 1,
+                paddingBottom: terminalBottomInset,
+              }}
+            >
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  backgroundColor: terminalTheme.background,
+                }}
+              />
               <TerminalSurface
                 autoFocus={!SHOWCASE_ENABLED}
                 buffer={terminalSurfaceBuffer}
@@ -1303,6 +1357,11 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 isRunning={isRunning}
                 // T3-CUSTOM(expbkt3): relay an explicit keyboard request to the native terminal surface.
                 keyboardFocusRequest={keyboardFocusRequest}
+                captureRequest={captureRequest}
+                onCapture={(text) => {
+                  if (text.trim()) setCapturedOutput(text);
+                  else Alert.alert("No terminal output", "There is no visible output to attach.");
+                }}
                 onInput={handleInput}
                 onKeyboardFocusChange={handleNativeKeyboardFocusChange}
                 onResize={handleResize}
@@ -1310,8 +1369,20 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 terminalKey={terminalKey}
                 theme={terminalTheme}
               />
-            </View>
+            </BlurTargetView>
 
+            {selectedThread && hasNativeTerminalSurface() ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  KeyboardController.dismiss();
+                  setCaptureRequest((value) => value + 1);
+                }}
+                className="px-4 py-2"
+              >
+                <Text style={{ color: terminalTheme.foreground }}>Attach visible output</Text>
+              </Pressable>
+            ) : null}
             {/* T3-CUSTOM(expbkt3): BEGIN show native-focus status and keyboard recovery when the accessory is hidden. */}
             {isAccessoryVisible ? (
               <KeyboardStickyView
@@ -1397,6 +1468,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 >
                   <GlassSurface
                     chrome="none"
+                    blurTarget={terminalBlurTarget}
+                    fallbackColor={terminalTheme.background}
                     glassEffectStyle="regular"
                     tintColor="transparent"
                     style={{

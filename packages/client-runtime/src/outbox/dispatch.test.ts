@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { dispatchPersistedOutboxItem } from "./dispatch.ts";
 
-class TestOutboxError extends Schema.TaggedErrorClass<TestOutboxError>()("TestOutboxError", {
+class TestOutboxError extends Schema.TaggedError<TestOutboxError>()("TestOutboxError", {
   message: Schema.String,
 }) {}
 

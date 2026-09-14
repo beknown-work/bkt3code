@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 
 export const ORCHESTRATION_COMMAND_ACK_TIMEOUT = "10 seconds";
 
-export class OrchestrationCommandAcknowledgementTimeoutError extends Schema.TaggedErrorClass<OrchestrationCommandAcknowledgementTimeoutError>()(
+export class OrchestrationCommandAcknowledgementTimeoutError extends Schema.TaggedError<OrchestrationCommandAcknowledgementTimeoutError>()(
   "OrchestrationCommandAcknowledgementTimeoutError",
   {
     commandType: Schema.String,

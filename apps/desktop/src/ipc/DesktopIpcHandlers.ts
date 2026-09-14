@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
+import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import {
   clearConnectionCatalog,
@@ -39,6 +40,8 @@ import {
   getWindowFullscreenState,
   openExternal,
   openSystemSettings,
+  checkSystemPermission,
+  pasteAsText,
   probeRemoteEditors,
   pickFolder,
   pickProjectFavicon,
@@ -48,12 +51,27 @@ import {
 } from "./methods/window.ts";
 // T3-CUSTOM(expbkt3): user-defined "Open in…" targets.
 import { openForkTarget } from "./methods/bkOpenTarget.ts";
+import {
+  acknowledgeSnapShot,
+  checkSnapShotShortcut,
+  dismissSnapShotAnimation,
+  getSnapShotState,
+  setupSnapShot,
+  previewSnapShotConfig,
+  applySnapShotConfig,
+  listPendingSnapShots,
+  readSnapShot,
+  requestSnapShotPermissions,
+  setSnapShotAnimationDestination,
+  setSnapShotShortcutSuppressed,
+} from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* installNotificationBadge();
   yield* PreviewIpc.installPreviewEventForwarding();
 
   yield* ipc.handle(AppActivationIpc.setReady);
@@ -68,6 +86,18 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getConnectionCatalog);
+  yield* ipc.handle(getSnapShotState);
+  yield* ipc.handle(setupSnapShot);
+  yield* ipc.handle(previewSnapShotConfig);
+  yield* ipc.handle(applySnapShotConfig);
+  yield* ipc.handle(requestSnapShotPermissions);
+  yield* ipc.handle(checkSnapShotShortcut);
+  yield* ipc.handle(setSnapShotShortcutSuppressed);
+  yield* ipc.handle(listPendingSnapShots);
+  yield* ipc.handle(readSnapShot);
+  yield* ipc.handle(setSnapShotAnimationDestination);
+  yield* ipc.handle(dismissSnapShotAnimation);
+  yield* ipc.handle(acknowledgeSnapShot);
   yield* ipc.handle(setConnectionCatalog);
   yield* ipc.handle(clearConnectionCatalog);
 
@@ -98,6 +128,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
   yield* ipc.handle(openSystemSettings);
+  yield* ipc.handle(checkSystemPermission);
+  yield* ipc.handle(pasteAsText);
   yield* ipc.handle(probeRemoteEditors);
   // T3-CUSTOM(expbkt3): user-defined "Open in…" targets.
   yield* ipc.handle(openForkTarget);
