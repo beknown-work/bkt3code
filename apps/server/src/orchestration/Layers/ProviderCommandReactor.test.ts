@@ -1466,6 +1466,8 @@ describe("ProviderCommandReactor", () => {
 
       expect(harness.sendTurn).toHaveBeenCalledWith(
         expect.objectContaining({ input: "Use the current message" }),
+        // T3-CUSTOM(expbkt3): provider sends retain runtime identity execution options.
+        { identityEnvironment: { BK_IDENTITY_RUNTIME: "t3-code" } },
       );
       expect(harness.generateThreadTitle).toHaveBeenCalledWith(
         expect.objectContaining({ message: "Use the current message" }),
@@ -2535,11 +2537,8 @@ describe("ProviderCommandReactor", () => {
     await harness.runEffect(titleUpdated);
     await harness.drain();
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
-    // T3-CUSTOM(expbkt3): the first prompt is named through the durable
-    // regeneration flow, so the prompt arrives as speaker-labelled thread
-    // context rather than the bare message. See shouldNameThreadFromFirstPrompt.
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
-      message: "USER:\nPlease investigate reconnect failures after restarting the session.",
+      message: "Please investigate reconnect failures after restarting the session.",
     });
 
     const readModel = await harness.readModel();
@@ -3310,8 +3309,7 @@ describe("ProviderCommandReactor", () => {
     await harness.drain();
 
     expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(
-      // T3-CUSTOM(expbkt3): durable title generation receives labelled conversation context.
-      `USER:\n[effort:high]\\n\\nFix reconnect spinner on resume ${assistantQuoteText}`,
+      `[effort:high]\\n\\nFix reconnect spinner on resume ${assistantQuoteText}`,
     );
     expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).not.toContain("t3-citation://");
     const readModel = await harness.readModel();

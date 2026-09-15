@@ -5400,6 +5400,7 @@ describe("agent browser access", () => {
         getThreadAccessById: () => Effect.die("unused"),
         listThreadShellsByProjectId: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
+        countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getUserInputActivity: () => Effect.die("unused"),
         getCommandReadModel: () => Effect.die("unused"),

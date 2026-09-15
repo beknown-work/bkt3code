@@ -71,6 +71,7 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getThreadAccessById: () => Effect.succeed(Option.none()),
     getThreadRuntimeContext: () => Effect.die("unused"),
     getTurnStartMessage: () => Effect.die("unused"),
+    countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
     getThreadShellById: () => Effect.die("unused"),
     listThreadShellsByProjectId: () => Effect.die("unused"),
     getThreadDetailById: () => Effect.die("unused"),

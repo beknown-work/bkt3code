@@ -271,6 +271,14 @@ export interface ProjectionSnapshotQueryShape {
     ProjectionRepositoryError
   >;
 
+  // T3-CUSTOM(expbkt3): BEGIN — the title refresh cadence needs how many user
+  // prompts a thread has, not their bodies. Same compaction predicate as
+  // getTurnStartMessage's hasOtherUserMessages.
+  readonly countThreadUserMessages: (
+    threadId: ThreadId,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
+  // T3-CUSTOM(expbkt3): END
+
   /**
    * Read the ownership/tag fields for a thread regardless of archived state
    * (team mode authorization). Archived threads are still owned by someone and

@@ -1644,6 +1644,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     `,
   });
 
+  // T3-CUSTOM(expbkt3): BEGIN — prompt count for the title refresh cadence.
+  // Keep the compaction predicate in sync with getTurnStartMessageRow.
+  const countThreadUserMessagesRow = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) => sql`
+      SELECT COUNT(*) AS "count"
+      FROM projection_thread_messages
+      WHERE thread_id = ${threadId}
+        AND role = 'user'
+        AND (
+          LOWER(TRIM(text, ${MESSAGE_TRIM_WHITESPACE})) != '/compact'
+          OR COALESCE(json_array_length(attachments_json), 0) > 0
+        )
+    `,
+  });
+  // T3-CUSTOM(expbkt3): END
+
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -4083,6 +4101,21 @@ pending_approval_requests AS (
     }));
   });
 
+  // T3-CUSTOM(expbkt3): BEGIN
+  const countThreadUserMessages: ProjectionSnapshotQueryShape["countThreadUserMessages"] =
+    Effect.fn("ProjectionSnapshotQuery.countThreadUserMessages")(function* (threadId) {
+      const row = yield* countThreadUserMessagesRow({ threadId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.countThreadUserMessages:query",
+            "ProjectionSnapshotQuery.countThreadUserMessages:decodeRow",
+          ),
+        ),
+      );
+      return row.count;
+    });
+  // T3-CUSTOM(expbkt3): END
+
   // Contiguous turn range bounding a windowed detail read; undefined loads the
   // full thread. Resolved from a window request inside the snapshot
   // transaction (see getThreadDetailSnapshot).
@@ -4598,6 +4631,8 @@ pending_approval_requests AS (
     listThreadShellsByProjectId,
     getThreadRuntimeContext,
     getTurnStartMessage,
+    // T3-CUSTOM(expbkt3): fork-only title-cadence query.
+    countThreadUserMessages,
     getThreadDetailById,
     getThreadDetailSnapshot,
   } satisfies ProjectionSnapshotQueryShape;

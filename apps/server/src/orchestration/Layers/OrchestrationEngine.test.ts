@@ -636,6 +636,7 @@ describe("OrchestrationEngine", () => {
           getThreadAccessById: () => Effect.succeed(Option.none()),
           getThreadRuntimeContext: () => Effect.die("unused"),
           getTurnStartMessage: () => Effect.die("unused"),
+          countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
           getThreadShellById: () => Effect.succeed(Option.none()),
           listThreadShellsByProjectId: () => Effect.succeed([]),
           getThreadDetailById: () => Effect.succeed(Option.none()),

@@ -201,6 +201,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
         getThreadAccessById: () => Effect.succeed(Option.none()),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
+        countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
         getThreadShellById: () => Effect.die("unused"),
         listThreadShellsByProjectId: () => Effect.die("unused"),
         getThreadDetailById: () => Effect.die("unused"),
@@ -337,6 +338,7 @@ it.effect.each([
         getThreadAccessById: () => Effect.succeed(Option.none()),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
+        countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
         getThreadShellById: () => Effect.die("unused"),
         listThreadShellsByProjectId: () => Effect.die("unused"),
         getThreadDetailById: () => Effect.die("unused"),
@@ -413,6 +415,7 @@ it.effect(
           getFullThreadDiffContext: () => Effect.succeed(Option.none()),
           getThreadRuntimeContext: () => Effect.die("unused"),
           getTurnStartMessage: () => Effect.die("unused"),
+          countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
           getThreadShellById: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
@@ -480,6 +483,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         getThreadAccessById: () => Effect.succeed(Option.none()),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
+        countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
         getThreadShellById: () => Effect.die("unused"),
         listThreadShellsByProjectId: () => Effect.die("unused"),
         getThreadDetailById: () => Effect.die("unused"),

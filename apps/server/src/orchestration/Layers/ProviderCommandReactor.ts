@@ -580,6 +580,14 @@ const make = Effect.gen(function* () {
     }
   >();
   const stoppingThreadIds = new Set<ThreadId>();
+  // T3-CUSTOM(expbkt3): first-prompt naming hands its message context to the
+  // regeneration worker so that run decodes no stored message bodies. Keyed by
+  // the meta.update command id and consumed once; a miss (a request replayed
+  // after a restart) falls back to the conversation read the manual refresh uses.
+  const firstPromptTitleContexts = new Map<
+    CommandId,
+    { readonly message: string; readonly attachments: ReadonlyArray<ChatAttachment> }
+  >();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -1507,12 +1515,22 @@ const make = Effect.gen(function* () {
       return { _tag: "Superseded" } as const;
     }
 
-    const thread = yield* resolveThreadDetail(event.payload.threadId);
+    // T3-CUSTOM(expbkt3): BEGIN — a first-prompt request carries its own
+    // context, so only a manual or scheduled refresh reads the conversation.
+    const firstPrompt =
+      event.commandId === null ? undefined : firstPromptTitleContexts.get(event.commandId);
+    if (event.commandId !== null) firstPromptTitleContexts.delete(event.commandId);
+    const thread = yield* firstPrompt === undefined
+      ? resolveThreadDetail(event.payload.threadId)
+      : resolveThreadShell(event.payload.threadId);
+    // T3-CUSTOM(expbkt3): END
     if (!thread || thread.titleRegeneration?.requestId !== requestId) {
       return { _tag: "Superseded" } as const;
     }
 
-    const { message, attachments } = formatThreadTitleContext(thread.messages);
+    // T3-CUSTOM(expbkt3): first-prompt context wins; see above.
+    const { message, attachments } =
+      firstPrompt ?? formatThreadTitleContext("messages" in thread ? thread.messages : []);
     if (message.length === 0) {
       return { _tag: "Completed", title: undefined } as const;
     }
@@ -1758,9 +1776,7 @@ const make = Effect.gen(function* () {
       return;
     }
     const executionId = String(event.commandId ?? event.eventId);
-    // T3-CUSTOM(expbkt3): the fork counts this thread's user messages for title
-    // maintenance, so it still needs the detail projection here.
-    const thread = yield* resolveThreadDetail(event.payload.threadId);
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     if (!thread) {
       return;
     }
@@ -1780,9 +1796,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    // T3-CUSTOM(expbkt3): the fork derives its own compact-aware user message
-    // count below, so upstream's hasOtherUserMessages flag is not read here.
-    const { message } = turnStart.value;
+    const { message, hasOtherUserMessages } = turnStart.value;
     const isCompactCommand = isCompactCommandMessage(message);
     // T3-CUSTOM(expbkt3): compaction never creates a provider turn, so it must
     // check the pre-existing session before admission can dual-write itself as
@@ -1861,17 +1875,21 @@ const make = Effect.gen(function* () {
     // recovery path (branch check, decideWorktreeRecovery, activity events), so the
     // guarantee holds without running the recovery twice per turn.
 
-    const userMessageCount = thread.messages.filter(
-      (entry) => entry.role === "user" && !isCompactCommandMessage(entry),
-    ).length;
-    const nonCompactUserMessageCount = userMessageCount;
-    const isFirstUserMessageTurn = userMessageCount === 1;
+    // T3-CUSTOM(expbkt3): BEGIN — first-turn eligibility comes from upstream's
+    // hasOtherUserMessages flag and the refresh cadence counts prompts with a
+    // dedicated query, so turn start never decodes stored message bodies
+    // (upstream #10108).
+    const isFirstUserMessageTurn = !hasOtherUserMessages;
+    // T3-CUSTOM(expbkt3): END
     // T3-CUSTOM(expbkt3): BEGIN — re-derive the title as a long session drifts
     // from its opening prompt. Reuses the durable regeneration flow (request
     // ids, supersede checks, interrupted-run recovery) rather than renaming
     // directly, so a refresh behaves exactly like the manual action.
     if (!isFirstUserMessageTurn && !isCompactCommand) {
       const { experimental } = yield* serverSettingsService.getSettings;
+      const userMessageCount = yield* projectionSnapshotQuery.countThreadUserMessages(
+        event.payload.threadId,
+      );
       if (
         shouldRefreshThreadTitle({
           userMessageCount,
@@ -1924,26 +1942,35 @@ const make = Effect.gen(function* () {
       // shouldNameThreadFromFirstPrompt for the full reasoning.
       if (
         shouldNameThreadFromFirstPrompt({
-          userMessageCount,
+          userMessageCount: 1,
           title: thread.title,
           titleManuallySet: thread.titleManuallySet,
           ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
         })
       ) {
+        const firstPromptCommandId = yield* serverCommandId("thread-title-first-prompt");
+        firstPromptTitleContexts.set(firstPromptCommandId, {
+          message: generationInput.messageText,
+          attachments: generationInput.attachments ?? [],
+        });
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
-            commandId: yield* serverCommandId("thread-title-first-prompt"),
+            commandId: firstPromptCommandId,
             threadId: event.payload.threadId,
             regenerateTitle: true,
           })
           .pipe(
             // A title is cosmetic; never let it interfere with starting the turn.
             Effect.catchCause((cause) =>
-              Effect.logWarning("first-prompt thread title naming failed to dispatch", {
-                threadId: event.payload.threadId,
-                cause: Cause.pretty(cause),
-              }),
+              Effect.sync(() => firstPromptTitleContexts.delete(firstPromptCommandId)).pipe(
+                Effect.andThen(
+                  Effect.logWarning("first-prompt thread title naming failed to dispatch", {
+                    threadId: event.payload.threadId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              ),
             ),
           );
       } else if (
@@ -2004,7 +2031,7 @@ const make = Effect.gen(function* () {
 
     if (claimGuard !== undefined) yield* claimGuard;
     if (isCompactCommand) {
-      if (nonCompactUserMessageCount === 0) {
+      if (!hasOtherUserMessages) {
         yield* appendTurnStartFailure(
           "Context compaction failed",
           "Context compaction requires an existing conversation.",
@@ -2467,7 +2494,11 @@ const make = Effect.gen(function* () {
       .pipe(Effect.andThen(stopOwnedSetup))
       .pipe(
         Effect.andThen(
-          thread.session && thread.session.status !== "stopped"
+          // T3-CUSTOM(expbkt3): stop whenever a session record exists, even one
+          // already projected as stopped. The projection can lag or lie about
+          // a provider process that is still alive; the adapter's stop is the
+          // ground truth and is a no-op for a session it does not hold.
+          thread.session
             ? providerService.stopSession({ threadId: thread.id }).pipe(
                 // T3-CUSTOM(expbkt3): a hung stop cannot hold the shared command lane.
                 Effect.timeoutOption(SESSION_STOP_TIMEOUT),
