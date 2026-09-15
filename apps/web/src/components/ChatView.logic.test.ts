@@ -2534,6 +2534,8 @@ describe("rewind draft recovery", () => {
     role: "user" as const,
     text: "edit this question",
     turnId: TurnId.make("rewound-turn"),
+    // T3-CUSTOM(expbkt3): fork-required field.
+    sentByUserId: null,
     createdAt: now,
     updatedAt: now,
     streaming: false,
@@ -2594,8 +2596,6 @@ describe("rewind draft recovery", () => {
           messages: [message],
           activities: [
             {
-              // T3-CUSTOM(expbkt3): fork-required field.
-              sentByUserId: null,
               id: EventId.make("rewind-failed"),
               kind: "checkpoint.revert.failed",
               tone: "error",
@@ -2638,8 +2638,6 @@ describe("rewind draft recovery", () => {
     vi.stubGlobal("fetch", fetchMock);
     const files = await prepareRevertedMessageAttachments({
       message: {
-        // T3-CUSTOM(expbkt3): fork-required field.
-        sentByUserId: null,
         ...message,
         attachments: [
           {

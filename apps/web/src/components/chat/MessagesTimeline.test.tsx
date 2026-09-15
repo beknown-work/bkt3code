@@ -1897,17 +1897,14 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&lt;review_comment");
     expect(markup).not.toContain("&lt;/review_comment&gt;");
     expect(markup).not.toContain("sectionId=");
-    // The plan title, not a workspace-relative path, and no synthetic extension.
+    expect(markup).not.toContain("```markdown");
+    // The chip is labelled by the plan title, not a workspace-relative path,
+    // and a placeholder range label is not shown as if it were a line range.
+    // (The card body — blockquote and byline — lives in the chip's popover,
+    // which static markup does not render; the parse is covered in
+    // packages/shared/src/composerContextLegacy.expbkt3.test.ts.)
     expect(markup).toContain("TEC-951 standup plan");
     expect(markup).not.toContain("TEC-951 standup plan.md");
-    // The quote is a blockquote, not a fenced code block.
-    expect(markup).toContain("<blockquote");
-    expect(markup).toContain("1. Outbound email context");
-    expect(markup).not.toContain("```markdown");
-    // Body and byline both survive.
-    expect(markup).toContain("no ignore this");
-    expect(markup).toContain("Tushar Bhardwaj");
-    // A placeholder range label is not shown as if it were a line range.
     expect(markup).not.toContain("quoted text");
   });
 
@@ -1957,9 +1954,9 @@ describe("MessagesTimeline", () => {
             id: "entry-attachments",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
-            // T3-CUSTOM(expbkt3): fork-required field.
-            sentByUserId: null,
             message: {
+              // T3-CUSTOM(expbkt3): fork-required field.
+              sentByUserId: null,
               id: MessageId.make("message-attachments"),
               role: "user",
               text: "See ![shot.png](t3-context://v1/image/img-1) and [notes.txt](t3-context://v1/file/file-1).",
@@ -2114,9 +2111,9 @@ describe("MessagesTimeline", () => {
             id: "entry-structured",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
-            // T3-CUSTOM(expbkt3): fork-required field.
-            sentByUserId: null,
             message: {
+              // T3-CUSTOM(expbkt3): fork-required field.
+              sentByUserId: null,
               id: MessageId.make("message-structured"),
               role: "user",
               text: "Compare [Terminal 1 line 4](t3-context://v1/terminal/ctx-t) with [gone](t3-context://v1/future/ctx-x).",

@@ -100,7 +100,7 @@ import type { ResolvedEnvironmentAppearance } from "../state/environmentAppearan
 import { EnvironmentBadgeView } from "./environment/EnvironmentBadge";
 // T3-CUSTOM(expbkt3): END
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
-import { primaryServerKeybindingsAtom } from "../state/server";
+import { primaryServerKeybindingsAtom, primaryServerSettingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
 // T3-CUSTOM(expbkt3): live Linear state for tagged lifecycle rows.
 import { linearIssueStatusesEnvironment } from "../state/linearIssues";
@@ -2024,9 +2024,11 @@ export function PhaseGroupedSidebar() {
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
-  const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
-  // T3-CUSTOM(expbkt3): follow the same auto-settle-on-merge setting as the default sidebar.
-  const autoSettleOnMerge = useClientSettings((state) => state.sidebarAutoSettleOnMerge);
+  // Auto-settle thresholds are server preferences (the server settles threads
+  // with no client attached), so read the primary server's values.
+  const serverSettings = useAtomValue(primaryServerSettingsAtom);
+  const autoSettleAfterDays = serverSettings.sidebarAutoSettleAfterDays;
+  const autoSettleOnMerge = serverSettings.sidebarAutoSettleOnMerge;
   const currentUserId = useCurrentUserId();
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze clocks. `now` is quantized to
   // the minute so the settled partition does not churn on every render

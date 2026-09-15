@@ -77,6 +77,7 @@ describe("ComposerPendingUserInputPanel", () => {
         questionIndex={0}
         onToggleOption={() => {}}
         onAdvance={() => {}}
+        onDismiss={() => {}}
       />,
     );
 

@@ -344,6 +344,9 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     environmentId: LOCAL_ENVIRONMENT_ID,
     title: "Project",
     workspaceRoot: "/workspace/project",
+    // T3-CUSTOM(expbkt3): fork-required fields.
+    ownerUserId: null,
+    memberUserIds: [],
     defaultModelSelection: null,
     scripts: [],
     createdAt: "2026-03-01T00:00:00.000Z",

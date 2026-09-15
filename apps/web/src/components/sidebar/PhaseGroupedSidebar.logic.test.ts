@@ -512,6 +512,7 @@ function makeThread(overrides: Partial<ThreadShell> = {}): ThreadShell {
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    pullRequests: [],
     ...overrides,
   };
 }

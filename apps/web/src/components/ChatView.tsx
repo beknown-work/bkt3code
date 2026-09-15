@@ -7404,6 +7404,8 @@ export default function ChatView(props: ChatViewProps) {
         role: "user",
         text: "/compact",
         turnId: null,
+        // T3-CUSTOM(expbkt3): fork-required field.
+        sentByUserId: null,
         createdAt,
         updatedAt: createdAt,
         streaming: false,

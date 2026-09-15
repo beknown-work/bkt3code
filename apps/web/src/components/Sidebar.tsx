@@ -1962,7 +1962,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   }
 
   const compactRows = props.compact;
-  const CompactStatusIcon = topStatus
+  // T3-CUSTOM(expbkt3): the fork's async "Question" status has no icon.
+  const CompactStatusIcon = topStatus?.icon
     ? {
         working: CircleDashedIcon,
         monitoring: EyeIcon,

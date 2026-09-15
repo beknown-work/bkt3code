@@ -530,9 +530,12 @@ describe("streaming row projection", () => {
       });
       const completed = send("Complete", 11, false);
       expect(completed.rows).toEqual(deriveMessagesTimelineRows(completed.input));
+      // T3-CUSTOM(expbkt3): a completed message annotates the turn but cannot settle
+      // it; only an execution transition does. The turn is still running here, so
+      // the copy button keeps its streaming state (upstream expects false).
       expect(
         completed.rows.find((row) => row.kind === "message" && row.message.id === liveMessage.id),
-      ).toMatchObject({ message: { text: "Complete" }, assistantCopyStreaming: false });
+      ).toMatchObject({ message: { text: "Complete" }, assistantCopyStreaming: true });
       expect(first.rows).toEqual(saved);
     } finally {
       unmount();
@@ -2996,7 +2999,14 @@ describe("deriveMessagesTimelineRows", () => {
     }));
     const input = {
       timelineEntries: deriveTimelineEntries([], [], [...tools, answer]),
-      latestTurn: { turnId, state: "completed", startedAt: time(0), completedAt: time(6) },
+      latestTurn: {
+        turnId,
+        state: "completed",
+        startedAt: time(0),
+        completedAt: time(6),
+        // T3-CUSTOM(expbkt3): fork-required field.
+        durationMs: null,
+      },
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaries: [],

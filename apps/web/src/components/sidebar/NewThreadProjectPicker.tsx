@@ -171,7 +171,7 @@ export function NewThreadProjectOptionList({
           <ProjectFavicon
             // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
             // saved title, favicon and icon override always travel together.
-            project={option.defaultHost}
+            project={option.defaultHost.project}
           />
           <span className="min-w-0 flex-1 truncate">{option.title}</span>
           {option.requiresHostChoice ? (
@@ -228,7 +228,7 @@ export function NewThreadHostList({
               <ProjectFavicon
                 // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
                 // saved title, favicon and icon override always travel together.
-                project={host}
+                project={host.project}
               />
             )}
             <span className="flex min-w-0 flex-1 flex-col">

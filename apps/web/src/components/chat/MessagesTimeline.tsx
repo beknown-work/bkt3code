@@ -3304,6 +3304,8 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
                   ? { fenceLanguage: record.fenceLanguage }
                   : {}),
                 ...(record.pullRequest !== undefined ? { pullRequest: record.pullRequest } : {}),
+                // T3-CUSTOM(expbkt3): plan comment byline.
+                ...(record.author !== undefined ? { author: record.author } : {}),
               }}
             />
           </UserMessageContextPopover>
