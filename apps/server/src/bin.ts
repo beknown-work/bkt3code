@@ -7,6 +7,7 @@ import * as CliError from "effect/unstable/cli/CliError";
 
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
+// T3-CUSTOM(expbkt3): the CLI graph reaches the source-control provider registry.
 import { ForgejoCliSelfContainedLive } from "./sourceControl/forgejoCliRuntime.expbkt3.ts";
 import { authCommand } from "./cli/auth.ts";
 import { appCommand } from "./cli/app.ts";

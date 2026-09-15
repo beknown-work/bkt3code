@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { DEFAULT_MODEL } from "./model.ts";
 import * as Schema from "effect/Schema";
 
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -787,7 +788,9 @@ describe("ServerSettings worktree defaults", () => {
     expect(settings.newWorktreesStartFromOrigin).toBe(true);
     expect(settings.defaultThreadModelSelection).toEqual({
       instanceId: "codex",
-      model: "gpt-5.6-sol",
+      // T3-CUSTOM(expbkt3): read the constant rather than a literal so an upstream
+      // default-model bump stops failing this fork test on every merge.
+      model: DEFAULT_MODEL,
     });
     expect(settings.defaultThreadRuntimeMode).toBe("full-access");
     expect(settings.defaultThreadInteractionMode).toBe("default");
