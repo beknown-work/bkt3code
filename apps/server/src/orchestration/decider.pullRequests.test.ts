@@ -16,7 +16,10 @@ import * as Schema from "effect/Schema";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
-import { isThreadDetailEvent } from "../ws.ts";
+// T3-CUSTOM(expbkt3): import from the module that owns this predicate rather than
+// from ws.ts, which only imports it. Upstream moved it out of ws.ts; pointing at
+// the real owner keeps this fork test off a merge hot-spot.
+import { isThreadDetailEvent } from "./threadDetailEvent.ts";
 
 const decodeCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 

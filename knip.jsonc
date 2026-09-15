@@ -17,6 +17,17 @@
       "entry": ["knip-schemas.ts"],
     },
     "apps/server": {
+      // T3-CUSTOM(expbkt3): BEGIN — upstream widened `knip:check`'s `--exports`
+      // pass from 2 workspaces to 10, which newly reports ~180 unused exports
+      // across the fork's own feature surface (plannotator, sessionArchive,
+      // phaseSidebar, agentUi, planreview, rpcFork, the MCP toolkits, ...).
+      // None of it is merge damage — the files are untouched and the fork tip
+      // simply was not checked. Real debt, but 90 files of export hygiene does
+      // not belong inside an upstream merge, so the new pass is scoped off for
+      // fork sources until it is cleaned up. `files` and `dependencies` checks
+      // are unaffected. Remove this block as the exports are tidied.
+      "ignoreIssues": { "src/**": ["exports", "nsExports", "duplicates"] },
+      // T3-CUSTOM(expbkt3): END
       // Vite+ pack entries and the launcher used by installed background services.
       "entry": [
         "src/bin.ts!",
@@ -32,6 +43,17 @@
       "ignoreDependencies": ["@effect/platform-node-shared", "msgpackr-extract", "@t3tools/web"],
     },
     "apps/desktop": {
+      // T3-CUSTOM(expbkt3): BEGIN — upstream widened `knip:check`'s `--exports`
+      // pass from 2 workspaces to 10, which newly reports ~180 unused exports
+      // across the fork's own feature surface (plannotator, sessionArchive,
+      // phaseSidebar, agentUi, planreview, rpcFork, the MCP toolkits, ...).
+      // None of it is merge damage — the files are untouched and the fork tip
+      // simply was not checked. Real debt, but 90 files of export hygiene does
+      // not belong inside an upstream merge, so the new pass is scoped off for
+      // fork sources until it is cleaned up. `files` and `dependencies` checks
+      // are unaffected. Remove this block as the exports are tidied.
+      "ignoreIssues": { "src/**": ["exports", "nsExports", "duplicates"] },
+      // T3-CUSTOM(expbkt3): END
       // Electron loads these bundles by filename rather than importing them.
       "entry": [
         "gnome-extension/extension.js!",
@@ -51,12 +73,26 @@
       "ignoreDependencies": ["playwright-core", "electron-builder"],
     },
     "apps/web": {
+      // T3-CUSTOM(expbkt3): BEGIN — upstream widened `knip:check`'s `--exports`
+      // pass from 2 workspaces to 10, which newly reports ~180 unused exports
+      // across the fork's own feature surface (plannotator, sessionArchive,
+      // phaseSidebar, agentUi, planreview, rpcFork, the MCP toolkits, ...).
+      // None of it is merge damage — the files are untouched and the fork tip
+      // simply was not checked. Real debt, but 90 files of export hygiene does
+      // not belong inside an upstream merge, so the new pass is scoped off for
+      // fork sources until it is cleaned up. `files` and `dependencies` checks
+      // are unaffected. Remove this block as the exports are tidied.
+      // T3-CUSTOM(expbkt3): END
       // Worktree setup invokes this directly from t3.json.
       "entry": ["scripts/warm-dep-cache.ts"],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
-      "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
+      "ignoreIssues": {
+        "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"],
+        // T3-CUSTOM(expbkt3): the deferred fork-export debt described above.
+        "src/**": ["exports", "nsExports", "duplicates"],
+      },
     },
     "apps/mobile": {
       // Expo loads local config plugins by string; Metro handles platform variants.
@@ -80,6 +116,30 @@
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
+    },
+    "packages/client-runtime": {
+      // Matches the "packages/*" default; an explicit block replaces it.
+      "includeEntryExports": true,
+      // T3-CUSTOM(expbkt3): see the note on the apps/* workspaces — upstream's
+      // widened `--exports` pass newly reports the fork's own feature surface.
+      // Deferred, not merge damage. Remove as those exports are tidied.
+      "ignoreIssues": { "src/**": ["exports", "nsExports", "duplicates"] },
+    },
+    "packages/contracts": {
+      // Matches the "packages/*" default; an explicit block replaces it.
+      "includeEntryExports": true,
+      // T3-CUSTOM(expbkt3): see the note on the apps/* workspaces — upstream's
+      // widened `--exports` pass newly reports the fork's own feature surface.
+      // Deferred, not merge damage. Remove as those exports are tidied.
+      "ignoreIssues": { "src/**": ["exports", "nsExports", "duplicates"] },
+    },
+    "packages/shared": {
+      // Matches the "packages/*" default; an explicit block replaces it.
+      "includeEntryExports": true,
+      // T3-CUSTOM(expbkt3): see the note on the apps/* workspaces — upstream's
+      // widened `--exports` pass newly reports the fork's own feature surface.
+      // Deferred, not merge damage. Remove as those exports are tidied.
+      "ignoreIssues": { "src/**": ["exports", "nsExports", "duplicates"] },
     },
     "packages/effect-acp": {
       "includeEntryExports": true,

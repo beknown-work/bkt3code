@@ -1257,6 +1257,78 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     return true
   }
 
+  // T3-CUSTOM(expbkt3): per-row VoiceOver semantics for the native review diff.
+  // Split out of `updateAccessibilityElementsIfNeeded` to keep that function under
+  // SwiftLint's cyclomatic_complexity limit. Returns false for row kinds that carry
+  // no semantics, which the caller skips.
+  private func configureAccessibilityElement(
+    _ element: ReviewDiffAccessibilityElement,
+    for row: ReviewDiffNativeRow
+  ) -> Bool {
+    switch row.kind {
+    case "file":
+      let fileId = resolvedFileId(for: row)
+      let path = row.filePath ?? row.text ?? "file"
+      let isCollapsed = collapsedFileIds.contains(fileId)
+      element.accessibilityLabel = "\(path), \(isCollapsed ? "collapsed" : "expanded")"
+      element.accessibilityHint = "Double tap to \(isCollapsed ? "expand" : "collapse") this file."
+      element.accessibilityTraits = .button
+      element.onActivate = { [weak self] in
+        self?.onToggleFile?(fileId)
+        return true
+      }
+    case "line":
+      let lineNumber = row.newLineNumber ?? row.oldLineNumber
+      let linePrefix = lineNumber.map { "Line \($0)" } ?? "Line"
+      let change = row.change.map { ", \($0)" } ?? ""
+      let content = String((row.content ?? row.text ?? "blank").prefix(1_000))
+      element.accessibilityLabel = "\(linePrefix)\(change): \(content)"
+      if isReviewSelectionEnabled {
+        let isSelected = selectedRowIds.contains(row.id)
+        element.accessibilityHint = "Double tap to \(isSelected ? "clear" : "select") this line for a review comment. Use actions to start a range."
+        element.accessibilityTraits = isSelected ? [.button, .selected] : .button
+        element.onActivate = { [weak self] in
+          guard let self else { return false }
+          self.onPressLine?(self.linePressPayload(for: row, gesture: "tap"))
+          return true
+        }
+        element.onStartRange = { [weak self] in
+          guard let self else { return false }
+          self.onPressLine?(self.linePressPayload(for: row, gesture: "longPress"))
+          return true
+        }
+        element.accessibilityCustomActions = [
+          UIAccessibilityCustomAction(
+            name: "Start comment range",
+            target: element,
+            selector: #selector(ReviewDiffAccessibilityElement.startRangeSelection)
+          )
+        ]
+      } else {
+        element.accessibilityTraits = .staticText
+        element.accessibilityHint = nil
+        element.onActivate = nil
+        element.onStartRange = nil
+        element.accessibilityCustomActions = nil
+      }
+    case "comment":
+      let isCollapsed = collapsedCommentIds.contains(row.id)
+      element.accessibilityLabel = row.commentText ?? "Review comment"
+      element.accessibilityHint = "Double tap to \(isCollapsed ? "expand" : "collapse") this comment."
+      element.accessibilityTraits = .button
+      element.onActivate = { [weak self] in
+        self?.onToggleComment?(row.id)
+        return true
+      }
+    case "hunk", "notice":
+      element.accessibilityLabel = String((row.text ?? row.content ?? "Diff information").prefix(1_000))
+      element.accessibilityTraits = .staticText
+    default:
+      return false
+    }
+    return true
+  }
+
   private func updateAccessibilityElementsIfNeeded() {
     guard bounds.width > 0, bounds.height > 0 else {
       accessibilityElements = []
@@ -1308,67 +1380,7 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
         height: rowFrame.height
       )
 
-      switch row.kind {
-      case "file":
-        let fileId = resolvedFileId(for: row)
-        let path = row.filePath ?? row.text ?? "file"
-        let isCollapsed = collapsedFileIds.contains(fileId)
-        element.accessibilityLabel = "\(path), \(isCollapsed ? "collapsed" : "expanded")"
-        element.accessibilityHint = "Double tap to \(isCollapsed ? "expand" : "collapse") this file."
-        element.accessibilityTraits = .button
-        element.onActivate = { [weak self] in
-          self?.onToggleFile?(fileId)
-          return true
-        }
-      case "line":
-        let lineNumber = row.newLineNumber ?? row.oldLineNumber
-        let linePrefix = lineNumber.map { "Line \($0)" } ?? "Line"
-        let change = row.change.map { ", \($0)" } ?? ""
-        let content = String((row.content ?? row.text ?? "blank").prefix(1_000))
-        element.accessibilityLabel = "\(linePrefix)\(change): \(content)"
-        if isReviewSelectionEnabled {
-          let isSelected = selectedRowIds.contains(row.id)
-          element.accessibilityHint = "Double tap to \(isSelected ? "clear" : "select") this line for a review comment. Use actions to start a range."
-          element.accessibilityTraits = isSelected ? [.button, .selected] : .button
-          element.onActivate = { [weak self] in
-            guard let self else { return false }
-            self.onPressLine?(self.linePressPayload(for: row, gesture: "tap"))
-            return true
-          }
-          element.onStartRange = { [weak self] in
-            guard let self else { return false }
-            self.onPressLine?(self.linePressPayload(for: row, gesture: "longPress"))
-            return true
-          }
-          element.accessibilityCustomActions = [
-            UIAccessibilityCustomAction(
-              name: "Start comment range",
-              target: element,
-              selector: #selector(ReviewDiffAccessibilityElement.startRangeSelection)
-            )
-          ]
-        } else {
-          element.accessibilityTraits = .staticText
-          element.accessibilityHint = nil
-          element.onActivate = nil
-          element.onStartRange = nil
-          element.accessibilityCustomActions = nil
-        }
-      case "comment":
-        let isCollapsed = collapsedCommentIds.contains(row.id)
-        element.accessibilityLabel = row.commentText ?? "Review comment"
-        element.accessibilityHint = "Double tap to \(isCollapsed ? "expand" : "collapse") this comment."
-        element.accessibilityTraits = .button
-        element.onActivate = { [weak self] in
-          self?.onToggleComment?(row.id)
-          return true
-        }
-      case "hunk", "notice":
-        element.accessibilityLabel = String((row.text ?? row.content ?? "Diff information").prefix(1_000))
-        element.accessibilityTraits = .staticText
-      default:
-        continue
-      }
+      guard configureAccessibilityElement(element, for: row) else { continue }
       elements.append(element)
     }
     accessibilityElements = elements
