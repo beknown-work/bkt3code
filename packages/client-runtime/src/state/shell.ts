@@ -25,7 +25,7 @@ import { subscribeDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
-import type { EnvironmentCatalogState } from "./connections.ts";
+import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 
 export type EnvironmentShellStatus = "empty" | "cached" | "synchronizing" | "live";
@@ -148,66 +148,75 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     );
 
-  const applyItem = Effect.fn("EnvironmentShellState.applyItem")(function* (
-    item: OrchestrationShellStreamItem,
+  // Apply each received batch with one state write. The RPC client's bounded
+  // buffer can split a server chunk, so a bulk action can still need several
+  // writes, but each write includes every event in that batch.
+  const applyItems = Effect.fn("EnvironmentShellState.applyItems")(function* (
+    items: ReadonlyArray<OrchestrationShellStreamItem>,
   ) {
-    if (item.kind === "synchronized") {
-      yield* Ref.set(awaitingCompletion, false);
-      yield* SubscriptionRef.update(state, (current) =>
-        Option.isSome(current.snapshot)
-          ? { ...current, status: "live" as const, error: Option.none() }
-          : current,
-      );
-      return;
-    }
-
-    const current = yield* SubscriptionRef.get(state);
-    if (item.kind === "execution") {
-      if (Option.isNone(current.snapshot)) return;
-      const nextSnapshot = {
-        ...current.snapshot.value,
-        threads: current.snapshot.value.threads.map((thread) =>
-          thread.id === item.execution.threadId
-            ? withExecutionSnapshot(thread, item.execution)
-            : thread,
-        ),
-      };
-      yield* SubscriptionRef.set(state, {
+    const initial = yield* SubscriptionRef.get(state);
+    let waiting = yield* Ref.get(awaitingCompletion);
+    let next = initial;
+    let receivedSnapshot = false;
+    for (const item of items) {
+      if (item.kind === "synchronized") {
+        waiting = false;
+        if (Option.isSome(next.snapshot)) {
+          next = { ...next, status: "live", error: Option.none() };
+        }
+        continue;
+      }
+      // T3-CUSTOM(expbkt3): BEGIN — per-thread execution frames are their own
+      // item kind; they replace one thread's execution snapshot in place.
+      if (item.kind === "execution") {
+        if (Option.isNone(next.snapshot)) continue;
+        next = {
+          snapshot: Option.some({
+            ...next.snapshot.value,
+            threads: next.snapshot.value.threads.map((thread) =>
+              thread.id === item.execution.threadId
+                ? withExecutionSnapshot(thread, item.execution)
+                : thread,
+            ),
+          }),
+          status: "live",
+          error: Option.none(),
+        };
+        continue;
+      }
+      // T3-CUSTOM(expbkt3): END
+      const nextSnapshot =
+        item.kind === "snapshot"
+          ? item.snapshot
+          : Option.match(next.snapshot, {
+              onNone: () => null,
+              // T3-CUSTOM(expbkt3): the reducer accepts equal-sequence derived
+              // frames. Team-mode visibility emits a parent-project upsert
+              // followed by its thread upsert at the same durable sequence;
+              // filtering here previously discarded the thread and left the
+              // sidebar stale until refresh.
+              onSome: (snapshot) => applyShellStreamEvent(snapshot, item),
+            });
+      if (nextSnapshot === null) continue;
+      receivedSnapshot ||= item.kind === "snapshot";
+      next = {
         snapshot: Option.some(nextSnapshot),
-        status: "live",
+        status: waiting ? "synchronizing" : "live",
         error: Option.none(),
-      });
-      yield* Queue.offer(persistence, nextSnapshot);
-      return;
+      };
     }
-    const nextSnapshot =
-      item.kind === "snapshot"
-        ? item.snapshot
-        : Option.match(current.snapshot, {
-            onNone: () => null,
-            // The reducer accepts equal-sequence derived frames. Team-mode
-            // visibility emits a parent-project upsert followed by its thread
-            // upsert at the same durable sequence; filtering here previously
-            // discarded the thread and left the sidebar stale until refresh.
-            onSome: (snapshot) => applyShellStreamEvent(snapshot, item),
-          });
-    if (nextSnapshot === null) {
-      return;
-    }
-
-    const waiting = yield* Ref.get(awaitingCompletion);
-    yield* SubscriptionRef.set(state, {
-      snapshot: Option.some(nextSnapshot),
-      status: waiting ? "synchronizing" : "live",
-      error: Option.none(),
-    });
-    if (item.kind === "snapshot") {
+    yield* Ref.set(awaitingCompletion, waiting);
+    if (next === initial) return;
+    yield* SubscriptionRef.set(state, next);
+    if (receivedSnapshot) {
       const session = yield* Ref.get(activeSubscriptionSession);
       if (session !== null) {
         yield* Ref.set(lastAuthoritativeSession, session);
       }
     }
-    yield* Queue.offer(persistence, nextSnapshot);
+    if (next.snapshot !== initial.snapshot && Option.isSome(next.snapshot)) {
+      yield* Queue.offer(persistence, next.snapshot.value);
+    }
   });
 
   const foregroundResubscriptions = Option.match(wakeups, {
@@ -252,7 +261,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           );
           const httpSnapshot = yield* snapshotLoader.load(prepared);
           if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+            yield* applyItems([{ kind: "snapshot", snapshot: httpSnapshot.value }]);
             canResume = true;
             current = yield* SubscriptionRef.get(state);
           }
@@ -286,7 +295,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach(applyItem)),
+    ).pipe(Stream.runForEachArray(applyItems)),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
@@ -305,7 +314,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   return state;
 });
 
-export function shellStateChanges(environmentId: EnvironmentId) {
+function shellStateChanges(environmentId: EnvironmentId) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(makeEnvironmentShellState().pipe(Effect.map(SubscriptionRef.changes))),
@@ -371,7 +380,7 @@ export function createEnvironmentShellSummaryAtom(input: {
     let firstError: string | null = null;
     let latestSnapshotUpdatedAt: string | null = null;
 
-    for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const state = get(input.shellStateValueAtom(environmentId));
       hasSynchronizingShell ||= state.status === "synchronizing";
       hasCachedShell ||= state.status === "cached";
@@ -412,7 +421,7 @@ export function createEnvironmentServerConfigsAtom(input: {
   let previousServerConfigs = EMPTY_SERVER_CONFIGS;
   return Atom.make((get) => {
     const next = new Map<EnvironmentId, ServerConfig>();
-    for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+    for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const config = get(input.serverConfigValueAtom(environmentId));
       if (config !== null) {
         next.set(environmentId, config);

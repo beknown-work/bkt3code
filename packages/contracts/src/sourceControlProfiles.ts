@@ -120,7 +120,7 @@ export const SourceControlProfileErrorReason = Schema.Literals([
 ]);
 export type SourceControlProfileErrorReason = typeof SourceControlProfileErrorReason.Type;
 
-export class SourceControlProfileError extends Schema.TaggedErrorClass<SourceControlProfileError>()(
+export class SourceControlProfileError extends Schema.TaggedError<SourceControlProfileError>()(
   "SourceControlProfileError",
   {
     operation: TrimmedNonEmptyString,

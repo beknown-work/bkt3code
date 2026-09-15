@@ -39,6 +39,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     checkpoints: [],
     rollingSummary: null,
     turnSummaries: [],
+    pullRequests: [],
     activities: [],
     ...overrides,
   };

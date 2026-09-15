@@ -9,6 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@t3tools/contracts";
+// T3-CUSTOM(expbkt3): retained for the pairing-link/client-session listings above.
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -47,7 +48,7 @@ const PrimaryEnvironmentRequestOperation = Schema.Literals([
 ]);
 type PrimaryEnvironmentRequestOperation = typeof PrimaryEnvironmentRequestOperation.Type;
 
-export class PrimaryEnvironmentRequestError extends Schema.TaggedErrorClass<PrimaryEnvironmentRequestError>()(
+export class PrimaryEnvironmentRequestError extends Schema.TaggedError<PrimaryEnvironmentRequestError>()(
   "PrimaryEnvironmentRequestError",
   {
     operation: PrimaryEnvironmentRequestOperation,
@@ -78,9 +79,9 @@ export class PrimaryEnvironmentRequestError extends Schema.TaggedErrorClass<Prim
   }
 }
 
-export const isPrimaryEnvironmentRequestError = Schema.is(PrimaryEnvironmentRequestError);
+const isPrimaryEnvironmentRequestError = Schema.is(PrimaryEnvironmentRequestError);
 
-export class PrimaryEnvironmentPairingCredentialRejectedError extends Schema.TaggedErrorClass<PrimaryEnvironmentPairingCredentialRejectedError>()(
+export class PrimaryEnvironmentPairingCredentialRejectedError extends Schema.TaggedError<PrimaryEnvironmentPairingCredentialRejectedError>()(
   "PrimaryEnvironmentPairingCredentialRejectedError",
   {
     providedLength: Schema.Number,
@@ -96,7 +97,7 @@ export const isPrimaryEnvironmentPairingCredentialRejectedError = Schema.is(
   PrimaryEnvironmentPairingCredentialRejectedError,
 );
 
-export class PrimaryEnvironmentAuthSessionTimeoutError extends Schema.TaggedErrorClass<PrimaryEnvironmentAuthSessionTimeoutError>()(
+export class PrimaryEnvironmentAuthSessionTimeoutError extends Schema.TaggedError<PrimaryEnvironmentAuthSessionTimeoutError>()(
   "PrimaryEnvironmentAuthSessionTimeoutError",
   {
     timeoutMs: Schema.Number,
@@ -108,11 +109,7 @@ export class PrimaryEnvironmentAuthSessionTimeoutError extends Schema.TaggedErro
   }
 }
 
-export const isPrimaryEnvironmentAuthSessionTimeoutError = Schema.is(
-  PrimaryEnvironmentAuthSessionTimeoutError,
-);
-
-export class PrimaryEnvironmentPairingCredentialRequiredError extends Schema.TaggedErrorClass<PrimaryEnvironmentPairingCredentialRequiredError>()(
+export class PrimaryEnvironmentPairingCredentialRequiredError extends Schema.TaggedError<PrimaryEnvironmentPairingCredentialRequiredError>()(
   "PrimaryEnvironmentPairingCredentialRequiredError",
   {
     providedLength: Schema.Number,
@@ -122,10 +119,6 @@ export class PrimaryEnvironmentPairingCredentialRequiredError extends Schema.Tag
     return "Enter a pairing token to continue.";
   }
 }
-
-export const isPrimaryEnvironmentPairingCredentialRequiredError = Schema.is(
-  PrimaryEnvironmentPairingCredentialRequiredError,
-);
 
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
@@ -315,7 +308,7 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
  * A valid Clerk token for someone outside the configured organization — the
  * gate surfaces this distinctly ("not a member — try a different account").
  */
-export class PrimaryEnvironmentClerkNotMemberError extends Schema.TaggedErrorClass<PrimaryEnvironmentClerkNotMemberError>()(
+export class PrimaryEnvironmentClerkNotMemberError extends Schema.TaggedError<PrimaryEnvironmentClerkNotMemberError>()(
   "PrimaryEnvironmentClerkNotMemberError",
   {
     detail: Schema.String,
@@ -557,6 +550,8 @@ export async function createServerPairingCredential(input?: {
   }
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — upstream dropped this as unused (#10225); the fork's
+// member-devices settings section still lists pairing links.
 export async function listServerPairingLinks(): Promise<ReadonlyArray<ServerPairingLinkRecord>> {
   try {
     const pairingLinks = await runPrimaryHttp(
@@ -594,6 +589,7 @@ export async function listServerPairingLinks(): Promise<ReadonlyArray<ServerPair
     });
   }
 }
+// T3-CUSTOM(expbkt3): END
 
 export async function revokeServerPairingLink(id: string): Promise<void> {
   try {
@@ -611,6 +607,8 @@ export async function revokeServerPairingLink(id: string): Promise<void> {
   }
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — upstream dropped this as unused (#10225); the fork's
+// member-devices settings section still lists client sessions.
 export async function listServerClientSessions(): Promise<
   ReadonlyArray<ServerClientSessionRecord>
 > {
@@ -643,6 +641,7 @@ export async function listServerClientSessions(): Promise<
     });
   }
 }
+// T3-CUSTOM(expbkt3): END
 
 export async function revokeServerClientSession(sessionId: AuthSessionId): Promise<void> {
   try {
@@ -701,16 +700,6 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
         bootstrapPromise = null;
       }
     });
-}
-
-// Used by the WSL backend swap: invalidate the cached authenticated state
-// (the new backend signs sessions with a different key) and re-bootstrap
-// against the desktop bootstrap credential so the next WS reconnect doesn't
-// hit 401 and start a reauth loop in the renderer.
-export async function reauthenticatePrimaryEnvironment(): Promise<ServerAuthGateState> {
-  resolvedAuthenticatedGateState = null;
-  bootstrapPromise = null;
-  return resolveInitialServerAuthGateState();
 }
 
 export function __resetServerAuthBootstrapForTests() {

@@ -34,7 +34,8 @@
     "test",
     "scripts/warm-dep-cache.ts",
     "../../scripts/lib/public-config.ts",
-    "../../scripts/lib/bk-managed-environment.ts"
+    "../../scripts/lib/bk-managed-environment.ts",
+    "../../scripts/lib/third-party-licenses.ts"
   ]
   // T3-CUSTOM(expbkt3): END
 }

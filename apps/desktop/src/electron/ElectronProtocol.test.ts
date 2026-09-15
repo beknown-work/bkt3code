@@ -298,6 +298,7 @@ describe("ElectronProtocol", () => {
     // which is never this renderer's origin.
     assert.deepEqual(directives["frame-src"], [
       "'self'",
+      "blob:",
       "http:",
       "https:",
       "https://challenges.cloudflare.com",

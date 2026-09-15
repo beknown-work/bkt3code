@@ -246,7 +246,7 @@ export type SessionArchiveBackfillResult = typeof SessionArchiveBackfillResult.T
  * back as a `skippedReason` on its outcome, so one bad entry never fails the
  * batch the operator selected.
  */
-export class SessionArchiveError extends Schema.TaggedErrorClass<SessionArchiveError>()(
+export class SessionArchiveError extends Schema.TaggedError<SessionArchiveError>()(
   "SessionArchiveError",
   {
     operation: TrimmedNonEmptyString,

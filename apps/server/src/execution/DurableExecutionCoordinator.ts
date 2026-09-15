@@ -83,7 +83,7 @@ function millisUntil(now: string, target: string): number {
   );
 }
 
-export class DurableExecutionDispatchError extends Schema.TaggedErrorClass<DurableExecutionDispatchError>()(
+export class DurableExecutionDispatchError extends Schema.TaggedError<DurableExecutionDispatchError>()(
   "DurableExecutionDispatchError",
   {
     failureType: Schema.String,

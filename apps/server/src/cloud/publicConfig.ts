@@ -49,21 +49,23 @@ function normalizeSecureUrl(value: string): string | null {
   }
 }
 
-export const buildTimeRelayUrl =
+const buildTimeRelayUrl =
   typeof __T3CODE_BUILD_RELAY_URL__ === "undefined"
     ? ""
     : (normalizeSecureRelayUrl(__T3CODE_BUILD_RELAY_URL__) ?? "");
+// T3-CUSTOM(expbkt3): re-exported for the fork's Clerk identity verifier (src/auth/ClerkIdentityVerifier.ts).
+// Upstream un-exported it when nothing else in its own tree used it.
 export const buildTimeClerkPublishableKey = readBuildTimeValue(
   typeof __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__ === "undefined"
     ? undefined
     : __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__,
 );
-export const buildTimeClerkCliOAuthClientId = readBuildTimeValue(
+const buildTimeClerkCliOAuthClientId = readBuildTimeValue(
   typeof __T3CODE_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__ === "undefined"
     ? undefined
     : __T3CODE_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__,
 );
-export const buildTimeRelayClientTracing = {
+const buildTimeRelayClientTracing = {
   tracesUrl: readBuildTimeValue(
     typeof __T3CODE_BUILD_RELAY_CLIENT_OTLP_TRACES_URL__ === "undefined"
       ? undefined

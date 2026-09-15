@@ -37,7 +37,7 @@ import { ServerSettingsService } from "../../../serverSettings.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
-export class T3ControlToolError extends Schema.TaggedErrorClass<T3ControlToolError>()(
+export class T3ControlToolError extends Schema.TaggedError<T3ControlToolError>()(
   "T3ControlToolError",
   {
     operation: Schema.String,

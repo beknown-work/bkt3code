@@ -107,13 +107,13 @@ export const PlanDiscussionCommentRecord = Schema.Struct({
 export type PlanDiscussionCommentRecord = typeof PlanDiscussionCommentRecord.Type;
 
 /** Raised when an append lost the race for a revision number. */
-export class PlanVersionConflictError extends Schema.TaggedErrorClass<PlanVersionConflictError>()(
+export class PlanVersionConflictError extends Schema.TaggedError<PlanVersionConflictError>()(
   "PlanVersionConflictError",
   { documentId: Schema.String, revision: Schema.Number },
 ) {}
 
 /** Raised when a draft save carried a stale `revisionToken`. */
-export class PlanDraftConflictError extends Schema.TaggedErrorClass<PlanDraftConflictError>()(
+export class PlanDraftConflictError extends Schema.TaggedError<PlanDraftConflictError>()(
   "PlanDraftConflictError",
   { documentId: Schema.String },
 ) {}

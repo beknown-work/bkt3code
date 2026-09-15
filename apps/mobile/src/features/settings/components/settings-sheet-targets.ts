@@ -4,6 +4,8 @@ export type SettingsSheetTarget =
   | "SettingsAppearance"
   | "SettingsProjectGrouping"
   | "SettingsClientStorage"
+  | "SettingsDiagnostics"
+  | "SettingsOpenSourceLicenses"
   | "SettingsUsage"
   // T3-CUSTOM(expbkt3): fork Users settings screen.
   | "SettingsSourceControl";

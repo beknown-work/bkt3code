@@ -131,6 +131,7 @@ const makeProjectedThread = (input: {
     modelSelection: { instanceId: sourceThread.providerInstanceId, model: "default" },
     runtimeMode: "full-access",
     interactionMode: "default",
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     // T3-CUSTOM(expbkt3): imported sessions start without a Git identity.

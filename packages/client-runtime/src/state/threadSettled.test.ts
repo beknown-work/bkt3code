@@ -160,6 +160,7 @@ function makeShell(input: {
     memberUserIds: [],
     settledOverride: input.settledOverride ?? null,
     settledAt: input.settledOverride === "settled" ? NOW : null,
+    pullRequests: [],
     session:
       input.sessionStatus === undefined
         ? null

@@ -12,7 +12,12 @@ interface PersistedThreadPanelState {
   readonly isOpen: boolean;
   readonly activeSurfaceId: string | null;
   readonly surfaces: ReadonlyArray<PersistedSurface>;
+  /** Upstream's closed-device memory; it must outlive an otherwise empty panel. */
+  readonly dismissedDeviceSurfaceIds?: ReadonlyArray<string> | undefined;
 }
+
+const hasDismissedDevices = (threadState: PersistedThreadPanelState): boolean =>
+  (threadState.dismissedDeviceSurfaceIds?.length ?? 0) > 0;
 
 export function withoutPersistedPlannotatorSurfaces<ThreadState extends PersistedThreadPanelState>(
   byThreadKey: Readonly<Record<string, ThreadState>>,
@@ -20,7 +25,10 @@ export function withoutPersistedPlannotatorSurfaces<ThreadState extends Persiste
   const persisted: Record<string, ThreadState> = {};
 
   for (const [threadKey, threadState] of Object.entries(byThreadKey)) {
-    if (threadState.surfaces.length === 0) continue;
+    if (threadState.surfaces.length === 0) {
+      if (hasDismissedDevices(threadState)) persisted[threadKey] = threadState;
+      continue;
+    }
     const removedIndex = threadState.surfaces.findIndex(
       (surface) => surface.kind === "plannotator",
     );
@@ -30,7 +38,17 @@ export function withoutPersistedPlannotatorSurfaces<ThreadState extends Persiste
     }
 
     const surfaces = threadState.surfaces.filter((surface) => surface.kind !== "plannotator");
-    if (surfaces.length === 0) continue;
+    if (surfaces.length === 0) {
+      if (hasDismissedDevices(threadState)) {
+        persisted[threadKey] = {
+          ...threadState,
+          surfaces,
+          activeSurfaceId: null,
+          isOpen: false,
+        } as unknown as ThreadState;
+      }
+      continue;
+    }
 
     const activeStillExists = surfaces.some(
       (surface) => surface.id === threadState.activeSurfaceId,

@@ -18,7 +18,7 @@ export const BK_BUNDLED_BACKEND_PORT_RANGES = {
   staging: { start: 4_773, end: 4_872 },
 } as const satisfies Record<BkManagedChannel, { readonly start: number; readonly end: number }>;
 
-export class BkBundledBackendPortUnavailableError extends Schema.TaggedErrorClass<BkBundledBackendPortUnavailableError>()(
+export class BkBundledBackendPortUnavailableError extends Schema.TaggedError<BkBundledBackendPortUnavailableError>()(
   "BkBundledBackendPortUnavailableError",
   {
     channel: Schema.Literals(["staging", "production"]),

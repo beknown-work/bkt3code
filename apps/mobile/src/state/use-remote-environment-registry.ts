@@ -94,6 +94,7 @@ export function useRemoteConnectionStatus() {
         environmentLabel: environment.environmentLabel,
         displayUrl: environment.displayUrl,
         isRelayManaged: environment.isRelayManaged,
+        isEnabled: environment.isEnabled,
         connectionState: environment.connectionState,
         connectionError: environment.connectionError,
         connectionErrorTraceId: environment.connectionErrorTraceId,
@@ -140,6 +141,11 @@ export function useRemoteConnections() {
     (environmentId: EnvironmentId) => controller.retryEnvironment(environmentId),
     [controller],
   );
+  const onSetEnvironmentEnabled = useCallback(
+    (environmentId: EnvironmentId, enabled: boolean) =>
+      controller.setEnvironmentEnabled(environmentId, enabled),
+    [controller],
+  );
   const onUpdateEnvironment = useCallback(
     (
       environmentId: EnvironmentId,
@@ -157,8 +163,9 @@ export function useRemoteConnections() {
         return;
       }
       Alert.alert(
-        "Remove environment?",
-        `Disconnect and forget ${environment.environmentLabel} on this device.`,
+        "Remove from this device?",
+        // T3-CUSTOM(expbkt3): removing an environment also drops its durable message outbox.
+        `Forget ${environment.environmentLabel}, its cached threads, and any unsent messages on this device. Switch it off instead to keep it saved.`,
         [
           { text: "Cancel", style: "cancel" },
           {
@@ -184,6 +191,7 @@ export function useRemoteConnections() {
     onChangeConnectionPairingUrl,
     onConnectPress,
     onReconnectEnvironment,
+    onSetEnvironmentEnabled,
     onUpdateEnvironment,
     onRemoveEnvironmentPress,
   };

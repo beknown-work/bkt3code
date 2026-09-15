@@ -1,8 +1,10 @@
 import { ProjectId } from "@t3tools/contracts";
-// T3-CUSTOM(expbkt3): BEGIN — checked-in t3.json setup scripts run automatically.
+// T3-CUSTOM(expbkt3): BEGIN — `projectScriptFromFileScript`/`setupT3ProjectFileScript`
+// let checked-in t3.json setup scripts run automatically.
 import {
   projectScriptFromFileScript,
   projectScriptRuntimeEnv,
+  resolveProjectScripts,
   setupProjectScript,
   setupT3ProjectFileScript,
 } from "@t3tools/shared/projectScripts";
@@ -14,6 +16,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 // T3-CUSTOM(expbkt3): BEGIN — checked-in t3.json setup scripts run automatically.
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
@@ -61,16 +64,18 @@ export interface ProjectSetupScriptRunnerInput {
 }
 // T3-CUSTOM(expbkt3): END
 
-export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
+export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
   {
     threadId: Schema.String,
     projectId: Schema.optional(Schema.String),
     projectCwd: Schema.optional(Schema.String),
     worktreePath: Schema.String,
-    // T3-CUSTOM(expbkt3): BEGIN — launch failures identify the retained setup terminal.
-    operation: Schema.Literals(["resolveProject", "runCommand"]),
+    // T3-CUSTOM(expbkt3): BEGIN — the fork runs the script to completion through
+    // `runCommand` instead of upstream's openTerminal/writeCommand pair, and launch
+    // failures identify the retained setup terminal
     // whose retained history the caller may expose.
+    operation: Schema.Literals(["resolveProject", "readSettings", "runCommand"]),
     terminalId: Schema.optional(Schema.String),
     // T3-CUSTOM(expbkt3): END
     cause: Schema.Defect(),
@@ -82,7 +87,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
 }
 
 // T3-CUSTOM(expbkt3): BEGIN — setup completion failures remain typed and inspectable.
-export class ProjectSetupScriptCommandError extends Schema.TaggedErrorClass<ProjectSetupScriptCommandError>()(
+export class ProjectSetupScriptCommandError extends Schema.TaggedError<ProjectSetupScriptCommandError>()(
   "ProjectSetupScriptCommandError",
   {
     threadId: Schema.String,
@@ -100,7 +105,7 @@ export class ProjectSetupScriptCommandError extends Schema.TaggedErrorClass<Proj
   }
 }
 
-export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorClass<ProjectSetupScriptProjectNotFoundError>()(
+export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedError<ProjectSetupScriptProjectNotFoundError>()(
   "ProjectSetupScriptProjectNotFoundError",
   {
     threadId: Schema.String,
@@ -133,11 +138,13 @@ export class ProjectSetupScriptRunner extends Context.Service<
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 // T3-CUSTOM(expbkt3): BEGIN — setup is completion-aware and preserves an interactive
 // terminal identity so durable bootstrap can gate, retry, stop, and inspect it.
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const projectFileLoader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
 
   /**
@@ -197,11 +204,21 @@ export const make = Effect.gen(function* () {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
 
-    // A project script the user configured always wins; the repository's
-    // checked-in t3.json is the fallback, so a repo that ships its setup action
-    // works in a fresh worktree without a per-environment manual import.
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProjectSetupScriptOperationError({
+            ...errorContext,
+            operation: "readSettings",
+            cause,
+          }),
+      ),
+    );
+    // T3-CUSTOM(expbkt3): a project script the user configured always wins; the
+    // repository's checked-in t3.json is the fallback, so a repo that ships its
+    // setup action works in a fresh worktree without a per-environment manual import.
     const script =
-      setupProjectScript(project.scripts) ??
+      setupProjectScript(resolveProjectScripts(settings, project)) ??
       (yield* t3ProjectFileSetupScript(project.workspaceRoot));
     if (!script) {
       return {

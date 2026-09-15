@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { clerkFrontendApiUrlFromPublishableKey } from "./relayAuth.ts";
 
-export class ClerkIdentityJwtVerificationError extends Schema.TaggedErrorClass<ClerkIdentityJwtVerificationError>()(
+export class ClerkIdentityJwtVerificationError extends Schema.TaggedError<ClerkIdentityJwtVerificationError>()(
   "ClerkIdentityJwtVerificationError",
   { cause: Schema.Defect() },
 ) {

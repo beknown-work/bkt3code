@@ -13,14 +13,14 @@ import * as Scope from "effect/Scope";
 import * as Electron from "electron";
 
 export const DESKTOP_HOST = "app";
-export const DESKTOP_PRODUCTION_SCHEME = "t3code";
-export const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+const DESKTOP_PRODUCTION_SCHEME = "t3code";
+const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
 
 export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean): string {
+function getDesktopOrigin(isDevelopment: boolean): string {
   return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
 }
 
@@ -28,7 +28,7 @@ export function getDesktopUrl(isDevelopment: boolean): string {
   return `${getDesktopOrigin(isDevelopment)}/`;
 }
 
-export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
+export class ElectronProtocolRegistrationError extends Schema.TaggedError<ElectronProtocolRegistrationError>()(
   "ElectronProtocolRegistrationError",
   {
     scheme: Schema.String,
@@ -40,7 +40,7 @@ export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<E
   }
 }
 
-export class ElectronProtocolUnregistrationError extends Schema.TaggedErrorClass<ElectronProtocolUnregistrationError>()(
+export class ElectronProtocolUnregistrationError extends Schema.TaggedError<ElectronProtocolUnregistrationError>()(
   "ElectronProtocolUnregistrationError",
   {
     scheme: Schema.String,
@@ -95,7 +95,8 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
   // reason as connect-src, so allow the network schemes rather than hosts. The
   // frame itself stays sandboxed without `allow-same-origin`, so it runs in an
   // opaque origin and cannot reach renderer state.
-  const frameSources = ["'self'", "http:", "https:", "https://challenges.cloudflare.com"];
+  // `blob:` is upstream's: document viewers render from local Blob URLs.
+  const frameSources = ["'self'", "blob:", "http:", "https:", "https://challenges.cloudflare.com"];
 
   return [
     "default-src 'self'",
@@ -109,7 +110,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
     // T3-CUSTOM(expbkt3): the fork's preview surface embeds managed-environment
-    // frames, so frame-src is composed rather than fixed.
+    // frames, so frame-src is composed rather than fixed. The list carries
+    // upstream's document-viewer `blob:` source; HTML viewers keep their own
+    // sandbox and the renderer's script policy is unchanged.
     `frame-src ${frameSources.join(" ")}`,
     "form-action 'self'",
   ].join("; ");
@@ -130,7 +133,7 @@ function withContentSecurityPolicy(response: Response, policy: string): Response
 /**
  * Must run synchronously during process bootstrap, before Electron emits `ready`.
  */
-export function registerDesktopSchemePrivilegesSync(): void {
+function registerDesktopSchemePrivilegesSync(): void {
   Electron.protocol.registerSchemesAsPrivileged([
     {
       scheme: DESKTOP_PRODUCTION_SCHEME,
@@ -307,6 +310,7 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
   throw lastError;
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   // T3-CUSTOM(expbkt3): platform services for reading packaged client assets.
   const platformContext = yield* Effect.context<FileSystem.FileSystem | Path.Path>();

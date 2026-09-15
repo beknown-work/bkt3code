@@ -75,7 +75,7 @@ const GhAssetList = Schema.Struct({
 });
 const decodeGhAssetList = Schema.decodeUnknownEffect(Schema.fromJsonString(GhAssetList));
 
-export class GhCommandFailedError extends Schema.TaggedErrorClass<GhCommandFailedError>()(
+export class GhCommandFailedError extends Schema.TaggedError<GhCommandFailedError>()(
   "GhCommandFailedError",
   {
     operation: Schema.Literals([
@@ -93,7 +93,7 @@ export class GhCommandFailedError extends Schema.TaggedErrorClass<GhCommandFaile
   }
 }
 
-export class NotANightlyVersionError extends Schema.TaggedErrorClass<NotANightlyVersionError>()(
+export class NotANightlyVersionError extends Schema.TaggedError<NotANightlyVersionError>()(
   "NotANightlyVersionError",
   {
     version: Schema.String,
@@ -107,7 +107,7 @@ export class NotANightlyVersionError extends Schema.TaggedErrorClass<NotANightly
   }
 }
 
-export class UnsafeReleaseTagError extends Schema.TaggedErrorClass<UnsafeReleaseTagError>()(
+export class UnsafeReleaseTagError extends Schema.TaggedError<UnsafeReleaseTagError>()(
   "UnsafeReleaseTagError",
   {
     tag: Schema.String,
@@ -122,7 +122,7 @@ export class UnsafeReleaseTagError extends Schema.TaggedErrorClass<UnsafeRelease
   }
 }
 
-export class ReleaseTagAlreadyExistsError extends Schema.TaggedErrorClass<ReleaseTagAlreadyExistsError>()(
+export class ReleaseTagAlreadyExistsError extends Schema.TaggedError<ReleaseTagAlreadyExistsError>()(
   "ReleaseTagAlreadyExistsError",
   {
     tag: Schema.String,
@@ -133,7 +133,7 @@ export class ReleaseTagAlreadyExistsError extends Schema.TaggedErrorClass<Releas
   }
 }
 
-export class ReleaseVersionNotNewerError extends Schema.TaggedErrorClass<ReleaseVersionNotNewerError>()(
+export class ReleaseVersionNotNewerError extends Schema.TaggedError<ReleaseVersionNotNewerError>()(
   "ReleaseVersionNotNewerError",
   {
     version: Schema.String,
@@ -148,7 +148,7 @@ export class ReleaseVersionNotNewerError extends Schema.TaggedErrorClass<Release
   }
 }
 
-export class NoPublishableArtifactsError extends Schema.TaggedErrorClass<NoPublishableArtifactsError>()(
+export class NoPublishableArtifactsError extends Schema.TaggedError<NoPublishableArtifactsError>()(
   "NoPublishableArtifactsError",
   {
     version: Schema.String,
@@ -160,7 +160,7 @@ export class NoPublishableArtifactsError extends Schema.TaggedErrorClass<NoPubli
   }
 }
 
-export class MissingUpdateManifestError extends Schema.TaggedErrorClass<MissingUpdateManifestError>()(
+export class MissingUpdateManifestError extends Schema.TaggedError<MissingUpdateManifestError>()(
   "MissingUpdateManifestError",
   {
     releaseDir: Schema.String,
@@ -176,7 +176,7 @@ export class MissingUpdateManifestError extends Schema.TaggedErrorClass<MissingU
   }
 }
 
-export class InvalidSourceShaError extends Schema.TaggedErrorClass<InvalidSourceShaError>()(
+export class InvalidSourceShaError extends Schema.TaggedError<InvalidSourceShaError>()(
   "InvalidSourceShaError",
   {
     sourceSha: Schema.String,
@@ -191,7 +191,7 @@ export class InvalidSourceShaError extends Schema.TaggedErrorClass<InvalidSource
   }
 }
 
-export class MalformedUpdateManifestError extends Schema.TaggedErrorClass<MalformedUpdateManifestError>()(
+export class MalformedUpdateManifestError extends Schema.TaggedError<MalformedUpdateManifestError>()(
   "MalformedUpdateManifestError",
   {
     manifest: Schema.String,
@@ -202,7 +202,7 @@ export class MalformedUpdateManifestError extends Schema.TaggedErrorClass<Malfor
   }
 }
 
-export class ManifestPayloadMissingError extends Schema.TaggedErrorClass<ManifestPayloadMissingError>()(
+export class ManifestPayloadMissingError extends Schema.TaggedError<ManifestPayloadMissingError>()(
   "ManifestPayloadMissingError",
   {
     manifest: Schema.String,
@@ -217,7 +217,7 @@ export class ManifestPayloadMissingError extends Schema.TaggedErrorClass<Manifes
   }
 }
 
-export class ManifestPayloadMismatchError extends Schema.TaggedErrorClass<ManifestPayloadMismatchError>()(
+export class ManifestPayloadMismatchError extends Schema.TaggedError<ManifestPayloadMismatchError>()(
   "ManifestPayloadMismatchError",
   {
     manifest: Schema.String,
@@ -237,7 +237,7 @@ export class ManifestPayloadMismatchError extends Schema.TaggedErrorClass<Manife
   }
 }
 
-export class IncompleteReleaseUploadError extends Schema.TaggedErrorClass<IncompleteReleaseUploadError>()(
+export class IncompleteReleaseUploadError extends Schema.TaggedError<IncompleteReleaseUploadError>()(
   "IncompleteReleaseUploadError",
   {
     tag: Schema.String,
@@ -253,7 +253,7 @@ export class IncompleteReleaseUploadError extends Schema.TaggedErrorClass<Incomp
   }
 }
 
-export class StaleDraftCleanupError extends Schema.TaggedErrorClass<StaleDraftCleanupError>()(
+export class StaleDraftCleanupError extends Schema.TaggedError<StaleDraftCleanupError>()(
   "StaleDraftCleanupError",
   {
     tag: Schema.String,
@@ -269,7 +269,7 @@ export class StaleDraftCleanupError extends Schema.TaggedErrorClass<StaleDraftCl
   }
 }
 
-export class InvalidPublishChannelError extends Schema.TaggedErrorClass<InvalidPublishChannelError>()(
+export class InvalidPublishChannelError extends Schema.TaggedError<InvalidPublishChannelError>()(
   "InvalidPublishChannelError",
   {
     channel: Schema.String,
@@ -280,7 +280,7 @@ export class InvalidPublishChannelError extends Schema.TaggedErrorClass<InvalidP
   }
 }
 
-export class PublishChannelMismatchError extends Schema.TaggedErrorClass<PublishChannelMismatchError>()(
+export class PublishChannelMismatchError extends Schema.TaggedError<PublishChannelMismatchError>()(
   "PublishChannelMismatchError",
   {
     version: Schema.String,
@@ -297,7 +297,7 @@ export class PublishChannelMismatchError extends Schema.TaggedErrorClass<Publish
   }
 }
 
-export class UnsignedBuildError extends Schema.TaggedErrorClass<UnsignedBuildError>()(
+export class UnsignedBuildError extends Schema.TaggedError<UnsignedBuildError>()(
   "UnsignedBuildError",
   {
     appPath: Schema.String,
@@ -314,7 +314,7 @@ export class UnsignedBuildError extends Schema.TaggedErrorClass<UnsignedBuildErr
   }
 }
 
-export class BuiltAppNotFoundError extends Schema.TaggedErrorClass<BuiltAppNotFoundError>()(
+export class BuiltAppNotFoundError extends Schema.TaggedError<BuiltAppNotFoundError>()(
   "BuiltAppNotFoundError",
   {
     releaseDir: Schema.String,
