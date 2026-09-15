@@ -21,6 +21,12 @@ const readModel: OrchestrationReadModel = {
   threads: [
     {
       id: ThreadId.make("thread-1"),
+      // T3-CUSTOM(expbkt3): fork-required thread ownership.
+      sourceControlProfileId: null,
+      ownerUserId: null,
+      memberUserIds: [],
+      rollingSummary: null,
+      turnSummaries: [],
       projectId: ProjectId.make("project-1"),
       title: "Manual title",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },

@@ -58,6 +58,9 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
     snapshotSequence: 0,
     projects: [
       {
+        // T3-CUSTOM(expbkt3): fork-required ownership fields.
+        ownerUserId: null,
+        memberUserIds: [],
         id: ProjectId.make("project-1"),
         title: "Project",
         workspaceRoot: "/repo",
@@ -82,6 +85,12 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
       {
         id: THREAD_ID,
         projectId: ProjectId.make("project-1"),
+        // T3-CUSTOM(expbkt3): fork-required thread ownership and summaries.
+        sourceControlProfileId: null,
+        ownerUserId: null,
+        memberUserIds: [],
+        rollingSummary: null,
+        turnSummaries: [],
         title: "Thread",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
         runtimeMode: "full-access",

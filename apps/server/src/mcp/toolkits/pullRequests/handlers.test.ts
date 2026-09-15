@@ -64,6 +64,9 @@ function makeProject(
   },
 ): OrchestrationProjectShell {
   return {
+    // T3-CUSTOM(expbkt3): fork-required project ownership.
+    ownerUserId: null,
+    memberUserIds: [],
     id: PROJECT_ID,
     title: "Project",
     workspaceRoot: "/workspace/project",
@@ -77,6 +80,10 @@ function makeProject(
 
 function makeThread(pullRequests: ReadonlyArray<ThreadPullRequestLink>): OrchestrationThreadShell {
   return {
+    // T3-CUSTOM(expbkt3): fork-required ownership fields.
+    sourceControlProfileId: null,
+    ownerUserId: null,
+    memberUserIds: [],
     id: THREAD_ID,
     projectId: PROJECT_ID,
     title: "Thread",

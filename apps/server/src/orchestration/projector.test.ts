@@ -139,6 +139,9 @@ describe("orchestration projector", () => {
           ...createEmptyReadModel(now),
           projects: [
             {
+              // T3-CUSTOM(expbkt3): fork-required ownership fields.
+              ownerUserId: null,
+              memberUserIds: [],
               id: ProjectId.make("project-1"),
               title: "T3 Code",
               workspaceRoot: "/repo",

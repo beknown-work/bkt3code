@@ -83,6 +83,10 @@ function thread(
   overrides: Partial<OrchestrationThreadShell> = {},
 ): OrchestrationThreadShell {
   return {
+    // T3-CUSTOM(expbkt3): fork-required thread ownership.
+    sourceControlProfileId: null,
+    ownerUserId: null,
+    memberUserIds: [],
     id: ThreadId.make(id),
     projectId: PROJECT_ID,
     title: id,
@@ -125,6 +129,9 @@ const project = {
   scripts: [],
   createdAt: NOW,
   updatedAt: NOW,
+  // T3-CUSTOM(expbkt3): fork-required project ownership.
+  ownerUserId: null,
+  memberUserIds: [],
 } satisfies OrchestrationProjectShell;
 
 const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options: {
