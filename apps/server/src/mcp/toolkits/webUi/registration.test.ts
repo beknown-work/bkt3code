@@ -22,6 +22,9 @@ const invocation: McpInvocationContext.McpInvocationScope = {
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
+  // T3-CUSTOM(expbkt3): upstream promoted these off initializePayload onto the client.
+  clientCapabilities: {},
+  clientInfo: { name: "web-ui-registration-test", version: "1.0.0" },
   initializePayload: {
     protocolVersion: "2025-03-26",
     capabilities: {},

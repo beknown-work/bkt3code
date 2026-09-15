@@ -112,6 +112,8 @@ layer("ProjectionThreadMessageRepository", (it) => {
         messageId,
         threadId,
         turnId: null,
+        // T3-CUSTOM(expbkt3): fork-required sender identity.
+        sentByUserId: null,
         role: "user",
         text: "see [Terminal 1 line 4](t3-context://v1/terminal/ctx_1)",
         isStreaming: false,

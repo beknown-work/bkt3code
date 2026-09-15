@@ -579,6 +579,8 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       providerSessionId: "provider-session-codex-test",
       providerInstanceId: ProviderInstanceId.make("codex"),
       actorUserId: null,
+      // T3-CUSTOM(expbkt3): upstream gates MCP tools by capability set.
+      capabilities: new Set(["preview"] as const),
       endpoint: "http://127.0.0.1:18085/mcp",
       authorizationHeader: "Bearer short-lived-provider-token",
       upstreamServers: [

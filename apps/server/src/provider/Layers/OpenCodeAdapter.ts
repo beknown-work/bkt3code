@@ -3975,6 +3975,10 @@ export function makeOpenCodeAdapter(
               .map((entry) => ({
                 id: TurnId.make(entry.info.id),
                 items: [entry.info, ...entry.parts],
+                // T3-CUSTOM(expbkt3): recovery must distinguish terminal proof from
+                // mere history presence. A forked session's retained messages carry
+                // no completion evidence of their own, so they are exactly "unknown".
+                state: "unknown" as const,
               })),
           };
         }

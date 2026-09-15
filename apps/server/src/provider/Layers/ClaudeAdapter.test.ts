@@ -607,6 +607,8 @@ describe("ClaudeAdapterLive", () => {
       providerSessionId: "provider-session-claude-test",
       providerInstanceId: ProviderInstanceId.make("claudeAgent"),
       actorUserId: null,
+      // T3-CUSTOM(expbkt3): upstream gates MCP tools by capability set.
+      capabilities: new Set(["preview"] as const),
       endpoint: "http://127.0.0.1:18085/mcp",
       authorizationHeader: `Bearer ${bearerToken}`,
       upstreamServers: [

@@ -1308,7 +1308,15 @@ export const readCodexThread = Effect.fn("readCodexThread")(function* (
         ),
       ),
     );
-    turns.push(...page.data.map((turn) => ({ id: TurnId.make(turn.id), items: turn.items })));
+    turns.push(
+      ...page.data.map((turn) => ({
+        id: TurnId.make(turn.id),
+        items: turn.items,
+        // T3-CUSTOM(expbkt3): durable terminal evidence for recovery, mapped the
+        // same way as the non-paginated path above.
+        state: turn.status === "inProgress" ? ("in-progress" as const) : turn.status,
+      })),
+    );
     cursor = page.nextCursor;
   } while (cursor !== null);
   return { threadId, turns };
