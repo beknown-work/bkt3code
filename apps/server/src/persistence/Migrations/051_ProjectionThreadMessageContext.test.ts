@@ -32,7 +32,7 @@ layer("051_ProjectionThreadMessageContext", (it) => {
       const migrations = yield* sql<{ readonly migration_id: number }>`
         SELECT migration_id
         FROM effect_sql_migrations
-        WHERE migration_id = 51
+        WHERE migration_id = 1034
       `;
 
       assert.equal(context?.name, "context_json");

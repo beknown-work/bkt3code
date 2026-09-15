@@ -472,12 +472,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sourceControlProfileId: null,
           // T3-CUSTOM(expbkt3): thread detail snapshots expose bootstrap readiness.
           bootstrap: null,
-          linkedPullRequest: {
-            projectId: asProjectId("project-1"),
-            repository: "pingdotgg/t3code",
-            number: 42,
-            url: "https://github.com/pingdotgg/t3code/pull/42",
-          },
           pullRequests: expectedPullRequests,
           branchPullRequest,
           latestTurn: {
@@ -633,12 +627,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           branch: null,
           worktreePath: null,
           sourceControlProfileId: null,
-          linkedPullRequest: {
-            projectId: asProjectId("project-1"),
-            repository: "pingdotgg/t3code",
-            number: 42,
-            url: "https://github.com/pingdotgg/t3code/pull/42",
-          },
           pullRequests: expectedPullRequests,
           branchPullRequest,
           latestTurn: {

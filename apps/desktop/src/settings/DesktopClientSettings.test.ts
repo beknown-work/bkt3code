@@ -62,8 +62,6 @@ const clientSettings: ClientSettings = {
   providerModelPreferences: {},
   providerRateLimitsEnabled: true,
   resourceMonitorEnabled: false,
-  sidebarAutoSettleAfterDays: 3,
-  sidebarAutoSettleOnMerge: true,
   onboardingCompletedAt: null,
   panelAnimationDurationMs: 0,
   proactivePanelsEnabled: true,

@@ -256,8 +256,12 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         Stream.ensuring(completeObservation),
                         // T3-CUSTOM(expbkt3): a value proves the subscription is
                         // healthy again, so the retry budget for this session resets.
-                        Stream.tap(() =>
-                          Ref.set(retryState, { session, attempt: 0, dormant: false }),
+                        // Per-array so the server's batches reach consumers intact
+                        // (Stream.tap re-chunks to single items).
+                        Stream.mapArrayEffect((items) =>
+                          Ref.set(retryState, { session, attempt: 0, dormant: false }).pipe(
+                            Effect.as(items),
+                          ),
                         ),
                       );
                     }),

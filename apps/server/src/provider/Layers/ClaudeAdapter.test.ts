@@ -875,8 +875,7 @@ describe("ClaudeAdapterLive", () => {
         type: "preset",
         preset: "claude_code",
         // T3-CUSTOM(expbkt3): upstream runtime instructions remain without identity context.
-        append:
-          "<runtime_info>In case you're asked: you are running in T3 Code through the Claude Code harness. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>",
+        append: buildRuntimeInstructions({ harness: "Claude Code" }),
       });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

@@ -1529,6 +1529,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           source_control_profile_id AS "sourceControlProfileId",
           linked_pull_request_json AS "linkedPullRequest",
+          branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
