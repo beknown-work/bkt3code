@@ -179,7 +179,9 @@ interface OpenCodeTurnSnapshot {
   readonly id: TurnId;
   readonly items: Array<unknown>;
   // T3-CUSTOM(expbkt3): a partial assistant record is not completion evidence.
-  state: "completed" | "interrupted" | "failed" | "in-progress";
+  // "unknown" mirrors ProviderThreadTurnSnapshot: history with no terminal proof,
+  // which is what a forked session's retained entries are.
+  state: "completed" | "interrupted" | "failed" | "in-progress" | "unknown";
 }
 
 type OpenCodeSubscribedEvent =
@@ -3870,12 +3872,17 @@ export function makeOpenCodeAdapter(
             turns.push({
               id: TurnId.make(entry.info.id),
               items: [entry.info, ...entry.parts],
+              // T3-CUSTOM(expbkt3): `time` is absent on entries OpenCode returns from a
+              // forked session. That is history with no terminal proof — "unknown" —
+              // and must not be conflated with a turn still running.
               state:
-                entry.info.time.completed === undefined
-                  ? "in-progress"
-                  : entry.info.error === undefined
-                    ? "completed"
-                    : "failed",
+                entry.info.time === undefined
+                  ? "unknown"
+                  : entry.info.time.completed === undefined
+                    ? "in-progress"
+                    : entry.info.error === undefined
+                      ? "completed"
+                      : "failed",
             });
           }
         }

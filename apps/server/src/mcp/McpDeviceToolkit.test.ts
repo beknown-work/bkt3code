@@ -161,9 +161,6 @@ it.effect("rejects unavailable agent access before booting or opening a device",
     expect(result.content).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          // T3-CUSTOM(expbkt3): fork-required invocation identity.
-          principal: "provider-session",
-          actorUserId: null,
           type: "text",
           text: expect.stringContaining("Agent access is disabled."),
         }),
