@@ -928,6 +928,8 @@ import {
   PencilRulerIcon,
   PlayIcon,
   XIcon,
+  // T3-CUSTOM(expbkt3): icon used by the fork's retry control.
+  RotateCcwIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { hasProviderSetup } from "./ProviderStatusBanner";

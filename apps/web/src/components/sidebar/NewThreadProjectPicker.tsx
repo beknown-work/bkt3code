@@ -169,10 +169,9 @@ export function NewThreadProjectOptionList({
           onClick={() => onChoose(option)}
         >
           <ProjectFavicon
-            environmentId={option.defaultHost.environmentId}
-            cwd={option.defaultHost.workspaceRoot}
-            projectName={option.title}
-            projectIcon={option.defaultHost.project.projectIcon}
+            // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+            // saved title, favicon and icon override always travel together.
+            project={option.defaultHost}
           />
           <span className="min-w-0 flex-1 truncate">{option.title}</span>
           {option.requiresHostChoice ? (
@@ -227,10 +226,9 @@ export function NewThreadHostList({
               <EnvironmentBadgeView appearance={appearance} variant="icon" title={host.label} />
             ) : (
               <ProjectFavicon
-                environmentId={host.environmentId}
-                cwd={host.workspaceRoot}
-                projectName={option.title}
-                projectIcon={host.project.projectIcon}
+                // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+                // saved title, favicon and icon override always travel together.
+                project={host}
               />
             )}
             <span className="flex min-w-0 flex-1 flex-col">

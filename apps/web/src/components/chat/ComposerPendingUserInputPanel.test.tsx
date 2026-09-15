@@ -71,7 +71,7 @@ describe("ComposerPendingUserInputPanel", () => {
   it("marks message-mode questions as async without presenting a blocking state", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingUserInputPanel
-        pendingUserInputs={[{ ...prompt, responseMode: "message" }]}
+        pendingUserInputs={[{ ...prompt, dismissible: true }]}
         respondingRequestIds={[]}
         answers={{}}
         questionIndex={0}

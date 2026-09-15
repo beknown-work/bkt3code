@@ -85,6 +85,8 @@ import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
+  // T3-CUSTOM(expbkt3): clears the plan agent when plan mode is disabled.
+  withoutPlanAgentSelection,
 } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -3410,7 +3412,7 @@ export function ArchivedThreadsPanel() {
     <SettingsPageContainer>
       {/* T3-CUSTOM(expbkt3): BEGIN — reclaim disk from archived sessions' worktrees. */}
       <SessionArchiveReclaimSection
-        environmentIds={environmentIds}
+        environmentIds={scope.environmentIds}
         onReclaimed={refreshArchivedThreads}
       />
       {/* T3-CUSTOM(expbkt3): END */}

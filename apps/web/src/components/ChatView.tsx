@@ -45,6 +45,8 @@ import {
   RuntimeMode,
   TerminalOpenInput,
   type WorktreeBaseRef,
+  // T3-CUSTOM(expbkt3): fork fallback when no project default exists.
+  DEFAULT_RUNTIME_MODE,
 } from "@t3tools/contracts";
 // T3-CUSTOM(expbkt3): expose recovery status while sends queue durably.
 import {
@@ -9809,7 +9811,9 @@ export default function ChatView(props: ChatViewProps) {
               activeRightPanelSurface?.kind !== "planReview" ? (
                 <div
                   className="pointer-events-none absolute left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5"
-                  style={{ bottom: composerOverlayHeight + 4 }}
+                  // T3-CUSTOM(expbkt3): the published overlay height is held in
+                  // composerTimelineInset; publishComposerOverlayHeight writes it.
+                  style={{ bottom: composerTimelineInset + 4 }}
                 >
                   <button
                     type="button"

@@ -750,6 +750,8 @@ describe("resolveThreadSwitchTimeline", () => {
         {
           kind: "message",
           message: {
+            // T3-CUSTOM(expbkt3): fork-required field.
+            sentByUserId: null,
             id: MessageId.make("preview-message"),
             role: "user",
             text: "Preview",
@@ -776,6 +778,8 @@ describe("resolveThreadSwitchTimeline", () => {
         {
           kind: "message",
           message: {
+            // T3-CUSTOM(expbkt3): fork-required field.
+            sentByUserId: null,
             id: MessageId.make("preview-message"),
             role: "user",
             text: "Preview",
@@ -1295,6 +1299,8 @@ describe("resolveComposerProviderSelection", () => {
       modelSelection: { instanceId, model: "default" },
       messages: [
         {
+          // T3-CUSTOM(expbkt3): fork-required field.
+          sentByUserId: null,
           id: MessageId.make(`import:${instanceId}:session:000000`),
           role: "user",
           text: "Continue the imported conversation",
@@ -2588,6 +2594,8 @@ describe("rewind draft recovery", () => {
           messages: [message],
           activities: [
             {
+              // T3-CUSTOM(expbkt3): fork-required field.
+              sentByUserId: null,
               id: EventId.make("rewind-failed"),
               kind: "checkpoint.revert.failed",
               tone: "error",
@@ -2630,6 +2638,8 @@ describe("rewind draft recovery", () => {
     vi.stubGlobal("fetch", fetchMock);
     const files = await prepareRevertedMessageAttachments({
       message: {
+        // T3-CUSTOM(expbkt3): fork-required field.
+        sentByUserId: null,
         ...message,
         attachments: [
           {

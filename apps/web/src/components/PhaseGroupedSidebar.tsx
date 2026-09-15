@@ -467,10 +467,9 @@ function PhaseFilterPopover({
                 onCheckedChange={() => toggleRepository(option.key)}
                 leading={
                   <ProjectFavicon
-                    environmentId={option.project.environmentId}
-                    cwd={option.project.workspaceRoot}
-                    projectName={option.project.title}
-                    projectIcon={option.project.projectIcon}
+                    // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+                    // saved title, favicon and icon override always travel together.
+                    project={option.project}
                     className="size-3"
                   />
                 }
@@ -1628,10 +1627,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               >
                 {project ? (
                   <ProjectFavicon
-                    environmentId={project.environmentId}
-                    cwd={project.workspaceRoot}
-                    projectName={project.title}
-                    projectIcon={project.projectIcon}
+                    // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+                    // saved title, favicon and icon override always travel together.
+                    project={project}
                     className="size-2.5"
                   />
                 ) : null}

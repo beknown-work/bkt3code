@@ -40,6 +40,8 @@ import {
   type DesktopServerExposureState,
   type DesktopWslState,
   type EnvironmentId,
+  // T3-CUSTOM(expbkt3): fork environment-machine presentation.
+  resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { connectionStatusText, connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import {
@@ -49,6 +51,8 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
+// T3-CUSTOM(expbkt3): fork environment-machine presentation in the row header.
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 // T3-CUSTOM(expbkt3): BEGIN — per-environment identity.

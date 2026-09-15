@@ -399,6 +399,12 @@ describe("streaming row projection", () => {
     });
     const liveMessage = initial.messages.at(-1)!;
     let thread: OrchestrationThread = {
+      // T3-CUSTOM(expbkt3): fork-required field.
+      sourceControlProfileId: null,
+      ownerUserId: null,
+      memberUserIds: [],
+      rollingSummary: null,
+      turnSummaries: [],
       id: ThreadId.make("streaming-thread"),
       projectId: ProjectId.make("project"),
       title: "Long thread",
@@ -1139,6 +1145,8 @@ describe("deriveMessagesTimelineRows", () => {
 
   it("keeps subagent spawn rows outside turn folds even after they settle", () => {
     const firstMessage: ChatMessage = {
+      // T3-CUSTOM(expbkt3): fork-required field.
+      sentByUserId: null,
       id: MessageId.make("assistant-first-entry"),
       role: "assistant",
       text: "Fanning out.",

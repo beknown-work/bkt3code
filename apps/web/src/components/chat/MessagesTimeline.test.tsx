@@ -1957,6 +1957,8 @@ describe("MessagesTimeline", () => {
             id: "entry-attachments",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
+            // T3-CUSTOM(expbkt3): fork-required field.
+            sentByUserId: null,
             message: {
               id: MessageId.make("message-attachments"),
               role: "user",
@@ -2112,6 +2114,8 @@ describe("MessagesTimeline", () => {
             id: "entry-structured",
             kind: "message",
             createdAt: "2026-03-17T19:12:28.000Z",
+            // T3-CUSTOM(expbkt3): fork-required field.
+            sentByUserId: null,
             message: {
               id: MessageId.make("message-structured"),
               role: "user",
