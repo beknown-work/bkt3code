@@ -22,6 +22,7 @@ import * as Option from "effect/Option";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+// T3-CUSTOM(expbkt3): tagging a session other than the credential's own.
 import { resolveMcpSessionTarget } from "../../mcpSessionTarget.ts";
 import {
   type ListThreadPullRequestsResult,
@@ -33,6 +34,7 @@ import {
   PullRequestListFailedError,
   type PullRequestTargetInput,
   PullRequestThreadNotFoundError,
+  // T3-CUSTOM(expbkt3): named-session authorization failure.
   PullRequestSessionTargetError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
@@ -161,6 +163,7 @@ const make = Effect.gen(function* () {
       | typeof PullRequestLinkFailedError
       | typeof PullRequestUnlinkFailedError
       | typeof PullRequestListFailedError,
+    // T3-CUSTOM(expbkt3): the session being tagged, when the caller names one.
     requested: ThreadId | undefined,
   ) {
     yield* McpInvocationContext.requireMcpCapability("pull-requests");
@@ -203,6 +206,7 @@ const make = Effect.gen(function* () {
   return PullRequestsToolkit.of({
     link_pull_request: (input) =>
       Effect.gen(function* () {
+        // T3-CUSTOM(expbkt3): sessionId targets another session; undefined is self.
         const thread = yield* requireThread(PullRequestLinkFailedError, input.sessionId);
         const project = yield* projectOf(thread, PullRequestLinkFailedError);
         const target = yield* resolveTarget(input, project);
@@ -228,6 +232,7 @@ const make = Effect.gen(function* () {
       }),
     unlink_pull_request: (input) =>
       Effect.gen(function* () {
+        // T3-CUSTOM(expbkt3): sessionId targets another session; undefined is self.
         const thread = yield* requireThread(PullRequestUnlinkFailedError, input.sessionId);
         const project = yield* projectOf(thread, PullRequestUnlinkFailedError);
         const target = yield* resolveTarget(input, project);
@@ -252,10 +257,12 @@ const make = Effect.gen(function* () {
           wasLinked,
         };
       }),
+    // T3-CUSTOM(expbkt3): BEGIN — sessionId targets another session.
     list_thread_pull_requests: (input) =>
       requireThread(PullRequestListFailedError, input.sessionId).pipe(
         Effect.map(listThreadPullRequests),
       ),
+    // T3-CUSTOM(expbkt3): END
   });
 });
 

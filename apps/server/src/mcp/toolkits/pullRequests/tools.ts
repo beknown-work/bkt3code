@@ -2,6 +2,7 @@ import {
   McpCapabilityUnavailableError,
   PositiveInt,
   PullRequestState,
+  // T3-CUSTOM(expbkt3): a named session target.
   ThreadId,
   ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
@@ -11,6 +12,7 @@ import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+// T3-CUSTOM(expbkt3): a named session is authorized before it is tagged.
 import { OrchestrationAccessControl } from "../../../orchestration/Services/AccessControl.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -31,6 +33,7 @@ const REGISTER_EVERY_PR =
  * resolve to the same host-level identity, so the agent can pass whichever
  * the host CLI handed back.
  */
+// T3-CUSTOM(expbkt3): BEGIN — tagging a session from outside it.
 const SessionTargetInput = {
   // T3-CUSTOM(expbkt3): an external agent has no thread of its own, so it names
   // the session it is tagging for. An in-session agent omits this.
@@ -42,7 +45,10 @@ const SessionTargetInput = {
   ),
 };
 
+// T3-CUSTOM(expbkt3): END
+
 export const PullRequestTargetInput = Schema.Struct({
+  // T3-CUSTOM(expbkt3): a named session target.
   ...SessionTargetInput,
   url: Schema.optional(
     TrimmedNonEmptyString.annotate({
@@ -133,13 +139,16 @@ export class PullRequestListFailedError extends Schema.TaggedError<PullRequestLi
   }
 }
 
+// T3-CUSTOM(expbkt3): BEGIN — named-session authorization failure.
 export class PullRequestSessionTargetError extends Schema.TaggedError<PullRequestSessionTargetError>()(
   "PullRequestSessionTargetError",
   { message: Schema.String },
 ) {}
+// T3-CUSTOM(expbkt3): END
 
 export const PullRequestToolError = Schema.Union([
   McpCapabilityUnavailableError,
+  // T3-CUSTOM(expbkt3): named-session authorization failure.
   PullRequestSessionTargetError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
@@ -235,8 +244,10 @@ const UnlinkPullRequestTool = Tool.make("unlink_pull_request", {
   .annotate(Tool.OpenWorld, false);
 
 const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
+  // T3-CUSTOM(expbkt3): BEGIN — "this thread" becomes a named session.
   description: `List the pull requests linked to a thread with their last known host state, and how they chain into stacks (bottom to top). ${REGISTER_EVERY_PR}`,
   parameters: Schema.Struct(SessionTargetInput),
+  // T3-CUSTOM(expbkt3): END
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,
   dependencies,
