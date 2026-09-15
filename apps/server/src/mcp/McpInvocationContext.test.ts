@@ -42,6 +42,9 @@ it.effect("reports the scoped credential context when preview capability is unav
 
 it.effect("reports other missing capabilities with the neutral error", () => {
   const invocation: McpInvocationContext.McpInvocationScope = {
+    // T3-CUSTOM(expbkt3): fork-required invocation identity.
+    principal: "provider-session",
+    actorUserId: null,
     environmentId: EnvironmentId.make("environment-1"),
     threadId: ThreadId.make("thread-1"),
     providerSessionId: "provider-session-1",

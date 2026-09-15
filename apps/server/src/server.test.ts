@@ -194,6 +194,9 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+// T3-CUSTOM(expbkt3): the fork wires SourceControlRepositoryService into the app
+// under test; its provider registry needs the Forgejo CLI that upstream added.
+import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ClerkIdentityVerifier from "./auth/ClerkIdentityVerifier.ts";
@@ -1391,6 +1394,9 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
+      // T3-CUSTOM(expbkt3): see the import note — supplies ForgejoCli to the
+      // source-control provider registry the fork pulls into this harness.
+      Layer.provide(ForgejoCli.layer),
       Layer.provide(VcsProcess.layer),
       Layer.provide(layerConfig),
     );

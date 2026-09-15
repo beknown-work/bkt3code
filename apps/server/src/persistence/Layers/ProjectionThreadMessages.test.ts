@@ -96,6 +96,8 @@ layer("ProjectionThreadMessageRepository", (it) => {
         ],
       };
       yield* repository.upsert({
+        // T3-CUSTOM(expbkt3): fork-required sender identity.
+        sentByUserId: null,
         messageId,
         threadId,
         turnId: null,
@@ -308,6 +310,8 @@ layer("ProjectionThreadMessageRepository", (it) => {
       const createdAt = "2026-03-01T00:00:00.000Z";
 
       yield* repository.upsert({
+        // T3-CUSTOM(expbkt3): fork-required sender identity.
+        sentByUserId: null,
         messageId: MessageId.make("message-assistant-turn-state"),
         threadId,
         turnId,

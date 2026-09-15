@@ -38,6 +38,9 @@ const testCrypto = Crypto.make({
 const invocation = (
   capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
 ): McpInvocationContext.McpInvocationScope => ({
+  // T3-CUSTOM(expbkt3): fork-required invocation identity.
+  principal: "provider-session",
+  actorUserId: null,
   environmentId: EnvironmentId.make("environment-1"),
   threadId: THREAD_ID,
   providerSessionId: "provider-session-1",

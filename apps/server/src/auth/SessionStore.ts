@@ -379,6 +379,10 @@ export const SessionCredentialInternalError = Schema.Union([
   SessionUserBindingError,
 ]);
 export type SessionCredentialInternalError = typeof SessionCredentialInternalError.Type;
+// T3-CUSTOM(expbkt3): predicate used by the fork's auth HTTP surface
+// (src/auth/http.ts) to narrow internal credential failures. Present on the
+// fork tip; the merge took upstream's version of this region and dropped it.
+export const isSessionCredentialInternalError = Schema.is(SessionCredentialInternalError);
 
 export const SessionCredentialError = Schema.Union([
   SessionCredentialInvalidError,

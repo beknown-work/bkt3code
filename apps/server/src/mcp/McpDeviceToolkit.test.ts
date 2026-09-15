@@ -18,6 +18,9 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 const environmentId = EnvironmentId.make("environment-device-test");
 const threadId = ThreadId.make("thread-device-test");
 const invocation = (capabilities: ReadonlyArray<McpInvocationContext.McpCapability>) => ({
+  // T3-CUSTOM(expbkt3): fork-required invocation identity.
+  principal: "provider-session" as const,
+  actorUserId: null,
   environmentId,
   threadId,
   providerSessionId: "provider-session-device-test",
@@ -158,6 +161,9 @@ it.effect("rejects unavailable agent access before booting or opening a device",
     expect(result.content).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          // T3-CUSTOM(expbkt3): fork-required invocation identity.
+          principal: "provider-session",
+          actorUserId: null,
           type: "text",
           text: expect.stringContaining("Agent access is disabled."),
         }),
