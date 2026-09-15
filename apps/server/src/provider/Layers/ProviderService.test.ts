@@ -288,13 +288,17 @@ function makeFakeCodexAdapter(
     },
     startSession,
     sendTurn,
-    ...(provider === CODEX_DRIVER
-      ? { compaction: { type: "native", start: compactThread } }
-      : provider === CURSOR_DRIVER
-        ? { compaction: { type: "slash-command", command: "/compress" } }
-        : provider === CLAUDE_AGENT_DRIVER
-          ? { compaction: { type: "slash-command", command: "/compact" } }
-          : {}),
+    // T3-CUSTOM(expbkt3): named once with an explicit undefined rather than spread
+    // conditionally, so this stays a single object type under
+    // exactOptionalPropertyTypes instead of a union the adapter shape rejects.
+    compaction:
+      provider === CODEX_DRIVER
+        ? ({ type: "native", start: compactThread } as const)
+        : provider === CURSOR_DRIVER
+          ? ({ type: "slash-command", command: "/compress" } as const)
+          : provider === CLAUDE_AGENT_DRIVER
+            ? ({ type: "slash-command", command: "/compact" } as const)
+            : undefined,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -303,7 +307,10 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
-    ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
+    // T3-CUSTOM(expbkt3): a conditional spread makes this a union of two object
+    // types, which exactOptionalPropertyTypes will not assign to the adapter
+    // shape. Naming the key once, with an explicit undefined, keeps one type.
+    uploadFeedback: provider === CODEX_DRIVER ? uploadFeedback : undefined,
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -5386,6 +5393,12 @@ describe("agent browser access", () => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const projectionLayer = Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+        // T3-CUSTOM(expbkt3): stubs for the query methods the fork adds to the shape;
+        // this test drives none of them.
+        getSessionListDetails: () => Effect.die("unused"),
+        listLatestProposedPlansForActiveThreads: () => Effect.die("unused"),
+        getThreadAccessById: () => Effect.die("unused"),
+        listThreadShellsByProjectId: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getUserInputActivity: () => Effect.die("unused"),
@@ -5435,7 +5448,9 @@ describe("agent browser access", () => {
           Effect.sync(() => {
             issued.push({
               threadId: request.threadId,
-              capabilities: [...request.capabilities].toSorted(),
+              // T3-CUSTOM(expbkt3): capabilities is optional on McpCredentialRequest,
+              // because fork call sites that predate upstream's gate omit it.
+              capabilities: [...(request.capabilities ?? [])].toSorted(),
             });
             return undefined;
           }),

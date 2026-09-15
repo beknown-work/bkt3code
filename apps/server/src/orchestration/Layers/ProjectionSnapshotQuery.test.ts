@@ -909,6 +909,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             role: "user",
             text: "Read these notes",
             turnId: null,
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             streaming: false,
             createdAt,
             updatedAt: createdAt,

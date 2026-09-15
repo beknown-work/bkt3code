@@ -410,6 +410,8 @@ it.effect.each(["opt-in desktop restart", "marked remote update"] as const)(
         });
         yield* engine.dispatch({
           type: "thread.create",
+          // T3-CUSTOM(expbkt3): fork-required source-control profile.
+          sourceControlProfileId: null,
           commandId: CommandId.make("create-restart-thread"),
           threadId,
           projectId,
@@ -469,7 +471,11 @@ it.effect.each(["opt-in desktop restart", "marked remote update"] as const)(
             ...provider,
             getCapabilities: () =>
               Effect.succeed({
-                sessionModelSwitch: "in-session",
+                sessionModelSwitch: "in-session" as const,
+                // T3-CUSTOM(expbkt3): explicit busy-thread delivery and durable-resume
+                // semantics are required on every adapter capability set.
+                activeTurnInput: "queue" as const,
+                durableResume: "unsupported" as const,
                 promptlessTurnContinuation: true,
               }),
             sendTurn: (input) =>

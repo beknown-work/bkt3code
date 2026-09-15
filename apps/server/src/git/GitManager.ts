@@ -187,11 +187,15 @@ interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   closedAt?: string | null;
   mergedAt?: string | null;
   updatedAt: Option.Option<DateTime.Utc>;
-  mergeability?: "mergeable" | "conflicting" | "unknown";
-  mergeStateStatus?: string;
-  reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown";
-  checksStatus?: "pass" | "fail" | "pending" | "unknown";
-  autoMergeEnabled?: boolean;
+  // T3-CUSTOM(expbkt3): BEGIN — merge/review/check state the fork surfaces. These
+  // admit an explicit `undefined` so a caller can spread a mapped record straight
+  // in; under exactOptionalPropertyTypes a bare `?:` would reject that.
+  mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
+  mergeStateStatus?: string | undefined;
+  reviewDecision?: "approved" | "changes-requested" | "review-required" | "unknown" | undefined;
+  checksStatus?: "pass" | "fail" | "pending" | "unknown" | undefined;
+  autoMergeEnabled?: boolean | undefined;
+  // T3-CUSTOM(expbkt3): END
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(

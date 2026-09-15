@@ -319,6 +319,9 @@ it.effect.each([
                   workspaceRoot: "/tmp/startup-project",
                   defaultModelSelection: null,
                   scripts: [],
+                  // T3-CUSTOM(expbkt3): fork-required project ownership.
+                  ownerUserId: null,
+                  memberUserIds: [],
                   createdAt: "2026-01-01T00:00:00.000Z",
                   updatedAt: "2026-01-01T00:00:00.000Z",
                   deletedAt: null,

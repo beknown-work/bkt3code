@@ -1263,6 +1263,8 @@ describe("OrchestrationEngine", () => {
         await system.run(
           system.engine.dispatch({
             type: "thread.create",
+            // T3-CUSTOM(expbkt3): fork-required source-control profile.
+            sourceControlProfileId: null,
             commandId: CommandId.make("pr-race-thread-create"),
             threadId,
             projectId,
@@ -1373,6 +1375,8 @@ describe("OrchestrationEngine", () => {
       const created = await system.run(
         system.engine.dispatch({
           type: "thread.create",
+          // T3-CUSTOM(expbkt3): fork-required source-control profile.
+          sourceControlProfileId: null,
           commandId: CommandId.make("pr-sync-thread-create"),
           threadId,
           projectId,

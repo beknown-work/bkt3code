@@ -125,7 +125,9 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /** Omitted when this adapter does not support manual context compaction. */
-  readonly compaction?: ProviderCompaction<TError>;
+  // T3-CUSTOM(expbkt3): admits an explicit `undefined` so an adapter can name the
+  // key unconditionally instead of building a union via a conditional spread.
+  readonly compaction?: ProviderCompaction<TError> | undefined;
 
   /**
    * Interrupt an active turn.
@@ -195,9 +197,11 @@ export interface ProviderAdapterShape<TError> {
   /**
    * Upload a thread to the provider when the adapter supports feedback.
    */
-  readonly uploadFeedback?: (
-    input: ProviderUploadFeedbackInput,
-  ) => Effect.Effect<ProviderUploadFeedbackResult, TError>;
+  // T3-CUSTOM(expbkt3): admits an explicit `undefined` so an adapter can name the
+  // key unconditionally instead of building a union via a conditional spread.
+  readonly uploadFeedback?:
+    | ((input: ProviderUploadFeedbackInput) => Effect.Effect<ProviderUploadFeedbackResult, TError>)
+    | undefined;
 
   /**
    * Stop all sessions owned by this adapter.
