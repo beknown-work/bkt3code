@@ -138,16 +138,21 @@ const startThreadTurnDurably = Effect.fn("ThreadCommands.startThreadTurnDurably"
     // inline data url; a locally-held one supplies the data url and its preview.
     attachments: serverInput.message.attachments.map((attachment, index) => {
       const dataUrl = "dataUrl" in attachment ? attachment.dataUrl : undefined;
+      // T3-CUSTOM(expbkt3): upstream's attachment `id` is optional, so `"id" in
+      // attachment` no longer proves it is a string. A queued attachment always
+      // needs a definite id, hence the explicit undefined check and the fallback.
+      const uploadedId =
+        "id" in attachment && attachment.id !== undefined ? attachment.id : undefined;
       return {
         type: attachment.type,
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
-        id: "id" in attachment ? attachment.id : `${serverInput.message.messageId}-${index}`,
+        id: uploadedId ?? `${serverInput.message.messageId}-${index}`,
         ...(dataUrl === undefined ? {} : { dataUrl, previewUri: dataUrl }),
-        ...("id" in attachment
-          ? { uploadedAttachmentId: attachment.id, uploadEnvironmentId: environmentId }
-          : {}),
+        ...(uploadedId === undefined
+          ? {}
+          : { uploadedAttachmentId: uploadedId, uploadEnvironmentId: environmentId }),
       };
     }),
     ...(serverInput.modelSelection === undefined

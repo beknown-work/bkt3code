@@ -79,10 +79,14 @@ export const fetchOrchestrationUsers = Effect.fn("clientRuntime.state.fetchOrche
   }) {
     return yield* executeAuthenticatedEnvironmentHttpRequest({
       ...input,
+      // T3-CUSTOM(expbkt3): upstream made this helper group-scoped — the caller
+      // names the group and `client` is already that group, so the call is
+      // `client.users(...)` rather than `client.orchestration.users(...)`.
+      group: "orchestration",
       method: "GET",
       url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/orchestration/users"),
       timeoutMs: input.timeoutMs ?? DEFAULT_SESSION_STATE_TIMEOUT_MS,
-      request: ({ client, headers }) => client.orchestration.users({ headers }),
+      request: ({ client, headers }) => client.users({ headers }),
     });
   },
 );

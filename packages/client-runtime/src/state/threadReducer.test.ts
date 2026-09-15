@@ -628,6 +628,8 @@ describe("applyThreadDetailEvent", () => {
             streaming: false,
             createdAt: baseThread.createdAt,
             updatedAt: baseThread.updatedAt,
+            // T3-CUSTOM(expbkt3): sender attribution is a fork-required message field.
+            sentByUserId: null,
           }),
         ),
       );

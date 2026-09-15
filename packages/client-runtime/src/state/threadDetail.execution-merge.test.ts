@@ -87,6 +87,7 @@ function threadShell(execution: ThreadExecutionSnapshot): EnvironmentThreadShell
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
+    pullRequests: [],
     snoozedUntil: null,
     snoozedAt: null,
     session: null,

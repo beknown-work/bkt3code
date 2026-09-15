@@ -88,9 +88,11 @@
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
+      // T3-CUSTOM(expbkt3): the "src/**" entry is the fork's, for the deferred
+      // export debt described above. Kept on one line so the surrounding
+      // upstream context is byte-identical and this stays a one-line conflict.
       "ignoreIssues": {
         "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"],
-        // T3-CUSTOM(expbkt3): the deferred fork-export debt described above.
         "src/**": ["exports", "nsExports", "duplicates"],
       },
     },

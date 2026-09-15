@@ -83,6 +83,7 @@ const THREAD = {
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
+  pullRequests: [],
   latestUserMessageAt: null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
@@ -291,6 +292,8 @@ describe("environment shell synchronization", () => {
         connect: Effect.void,
         disconnect: Effect.void,
         retryNow: Effect.void,
+        // T3-CUSTOM(expbkt3): dead-transport escalation entry point on the supervisor.
+        notifySessionSuspect: () => Effect.void,
       } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
       const cache = Persistence.EnvironmentCacheStore.of({
         loadShell: () => Effect.succeed(Option.none()),
