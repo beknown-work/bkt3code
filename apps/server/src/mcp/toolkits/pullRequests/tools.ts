@@ -2,6 +2,7 @@ import {
   McpCapabilityUnavailableError,
   PositiveInt,
   PullRequestState,
+  ThreadId,
   ThreadPullRequestLinkSource,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
@@ -10,6 +11,7 @@ import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { OrchestrationAccessControl } from "../../../orchestration/Services/AccessControl.ts";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
@@ -17,6 +19,8 @@ const dependencies = [
   McpInvocationContext.McpInvocationContext,
   OrchestrationEngine.OrchestrationEngineService,
   ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+  // T3-CUSTOM(expbkt3): a named session is authorized before it is tagged.
+  OrchestrationAccessControl,
 ];
 
 const REGISTER_EVERY_PR =
@@ -27,7 +31,19 @@ const REGISTER_EVERY_PR =
  * resolve to the same host-level identity, so the agent can pass whichever
  * the host CLI handed back.
  */
+const SessionTargetInput = {
+  // T3-CUSTOM(expbkt3): an external agent has no thread of its own, so it names
+  // the session it is tagging for. An in-session agent omits this.
+  sessionId: Schema.optional(
+    ThreadId.annotate({
+      description:
+        "T3 session/thread ID to tag. External and user-wide agents must supply it; an in-session agent omits it and tags its own session.",
+    }),
+  ),
+};
+
 export const PullRequestTargetInput = Schema.Struct({
+  ...SessionTargetInput,
   url: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description:
@@ -117,8 +133,14 @@ export class PullRequestListFailedError extends Schema.TaggedError<PullRequestLi
   }
 }
 
+export class PullRequestSessionTargetError extends Schema.TaggedError<PullRequestSessionTargetError>()(
+  "PullRequestSessionTargetError",
+  { message: Schema.String },
+) {}
+
 export const PullRequestToolError = Schema.Union([
   McpCapabilityUnavailableError,
+  PullRequestSessionTargetError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,
   PullRequestHostRequiredError,
@@ -213,7 +235,8 @@ const UnlinkPullRequestTool = Tool.make("unlink_pull_request", {
   .annotate(Tool.OpenWorld, false);
 
 const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
-  description: `List the pull requests linked to this thread with their last known host state, and how they chain into stacks (bottom to top). ${REGISTER_EVERY_PR}`,
+  description: `List the pull requests linked to a thread with their last known host state, and how they chain into stacks (bottom to top). ${REGISTER_EVERY_PR}`,
+  parameters: Schema.Struct(SessionTargetInput),
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,
   dependencies,

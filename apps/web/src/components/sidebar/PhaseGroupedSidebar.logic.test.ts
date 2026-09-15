@@ -357,6 +357,115 @@ describe("resolvePhaseSidebarChangeRequestBadge", () => {
     expect(resolvePhaseSidebarChangeRequestBadge({ pr: null })).toBeNull();
   });
 
+  const link = (
+    number: number,
+    overrides: {
+      readonly state?: "open" | "closed" | "merged";
+      readonly headBranch?: string;
+      readonly baseBranch?: string;
+      readonly isDraft?: boolean;
+      readonly synced?: boolean;
+    } = {},
+  ) => ({
+    host: "github.com",
+    repository: "beknown-work/bkt3code",
+    number,
+    url: `https://github.com/beknown-work/bkt3code/pull/${number}`,
+    source: "agent" as const,
+    linkedAt: "2026-09-15T10:00:00.000Z",
+    stack: null,
+    snapshot:
+      overrides.synced === false
+        ? null
+        : {
+            state: overrides.state ?? "open",
+            title: `PR ${number}`,
+            headBranch: overrides.headBranch ?? `t3code/branch-${number}`,
+            baseBranch: overrides.baseBranch ?? "expbkmain",
+            isDraft: overrides.isDraft ?? false,
+            updatedAt: null,
+            syncedAt: "2026-09-15T10:00:00.000Z",
+          },
+  });
+
+  it("shows a review an agent tagged even when the branch probe found nothing", () => {
+    // `link_pull_request` is the only way a PR in another repository, or one
+    // opened before the branch existed, ever reaches this row.
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: null }, [link(76)]);
+
+    expect(badge?.label).toBe("#76");
+    expect(badge?.kind).toBe("single");
+    expect(badge?.url).toBe("https://github.com/beknown-work/bkt3code/pull/76");
+  });
+
+  it("prefers tagged links over the branch probe", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: { ...pr, state: "open" } }, [
+      link(99),
+    ]);
+
+    expect(badge?.label).toBe("#99");
+  });
+
+  it("keeps the number visible and counts the rest when several are tagged", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: null }, [
+      link(10, { state: "merged" }),
+      link(20),
+    ]);
+
+    expect(badge?.label).toMatch(/^#\d+ \+1$/u);
+    expect(badge?.kind).toBe("multiple");
+    expect(badge?.entries.map((entry) => entry.label).sort()).toEqual(["#10", "#20"]);
+  });
+
+  it("calls one chain a stack, so the row can wear a different glyph", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: null }, [
+      link(1, { headBranch: "layer-1", baseBranch: "expbkmain" }),
+      link(2, { headBranch: "layer-2", baseBranch: "layer-1" }),
+      link(3, { headBranch: "layer-3", baseBranch: "layer-2" }),
+    ]);
+
+    expect(badge?.kind).toBe("stack");
+    expect(badge?.entries).toHaveLength(3);
+    // Bottom of the stack first, so the list reads the way the stack merges.
+    expect(badge?.entries.map((entry) => entry.label)).toEqual(["#1", "#2", "#3"]);
+  });
+
+  it("carries each tagged review's own state, not just the aggregate", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: null }, [
+      link(10, { state: "merged" }),
+      link(20, { state: "open" }),
+    ]);
+    const tones = new Map(badge?.entries.map((entry) => [entry.label, entry.colorClassName]));
+
+    expect(tones.get("#10")).toContain("violet");
+    expect(tones.get("#20")).toContain("emerald");
+  });
+
+  it("keeps the lane to three hues: a draft is an open review wearing a modifier", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: null }, [
+      link(10, { isDraft: true }),
+      link(20, { isDraft: true }),
+    ]);
+
+    expect(badge?.state).toBe("open");
+    expect(badge?.colorClassName).toContain("emerald");
+  });
+
+  it("says a freshly tagged review is not synced rather than inventing a state", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge({ pr: null }, [
+      link(76, { synced: false }),
+    ]);
+
+    expect(badge?.statusText).toBe("not synced yet");
+    expect(badge?.entries[0]?.title).toBeNull();
+  });
+
+  it("falls back to the branch probe when nothing is tagged", () => {
+    expect(resolvePhaseSidebarChangeRequestBadge({ pr: { ...pr, state: "open" } }, [])?.label).toBe(
+      "#76",
+    );
+  });
+
   it("says nothing about draft or checks once the PR is merged", () => {
     // Those modifiers only describe an open PR; repeating them after the merge
     // would read as unfinished work.

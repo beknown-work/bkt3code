@@ -203,6 +203,10 @@
       "types": "./src/threadReference.ts",
       "import": "./src/threadReference.ts"
     },
+    "./linearIssue": {
+      "types": "./src/linearIssue.ts",
+      "import": "./src/linearIssue.ts"
+    },
     "./threadPullRequests": {
       "types": "./src/threadPullRequests.ts",
       "import": "./src/threadPullRequests.ts"

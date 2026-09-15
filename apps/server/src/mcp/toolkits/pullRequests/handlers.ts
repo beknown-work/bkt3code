@@ -22,6 +22,7 @@ import * as Option from "effect/Option";
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { resolveMcpSessionTarget } from "../../mcpSessionTarget.ts";
 import {
   type ListThreadPullRequestsResult,
   PullRequestLinkFailedError,
@@ -32,6 +33,7 @@ import {
   PullRequestListFailedError,
   type PullRequestTargetInput,
   PullRequestThreadNotFoundError,
+  PullRequestSessionTargetError,
   PullRequestsToolkit,
   type ThreadPullRequestEntry,
 } from "./tools.ts";
@@ -159,13 +161,23 @@ const make = Effect.gen(function* () {
       | typeof PullRequestLinkFailedError
       | typeof PullRequestUnlinkFailedError
       | typeof PullRequestListFailedError,
+    requested: ThreadId | undefined,
   ) {
-    const scope = yield* McpInvocationContext.requireMcpCapability("pull-requests");
+    yield* McpInvocationContext.requireMcpCapability("pull-requests");
+    // T3-CUSTOM(expbkt3): an in-session agent still gets its own thread and
+    // nothing else; an external one names the session, authorized exactly the
+    // way the control tools authorize a named session.
+    const threadId = yield* resolveMcpSessionTarget({
+      requested,
+      capability: "pull-requests",
+    }).pipe(
+      Effect.mapError((error) => new PullRequestSessionTargetError({ message: error.message })),
+    );
     const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
+      .getThreadShellById(threadId)
       .pipe(Effect.mapError((cause) => new Failure({ cause })));
     if (Option.isNone(thread)) {
-      return yield* new PullRequestThreadNotFoundError({ threadId: scope.threadId });
+      return yield* new PullRequestThreadNotFoundError({ threadId });
     }
     return thread.value;
   });
@@ -191,7 +203,7 @@ const make = Effect.gen(function* () {
   return PullRequestsToolkit.of({
     link_pull_request: (input) =>
       Effect.gen(function* () {
-        const thread = yield* requireThread(PullRequestLinkFailedError);
+        const thread = yield* requireThread(PullRequestLinkFailedError, input.sessionId);
         const project = yield* projectOf(thread, PullRequestLinkFailedError);
         const target = yield* resolveTarget(input, project);
         const alreadyLinked = yield* engine
@@ -216,7 +228,7 @@ const make = Effect.gen(function* () {
       }),
     unlink_pull_request: (input) =>
       Effect.gen(function* () {
-        const thread = yield* requireThread(PullRequestUnlinkFailedError);
+        const thread = yield* requireThread(PullRequestUnlinkFailedError, input.sessionId);
         const project = yield* projectOf(thread, PullRequestUnlinkFailedError);
         const target = yield* resolveTarget(input, project);
         const wasLinked = yield* engine
@@ -240,8 +252,10 @@ const make = Effect.gen(function* () {
           wasLinked,
         };
       }),
-    list_thread_pull_requests: () =>
-      requireThread(PullRequestListFailedError).pipe(Effect.map(listThreadPullRequests)),
+    list_thread_pull_requests: (input) =>
+      requireThread(PullRequestListFailedError, input.sessionId).pipe(
+        Effect.map(listThreadPullRequests),
+      ),
   });
 });
 

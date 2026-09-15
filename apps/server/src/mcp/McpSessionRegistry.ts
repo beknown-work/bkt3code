@@ -366,7 +366,15 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           threadId: ThreadId.make(`external-user:${externalUser.userId}`),
           providerSessionId: `external-user:${externalUser.userId}`,
           providerInstanceId: ProviderInstanceId.make("external-user"),
-          capabilities: new Set(["t3.read", "t3.control", "t3.plan", "t3.session.create"]),
+          // T3-CUSTOM(expbkt3): an external agent that may already rename a
+          // session and dispatch its commands may also tag its pull requests.
+          capabilities: new Set([
+            "pull-requests",
+            "t3.read",
+            "t3.control",
+            "t3.plan",
+            "t3.session.create",
+          ]),
           issuedAt: timestamp,
         } satisfies McpInvocationContext.McpInvocationScope;
       }
@@ -384,7 +392,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make("external-operator"),
         providerSessionId: "external-operator",
         providerInstanceId: ProviderInstanceId.make("external-operator"),
-        capabilities: new Set(["t3.read", "t3.control", "t3.plan"]),
+        capabilities: new Set(["pull-requests", "t3.read", "t3.control", "t3.plan"]),
         issuedAt: timestamp,
       } satisfies McpInvocationContext.McpInvocationScope;
     },

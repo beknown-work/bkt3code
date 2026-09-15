@@ -17,6 +17,7 @@ import {
   type OrchestrationThreadShell,
   type ThreadExecutionSnapshot,
 } from "@t3tools/contracts";
+import { parseLinearIssueUrl } from "@t3tools/shared/linearIssue";
 import { withPlannotatorPlanMarker } from "@t3tools/shared/plannotator";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -40,6 +41,7 @@ import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts
 import { redactServerSettingsForClient, ServerSettingsService } from "../../../serverSettings.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { hasUserWideScope, resolveMcpSessionTarget } from "../../mcpSessionTarget.ts";
 import { T3ControlToolkit, T3ControlToolError } from "./tools.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -116,11 +118,6 @@ const requireSessionCreator = Effect.fn("T3ControlToolkit.requireSessionCreator"
   }
   return scope;
 });
-
-const hasUserWideScope = (scope: McpInvocationContext.McpInvocationScope): boolean =>
-  McpInvocationContext.isExternalMcpOperator(scope) ||
-  scope.principal === "external-user" ||
-  scope.capabilities.has("t3.session.create");
 
 /**
  * T3-CUSTOM(expbkt3): decide which session a newly created session is filed
@@ -302,35 +299,11 @@ const resolveSessionId = Effect.fn("T3ControlToolkit.resolveSessionId")(function
   requested: ThreadId | undefined,
   capability: "t3.read" | "t3.control" | "t3.plan" = "t3.read",
 ) {
-  const scope = yield* requireCapability(operation, capability);
-  if (hasUserWideScope(scope)) {
-    if (requested === undefined) {
-      return yield* new T3ControlToolError({
-        operation,
-        message: "sessionId is required for a user-wide MCP call.",
-      });
-    }
-    if (!McpInvocationContext.isExternalMcpOperator(scope) && scope.actorUserId !== null) {
-      const accessControl = yield* OrchestrationAccessControl;
-      const allowed = yield* accessControl
-        .canAccessThread(scope.actorUserId, requested)
-        .pipe(mapControlError(operation));
-      if (!allowed) {
-        return yield* new T3ControlToolError({
-          operation,
-          message: `T3 session ${requested} was not found.`,
-        });
-      }
-    }
-    return requested;
-  }
-  if (requested !== undefined && requested !== scope.threadId) {
-    return yield* new T3ControlToolError({
-      operation,
-      message: "An in-session agent may only control its own T3 session.",
-    });
-  }
-  return scope.threadId;
+  // The policy itself lives in `mcpSessionTarget` so the pull-request tools
+  // authorize a named session exactly the way these do.
+  return yield* resolveMcpSessionTarget({ requested, capability }).pipe(
+    Effect.mapError((error) => new T3ControlToolError({ operation, message: error.message })),
+  );
 });
 
 function attentionReasons(
@@ -675,12 +648,26 @@ const handlers = {
     const createdAt = yield* nowIso;
     const results: Array<{ readonly type: string; readonly sequence: number }> = [];
 
+    // T3-CUSTOM(expbkt3): an agent's Linear tag clears the same bar a human's
+    // does. The stored URL ends up in `openExternal` on the sidebar row, so a
+    // string that is not a linear.app issue never reaches the projection.
+    const linearIssueUrl =
+      input.linearIssueUrl === undefined || input.linearIssueUrl === null
+        ? input.linearIssueUrl
+        : (parseLinearIssueUrl(input.linearIssueUrl)?.url ??
+          (yield* new T3ControlToolError({
+            operation,
+            message: `${input.linearIssueUrl} is not a Linear issue URL. Pass one like https://linear.app/acme/issue/ENG-42, or null to clear the tag.`,
+          })));
+
     if (
       input.title !== undefined ||
       input.modelSelection !== undefined ||
       input.branch !== undefined ||
       // T3-CUSTOM(expbkt3): session priority.
-      input.priority !== undefined
+      input.priority !== undefined ||
+      // T3-CUSTOM(expbkt3): the Linear ticket this session answers to.
+      linearIssueUrl !== undefined
     ) {
       const commandId = yield* makeCommandId(crypto, operation);
       const result = yield* dispatcher
@@ -697,6 +684,8 @@ const handlers = {
           ...(input.branch === undefined ? {} : { branch: input.branch }),
           // T3-CUSTOM(expbkt3): undefined leaves priority unchanged; null clears it.
           ...(input.priority === undefined ? {} : { priority: input.priority }),
+          // T3-CUSTOM(expbkt3): undefined leaves the Linear tag unchanged; null clears it.
+          ...(linearIssueUrl === undefined ? {} : { linearIssueUrl }),
         })
         .pipe(mapControlError(operation));
       results.push({ type: "thread.meta.update", sequence: result.sequence });

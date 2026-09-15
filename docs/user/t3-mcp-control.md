@@ -121,7 +121,7 @@ custom-header authentication are also supported.
 | `t3_list_projects`            | Discover project IDs, roots, repository identity, defaults, scripts, and active session counts.                       |
 | `t3_get_configuration`        | Discover redacted server settings and the live provider/model catalog, including supported model options.             |
 | `t3_send_prompt`              | Start or steer a durable turn and optionally select model, runtime mode, and plan/default interaction mode.           |
-| `t3_update_session`           | Keep title, branch, model, runtime mode, and interaction mode current.                                                |
+| `t3_update_session`           | Keep title, Linear issue tag, branch, model, runtime mode, and interaction mode current.                              |
 | `t3_session_action`           | Interrupt, stop, restart, archive, settle, snooze, delete, or request a fresh catch-up.                               |
 | `t3_respond_approval`         | Resolve a pending provider approval using the request's allowed decision.                                             |
 | `t3_respond_user_input`       | Answer a pending structured user-input request.                                                                       |
@@ -138,10 +138,32 @@ custom-header authentication are also supported.
 | `t3_ui_get_tool`              | Read the exact input, success, and declared error schemas for one virtual web UI tool.                                |
 | `t3_ui_call`                  | Execute one virtual web UI tool through the browser's handler, validation, authorization, and visibility path.        |
 | `t3_ui_batch`                 | Execute up to 25 virtual web UI tools sequentially in a shared handler scope.                                         |
+| `link_pull_request`           | Tag a pull request onto a session, for a review branch detection will not find on its own.                            |
+| `unlink_pull_request`         | Remove a pull request tag from a session.                                                                             |
+| `list_thread_pull_requests`   | List a session's tagged pull requests with their host state and how they chain into stacks.                           |
 
 The MCP JSON schemas describe every field. Agents should call
 `t3_get_configuration` before changing models and `t3_get_session` before
 answering approvals or structured input.
+
+## Naming a session's work
+
+Three pieces of a session's identity are settable over MCP, so an agent can
+label its own work rather than leaving it to whoever opens the sidebar:
+
+- **Title** — `t3_update_session` with `title`. An MCP rename takes ownership of
+  the title, so automatic title generation will not overwrite it afterwards.
+- **Linear issue** — `t3_update_session` with `linearIssueUrl`, or `null` to
+  clear it. Only `linear.app` issue URLs are accepted; the key and its live
+  status then appear beside the session in the sidebar.
+- **Pull requests** — `link_pull_request`, once per review, including each layer
+  of a stack. A session can hold several; the sidebar shows the current one's
+  number and opens the full list when there is more than one. Tag them
+  explicitly whenever a review is not simply the checked-out branch's.
+
+An in-session agent omits `sessionId` and acts on its own session. An external
+or user-wide agent supplies `sessionId`, and may only name sessions its own
+actor can already see.
 
 ## Complete web UI parity and code mode
 
