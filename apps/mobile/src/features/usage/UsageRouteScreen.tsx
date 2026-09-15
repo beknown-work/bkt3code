@@ -344,6 +344,9 @@ function SegmentedControl<Value extends number | string>(props: {
   /** The tab bar is full height; filters under it are shorter so it stays primary. */
   readonly size?: "default" | "compact";
   readonly className?: string;
+  // T3-CUSTOM(expbkt3): Android exposes a segmented control as a tab list, iOS as
+  // buttons. Callers override the non-iOS role; the accessibility work below reads it.
+  readonly role?: "button" | "tab";
 }) {
   const compact = props.size === "compact";
   // T3-CUSTOM(expbkt3): render each usage segment as a direct native button.

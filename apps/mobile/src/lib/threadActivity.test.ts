@@ -1,6 +1,4 @@
 import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
-// T3-CUSTOM(expbkt3): retained for the fork's local-feedback ordering test below.
-import { codexFeedbackMessage } from "@t3tools/client-runtime/state/threads";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
@@ -353,6 +351,8 @@ describe("buildThreadFeed", () => {
     const latestTurn = {
       turnId: activeTurnId,
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       startedAt: "2026-04-01T00:00:03.000Z",
       completedAt: null,
     };
@@ -936,6 +936,8 @@ describe("buildThreadFeed", () => {
     const latestTurn = {
       turnId: TurnId.make("turn-after-setup"),
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       requestedAt: "2026-08-30T00:00:03.000Z",
       startedAt: "2026-08-30T00:00:04.000Z",
       completedAt: null,
@@ -1010,9 +1012,31 @@ describe("buildThreadFeed", () => {
     });
 
     const feed = buildThreadFeed(thread, {
+      // T3-CUSTOM(expbkt3): upstream #10398 deleted `codexFeedbackMessage` when
+      // Codex feedback moved from pseudo-messages to composer banners. The
+      // subject here is buildThreadFeed's localMessages ordering, which still
+      // exists, so the two messages the helper used to build are inlined.
       localMessages: [
-        codexFeedbackMessage(submission),
-        codexFeedbackMessage(submission, "assistant"),
+        {
+          id: submission.id,
+          role: "user" as const,
+          text: submission.command,
+          turnId: null,
+          sentByUserId: null,
+          streaming: false,
+          createdAt: submission.createdAt,
+          updatedAt: submission.createdAt,
+        },
+        {
+          id: MessageId.make(`${submission.id}:feedback`),
+          role: "assistant" as const,
+          text: `Feedback sent to OpenAI.\n\nThread ID: \`${submission.feedbackId}\``,
+          turnId: null,
+          sentByUserId: null,
+          streaming: false,
+          createdAt: submission.createdAt,
+          updatedAt: submission.createdAt,
+        },
       ],
     });
 
@@ -1690,6 +1714,8 @@ describe("buildThreadFeed", () => {
         latestTurn: {
           ...thread.latestTurn!,
           state: "completed",
+          // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+          durationMs: null,
           completedAt: "2026-04-01T00:00:04.000Z",
         },
       });
@@ -2311,6 +2337,8 @@ describe("buildThreadFeed", () => {
       const latestTurn = {
         turnId,
         state: "running" as const,
+        // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+        durationMs: null,
         requestedAt: "2026-04-01T00:00:00.000Z",
         startedAt: "2026-04-01T00:00:00.000Z",
         completedAt: null,
@@ -2377,6 +2405,8 @@ describe("buildThreadFeed", () => {
     const latestTurn = {
       turnId,
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       requestedAt: "2026-04-01T00:00:00.000Z",
       startedAt: "2026-04-01T00:00:00.000Z",
       completedAt: null,
@@ -2390,6 +2420,8 @@ describe("buildThreadFeed", () => {
         latestTurn,
         messages: [
           {
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             id: MessageId.make("user-1"),
             role: "user",
             text: "hello",
@@ -2426,6 +2458,8 @@ describe("buildThreadFeed", () => {
     const latestTurn = {
       turnId,
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       requestedAt: "2026-04-01T00:00:00.000Z",
       startedAt: "2026-04-01T00:00:00.000Z",
       completedAt: null,
@@ -2495,6 +2529,8 @@ describe("buildThreadFeed", () => {
     const latestTurn = {
       turnId,
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       requestedAt: "2026-04-01T00:00:00.000Z",
       startedAt: "2026-04-01T00:00:00.000Z",
       completedAt: null,
@@ -2508,6 +2544,8 @@ describe("buildThreadFeed", () => {
         latestTurn,
         messages: [
           {
+            // T3-CUSTOM(expbkt3): fork-required sender identity.
+            sentByUserId: null,
             id: MessageId.make("assistant-1"),
             role: "assistant",
             text: "Here is what I found",
@@ -2672,6 +2710,8 @@ describe("buildThreadFeed", () => {
     const latestTurn = {
       turnId,
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       requestedAt: "2026-04-01T00:00:00.000Z",
       startedAt: "2026-04-01T00:00:00.000Z",
       completedAt: null,
@@ -3031,6 +3071,8 @@ describe("quiet timeline: nested agents", () => {
     const latestTurn = {
       turnId,
       state: "running" as const,
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       requestedAt: "2026-04-01T00:00:00.000Z",
       startedAt: "2026-04-01T00:00:00.000Z",
       completedAt: null,
@@ -3078,6 +3120,8 @@ describe("quiet timeline: nested agents", () => {
     const single = presentFor([agent("a-start", "task.started", "a", 1)]);
     expect(single.map((row) => row.type)).toEqual(["agent-spawn"]);
     expect(single[0]).toMatchObject({
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       id: `agent-spawn:${turnId}`,
       summary: { title: "Agent a", status: "Working", tone: "working" },
     });
@@ -3462,6 +3506,8 @@ it("keeps attachment-only question answers expandable outside mobile work groups
     projectId: ProjectId.make("project-answer"),
     title: "Answer history",
     latestTurn: {
+      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
+      durationMs: null,
       turnId,
       state: "completed",
       requestedAt: "2026-09-08T00:00:00.000Z",

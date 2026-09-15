@@ -119,7 +119,12 @@ import {
   type MediaVideoPreviewSource,
 } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "../../components/CopyTextButton";
-import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
+import {
+  parseReviewCommentMessageSegments,
+  // T3-CUSTOM(expbkt3): the fork's plan-review card renders this shape; upstream
+  // extracted the file-review card, which left this type unimported here.
+  type ReviewInlineComment,
+} from "../review/reviewCommentSelection";
 import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
 import {
   ReviewCommentCard,
