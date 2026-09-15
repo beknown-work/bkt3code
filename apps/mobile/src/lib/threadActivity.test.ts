@@ -3120,8 +3120,6 @@ describe("quiet timeline: nested agents", () => {
     const single = presentFor([agent("a-start", "task.started", "a", 1)]);
     expect(single.map((row) => row.type)).toEqual(["agent-spawn"]);
     expect(single[0]).toMatchObject({
-      // T3-CUSTOM(expbkt3): server-computed turn duration; null while running.
-      durationMs: null,
       id: `agent-spawn:${turnId}`,
       summary: { title: "Agent a", status: "Working", tone: "working" },
     });

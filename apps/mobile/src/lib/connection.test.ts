@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { MOBILE_APP_VERSION } from "../../app-version";
 
 // T3-CUSTOM(expbkt3): authClientMetadata reads the Expo manifest for the fork
 // build SHA, which pulls in expo-modules-core; that reads React Native's
@@ -47,7 +48,8 @@ describe("mobile remote connection records", () => {
     expect(authClientMetadata()).toEqual({
       label: "T3 Code Mobile",
       deviceType: "mobile",
-      appVersion: "1.0.4",
+      // T3-CUSTOM(expbkt3): the fork stamps the mobile version onto auth client metadata.
+      appVersion: MOBILE_APP_VERSION,
       os: "iOS",
       osMajorVersion: 18,
       deviceModel: "iPhone 15 Pro",
