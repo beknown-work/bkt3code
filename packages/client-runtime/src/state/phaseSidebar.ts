@@ -19,6 +19,8 @@
 // the method from Array.prototype.
 import type {
   ServerConfig,
+  // T3-CUSTOM(expbkt3): the thread's auto-detected branch review.
+  ThreadLinkedPullRequest,
   ThreadPullRequestLink,
   UserId,
   VcsStatusResult,
@@ -128,6 +130,14 @@ export interface PhaseSidebarCheckoutMetadata {
    * map this through a static class table — see `PHASE_SIDEBAR_CHECKOUT_TONES`.
    */
   readonly toneIndex: number | null;
+  /**
+   * T3-CUSTOM(expbkt3): the thread's branch is not the one checked out.
+   *
+   * Only ever set for a local checkout, where the label shows the *actual*
+   * refName. Without this the row reads as healthy while pointing somewhere
+   * else entirely, which is the state upstream warns about in its tooltip.
+   */
+  readonly branchMismatch: string | null;
 }
 
 /**
@@ -167,7 +177,11 @@ export function resolvePhaseSidebarCheckoutMetadata(
     const codename = options?.codename ?? resolveWorktreeCodename(thread.worktreePath);
     const sharing = options?.sharing ?? null;
 
+    // T3-CUSTOM(expbkt3): the codename replaces the branch in the label, so the
+    // branch has to survive in the tooltip — otherwise a worktree row is the one
+    // place in the app that never tells you which branch it is on.
     const tooltipParts = [`Worktree ${codename}`];
+    if (thread.branch) tooltipParts.push(thread.branch);
     if (baseRef) tooltipParts.push(`from ${baseRef}`);
     tooltipParts.push(thread.worktreePath);
     if (sharing) {
@@ -179,15 +193,29 @@ export function resolvePhaseSidebarCheckoutMetadata(
       label: sharing ? `${codename} ×${sharing.count}` : codename,
       tooltip: tooltipParts.join(" · "),
       toneIndex: worktreeCodenameToneIndex(codename),
+      branchMismatch: null,
     };
   }
 
   const branch = vcsStatus?.refName ?? thread.branch;
+  // T3-CUSTOM(expbkt3): the label is the branch actually checked out, so when
+  // that is not the thread's branch the row needs to say so rather than quietly
+  // showing someone else's work as this thread's.
+  const branchMismatch =
+    thread.branch !== null && vcsStatus?.refName != null && vcsStatus.refName !== thread.branch
+      ? thread.branch
+      : null;
   return {
     kind: "current",
     label: branch ?? "Current checkout",
-    tooltip: branch ? `Current checkout on ${branch}` : "Current checkout",
+    tooltip:
+      branchMismatch !== null
+        ? `Current checkout on ${branch} — this thread is on ${branchMismatch}`
+        : branch
+          ? `Current checkout on ${branch}`
+          : "Current checkout",
     toneIndex: null,
+    branchMismatch,
   };
 }
 
@@ -414,6 +442,16 @@ const PHASE_SIDEBAR_CHANGE_REQUEST_TONES = {
   closed: "text-red-600 dark:text-red-300/90",
 } satisfies Record<ChangeRequestStateLike, string>;
 
+/**
+ * T3-CUSTOM(expbkt3): a review we know exists but have no state for yet.
+ *
+ * The thread's own `branchPullRequest` carries a number and a URL and nothing
+ * else, so colouring it green would assert an "open" the row has not confirmed.
+ * Muted says "there is a review here, status still loading" — the same shape
+ * upstream uses for an unhydrated PR.
+ */
+const PHASE_SIDEBAR_CHANGE_REQUEST_PENDING_TONE = "text-muted-foreground";
+
 /** Modifiers are qualifiers on "open", never states — they stay out of the hue. */
 function changeRequestStatusText(input: {
   readonly state: ChangeRequestStateLike;
@@ -483,6 +521,16 @@ function entryFromLink(
 export function resolvePhaseSidebarChangeRequestBadge(
   vcsStatus: Pick<VcsStatusResult, "pr" | "sourceControlProvider"> | null | undefined,
   pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined,
+  /**
+   * T3-CUSTOM(expbkt3): the thread's own detected review — `branchPullRequest`,
+   * falling back to the legacy `linkedPullRequest`.
+   *
+   * This is the field the server writes when it auto-detects the PR for a
+   * thread's branch, and it is the reason a detected PR used to show in the chat
+   * header but never on the row: the row only ever looked at explicit links and
+   * at a working-directory probe, neither of which sees it.
+   */
+  detectedPullRequest?: ThreadLinkedPullRequest | null | undefined,
 ): PhaseSidebarChangeRequestBadge | null {
   const shortName = resolveChangeRequestPresentation(vcsStatus?.sourceControlProvider).shortName;
   const chains = resolveThreadPullRequestChains(pullRequests ?? []);
@@ -513,8 +561,42 @@ export function resolvePhaseSidebarChangeRequestBadge(
     };
   }
 
-  const pr = vcsStatus?.pr;
-  if (!pr) return null;
+  // T3-CUSTOM(expbkt3): BEGIN — the detected review decides WHICH review this
+  // row is about; the probe only fills in its state.
+  //
+  // `vcsStatus` is keyed by working directory, not by thread, so on a shared
+  // local checkout it reports whatever branch happens to be checked out right
+  // now. Trusting it alone put another thread's PR on this row. When the two
+  // disagree, the thread's own field wins and the row waits for state rather
+  // than showing a confident wrong number.
+  const detected = detectedPullRequest ?? null;
+  const probe = vcsStatus?.pr ?? null;
+  const pr =
+    probe !== null && (detected === null || probe.number === detected.number) ? probe : null;
+
+  if (pr === null) {
+    if (detected === null) return null;
+    const pendingEntry: PhaseSidebarChangeRequestEntry = {
+      label: `#${detected.number}`,
+      url: detected.url,
+      state: "open",
+      colorClassName: PHASE_SIDEBAR_CHANGE_REQUEST_PENDING_TONE,
+      statusText: "status pending",
+      title: null,
+      tooltip: `${shortName} #${detected.number} — status pending`,
+    };
+    return {
+      label: pendingEntry.label,
+      url: pendingEntry.url,
+      state: pendingEntry.state,
+      colorClassName: pendingEntry.colorClassName,
+      statusText: pendingEntry.statusText,
+      tooltip: pendingEntry.tooltip,
+      kind: "single",
+      entries: [pendingEntry],
+    };
+  }
+  // T3-CUSTOM(expbkt3): END
   const statusText = changeRequestStatusText({
     state: pr.state,
     isDraft: pr.isDraft,
@@ -840,14 +922,25 @@ export type PhaseSidebarAttentionKind = "input" | "approval" | "error" | "plan";
 export function resolvePhaseSidebarAttentionKind(
   thread: Pick<
     ThreadShell,
-    "execution" | "hasPendingApprovals" | "hasPendingUserInput" | "hasActionableProposedPlan"
+    | "execution"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "hasActionableProposedPlan"
+    // T3-CUSTOM(expbkt3): a session error is a failure the badge has to show.
+    | "session"
   >,
 ): PhaseSidebarAttentionKind | null {
   if (phaseSidebarNeedsUserInput(thread)) return "input";
   if (thread.hasPendingApprovals || thread.execution?.turn?.state === "waiting-for-approval") {
     return "approval";
   }
-  if (thread.execution?.activity === "failed") return "error";
+  // T3-CUSTOM(expbkt3): a session error counts as a failure here too.
+  // `resolvePhaseSidebarPhase` already treats `session.status === "error"` as a
+  // failure for grouping, so badging only on execution activity meant a row
+  // could be grouped as failed while flying no badge at all.
+  if (thread.execution?.activity === "failed" || thread.session?.status === "error") {
+    return "error";
+  }
   // T3-CUSTOM(expbkt3): ranked last. A plan is a decision to make at leisure,
   // not a session stuck mid-turn, so it never outranks a question or a failure.
   if (thread.hasActionableProposedPlan) return "plan";
@@ -1101,6 +1194,14 @@ export function comparePhaseSidebarRows(
   sortOrder: SidebarThreadSortOrder,
   sort: PhaseSidebarSortPreferences,
 ): number {
+  // T3-CUSTOM(expbkt3): a pinned thread sorts to the top of its group.
+  //
+  // Pin and unpin already existed in the row context menu but changed nothing
+  // observable: this comparator ignored `pinnedAt` and no row rendered it, so
+  // pinning was a no-op the UI still offered. Pinning inside the group rather
+  // than lifting rows into a section of their own keeps the lifecycle grouping
+  // intact — the whole premise of this sidebar.
+  const pinDelta = (right.thread.pinnedAt ? 1 : 0) - (left.thread.pinnedAt ? 1 : 0);
   const priorityDelta = sort.priorityFirst
     ? phaseSidebarPriorityRank(left.thread) - phaseSidebarPriorityRank(right.thread)
     : 0;
@@ -1108,6 +1209,7 @@ export function comparePhaseSidebarRows(
   const rightTime = getThreadSortTimestamp(right.thread, sortOrder);
   const timeDelta = sort.direction === "oldest_first" ? leftTime - rightTime : rightTime - leftTime;
   return (
+    pinDelta ||
     priorityDelta ||
     timeDelta ||
     left.thread.title.localeCompare(right.thread.title) ||

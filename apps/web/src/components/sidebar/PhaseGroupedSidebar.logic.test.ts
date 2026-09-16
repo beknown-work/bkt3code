@@ -258,8 +258,11 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
     ).toEqual({
       kind: "current",
       label: "dev",
-      tooltip: "Current checkout on dev",
+      // T3-CUSTOM(expbkt3): the thread is on `stale-branch` but `dev` is checked
+      // out, so the row now says so instead of reading as healthy.
+      tooltip: "Current checkout on dev — this thread is on stale-branch",
       toneIndex: null,
+      branchMismatch: "stale-branch",
     });
   });
 
@@ -287,7 +290,11 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
         { branch: "t3code/generated-feature", worktreePath },
         { refName: "t3code/generated-feature", baseRef: "main", pr: null },
       ).tooltip,
-    ).toBe(`Worktree ${resolveWorktreeCodename(worktreePath)} · from main · ${worktreePath}`);
+      // T3-CUSTOM(expbkt3): the codename replaces the branch in the label, so
+      // the branch has to survive here.
+    ).toBe(
+      `Worktree ${resolveWorktreeCodename(worktreePath)} · t3code/generated-feature · from main · ${worktreePath}`,
+    );
   });
 
   it("prefers a pull request base when one is available", () => {
@@ -1739,3 +1746,152 @@ describe("phase sidebar priority", () => {
     expect(phaseSidebarPriorityBadgeClassName(0)).not.toContain("bg-red-500");
   });
 });
+
+// T3-CUSTOM(expbkt3): BEGIN — signals the stock sidebar shows and this one did not.
+describe("phase sidebar detected pull requests", () => {
+  const detected = {
+    projectId: ProjectId.make("project-1"),
+    repository: "beknown-work/bkt3code",
+    number: 180,
+    url: "https://github.com/beknown-work/bkt3code/pull/180",
+  };
+
+  it("shows a pull request the server detected for the thread's branch", () => {
+    // The auto-detected PR lives only on the thread, never in `pullRequests`,
+    // so the row used to render nothing while the chat header showed it.
+    const badge = resolvePhaseSidebarChangeRequestBadge(null, [], detected);
+
+    expect(badge?.label).toBe("#180");
+    expect(badge?.url).toBe(detected.url);
+    expect(badge?.statusText).toBe("status pending");
+  });
+
+  it("keeps the detected review muted until its state is known", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge(null, [], detected);
+
+    // Colouring it green would assert an "open" the row has not confirmed.
+    expect(badge?.colorClassName).toBe("text-muted-foreground");
+    expect(badge?.colorClassName).not.toContain("emerald");
+  });
+
+  it("enriches the detected review with live state when the two agree", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge(
+      { pr: { number: 180, url: detected.url, state: "open", title: "A plan" } as never },
+      [],
+      detected,
+    );
+
+    expect(badge?.label).toBe("#180");
+    expect(badge?.statusText).toBe("open");
+  });
+
+  it("ignores a working-directory probe pointing at another thread's review", () => {
+    // The probe is keyed by cwd, so on a shared local checkout it reports
+    // whatever branch is checked out. The thread's own field decides identity.
+    const badge = resolvePhaseSidebarChangeRequestBadge(
+      {
+        pr: {
+          number: 999,
+          url: "https://example.test/999",
+          state: "open",
+          title: "Other",
+        } as never,
+      },
+      [],
+      detected,
+    );
+
+    expect(badge?.label).toBe("#180");
+    expect(badge?.statusText).toBe("status pending");
+  });
+
+  it("renders nothing when there is no review at all", () => {
+    expect(resolvePhaseSidebarChangeRequestBadge(null, [], null)).toBeNull();
+  });
+});
+
+describe("phase sidebar branch mismatch", () => {
+  it("flags a local checkout sitting on another branch", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "feature/mine", worktreePath: null },
+      { refName: "main", baseRef: null, pr: null } as never,
+    );
+
+    expect(metadata.branchMismatch).toBe("feature/mine");
+    expect(metadata.tooltip).toContain("feature/mine");
+  });
+
+  it("stays quiet when the checkout matches the thread", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata({ branch: "main", worktreePath: null }, {
+      refName: "main",
+      baseRef: null,
+      pr: null,
+    } as never);
+
+    expect(metadata.branchMismatch).toBeNull();
+  });
+
+  it("never flags a worktree, which owns its own checkout", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "feature/mine", worktreePath: "/tmp/wt" },
+      { refName: "main", baseRef: null, pr: null } as never,
+    );
+
+    expect(metadata.branchMismatch).toBeNull();
+  });
+
+  it("names the branch in a worktree tooltip, since the label is a codename", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "feature/mine", worktreePath: "/tmp/wt" },
+      null,
+      { codename: "onigiri" },
+    );
+
+    expect(metadata.label).toBe("onigiri");
+    expect(metadata.tooltip).toContain("feature/mine");
+  });
+});
+
+describe("phase sidebar session errors", () => {
+  it("badges a session error, matching how it is already grouped", () => {
+    // resolvePhaseSidebarPhase already treats this as a failure, so badging on
+    // execution activity alone left a row grouped as failed with no badge.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ session: { status: "error" } as never, execution: null }),
+      ),
+    ).toBe("error");
+  });
+});
+// T3-CUSTOM(expbkt3): END
+
+// T3-CUSTOM(expbkt3): BEGIN — pinning used to be a no-op the UI still offered.
+describe("phase sidebar pinning", () => {
+  it("sorts a pinned thread to the top of its group", () => {
+    const pinned = makeRow({
+      thread: makeThread({ id: ThreadId.make("thread-pinned"), pinnedAt: now }),
+    });
+    const ordinary = makeRow({ thread: makeThread({ id: ThreadId.make("thread-plain") }) });
+
+    const groups = buildPhaseSidebarGroups(
+      [ordinary, pinned],
+      EMPTY_PHASE_SIDEBAR_FILTERS,
+      "updated_at",
+    );
+
+    expect(groups[0]?.rows[0]?.thread.id).toBe(ThreadId.make("thread-pinned"));
+  });
+
+  it("leaves order alone when nothing is pinned", () => {
+    const a = makeRow({ thread: makeThread({ id: ThreadId.make("thread-a") }) });
+    const b = makeRow({ thread: makeThread({ id: ThreadId.make("thread-b") }) });
+
+    const groups = buildPhaseSidebarGroups([a, b], EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+
+    expect(groups[0]?.rows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
+    ]);
+  });
+});
+// T3-CUSTOM(expbkt3): END
