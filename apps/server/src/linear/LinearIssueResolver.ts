@@ -18,6 +18,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 
 import type * as UserMcpProfileStore from "../mcp/UserMcpProfileStore.ts";
 import type { LinearIssueStatusCache } from "./LinearIssueStatusCache.ts";
+import type { LinearStatusBridge } from "./LinearStatusBridge.ts";
 
 const LINEAR_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/u;
 const MAX_ISSUES_PER_REQUEST = 25;
@@ -125,6 +126,8 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
     readonly httpClient: HttpClient.HttpClient;
     /** Omitted in tests that want every call to reach the upstream read. */
     readonly cache?: LinearIssueStatusCache | undefined;
+    /** Absent when no bridge service token is configured; Bifrost then answers alone. */
+    readonly bridge?: LinearStatusBridge | undefined;
   }) {
     const identifiers = [
       ...new Set(input.identifiers.map((identifier) => identifier.trim().toUpperCase())),
@@ -137,24 +140,35 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
       .map((identifier) => unavailable(identifier, "Invalid Linear issue identifier."));
     if (validIdentifiers.length === 0) return { issues: invalid } satisfies LinearIssueStatusResult;
 
-    const configured = yield* input.profiles.get(input.userId).pipe(
-      Effect.map((profile) =>
-        profile.integrations.some(
-          (item) =>
-            item.id === BIFROST_MCP_INTEGRATION_ID && item.enabled && item.credentialConfigured,
+    // The bridge answers first. Its credential belongs to the server, so it is
+    // the only path that works for a viewer with no Bifrost integration — and
+    // it costs Linear nothing, because the bridge is answering from a webhook
+    // projection it already maintains.
+    const bridge = input.bridge;
+
+    // Bifrost stays as the fallback for anything the bridge has not seen, and
+    // it is per-viewer, so the credential is only needed on that path.
+    const credential = yield* Effect.gen(function* () {
+      const configured = yield* input.profiles.get(input.userId).pipe(
+        Effect.map((profile) =>
+          profile.integrations.some(
+            (item) =>
+              item.id === BIFROST_MCP_INTEGRATION_ID && item.enabled && item.credentialConfigured,
+          ),
         ),
-      ),
-      Effect.orElseSucceed(() => false),
-    );
-    const credential = configured
-      ? yield* input.profiles
-          .getIntegrationCredential(
-            input.userId,
-            PersonalMcpIntegrationId.make(BIFROST_MCP_INTEGRATION_ID),
-          )
-          .pipe(Effect.orElseSucceed(() => undefined))
-      : undefined;
-    if (!credential) {
+        Effect.orElseSucceed(() => false),
+      );
+      return configured
+        ? yield* input.profiles
+            .getIntegrationCredential(
+              input.userId,
+              PersonalMcpIntegrationId.make(BIFROST_MCP_INTEGRATION_ID),
+            )
+            .pipe(Effect.orElseSucceed(() => undefined))
+        : undefined;
+    });
+
+    if (bridge === undefined && credential === undefined) {
       return {
         issues: [
           ...invalid,
@@ -167,18 +181,35 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
 
     // The cache is what makes a per-minute sidebar refresh affordable: issue
     // status is the same for every viewer, so N clients collapse to one read.
-    const fetchMissing = (missing: ReadonlyArray<string>) =>
-      Effect.forEach(
-        missing,
-        (identifier) =>
-          resolveOne(input.httpClient, credential, identifier).pipe(
-            Effect.timeout("12 seconds"),
-            Effect.catchCause(() =>
-              Effect.succeed(unavailable(identifier, "Linear status is temporarily unavailable.")),
-            ),
-          ),
-        { concurrency: 2 },
-      );
+    const fetchMissing = Effect.fn("LinearIssueResolver.fetchMissing")(function* (
+      missing: ReadonlyArray<string>,
+    ) {
+      const known = bridge === undefined ? undefined : yield* bridge.lookup(missing);
+      const unresolved = missing.filter((identifier) => known?.has(identifier) !== true);
+      const fromBifrost =
+        unresolved.length === 0
+          ? []
+          : credential === undefined
+            ? unresolved.map((identifier) =>
+                unavailable(identifier, "Configure and enable Bifrost to read Linear status."),
+              )
+            : yield* Effect.forEach(
+                unresolved,
+                (identifier) =>
+                  resolveOne(input.httpClient, credential, identifier).pipe(
+                    Effect.timeout("12 seconds"),
+                    Effect.catchCause(() =>
+                      Effect.succeed(
+                        unavailable(identifier, "Linear status is temporarily unavailable."),
+                      ),
+                    ),
+                  ),
+                { concurrency: 2 },
+              );
+      const byIdentifier = new Map(fromBifrost.map((summary) => [summary.identifier, summary]));
+      return missing.map((identifier) => known?.get(identifier) ?? byIdentifier.get(identifier)!);
+    });
+
     const resolved =
       input.cache === undefined
         ? yield* fetchMissing(validIdentifiers)

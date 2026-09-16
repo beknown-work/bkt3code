@@ -53,6 +53,7 @@ import type * as SourceControlProfileService from "./sourceControl/SourceControl
 import type { ThreadExecutionSupervisorShape } from "./execution/ThreadExecutionSupervisor.ts";
 import { resolveLinearIssueStatuses } from "./linear/LinearIssueResolver.ts";
 import { sharedLinearIssueStatusCache } from "./linear/LinearIssueStatusCache.ts";
+import { linearStatusBridgeToken, makeLinearStatusBridge } from "./linear/LinearStatusBridge.ts";
 import type { SessionArchiveServiceShape } from "./sessionArchive/SessionArchiveService.ts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
@@ -212,15 +213,19 @@ export const makeForkWsHandlers = ({
       observeRpcEffect(
         WS_METHODS.linearIssuesResolve,
         sharedLinearIssueStatusCache().pipe(
-          Effect.flatMap((cache) =>
-            resolveLinearIssueStatuses({
+          Effect.flatMap((cache) => {
+            const token = linearStatusBridgeToken();
+            return resolveLinearIssueStatuses({
               userId: personalMcpUserId,
               identifiers: input.identifiers,
               profiles: personalMcpProfiles,
               httpClient,
               cache,
-            }),
-          ),
+              ...(token === undefined
+                ? {}
+                : { bridge: makeLinearStatusBridge({ httpClient, token }) }),
+            });
+          }),
         ),
         { "rpc.aggregate": "linear-issues" },
       ),

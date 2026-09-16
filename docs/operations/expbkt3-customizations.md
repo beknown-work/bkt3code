@@ -44,16 +44,16 @@ below are deliberate exceptions: they are load-bearing infrastructure whose
 _increase_ merge and correctness risk rather than reduce it. Treat them as
 permanent fork surface and keep them marked instead.
 
-| Subsystem                         | Why it is not flag-gated                                                                                                              |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| User management / Clerk team mode | The reason the fork exists. Already conditioned on `T3CODE_CLERK_SECRET_KEY` being configured.                                        |
-| Ownership + access control        | A disabled access-control path is a data-exposure bug, not a fallback. Part of user management in practice.                           |
-| ThreadExecutionSupervisor         | Turn admission and execution revisions are in the dispatch path; a bypass mode would be a second scheduler.                           |
-| Session recovery                  | Reconnect-after-restart has no meaningful "off" state — off is just the pre-existing stuck-session bug.                               |
-| Thread priority                   | A projection column plus ordering. Nothing to disable; the sidebar that consumes it is itself flag-gated.                             |
-| Thread Linear tags                | Durable metadata plus a read-only status lookup, settable from the UI or over MCP. The sidebar that consumes it is itself flag-gated. |
-| Shell projection barrier          | Sync-correctness hardening. Disabling it reintroduces the drift it was written to fix.                                                |
-| Plannotator plan review           | Relied on daily and mounted unconditionally; documented here rather than retrofitted behind a flag.                                   |
+| Subsystem                         | Why it is not flag-gated                                                                                                                                                                                              |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User management / Clerk team mode | The reason the fork exists. Already conditioned on `T3CODE_CLERK_SECRET_KEY` being configured.                                                                                                                        |
+| Ownership + access control        | A disabled access-control path is a data-exposure bug, not a fallback. Part of user management in practice.                                                                                                           |
+| ThreadExecutionSupervisor         | Turn admission and execution revisions are in the dispatch path; a bypass mode would be a second scheduler.                                                                                                           |
+| Session recovery                  | Reconnect-after-restart has no meaningful "off" state — off is just the pre-existing stuck-session bug.                                                                                                               |
+| Thread priority                   | A projection column plus ordering. Nothing to disable; the sidebar that consumes it is itself flag-gated.                                                                                                             |
+| Thread Linear tags                | Durable metadata plus a read-only status lookup served from the bridge's webhook projection, with a per-viewer Bifrost fallback. Settable from the UI or over MCP. The sidebar that consumes it is itself flag-gated. |
+| Shell projection barrier          | Sync-correctness hardening. Disabling it reintroduces the drift it was written to fix.                                                                                                                                |
+| Plannotator plan review           | Relied on daily and mounted unconditionally; documented here rather than retrofitted behind a flag.                                                                                                                   |
 
 Everything outside this table should follow the flag rule in `AGENTS.md`.
 
@@ -100,7 +100,7 @@ turn-settlement rewrite in `state/threadReducer.ts`, the restart predicate in
 | Lifecycle counters               | experimental sidebar counter components                                                                                                                                                                                                            | `SidebarChrome.tsx`                                                                                                                                                                                                                                                                                                                       |
 | Urgent pending input             | `PhaseGroupedSidebar.logic.ts`                                                                                                                                                                                                                     | `PhaseGroupedSidebar.tsx`                                                                                                                                                                                                                                                                                                                 |
 | Lifecycle parking shelves        | `PhaseGroupedSidebar.logic.ts` (`partitionPhaseSidebarRows`), `PhaseGroupedSidebar.tsx`                                                                                                                                                            | `useThreadActions.ts`, `Sidebar.snooze.ts`, `Sidebar.logic.ts` (all read-only)                                                                                                                                                                                                                                                            |
-| Thread Linear tags               | `LinearIssueResolver.ts`, `LinearIssueTagDialog.tsx`, `linearIssue.ts`, migration 1004                                                                                                                                                             | orchestration/contracts projections, `ws.ts`, `PhaseGroupedSidebar.tsx`                                                                                                                                                                                                                                                                   |
+| Thread Linear tags               | `LinearIssueResolver.ts`, `LinearStatusBridge.ts`, `LinearIssueStatusCache.ts`, `LinearIssueTagDialog.tsx`, `linearIssue.ts`, migration 1004                                                                                                       | orchestration/contracts projections, `ws.ts`, `PhaseGroupedSidebar.tsx`                                                                                                                                                                                                                                                                   |
 | Durable thread bootstrap         | `apps/server/src/thread-bootstrap/`, `ThreadBootstrapPanel*`, `ProjectCreationDefaultsCard.tsx`                                                                                                                                                    | orchestration/contracts projections, dispatcher, terminal manager, chat composer/settings seams                                                                                                                                                                                                                                           |
 | Notification alerts              | `apps/web/src/notifications/`, `NotificationsSettingsPanel.tsx`, `settings.notifications.tsx`                                                                                                                                                      | `__root.tsx` mount, `settingsSearch.ts` path/label, `SettingsSidebarNav.tsx` icon                                                                                                                                                                                                                                                         |
 | Session title maintenance        | `apps/server/src/thread-title/`, `ThreadTitleMaintenanceSettingsSection.tsx`, migration 1013, `decider.titleOwnership.test.ts`                                                                                                                     | `ProviderCommandReactor.ts` turn-start seam, experimental settings schema, Experiments panel, `titleOrigin`/`titleManuallySet` on the meta-update contract, decider/projector/projection columns, MCP create+update handlers, the three sidebars' rename call sites                                                                       |
@@ -259,6 +259,39 @@ with the UI in `PhaseGroupedSidebar.tsx`:
 Both persist in the existing `t3code:phase-sidebar-filters:v1` blob; the
 sanitizer defaults them off for blobs written before they existed, so the
 storage version stays v1.
+
+## Where Linear issue status comes from
+
+The sidebar shows `TEC-1295 (Done)` beside a tagged row. That status is read in
+this order, and the order is the whole design:
+
+1. **The bridge** (`LinearStatusBridge.ts`), when `BRIDGE_SERVICE_TOKEN` is set.
+   TLB already receives a Linear `Issue` data-change webhook for every issue in
+   the workspace and projects it into a table, so it answers from its own
+   database and costs Linear nothing. Its credential belongs to the server, so
+   this is the only path that works for a viewer who has no Bifrost integration
+   — that viewer used to see `(unavailable)` on every row.
+2. **Bifrost**, per viewer, for identifiers the bridge has never seen. One
+   HTTPS round trip per issue, using that person's own virtual key.
+3. **Neither configured** → the row says so, naming the thing to fix.
+
+An entry the bridge returns with `status: null` and `error: null` means "never
+seen here", not "no status": it is dropped so the Bifrost fallback still runs.
+A bridge that is down, unreachable, or refuses the token returns nothing and
+falls through to step 2 — it can never be worse than not having a bridge.
+
+In front of all of it sits `LinearIssueStatusCache`, a process-wide cache keyed
+by identifier with a `Deferred` per in-flight read. Issue status is
+workspace-global, so it does not vary by viewer and caches cleanly; without it
+the sidebar's per-minute refresh multiplied by every viewer and every browser
+tab. Successes live 50s (just under the client's 55s stale time), failures 5s
+so a credential that starts working is not pinned to `(unavailable)` for a full
+window.
+
+The cache is deliberately memoised at module scope rather than built in the
+fork's RPC handler map: that map is rebuilt per connection, so a cache created
+there would collapse one client's tabs and nothing else — which is not where the
+multiplication comes from.
 
 ## Row change-request badge and settle-on-merge
 
