@@ -267,7 +267,8 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
     label: "Needs Input",
     helperText: "Agent is waiting for your answer",
   },
-  { id: "plan_ready", label: "Plan Ready", helperText: "Planning session is stopped" },
+  // T3-CUSTOM(expbkt3): the group means a plan is waiting, not "plan mode, idle".
+  { id: "plan_ready", label: "Plan Ready", helperText: "A plan is waiting for your decision" },
   { id: "ready", label: "Ready", helperText: "No active agent work" },
   { id: "planning", label: "Planning", helperText: "Agent is preparing a plan" },
   { id: "implementing", label: "Implementing", helperText: "Agent is changing code" },
@@ -833,16 +834,23 @@ export function phaseSidebarNeedsUserInput(
   return thread.hasPendingUserInput || thread.execution?.turn?.state === "waiting-for-input";
 }
 
-export type PhaseSidebarAttentionKind = "input" | "approval" | "error";
+// T3-CUSTOM(expbkt3): "plan" is attention too — a decision is waiting on a human.
+export type PhaseSidebarAttentionKind = "input" | "approval" | "error" | "plan";
 
 export function resolvePhaseSidebarAttentionKind(
-  thread: Pick<ThreadShell, "execution" | "hasPendingApprovals" | "hasPendingUserInput">,
+  thread: Pick<
+    ThreadShell,
+    "execution" | "hasPendingApprovals" | "hasPendingUserInput" | "hasActionableProposedPlan"
+  >,
 ): PhaseSidebarAttentionKind | null {
   if (phaseSidebarNeedsUserInput(thread)) return "input";
   if (thread.hasPendingApprovals || thread.execution?.turn?.state === "waiting-for-approval") {
     return "approval";
   }
   if (thread.execution?.activity === "failed") return "error";
+  // T3-CUSTOM(expbkt3): ranked last. A plan is a decision to make at leisure,
+  // not a session stuck mid-turn, so it never outranks a question or a failure.
+  if (thread.hasActionableProposedPlan) return "plan";
   return null;
 }
 
@@ -855,9 +863,6 @@ export function resolvePhaseSidebarPhase(
   // A failed provider is actionable even if a stale durable intent or
   // background-liveness projection has not cleared yet.
   const hasFailure = thread.execution?.activity === "failed" || thread.session?.status === "error";
-  if (hasFailure) {
-    return thread.interactionMode === "plan" ? "plan_ready" : "ready";
-  }
 
   // T3-CUSTOM(expbkt3): BEGIN — group from the same durable intent as the badge.
   const isActive =
@@ -869,16 +874,22 @@ export function resolvePhaseSidebarPhase(
     thread.session?.status === "starting" ||
     thread.session?.status === "running";
   // T3-CUSTOM(expbkt3): END
-  if (isActive) {
+  if (!hasFailure && isActive) {
     return thread.interactionMode === "plan" ? "planning" : "implementing";
   }
 
   // Sidebar V2's reliability ordering: a failure or an actionable plan must
   // not be hidden by liveness that can linger while background work winds
   // down. Those states keep their ordinary group and attention treatment.
-  if (thread.interactionMode === "plan" && thread.hasActionableProposedPlan) {
-    return "plan_ready";
-  }
+  //
+  // T3-CUSTOM(expbkt3): Plan Ready means a plan is waiting for a human, in any
+  // interaction mode. `t3_submit_plan` never changes interactionMode, so gating
+  // this on plan mode hid every plan submitted from a default-mode turn. A
+  // settled turn holding an actionable plan outranks a failure: the row's whole
+  // job is the decision, and the failure still flies its own badge.
+  if (thread.hasActionableProposedPlan) return "plan_ready";
+
+  if (hasFailure) return "ready";
 
   // A settled foreground turn can still own native subagents, workflows, or
   // watch scripts. Keep it among agent-work rows until the authoritative
@@ -887,7 +898,10 @@ export function resolvePhaseSidebarPhase(
     return thread.interactionMode === "plan" ? "planning" : "implementing";
   }
 
-  return thread.interactionMode === "plan" ? "plan_ready" : "ready";
+  // T3-CUSTOM(expbkt3): an idle plan-mode thread with nothing to decide is just
+  // idle. It used to land in Plan Ready, which made the group unscannable — the
+  // rows that needed a human were mixed in with the ones that did not.
+  return "ready";
 }
 
 /**

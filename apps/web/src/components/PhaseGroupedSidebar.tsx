@@ -1076,6 +1076,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   );
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
+  // T3-CUSTOM(expbkt3): the pulse is for a decision that is actually waiting.
+  // A running row can hold a plan too, but it gets the badge only — the row is
+  // still moving, so flashing it would cry wolf.
+  const planReady = row.phaseId === "plan_ready" && attentionKind === "plan";
   // T3-CUSTOM(expbkt3): BEGIN — session tree derivations. Subtree state only
   // surfaces on the parent while the subtree is closed; once open, the child
   // rows speak for themselves.
@@ -1475,10 +1479,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       <button
         ref={rowRef}
         type="button"
-        className={phaseSidebarRowClassName(active, selected, needsUserInput)}
+        className={phaseSidebarRowClassName(active, selected, needsUserInput, planReady)}
         aria-current={active ? "page" : undefined}
         aria-expanded={hasChildren ? treeExpanded : undefined}
-        data-attention={needsUserInput ? "user-input" : undefined}
+        data-attention={needsUserInput ? "user-input" : planReady ? "plan-ready" : undefined}
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
         onDoubleClick={() => onStartRename(row)}
@@ -1876,7 +1880,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             </Tooltip>
           ) : null}
           {/* T3-CUSTOM(expbkt3): END */}
-          {workBadge && attentionKind === null ? (
+          {/* T3-CUSTOM(expbkt3): a plan does not silence the work badge — a
+              running row with a plan attached has to keep saying it is running. */}
+          {workBadge && (attentionKind === null || attentionKind === "plan") ? (
             <span
               role="status"
               className={cn(
@@ -1890,7 +1896,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           {/* T3-CUSTOM(expbkt3): A descendant is waiting on a human. Outlined
               with a ↳ glyph, same grammar as the derived work badge: solid is
               this row, outlined is somewhere beneath it. */}
-          {collapsedDescendantAttention !== null && attentionKind === null ? (
+          {collapsedDescendantAttention !== null &&
+          (attentionKind === null || attentionKind === "plan") ? (
             <span
               role="status"
               aria-label={`A child session needs ${collapsedDescendantAttention}`}
@@ -1901,7 +1908,10 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                   ? "border-red-500/50 text-red-600 dark:border-red-400/50 dark:text-red-300"
                   : collapsedDescendantAttention === "approval"
                     ? "border-amber-500/50 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
-                    : "border-red-500/40 text-red-700 dark:border-red-400/40 dark:text-red-300",
+                    : // T3-CUSTOM(expbkt3): a plan below reads violet, like its own row would.
+                      collapsedDescendantAttention === "plan"
+                      ? "border-violet-500/50 text-violet-700 dark:border-violet-400/50 dark:text-violet-300"
+                      : "border-red-500/40 text-red-700 dark:border-red-400/40 dark:text-red-300",
               )}
             >
               ↳ {collapsedDescendantAttention.toUpperCase()}
@@ -1933,7 +1943,23 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             >
               ERROR
             </span>
-          ) : null}
+          ) : /* T3-CUSTOM(expbkt3): BEGIN — a plan waiting for a decision. Solid
+                 once the turn has settled, outlined while the agent is still
+                 working, so "decide now" and "there will be one" stay apart. */
+          attentionKind === "plan" ? (
+            <span
+              aria-label={
+                planReady ? "Plan ready for review" : "Plan attached, agent still working"
+              }
+              className={
+                planReady
+                  ? "rounded-sm bg-violet-500 px-1 py-0.5 text-[8px] font-black tracking-wide text-white shadow-sm"
+                  : "rounded-sm border border-violet-500/50 px-1 py-0.5 text-[8px] font-black tracking-wide text-violet-700 dark:border-violet-400/50 dark:text-violet-300"
+              }
+            >
+              PLAN
+            </span>
+          ) : /* T3-CUSTOM(expbkt3): END */ null}
           {/* T3-CUSTOM(expbkt3): A woken thread returns to its original sort
               position, so the wake signal has to carry the weight itself. */}
           {showWokePill ? (

@@ -130,6 +130,43 @@ describe("phaseSidebarRowActionsClassName", () => {
   });
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — the violet Plan Ready row treatment.
+describe("phase sidebar plan-ready rows", () => {
+  it("mirrors the Needs Input pulse in violet", () => {
+    const planReady = phaseSidebarRowClassName(false, false, false, true);
+
+    expect(planReady).toContain("animate-[pulse_1.25s_ease-in-out_infinite]");
+    expect(planReady).toContain("bg-violet-500/20");
+    expect(planReady).toContain("ring-violet-500/60");
+    expect(planReady).toContain("shadow-[inset_3px_0_0_0_var(--color-violet-500)");
+    expect(planReady).toContain("motion-reduce:animate-none");
+  });
+
+  it("stays visually distinct from the red Needs Input row", () => {
+    const planReady = phaseSidebarRowClassName(false, false, false, true);
+    const needsInput = phaseSidebarRowClassName(false, false, true, false);
+
+    expect(planReady).not.toContain("bg-red-500/20");
+    expect(needsInput).not.toContain("bg-violet-500/20");
+    expect(planReady).not.toBe(needsInput);
+  });
+
+  it("lets a question win the row when a plan is also waiting", () => {
+    // Both flags can be true mid-transition; the row must not carry two pulses.
+    const both = phaseSidebarRowClassName(false, false, true, true);
+
+    expect(both).toContain("bg-red-500/20");
+    expect(both).not.toContain("bg-violet-500/20");
+  });
+
+  it("leaves an ordinary row unpulsed", () => {
+    expect(phaseSidebarRowClassName(false, false, false, false)).not.toContain(
+      "animate-[pulse_1.25s_ease-in-out_infinite]",
+    );
+  });
+});
+// T3-CUSTOM(expbkt3): END
+
 describe("phase sidebar group headers", () => {
   it("gives ready states distinct, theme-aware surfaces and larger labels", () => {
     const planReady = phaseSidebarGroupHeaderClassName("plan_ready");
@@ -696,7 +733,10 @@ describe("phase sidebar lifecycle", () => {
         }),
       ),
     ).toBe("plan_ready");
-    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("plan_ready");
+    // T3-CUSTOM(expbkt3): plan mode alone is not Plan Ready any more — the group
+    // means a plan is waiting for a decision, so an idle plan-mode thread with
+    // nothing to decide is just idle.
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
@@ -802,8 +842,68 @@ describe("phase sidebar lifecycle", () => {
     ]);
   });
 
-  it("uses only plan mode and working state for lifecycle classification", () => {
-    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("plan_ready");
+  // T3-CUSTOM(expbkt3): BEGIN — Plan Ready means a plan is waiting, in any mode.
+  it("files a plan submitted from a default-mode turn under Plan Ready", () => {
+    // `t3_submit_plan` never changes interactionMode, so gating the group on
+    // plan mode hid every plan an agent submitted mid-turn.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({ interactionMode: "default", hasActionableProposedPlan: true }),
+      ),
+    ).toBe("plan_ready");
+  });
+
+  it("keeps a waiting plan out of Plan Ready while the agent is still running", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "default",
+          hasActionableProposedPlan: true,
+          execution: makeActiveExecution(),
+        }),
+      ),
+    ).toBe("implementing");
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          execution: makeActiveExecution(),
+        }),
+      ),
+    ).toBe("planning");
+  });
+
+  it("drops a failed thread with nothing to decide into Ready", () => {
+    // It used to land in Plan Ready purely for being in plan mode; the ERROR
+    // badge already says what happened.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          execution: makeExecution({ activity: "failed" }),
+        }),
+      ),
+    ).toBe("ready");
+  });
+
+  it("keeps a failed thread in Plan Ready when its plan is still outstanding", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          execution: makeExecution({ activity: "failed" }),
+        }),
+      ),
+    ).toBe("plan_ready");
+  });
+  // T3-CUSTOM(expbkt3): END
+
+  it("uses an actionable plan and working state for lifecycle classification", () => {
+    // T3-CUSTOM(expbkt3): interaction mode picks Planning vs Implementing while
+    // work runs; it no longer decides Plan Ready on its own.
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
     expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "default" }))).toBe("ready");
     expect(
       resolvePhaseSidebarPhase(
@@ -881,6 +981,42 @@ describe("phase sidebar attention badges", () => {
       ),
     ).toBe("error");
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN — a plan waiting on a human is attention too.
+  it("reports a waiting plan as attention, ranked below every blocking kind", () => {
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ hasActionableProposedPlan: true }))).toBe(
+      "plan",
+    );
+    // A question, an approval and a failure each outrank it.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, hasPendingUserInput: true }),
+      ),
+    ).toBe("input");
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, hasPendingApprovals: true }),
+      ),
+    ).toBe("approval");
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({
+          hasActionableProposedPlan: true,
+          execution: makeExecution({ activity: "failed" }),
+        }),
+      ),
+    ).toBe("error");
+  });
+
+  it("badges a plan that arrives while the agent is still working", () => {
+    // The row stays in Implementing, but it still has to say a plan is there.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, execution: makeActiveExecution() }),
+      ),
+    ).toBe("plan");
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it("does not add attention badges to ordinary lifecycle states", () => {
     expect(resolvePhaseSidebarAttentionKind(makeThread())).toBeNull();
