@@ -52,6 +52,11 @@ import {
   SearchIcon,
   // T3-CUSTOM(expbkt3): unsent composer text mirrors the stock sidebar pen.
   SquarePenIcon,
+  // T3-CUSTOM(expbkt3): BEGIN — signals the stock sidebar shows and this one did not.
+  PinIcon,
+  TerminalIcon,
+  TriangleAlertIcon,
+  // T3-CUSTOM(expbkt3): END
   XIcon,
 } from "lucide-react";
 import {
@@ -103,6 +108,8 @@ import { EnvironmentBadgeView } from "./environment/EnvironmentBadge";
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
 import { primaryServerKeybindingsAtom, primaryServerSettingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
+// T3-CUSTOM(expbkt3): running terminal subprocesses, shown on the row as upstream does.
+import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 // T3-CUSTOM(expbkt3): live Linear state for tagged lifecycle rows.
 import { linearIssueStatusesEnvironment } from "../state/linearIssues";
 // T3-CUSTOM(expbkt3): pending IndexedDB sends drive sidebar state before acknowledgement.
@@ -1047,6 +1054,11 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(
     vcsStatus,
     row.thread.pullRequests,
+    // T3-CUSTOM(expbkt3): the PR the server detected for this thread's branch.
+    // It lives only on the thread, never in `pullRequests`, so a row that read
+    // the links and the probe alone showed nothing while the chat header showed
+    // the PR — the bug this closes.
+    row.thread.branchPullRequest ?? row.thread.linkedPullRequest ?? null,
   );
   // T3-CUSTOM(expbkt3): worktree codename replaces the generic "Worktree" label.
   const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus, {
@@ -1059,10 +1071,15 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const workspacePath = row.thread.worktreePath ?? project?.workspaceRoot ?? null;
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(active);
   const workflowStatus = useEnvironmentQuery(
-    leaseLiveStatus && row.thread.branch !== null && workspacePath !== null
+    leaseLiveStatus &&
+      (row.thread.branch !== null || row.thread.worktreePath !== null) &&
+      workspacePath !== null
       ? vcsEnvironment.status({
           environmentId: row.thread.environmentId,
-          input: { cwd: workspacePath },
+          // T3-CUSTOM(expbkt3): threadId resolves this project's source-control
+          // overrides server-side. Omitting it probed under the wrong profile
+          // wherever a project configures one.
+          input: { cwd: workspacePath, threadId: row.thread.id },
         })
       : null,
   );
@@ -1080,6 +1097,17 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   // A running row can hold a plan too, but it gets the badge only — the row is
   // still moving, so flashing it would cry wolf.
   const planReady = row.phaseId === "plan_ready" && attentionKind === "plan";
+  // T3-CUSTOM(expbkt3): BEGIN — signals the stock sidebar carries and this one
+  // dropped. Each reads a field already on the row.
+  const isPinned = row.thread.pinnedAt != null;
+  // A message-mode question. It never changes the phase, so without this the
+  // row is indistinguishable from an idle one while an agent waits on an answer.
+  const hasAsyncQuestion = row.thread.hasPendingAsyncUserInput === true;
+  const runningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: row.thread.environmentId,
+    threadId: row.thread.id,
+  });
+  // T3-CUSTOM(expbkt3): END
   // T3-CUSTOM(expbkt3): BEGIN — session tree derivations. Subtree state only
   // surfaces on the parent while the subtree is closed; once open, the child
   // rows speak for themselves.
@@ -1687,6 +1715,29 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               {/* T3-CUSTOM(expbkt3): END */}
               <TooltipPopup side="top">{checkoutMetadata.tooltip}</TooltipPopup>
             </Tooltip>
+            {/* T3-CUSTOM(expbkt3): BEGIN — the checkout moved off this thread's
+                branch. The label beside it shows the branch that IS checked out,
+                so without this the row reads as healthy while pointing at
+                someone else's work. */}
+            {checkoutMetadata.branchMismatch !== null ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      data-testid={`branch-mismatch-${row.thread.id}`}
+                      aria-label={`This thread is on ${checkoutMetadata.branchMismatch}, which is not checked out`}
+                      className="inline-flex shrink-0 items-center text-amber-600 dark:text-amber-300"
+                    >
+                      <TriangleAlertIcon aria-hidden className="size-2.5" />
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top">
+                  {`This thread is on ${checkoutMetadata.branchMismatch}. You are currently checked out on another branch.`}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* T3-CUSTOM(expbkt3): END */}
             {linearIssue ? (
               <Tooltip>
                 {/* T3-CUSTOM(expbkt3): BEGIN — wrap complete labels as units. */}
@@ -1880,6 +1931,49 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
             </Tooltip>
           ) : null}
           {/* T3-CUSTOM(expbkt3): END */}
+          {/* T3-CUSTOM(expbkt3): BEGIN — a pinned row says so. Pin and unpin were
+              already in the context menu but changed nothing observable. */}
+          {isPinned ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="status"
+                    aria-label="Pinned"
+                    data-testid={`phase-thread-pinned-${row.thread.id}`}
+                    className="inline-flex shrink-0 items-center text-muted-foreground"
+                  />
+                }
+              >
+                <PinIcon aria-hidden className="size-2.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Pinned to the top of its group</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {/* A terminal subprocess is still running in this thread. */}
+          {runningTerminalIds.length > 0 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="status"
+                    aria-label={`${runningTerminalIds.length} terminal process${
+                      runningTerminalIds.length === 1 ? "" : "es"
+                    } running`}
+                    data-testid={`phase-thread-terminals-${row.thread.id}`}
+                    className="inline-flex shrink-0 items-center text-sky-600 dark:text-sky-300/90"
+                  />
+                }
+              >
+                <TerminalIcon aria-hidden className="size-2.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {runningTerminalIds.length} terminal process
+                {runningTerminalIds.length === 1 ? "" : "es"} running
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {/* T3-CUSTOM(expbkt3): END */}
           {/* T3-CUSTOM(expbkt3): a plan does not silence the work badge — a
               running row with a plan attached has to keep saying it is running. */}
           {workBadge && (attentionKind === null || attentionKind === "plan") ? (
@@ -1958,6 +2052,16 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               }
             >
               PLAN
+            </span>
+          ) : /* T3-CUSTOM(expbkt3): a message-mode question. It never changes the
+                 phase, so the row would otherwise look idle while an agent waits. */
+          hasAsyncQuestion ? (
+            <span
+              aria-label="Question waiting"
+              data-testid={`phase-thread-async-question-${row.thread.id}`}
+              className="rounded-sm bg-amber-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-amber-700 shadow-sm dark:text-amber-300"
+            >
+              ASK
             </span>
           ) : /* T3-CUSTOM(expbkt3): END */ null}
           {/* T3-CUSTOM(expbkt3): A woken thread returns to its original sort
