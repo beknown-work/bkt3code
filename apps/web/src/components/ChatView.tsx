@@ -206,6 +206,8 @@ import {
 } from "../rightPanelStore";
 // T3-CUSTOM(expbkt3): native plan review surface.
 import { PlanReviewPanel, useOpenPlanReviewDocumentId } from "../fork/planReviewSurface";
+// T3-CUSTOM(expbkt3): a reviewable plan takes over the transcript.
+import { PlanReviewTakeover } from "../fork/planReviewTakeover";
 // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
 import { AgentUiExpandedSurface } from "../fork/agentUiSurface";
 import {
@@ -9830,6 +9832,10 @@ export default function ChatView(props: ChatViewProps) {
                 </div>
               ) : null}
               {/* T3-CUSTOM(expbkt3): END */}
+              {/* T3-CUSTOM(expbkt3): a reviewable plan covers the transcript, not the composer.
+                  Mounted before the agent view so a surface the user expanded on
+                  purpose still wins over the automatic one. */}
+              <PlanReviewTakeover threadRef={activeThreadRef} documentId={planReviewDocumentId} />
               {/* T3-CUSTOM(expbkt3): an expanded agent view covers the transcript, not the composer. */}
               <AgentUiExpandedSurface threadRef={activeThreadRef} />
             </div>
