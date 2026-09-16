@@ -42,6 +42,7 @@ import {
   FolderGit2Icon,
   // T3-CUSTOM(expbkt3): PR badge in the row metadata lane.
   GitPullRequestIcon,
+  LayersIcon,
   LaptopIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -100,7 +101,7 @@ import type { ResolvedEnvironmentAppearance } from "../state/environmentAppearan
 import { EnvironmentBadgeView } from "./environment/EnvironmentBadge";
 // T3-CUSTOM(expbkt3): END
 import { useProjects, useServerConfigs, useThreadShells } from "../state/entities";
-import { primaryServerKeybindingsAtom } from "../state/server";
+import { primaryServerKeybindingsAtom, primaryServerSettingsAtom } from "../state/server";
 import { allEnvironmentShellsLiveAtom } from "../state/shell";
 // T3-CUSTOM(expbkt3): live Linear state for tagged lifecycle rows.
 import { linearIssueStatusesEnvironment } from "../state/linearIssues";
@@ -467,10 +468,9 @@ function PhaseFilterPopover({
                 onCheckedChange={() => toggleRepository(option.key)}
                 leading={
                   <ProjectFavicon
-                    environmentId={option.project.environmentId}
-                    cwd={option.project.workspaceRoot}
-                    projectName={option.project.title}
-                    projectIcon={option.project.projectIcon}
+                    // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+                    // saved title, favicon and icon override always travel together.
+                    project={option.project}
                     className="size-3"
                   />
                 }
@@ -1041,7 +1041,13 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const mattermostLink = resolvePhaseSidebarMattermostLink(row.thread.mattermostThreadUrl);
   // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
   // state, number as the label.
-  const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(vcsStatus);
+  // T3-CUSTOM(expbkt3): tagged links first, branch detection only as a fallback —
+  // a review an agent registered with `link_pull_request` is not necessarily the
+  // checked-out branch's.
+  const changeRequestBadge = resolvePhaseSidebarChangeRequestBadge(
+    vcsStatus,
+    row.thread.pullRequests,
+  );
   // T3-CUSTOM(expbkt3): worktree codename replaces the generic "Worktree" label.
   const checkoutMetadata = resolvePhaseSidebarCheckoutMetadata(row.thread, vcsStatus, {
     codename: worktreeCodename,
@@ -1149,22 +1155,28 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
 
   // T3-CUSTOM(expbkt3): same affordance as the Linear tag — the badge opens the
   // change request rather than routing to the thread.
-  const openChangeRequest = (event: { preventDefault(): void; stopPropagation(): void }) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!changeRequestBadge) return;
+  const openChangeRequestUrl = (url: string, label: string) => {
     const api = readLocalApi();
     if (!api) return;
-    void api.shell.openExternal(changeRequestBadge.url).catch((error: unknown) => {
+    void api.shell.openExternal(url).catch((error: unknown) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: `Failed to open ${changeRequestBadge.label}`,
+          title: `Failed to open ${label}`,
           description:
             error instanceof Error ? error.message : "The change request could not be opened.",
         }),
       );
     });
+  };
+
+  // T3-CUSTOM(expbkt3): one review opens it; several list themselves first, so
+  // a thread carrying a stack is never a link to whichever layer sorted top.
+  const openChangeRequest = (event: { preventDefault(): void; stopPropagation(): void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!changeRequestBadge) return;
+    openChangeRequestUrl(changeRequestBadge.url, changeRequestBadge.label);
   };
 
   const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1628,10 +1640,9 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               >
                 {project ? (
                   <ProjectFavicon
-                    environmentId={project.environmentId}
-                    cwd={project.workspaceRoot}
-                    projectName={project.title}
-                    projectIcon={project.projectIcon}
+                    // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+                    // saved title, favicon and icon override always travel together.
+                    project={project}
                     className="size-2.5"
                   />
                 ) : null}
@@ -1707,35 +1718,106 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 </TooltipPopup>
               </Tooltip>
             ) : null}
-            {/* T3-CUSTOM(expbkt3): PR badge — number only, state by colour. */}
+            {/* T3-CUSTOM(expbkt3): PR badge — number only, state by colour. A
+                stack wears the layers glyph so it is distinguishable from a
+                single review at a glance; more than one review opens a list
+                rather than guessing which one you meant. */}
             {changeRequestBadge ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <span
-                      role="link"
-                      tabIndex={0}
-                      data-testid={`phase-thread-change-request-${row.thread.id}`}
-                      data-change-request-state={changeRequestBadge.state}
-                      aria-label={`Open ${changeRequestBadge.label} (${changeRequestBadge.statusText})`}
-                      className={cn(
-                        "inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                        changeRequestBadge.colorClassName,
-                      )}
-                      onClick={openChangeRequest}
-                      onDoubleClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        openChangeRequest(event);
-                      }}
-                    />
-                  }
-                >
-                  <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
-                  <span className="tabular-nums">{changeRequestBadge.label}</span>
-                </TooltipTrigger>
-                <TooltipPopup side="top">{changeRequestBadge.tooltip}</TooltipPopup>
-              </Tooltip>
+              changeRequestBadge.kind === "single" ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        role="link"
+                        tabIndex={0}
+                        data-testid={`phase-thread-change-request-${row.thread.id}`}
+                        data-change-request-state={changeRequestBadge.state}
+                        aria-label={`Open ${changeRequestBadge.label} (${changeRequestBadge.statusText})`}
+                        className={cn(
+                          "inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          changeRequestBadge.colorClassName,
+                        )}
+                        onClick={openChangeRequest}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          openChangeRequest(event);
+                        }}
+                      />
+                    }
+                  >
+                    <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                    <span className="tabular-nums">{changeRequestBadge.label}</span>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{changeRequestBadge.tooltip}</TooltipPopup>
+                </Tooltip>
+              ) : (
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        data-testid={`phase-thread-change-request-${row.thread.id}`}
+                        data-change-request-state={changeRequestBadge.state}
+                        data-change-request-kind={changeRequestBadge.kind}
+                        aria-label={`${changeRequestBadge.entries.length} ${
+                          changeRequestBadge.kind === "stack"
+                            ? "stacked pull requests"
+                            : "linked pull requests"
+                        }`}
+                        className={cn(
+                          "inline-flex max-w-full shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap font-medium hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          changeRequestBadge.colorClassName,
+                        )}
+                        onClick={(event: ReactMouseEvent<HTMLSpanElement>) => {
+                          event.stopPropagation();
+                        }}
+                        onDoubleClick={(event: ReactMouseEvent<HTMLSpanElement>) => {
+                          event.stopPropagation();
+                        }}
+                      />
+                    }
+                  >
+                    {changeRequestBadge.kind === "stack" ? (
+                      <LayersIcon aria-hidden className="size-2.5 shrink-0" />
+                    ) : (
+                      <GitPullRequestIcon aria-hidden className="size-2.5 shrink-0" />
+                    )}
+                    <span className="tabular-nums">{changeRequestBadge.label}</span>
+                  </PopoverTrigger>
+                  <PopoverPopup align="start" side="bottom" className="w-72 p-1">
+                    <p className="px-2 py-1 text-xs text-muted-foreground">
+                      {changeRequestBadge.kind === "stack"
+                        ? `Stack of ${changeRequestBadge.entries.length}, bottom first`
+                        : `${changeRequestBadge.entries.length} linked reviews`}
+                    </p>
+                    {changeRequestBadge.entries.map((entry) => (
+                      <button
+                        key={entry.url}
+                        type="button"
+                        data-change-request-state={entry.state}
+                        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openChangeRequestUrl(entry.url, entry.label);
+                        }}
+                      >
+                        <GitPullRequestIcon
+                          aria-hidden
+                          className={cn("size-3 shrink-0", entry.colorClassName)}
+                        />
+                        <span className={cn("tabular-nums", entry.colorClassName)}>
+                          {entry.label}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                          {entry.title ?? entry.statusText}
+                        </span>
+                      </button>
+                    ))}
+                  </PopoverPopup>
+                </Popover>
+              )
             ) : null}
           </span>
         </span>
@@ -2026,9 +2108,11 @@ export function PhaseGroupedSidebar() {
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const sortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmArchive = useClientSettings((settings) => settings.confirmThreadArchive);
-  const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
-  // T3-CUSTOM(expbkt3): follow the same auto-settle-on-merge setting as the default sidebar.
-  const autoSettleOnMerge = useClientSettings((state) => state.sidebarAutoSettleOnMerge);
+  // Auto-settle thresholds are server preferences (the server settles threads
+  // with no client attached), so read the primary server's values.
+  const serverSettings = useAtomValue(primaryServerSettingsAtom);
+  const autoSettleAfterDays = serverSettings.sidebarAutoSettleAfterDays;
+  const autoSettleOnMerge = serverSettings.sidebarAutoSettleOnMerge;
   const currentUserId = useCurrentUserId();
   // T3-CUSTOM(expbkt3): BEGIN — settle/snooze clocks. `now` is quantized to
   // the minute so the settled partition does not churn on every render

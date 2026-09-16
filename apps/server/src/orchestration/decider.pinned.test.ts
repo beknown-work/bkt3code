@@ -39,6 +39,7 @@ function makeReadModel(input: {
         sourceControlProfileId: null,
         ownerUserId: null,
         memberUserIds: [],
+        pullRequests: [],
         latestTurn: null,
         createdAt: NOW,
         updatedAt: NOW,

@@ -7,6 +7,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   DEFAULT_SERVER_SETTINGS,
+  // T3-CUSTOM(expbkt3): a child thread can start on another machine.
   type EnvironmentId,
   type ScopedProjectRef,
   type ThreadId,
@@ -28,6 +29,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
 import { readProjects, readThreadShell, useProjects, useThread } from "../state/entities";
 import {
@@ -76,7 +78,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 export function useNewThreadHandler() {
   // T3-CUSTOM(expbkt3): a remote project inherits the settings of the server
   // that owns it, matching HTTP, WebSocket, and MCP resolution.
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const router = useRouter();
   const getCurrentRouteTarget = useCallback(() => {
@@ -105,6 +107,8 @@ export function useNewThreadHandler() {
       // up again and finding whichever draft it happens to hold.
     ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
       const projects = readProjects();
+      const targetServerSettings =
+        environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -128,14 +132,26 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
+      // The resolver applies project overrides and, until the server has
+      // folded them, the aggregate's own legacy fields.
+      const projectSettings = resolveProjectSettings(
+        targetServerSettings,
+        project?.id ?? null,
+        project,
+      );
+      // T3-CUSTOM(expbkt3): no resolveNewThreadModelSelectionOverride — the carry
+      // block above is removed, so there is no carried selection to reconcile.
+      const projectThreadEnvMode =
+        projectSettings.sources.defaultThreadEnvMode === "project"
+          ? projectSettings.settings.defaultThreadEnvMode
+          : undefined;
       // The shared resolver owns the priority order. The t3.json read is
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
-        // T3-CUSTOM(expbkt3): the project's threadCreationDefaults and the
-        // owning server's settings replace the primary server's settings as
-        // sources, matching HTTP, WebSocket, and MCP resolution.
-        const projectSetting = projectDefaults?.environmentMode ?? project?.defaultThreadEnvMode;
+        // T3-CUSTOM(expbkt3): the project's threadCreationDefaults outrank the
+        // resolved project setting, matching HTTP, WebSocket, and MCP resolution.
+        const projectSetting = projectDefaults?.environmentMode ?? projectThreadEnvMode;
         const consultProjectFile = project !== undefined && projectSetting == null;
         return resolveDefaultThreadEnvMode({
           projectSetting,
@@ -145,27 +161,28 @@ export function useNewThreadHandler() {
                 project.workspaceRoot,
               )
             : null,
-          globalDefault: targetSettings.defaultThreadEnvMode,
+          globalDefault: projectSettings.settings.defaultThreadEnvMode,
         });
       };
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
         : scopedProjectKey(projectRef);
-      const targetSettings =
-        serverConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
+      // T3-CUSTOM(expbkt3): BEGIN — the project's own thread-creation defaults
+      // outrank the resolved project settings for a brand-new thread.
       const projectDefaults = project?.threadCreationDefaults;
       const inheritedBaseRef = projectDefaults?.worktreeBaseRef ?? {
         kind: "repository-default" as const,
-        source: targetSettings.newWorktreesStartFromOrigin
+        source: projectSettings.settings.newWorktreesStartFromOrigin
           ? ("origin" as const)
           : ("local" as const),
       };
       const inheritedBranch = inheritedBaseRef.kind === "branch" ? inheritedBaseRef.branch : null;
       const inheritedStartFromOrigin = inheritedBaseRef.source === "origin";
       const inheritedRuntimeMode =
-        projectDefaults?.runtimeMode ?? targetSettings.defaultThreadRuntimeMode;
+        projectDefaults?.runtimeMode ?? projectSettings.settings.defaultRuntimeMode;
       const inheritedInteractionMode =
-        projectDefaults?.interactionMode ?? targetSettings.defaultThreadInteractionMode;
+        projectDefaults?.interactionMode ?? projectSettings.settings.defaultThreadInteractionMode;
+      // T3-CUSTOM(expbkt3): END
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
@@ -281,6 +298,7 @@ export function useNewThreadHandler() {
           if (workspaceContext) {
             setDraftThreadContext(emptyStoredDraftThread.draftId, {
               ...workspaceContext,
+              // T3-CUSTOM(expbkt3): a new thread always takes the inherited defaults.
               runtimeMode: inheritedRuntimeMode,
               interactionMode: inheritedInteractionMode,
             });
@@ -302,6 +320,7 @@ export function useNewThreadHandler() {
             {
               threadId: emptyStoredDraftThread.threadId,
               ...workspaceContext,
+              // T3-CUSTOM(expbkt3): a new thread always takes the inherited defaults.
               runtimeMode: inheritedRuntimeMode,
               interactionMode: inheritedInteractionMode,
             },
@@ -435,7 +454,7 @@ export function useNewThreadHandler() {
         return { draftId, threadId };
       })();
     },
-    [getCurrentRouteTarget, projectGroupingSettings, router, serverConfigs],
+    [environmentServerConfigs, getCurrentRouteTarget, projectGroupingSettings, router],
   );
 }
 // T3-CUSTOM(expbkt3): END
@@ -447,6 +466,7 @@ export function useHandleNewThread() {
     select: (params) => resolveThreadRouteTarget(params),
   });
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
+  const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const activeThread = useThread(routeThreadRef);
   const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
   const activeDraftThread = useComposerDraftStore(() =>
@@ -477,6 +497,7 @@ export function useHandleNewThread() {
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
       : null,
     handleNewThread,
+    routeDraftId,
     routeThreadRef,
   };
 }

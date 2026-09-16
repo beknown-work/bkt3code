@@ -32,7 +32,7 @@ const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
 
-export class StaleBkBrandIconsError extends Schema.TaggedErrorClass<StaleBkBrandIconsError>()(
+export class StaleBkBrandIconsError extends Schema.TaggedError<StaleBkBrandIconsError>()(
   "StaleBkBrandIconsError",
   {
     stalePaths: Schema.Array(Schema.String),

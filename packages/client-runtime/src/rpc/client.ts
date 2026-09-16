@@ -14,7 +14,7 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 
-export class EnvironmentRpcUnavailableError extends Schema.TaggedErrorClass<EnvironmentRpcUnavailableError>()(
+export class EnvironmentRpcUnavailableError extends Schema.TaggedError<EnvironmentRpcUnavailableError>()(
   "EnvironmentRpcUnavailableError",
   {
     environmentId: Schema.String,
@@ -56,6 +56,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
   | typeof WS_METHODS.subscribeDiscoveredLocalServers
+  | typeof WS_METHODS.subscribeDeviceState
   | typeof WS_METHODS.subscribeResourceTelemetry
   | typeof WS_METHODS.pullRequestsSubscribeRefreshes
   | typeof WS_METHODS.previewAutomationConnect
@@ -176,6 +177,10 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
 }
 
 interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  /** Reports protocol or programming defects without changing their recovery policy. */
+  readonly onDefect?: (
+    cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+  ) => Effect.Effect<void, never, never>;
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
@@ -249,74 +254,91 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       });
                       return mapStream(session, method(input)).pipe(
                         Stream.ensuring(completeObservation),
-                        Stream.tap(() =>
-                          Ref.set(retryState, { session, attempt: 0, dormant: false }),
+                        // T3-CUSTOM(expbkt3): a value proves the subscription is
+                        // healthy again, so the retry budget for this session resets.
+                        // Per-array so the server's batches reach consumers intact
+                        // (Stream.tap re-chunks to single items).
+                        Stream.mapArrayEffect((items) =>
+                          Ref.set(retryState, { session, attempt: 0, dormant: false }).pipe(
+                            Effect.as(items),
+                          ),
                         ),
-                        Stream.catchCause((cause) => {
-                          const hasOnlyExpectedFailures =
-                            cause.reasons.length > 0 &&
-                            cause.reasons.every((reason) => reason._tag === "Fail");
-                          const isTransportFailure =
-                            hasOnlyExpectedFailures &&
-                            cause.reasons.every(
-                              (reason) => reason._tag === "Fail" && isRpcClientError(reason.error),
-                            );
-                          if (isTransportFailure) {
-                            return Stream.fromEffect(
-                              Effect.logWarning(
-                                "Durable RPC subscription lost its transport; waiting for the next session.",
-                                {
-                                  cause: Cause.pretty(cause),
-                                  method: tag,
-                                  environmentId: supervisor.target.environmentId,
-                                },
-                              ).pipe(
-                                // Waiting alone deadlocks when the supervisor
-                                // still believes this lease is healthy: no new
-                                // session ever arrives. Report the session so
-                                // it gets probed; if it is alive this is a
-                                // no-op and the stream still waits.
-                                Effect.andThen(supervisor.notifySessionSuspect(session)),
-                              ),
-                            ).pipe(Stream.drain);
-                          }
-                          if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
-                            const handled = Stream.fromEffect(
-                              options.onExpectedFailure(cause),
-                            ).pipe(Stream.drain);
-                            const retryExpectedFailureAfter = options.retryExpectedFailureAfter;
-                            if (retryExpectedFailureAfter === undefined) {
-                              return handled;
-                            }
-                            // T3-CUSTOM(expbkt3): a policy may end retries without
-                            // waiting for the whole WebSocket session to be replaced.
-                            const retryDelay =
-                              typeof retryExpectedFailureAfter === "function"
-                                ? retryExpectedFailureAfter(retryAttempt, cause)
-                                : Option.some(retryExpectedFailureAfter);
-                            const rememberAttempt = Stream.fromEffect(
-                              Ref.set(retryState, {
-                                session,
-                                attempt: retryAttempt + 1,
-                                dormant: Option.isNone(retryDelay),
-                              }),
-                            ).pipe(Stream.drain);
-                            if (Option.isNone(retryDelay)) {
-                              return Stream.concat(handled, rememberAttempt);
-                            }
-                            return handled.pipe(
-                              Stream.concat(rememberAttempt),
-                              Stream.concat(
-                                Stream.fromEffect(Effect.sleep(retryDelay.value)).pipe(
-                                  Stream.drain,
-                                ),
-                              ),
-                              Stream.concat(subscribeToSession(retryAttempt + 1)),
-                            );
-                          }
-                          return Stream.failCause(cause);
-                        }),
                       );
+                    }),
+                  ).pipe(
+                    Stream.tapCause((cause) =>
+                      options?.onDefect !== undefined &&
+                      cause.reasons.some(
+                        (reason) =>
+                          reason._tag === "Die" ||
+                          (reason._tag === "Fail" &&
+                            isRpcClientError(reason.error) &&
+                            reason.error.reason._tag === "RpcClientDefect"),
+                      )
+                        ? options.onDefect(cause)
+                        : Effect.void,
+                    ),
+                    Stream.catchCause((cause) => {
+                      const hasOnlyExpectedFailures =
+                        cause.reasons.length > 0 &&
+                        cause.reasons.every((reason) => reason._tag === "Fail");
+                      const isTransportFailure =
+                        hasOnlyExpectedFailures &&
+                        cause.reasons.every(
+                          (reason) => reason._tag === "Fail" && isRpcClientError(reason.error),
+                        );
+                      if (isTransportFailure) {
+                        return Stream.fromEffect(
+                          Effect.logWarning(
+                            "Durable RPC subscription lost its transport; waiting for the next session.",
+                            {
+                              cause: Cause.pretty(cause),
+                              method: tag,
+                              environmentId: supervisor.target.environmentId,
+                            },
+                          ).pipe(
+                            // T3-CUSTOM(expbkt3): waiting alone deadlocks when the
+                            // supervisor still believes this lease is healthy: no new
+                            // session ever arrives. Report the session so it gets
+                            // probed; if it is alive this is a no-op and the stream
+                            // still waits.
+                            Effect.andThen(supervisor.notifySessionSuspect(session)),
+                          ),
+                        ).pipe(Stream.drain);
+                      }
+                      if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
+                        const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
+                          Stream.drain,
+                        );
+                        const retryExpectedFailureAfter = options.retryExpectedFailureAfter;
+                        if (retryExpectedFailureAfter === undefined) {
+                          return handled;
+                        }
+                        // T3-CUSTOM(expbkt3): a policy may end retries without
+                        // waiting for the whole WebSocket session to be replaced.
+                        const retryDelay =
+                          typeof retryExpectedFailureAfter === "function"
+                            ? retryExpectedFailureAfter(retryAttempt, cause)
+                            : Option.some(retryExpectedFailureAfter);
+                        const rememberAttempt = Stream.fromEffect(
+                          Ref.set(retryState, {
+                            session,
+                            attempt: retryAttempt + 1,
+                            dormant: Option.isNone(retryDelay),
+                          }),
+                        ).pipe(Stream.drain);
+                        if (Option.isNone(retryDelay)) {
+                          return Stream.concat(handled, rememberAttempt);
+                        }
+                        return handled.pipe(
+                          Stream.concat(rememberAttempt),
+                          Stream.concat(
+                            Stream.fromEffect(Effect.sleep(retryDelay.value)).pipe(Stream.drain),
+                          ),
+                          Stream.concat(subscribeToSession(retryAttempt + 1)),
+                        );
+                      }
+                      return Stream.failCause(cause);
                     }),
                   ),
                 );
@@ -386,8 +408,3 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
 > {
   return subscribeDynamic(tag, () => Effect.succeed(input), options);
 }
-
-export const config = Effect.gen(function* () {
-  const session = yield* currentSession();
-  return yield* session.initialConfig;
-}).pipe(Effect.withSpan("EnvironmentRpc.config"));

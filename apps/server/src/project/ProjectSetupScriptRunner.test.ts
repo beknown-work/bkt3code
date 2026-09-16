@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
@@ -60,6 +61,7 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
       Effect.succeed(
         workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
       ),
+    getProjectShells: () => Effect.die("unused"),
     getProjectShellById: (projectId) =>
       Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
     getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
@@ -68,6 +70,8 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getFullThreadDiffContext: () => Effect.die("unused"),
     getThreadAccessById: () => Effect.succeed(Option.none()),
     getThreadRuntimeContext: () => Effect.die("unused"),
+    getTurnStartMessage: () => Effect.die("unused"),
+    countThreadUserMessages: () => Effect.die("unused"), // T3-CUSTOM(expbkt3): fork query stub.
     getThreadShellById: () => Effect.die("unused"),
     listThreadShellsByProjectId: () => Effect.die("unused"),
     getThreadDetailById: () => Effect.die("unused"),
@@ -96,6 +100,7 @@ const makeTerminalManagerLayer = (
 const testLayer = (
   project: OrchestrationProject,
   runCommand: TerminalManager.TerminalManager["Service"]["runCommand"],
+  settings = ServerSettings.layerTest(),
 ) =>
   ProjectSetupScriptRunner.layer.pipe(
     Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
@@ -103,6 +108,7 @@ const testLayer = (
     // T3-CUSTOM(expbkt3): the t3.json setup fallback reads the real workspace root.
     Layer.provideMerge(T3ProjectFileLoader.layer),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provide(settings),
   );
 
 // T3-CUSTOM(expbkt3): BEGIN — checked-in t3.json setup script coverage.
@@ -135,6 +141,49 @@ const succeedingRunCommand = (terminalId: string) =>
 // T3-CUSTOM(expbkt3): END
 
 describe("ProjectSetupScriptRunner", () => {
+  it.effect("runs the inherited machine setup action in the checkout's worktree", () => {
+    // The fork runs setup to completion through `runCommand`; upstream's
+    // open/write pair no longer exists on this path.
+    const runCommand = succeedingRunCommand("setup-default-setup");
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const result = yield* runner.runForThread({
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath: "/repo/worktrees/a",
+      });
+      expect(result).toMatchObject({ status: "completed", scriptId: "default-setup" });
+      expect(runCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-1",
+          terminalId: "setup-default-setup",
+          cwd: "/repo/worktrees/a",
+          worktreePath: "/repo/worktrees/a",
+          env: { T3CODE_PROJECT_ROOT: "/repo/project", T3CODE_WORKTREE_PATH: "/repo/worktrees/a" },
+          command: "npm install",
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        testLayer(
+          makeProject([]),
+          runCommand,
+          ServerSettings.layerTest({
+            defaultProjectScripts: [
+              {
+                id: "default-setup",
+                name: "Setup",
+                command: "npm install",
+                icon: "configure",
+                runOnWorktreeCreate: true,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("returns no-script when no setup script exists", () => {
     const runCommand = vi.fn(() => Effect.die("unexpected runCommand"));
     const project = makeProject([]);

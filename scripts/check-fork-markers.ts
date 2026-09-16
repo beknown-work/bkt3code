@@ -44,6 +44,8 @@ const EXEMPT_PATTERNS: ReadonlyArray<RegExp> = [
   /^deploy\//,
   /(^|\/)pnpm-lock\.yaml$/,
   /(^|\/)package\.json$/,
+  // JSON cannot carry a marker comment; fork package notices live beside upstream's.
+  /^third-party-licenses\.config\.json$/,
   /\.md$/,
 ];
 

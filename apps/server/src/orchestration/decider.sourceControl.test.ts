@@ -22,6 +22,8 @@ function makeReadModel(sessionStatus?: OrchestrationSessionStatus): Orchestratio
     projects: [],
     threads: [
       {
+        // T3-CUSTOM(expbkt3): upstream's linked pull requests; empty on a fresh fixture.
+        pullRequests: [],
         id: threadId,
         projectId: ProjectId.make("project-source-control"),
         title: "Source-control identity",

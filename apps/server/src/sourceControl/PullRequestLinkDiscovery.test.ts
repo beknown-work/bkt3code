@@ -33,6 +33,8 @@ const snapshot: OrchestrationShellSnapshot = {
   ],
   threads: [
     {
+      // T3-CUSTOM(expbkt3): upstream's linked pull requests; empty on a fresh fixture.
+      pullRequests: [],
       id: threadId,
       projectId,
       title: "Repair bridge",

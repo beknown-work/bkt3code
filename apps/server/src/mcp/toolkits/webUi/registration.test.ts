@@ -22,6 +22,9 @@ const invocation: McpInvocationContext.McpInvocationScope = {
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
+  // T3-CUSTOM(expbkt3): upstream promoted these off initializePayload onto the client.
+  clientCapabilities: {},
+  clientInfo: { name: "web-ui-registration-test", version: "1.0.0" },
   initializePayload: {
     protocolVersion: "2025-03-26",
     capabilities: {},
@@ -67,9 +70,9 @@ it.effect("registers four compact tools while listing the complete virtual surfa
       expect(listed.structuredContent).toMatchObject({
         ok: true,
         // T3-CUSTOM(expbkt3): registration exposes the current authenticated RPC group.
-        rpcCount: 157,
-        streamCount: 23,
-        matchedCount: 157,
+        rpcCount: 171,
+        streamCount: 24,
+        matchedCount: 171,
       });
 
       const schema = yield* withInvocation(

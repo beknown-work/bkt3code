@@ -14,7 +14,6 @@ import type {
   OrchestrationThread,
   ProjectContentMatch,
   ProjectEntryKind,
-  ThreadId,
   VcsListRefsInput, // T3-CUSTOM(expbkt3): exact remote-ref query input.
   VcsListRefsResult,
   VcsRef,
@@ -34,7 +33,6 @@ import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
 import { projectContentSearch, projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
-import { useEnvironmentThread } from "./threads";
 import { vcsEnvironment } from "./vcs";
 
 const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
@@ -175,19 +173,6 @@ export function useThreadSearch(
         ? result.matches
         : [...result.matches, ...cachedMatches],
     isPending: canSearch && (isDebouncing || result.isLoading),
-  };
-}
-
-export function useThreadDetail(
-  environmentId: EnvironmentId | null,
-  threadId: ThreadId | null,
-): ThreadDetailView {
-  const state = useEnvironmentThread(environmentId, threadId);
-  return {
-    data: Option.getOrNull(state.data),
-    error: Option.getOrNull(state.error),
-    isPending: state.status === "synchronizing",
-    isDeleted: state.status === "deleted",
   };
 }
 
@@ -386,6 +371,7 @@ export function useProjectPathSearch(
     isPending:
       !areProjectPathSearchTargetsEqual(normalizedTarget, debouncedTarget) || result.isPending,
     searchedQuery: debouncedTarget.query ?? "",
+    truncated: result.data?.truncated ?? false,
     refresh: result.refresh,
   };
 }

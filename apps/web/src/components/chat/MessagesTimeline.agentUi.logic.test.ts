@@ -41,8 +41,8 @@ const derive = (timelineEntries: ReadonlyArray<ReturnType<typeof toolEntry>>) =>
     timelineEntries,
     isWorking: false,
     activeTurnStartedAt: null,
-    turnDiffSummaryByAssistantMessageId: new Map(),
-    revertTurnCountByUserMessageId: new Map(),
+    turnDiffSummaries: [],
+    supportsConversationRollback: false,
   });
 
 /** Every work entry the reader can see without expanding a toggle. */

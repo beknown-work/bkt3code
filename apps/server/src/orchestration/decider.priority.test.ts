@@ -34,6 +34,8 @@ function makeReadModel(priority: ThreadPriority | null = null): OrchestrationRea
     ],
     threads: [
       {
+        // T3-CUSTOM(expbkt3): upstream's linked pull requests; empty on a fresh fixture.
+        pullRequests: [],
         id: ThreadId.make("thread-1"),
         projectId: ProjectId.make("project-1"),
         title: "Thread",

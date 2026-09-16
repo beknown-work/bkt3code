@@ -28,6 +28,21 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 
+/**
+ * How ProviderService runs manual context compaction for an adapter.
+ * Native adapters expose a start call and must emit a compacted thread state
+ * when they finish. Slash-command adapters get the command sent as a turn.
+ */
+export type ProviderCompaction<TError> =
+  | {
+      readonly type: "native";
+      readonly start: (
+        threadId: ThreadId,
+        modelSelection?: ProviderSendTurnInput["modelSelection"],
+      ) => Effect.Effect<void, TError>;
+    }
+  | { readonly type: "slash-command"; readonly command: `/${string}` };
+
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
@@ -109,10 +124,10 @@ export interface ProviderAdapterShape<TError> {
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
-  readonly compactThread?: (
-    threadId: ThreadId,
-    modelSelection?: ProviderSendTurnInput["modelSelection"],
-  ) => Effect.Effect<void, TError>;
+  /** Omitted when this adapter does not support manual context compaction. */
+  // T3-CUSTOM(expbkt3): admits an explicit `undefined` so an adapter can name the
+  // key unconditionally instead of building a union via a conditional spread.
+  readonly compaction?: ProviderCompaction<TError> | undefined;
 
   /**
    * Interrupt an active turn.
@@ -182,9 +197,11 @@ export interface ProviderAdapterShape<TError> {
   /**
    * Upload a thread to the provider when the adapter supports feedback.
    */
-  readonly uploadFeedback?: (
-    input: ProviderUploadFeedbackInput,
-  ) => Effect.Effect<ProviderUploadFeedbackResult, TError>;
+  // T3-CUSTOM(expbkt3): admits an explicit `undefined` so an adapter can name the
+  // key unconditionally instead of building a union via a conditional spread.
+  readonly uploadFeedback?:
+    | ((input: ProviderUploadFeedbackInput) => Effect.Effect<ProviderUploadFeedbackResult, TError>)
+    | undefined;
 
   /**
    * Stop all sessions owned by this adapter.

@@ -50,10 +50,11 @@ export const fetchEnvironmentSessionState = Effect.fn(
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
+    group: "auth",
     method: "GET",
     url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/auth/session"),
     timeoutMs: input.timeoutMs ?? DEFAULT_SESSION_STATE_TIMEOUT_MS,
-    request: ({ client, headers }) => client.auth.session({ headers }),
+    request: ({ client, headers }) => client.session({ headers }),
     // This endpoint returns 200 with authenticated:false for expired credentials.
     isUnauthorizedResponse: (response) => !response.authenticated,
   });
@@ -78,10 +79,14 @@ export const fetchOrchestrationUsers = Effect.fn("clientRuntime.state.fetchOrche
   }) {
     return yield* executeAuthenticatedEnvironmentHttpRequest({
       ...input,
+      // T3-CUSTOM(expbkt3): upstream made this helper group-scoped — the caller
+      // names the group and `client` is already that group, so the call is
+      // `client.users(...)` rather than `client.orchestration.users(...)`.
+      group: "orchestration",
       method: "GET",
       url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/orchestration/users"),
       timeoutMs: input.timeoutMs ?? DEFAULT_SESSION_STATE_TIMEOUT_MS,
-      request: ({ client, headers }) => client.orchestration.users({ headers }),
+      request: ({ client, headers }) => client.users({ headers }),
     });
   },
 );

@@ -5,7 +5,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -865,14 +864,3 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     notifySessionSuspect,
   });
 });
-
-export const layer = (
-  entry: ConnectionCatalogEntry,
-  options?: EnvironmentSupervisorOptions,
-): Layer.Layer<
-  EnvironmentSupervisor,
-  never,
-  | Connectivity.Connectivity
-  | ConnectionDriver.ConnectionDriver
-  | ConnectionWakeups.ConnectionWakeups
-> => Layer.effect(EnvironmentSupervisor, make(entry, options));

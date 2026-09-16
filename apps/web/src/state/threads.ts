@@ -22,7 +22,7 @@ export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRunt
 // T3-CUSTOM(expbkt3): BEGIN — shared by ChatView and sidebar surfaces.
 export const durableThreadOutbox = createEnvironmentOutboxAtoms(connectionAtomRuntime);
 // T3-CUSTOM(expbkt3): END
-export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
+const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );

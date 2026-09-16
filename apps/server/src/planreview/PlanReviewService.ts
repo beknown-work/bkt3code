@@ -50,12 +50,12 @@ import {
 import { buildUnifiedDiff, toRenderableFileDiff } from "./planReviewDiff.ts";
 import { decidePlanResend } from "./PlanReviewContextPolicy.ts";
 
-export class PlanReviewNotFoundError extends Schema.TaggedErrorClass<PlanReviewNotFoundError>()(
+export class PlanReviewNotFoundError extends Schema.TaggedError<PlanReviewNotFoundError>()(
   "PlanReviewNotFoundError",
   { documentId: Schema.String },
 ) {}
 
-export class PlanReviewInvariantError extends Schema.TaggedErrorClass<PlanReviewInvariantError>()(
+export class PlanReviewInvariantError extends Schema.TaggedError<PlanReviewInvariantError>()(
   "PlanReviewInvariantError",
   { operation: Schema.String, detail: Schema.String },
 ) {}

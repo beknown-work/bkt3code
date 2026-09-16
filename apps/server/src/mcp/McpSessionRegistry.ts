@@ -34,6 +34,12 @@ export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
   readonly actorUserId?: UserId | null;
+  /**
+   * Capabilities the caller gates ("preview", "device").
+   * T3-CUSTOM(expbkt3): optional — fork call sites that predate upstream's
+   * caller-side gate keep the fork's previous unconditional preview grant.
+   */
+  readonly capabilities?: ReadonlySet<McpInvocationContext.McpCapability>;
 }
 
 export interface McpIssuedCredential {
@@ -140,7 +146,7 @@ const DEFAULT_MAXIMUM_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
  *
  * The bound matters because `/mcp` is mounted outside the environment auth
  * stack and is reachable on whatever host the server binds to, so this token is
- * the only thing guarding the preview toolkit on a remote-reachable server.
+ * the only thing guarding the `t3-code` toolkits on a remote-reachable server.
  */
 const DEFAULT_LIVENESS_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
@@ -234,7 +240,10 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           ? undefined
           : yield* options.loadPersonalProfile(actorUserId);
       const capabilities = new Set<McpInvocationContext.McpCapability>([
-        "preview",
+        "pull-requests",
+        ...(request.capabilities ?? ["preview"]),
+        // T3-CUSTOM(expbkt3): the fork's control-plane capabilities ride on every
+        // provider session; browser/device stay gated by `request.capabilities`.
         "t3.read",
         "t3.control",
         "t3.plan",
@@ -310,6 +319,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           endpoint,
           authorizationHeader: `Bearer ${rawToken}`,
           upstreamServers,
+          capabilities: scope.capabilities,
         },
         expiresAt,
       };
@@ -356,7 +366,15 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           threadId: ThreadId.make(`external-user:${externalUser.userId}`),
           providerSessionId: `external-user:${externalUser.userId}`,
           providerInstanceId: ProviderInstanceId.make("external-user"),
-          capabilities: new Set(["t3.read", "t3.control", "t3.plan", "t3.session.create"]),
+          // T3-CUSTOM(expbkt3): an external agent that may already rename a
+          // session and dispatch its commands may also tag its pull requests.
+          capabilities: new Set([
+            "pull-requests",
+            "t3.read",
+            "t3.control",
+            "t3.plan",
+            "t3.session.create",
+          ]),
           issuedAt: timestamp,
         } satisfies McpInvocationContext.McpInvocationScope;
       }
@@ -374,7 +392,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make("external-operator"),
         providerSessionId: "external-operator",
         providerInstanceId: ProviderInstanceId.make("external-operator"),
-        capabilities: new Set(["t3.read", "t3.control", "t3.plan"]),
+        capabilities: new Set(["pull-requests", "t3.read", "t3.control", "t3.plan"]),
         issuedAt: timestamp,
       } satisfies McpInvocationContext.McpInvocationScope;
     },

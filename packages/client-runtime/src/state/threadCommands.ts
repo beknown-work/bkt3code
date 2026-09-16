@@ -22,18 +22,22 @@ import {
   type ContinueThreadBootstrapInput,
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
+  type LinkThreadPullRequestInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
+  type DismissThreadUserInputInput,
   type RevertThreadCheckpointInput,
   type SetThreadInteractionModeInput,
   type SetThreadRuntimeModeInput,
   type PinThreadInput,
   type ReorderPinnedThreadInput,
+  type ReorderActiveThreadInput,
   type SettleThreadInput,
   type SnoozeThreadInput,
   type StartThreadTurnInput,
   type StopThreadSessionInput,
   type UnarchiveThreadInput,
+  type UnlinkThreadPullRequestInput,
   type UnpinThreadInput,
   type UnsettleThreadInput,
   type UnsnoozeThreadInput,
@@ -46,18 +50,22 @@ import {
   continueThreadBootstrap,
   deleteThread,
   interruptThreadTurn,
+  linkThreadPullRequest,
   respondToThreadApproval,
   respondToThreadUserInput,
+  dismissThreadUserInput,
   revertThreadCheckpoint,
   setThreadInteractionMode,
   setThreadRuntimeMode,
   pinThread,
   reorderPinnedThread,
+  reorderActiveThread,
   settleThread,
   snoozeThread,
   startThreadTurn,
   stopThreadSession,
   unarchiveThread,
+  unlinkThreadPullRequest,
   unpinThread,
   unsettleThread,
   unsnoozeThread,
@@ -130,16 +138,21 @@ const startThreadTurnDurably = Effect.fn("ThreadCommands.startThreadTurnDurably"
     // inline data url; a locally-held one supplies the data url and its preview.
     attachments: serverInput.message.attachments.map((attachment, index) => {
       const dataUrl = "dataUrl" in attachment ? attachment.dataUrl : undefined;
+      // T3-CUSTOM(expbkt3): upstream's attachment `id` is optional, so `"id" in
+      // attachment` no longer proves it is a string. A queued attachment always
+      // needs a definite id, hence the explicit undefined check and the fallback.
+      const uploadedId =
+        "id" in attachment && attachment.id !== undefined ? attachment.id : undefined;
       return {
         type: attachment.type,
         name: attachment.name,
         mimeType: attachment.mimeType,
         sizeBytes: attachment.sizeBytes,
-        id: "id" in attachment ? attachment.id : `${serverInput.message.messageId}-${index}`,
+        id: uploadedId ?? `${serverInput.message.messageId}-${index}`,
         ...(dataUrl === undefined ? {} : { dataUrl, previewUri: dataUrl }),
-        ...("id" in attachment
-          ? { uploadedAttachmentId: attachment.id, uploadEnvironmentId: environmentId }
-          : {}),
+        ...(uploadedId === undefined
+          ? {}
+          : { uploadedAttachmentId: uploadedId, uploadEnvironmentId: environmentId }),
       };
     }),
     ...(serverInput.modelSelection === undefined
@@ -251,18 +264,22 @@ export type {
   ContinueThreadBootstrapInput,
   DeleteThreadInput,
   InterruptThreadTurnInput,
+  LinkThreadPullRequestInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
+  DismissThreadUserInputInput,
   RevertThreadCheckpointInput,
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,
   PinThreadInput,
   ReorderPinnedThreadInput,
+  ReorderActiveThreadInput,
   SettleThreadInput,
   SnoozeThreadInput,
   StartThreadTurnInput,
   StopThreadSessionInput,
   UnarchiveThreadInput,
+  UnlinkThreadPullRequestInput,
   UnpinThreadInput,
   UnsettleThreadInput,
   UnsnoozeThreadInput,
@@ -395,9 +412,27 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    reorderActive: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:reorder-active",
+      execute: (input: ReorderActiveThreadInput) => reorderActiveThread(input),
+      scheduler,
+      concurrency,
+    }),
     updateMetadata: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:update-metadata",
       execute: (input: UpdateThreadMetadataInput) => updateThreadMetadata(input),
+      scheduler,
+      concurrency,
+    }),
+    linkPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:link-pull-request",
+      execute: (input: LinkThreadPullRequestInput) => linkThreadPullRequest(input),
+      scheduler,
+      concurrency,
+    }),
+    unlinkPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:unlink-pull-request",
+      execute: (input: UnlinkThreadPullRequestInput) => unlinkThreadPullRequest(input),
       scheduler,
       concurrency,
     }),
@@ -442,6 +477,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     respondToUserInput: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:respond-to-user-input",
       execute: (input: RespondToThreadUserInputInput) => respondToThreadUserInput(input),
+      scheduler,
+      concurrency,
+    }),
+    dismissUserInput: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:dismiss-user-input",
+      execute: (input: DismissThreadUserInputInput) => dismissThreadUserInput(input),
       scheduler,
       concurrency,
     }),

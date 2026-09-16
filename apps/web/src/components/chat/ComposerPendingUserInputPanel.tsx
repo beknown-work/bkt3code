@@ -17,6 +17,7 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionValue: string) => void;
   onAdvance: () => void;
+  onDismiss: (requestId: ApprovalRequestId) => void;
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -26,6 +27,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   questionIndex,
   onToggleOption,
   onAdvance,
+  onDismiss,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -40,6 +42,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      onDismiss={onDismiss}
     />
   );
 });
@@ -51,6 +54,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  onDismiss,
 }: {
   prompt: PendingUserInput;
   isResponding: boolean;
@@ -58,6 +62,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionValue: string) => void;
   onAdvance: () => void;
+  onDismiss: (requestId: ApprovalRequestId) => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
@@ -186,7 +191,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             {activeQuestion.header}
           </span>
           {/* T3-CUSTOM(expbkt3): BEGIN — show message-mode questions without Needs Input. */}
-          {prompt.responseMode === "message" ? (
+          {/* T3-CUSTOM(expbkt3): upstream replaced responseMode with the derived
+              `dismissible` flag (responseMode === "message"). */}
+          {prompt.dismissible ? (
             <span className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-medium text-[10px] text-muted-foreground">
               Async
             </span>
@@ -205,13 +212,37 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             </span>
           ) : null}
           <ComposerBanner.ToggleIcon expanded={!isCollapsed} />
+          {prompt.dismissible ? (
+            // Sits inside the trigger button, so stop the click from toggling
+            // the disclosure. Dismiss closes the question without a reply.
+            <ComposerBanner.Dismiss
+              render={<span role="button" tabIndex={0} />}
+              aria-label="Dismiss question without answering"
+              title="Dismiss question without answering"
+              disabled={isResponding}
+              data-pending-user-input-dismiss
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onDismiss(prompt.requestId);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                onDismiss(prompt.requestId);
+              }}
+            />
+          ) : null}
         </ComposerBanner.Actions>
       </CollapsibleTrigger>
       <CollapsiblePanel>
         <ComposerBanner.Body className="pe-1 pb-1">
           <p className="text-sm text-foreground/85">{activeQuestion.question}</p>
           {/* T3-CUSTOM(expbkt3): BEGIN — explain asynchronous answer behavior. */}
-          {prompt.responseMode === "message" ? (
+          {/* T3-CUSTOM(expbkt3): upstream replaced responseMode with the derived
+              `dismissible` flag (responseMode === "message"). */}
+          {prompt.dismissible ? (
             <p className="text-secondary-label text-xs">Agent can continue while you decide.</p>
           ) : null}
           {/* T3-CUSTOM(expbkt3): END */}

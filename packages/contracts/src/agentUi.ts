@@ -48,7 +48,7 @@ export const AgentUiGetRenderResult = Schema.Struct({
 });
 export type AgentUiGetRenderResult = typeof AgentUiGetRenderResult.Type;
 
-export class AgentUiError extends Schema.TaggedErrorClass<AgentUiError>()("AgentUiError", {
+export class AgentUiError extends Schema.TaggedError<AgentUiError>()("AgentUiError", {
   operation: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
 }) {}

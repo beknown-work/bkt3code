@@ -52,8 +52,11 @@ public class T3TerminalModule: Module {
         view.mutedForegroundColorHex = mutedForegroundColor
       }
 
+      Prop("captureRequest") { (view: T3TerminalView, request: Double) in
+        view.captureRequest = request
+      }
       // T3-CUSTOM(expbkt3): expose non-sensitive native focus diagnostics.
-      Events("onInput", "onResize", "onKeyboardFocusChange")
+      Events("onInput", "onResize", "onCapture", "onKeyboardFocusChange")
     }
   }
 }

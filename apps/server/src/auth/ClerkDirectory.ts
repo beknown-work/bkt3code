@@ -30,13 +30,13 @@ const ORG_MEMBER_CACHE_TTL_MS = 2 * 60 * 1000;
 const ORG_MEMBER_PAGE_SIZE = 100;
 
 /** Failure verifying a Clerk token or gating on org membership. */
-export class ClerkAuthError extends Schema.TaggedErrorClass<ClerkAuthError>()("ClerkAuthError", {
+export class ClerkAuthError extends Schema.TaggedError<ClerkAuthError>()("ClerkAuthError", {
   reason: Schema.Literals(["disabled", "invalid_token", "not_org_member"]),
   message: Schema.String,
 }) {}
 
 /** Failure calling the Clerk directory (list members / resolve email). */
-export class ClerkDirectoryError extends Schema.TaggedErrorClass<ClerkDirectoryError>()(
+export class ClerkDirectoryError extends Schema.TaggedError<ClerkDirectoryError>()(
   "ClerkDirectoryError",
   {
     message: Schema.String,
