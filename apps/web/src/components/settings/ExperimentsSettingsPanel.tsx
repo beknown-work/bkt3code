@@ -31,6 +31,10 @@ export function ExperimentsSettingsPanel() {
   const updateSettings = useUpdateClientSettings();
   // T3-CUSTOM(expbkt3): native plan review (moved here from the removed Beta panel).
   const nativePlanReviewEnabled = useClientSettings((settings) => settings.nativePlanReviewEnabled);
+  // T3-CUSTOM(expbkt3): plan review takeover.
+  const planReviewAutoOpenEnabled = useClientSettings(
+    (settings) => settings.planReviewAutoOpenEnabled,
+  );
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   const agentUiSurfacesEnabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
 
@@ -48,6 +52,22 @@ export function ExperimentsSettingsPanel() {
                 updateSettings({ nativePlanReviewEnabled: Boolean(checked) })
               }
               aria-label="Native plan review"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): BEGIN — plan review takeover. */}
+        <SettingsRow
+          {...searchableSetting("plan-review-takeover")}
+          description="Open a plan for review the moment it is ready, over the conversation. The chat header, the composer and the sidebar stay usable, and closing a plan keeps it closed. While off, a ready plan waits behind the Preview button on its card. Needs native plan review."
+          control={
+            <Switch
+              checked={planReviewAutoOpenEnabled}
+              disabled={!nativePlanReviewEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ planReviewAutoOpenEnabled: Boolean(checked) })
+              }
+              aria-label="Open a ready plan automatically"
             />
           }
         />

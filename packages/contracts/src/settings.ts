@@ -508,6 +508,10 @@ export const ClientSettingsSchema = Schema.Struct({
   // T3-CUSTOM(expbkt3): native plan review. On by default; turning it off hides
   // the Preview entry points and leaves Plannotator as the only review path.
   nativePlanReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // T3-CUSTOM(expbkt3): a reviewable plan takes over the transcript as soon as
+  // it lands, so a plan gate cannot be missed. Off leaves the Preview button as
+  // the only way in. Requires nativePlanReviewEnabled.
+  planReviewAutoOpenEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in the chat transcript. While
   // off, a `t3_show_ui` call stays an ordinary collapsed tool row.
   agentUiSurfacesEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1834,6 +1838,8 @@ export const ClientSettingsPatch = Schema.Struct({
   planModeAvailable: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): native plan review.
   nativePlanReviewEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): plan review takeover.
+  planReviewAutoOpenEnabled: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   agentUiSurfacesEnabled: Schema.optionalKey(Schema.Boolean),
   pullRequestMergeMethodOverrides: Schema.optionalKey(
