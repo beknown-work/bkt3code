@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import type * as UserMcpProfileStore from "../mcp/UserMcpProfileStore.ts";
+import type { LinearIssueStatusCache } from "./LinearIssueStatusCache.ts";
 
 const LINEAR_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/u;
 const MAX_ISSUES_PER_REQUEST = 25;
@@ -122,6 +123,8 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
     readonly identifiers: ReadonlyArray<string>;
     readonly profiles: UserMcpProfileStore.UserMcpProfileStore["Service"];
     readonly httpClient: HttpClient.HttpClient;
+    /** Omitted in tests that want every call to reach the upstream read. */
+    readonly cache?: LinearIssueStatusCache | undefined;
   }) {
     const identifiers = [
       ...new Set(input.identifiers.map((identifier) => identifier.trim().toUpperCase())),
@@ -162,17 +165,24 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
       } satisfies LinearIssueStatusResult;
     }
 
-    const resolved = yield* Effect.forEach(
-      validIdentifiers,
-      (identifier) =>
-        resolveOne(input.httpClient, credential, identifier).pipe(
-          Effect.timeout("12 seconds"),
-          Effect.catchCause(() =>
-            Effect.succeed(unavailable(identifier, "Linear status is temporarily unavailable.")),
+    // The cache is what makes a per-minute sidebar refresh affordable: issue
+    // status is the same for every viewer, so N clients collapse to one read.
+    const fetchMissing = (missing: ReadonlyArray<string>) =>
+      Effect.forEach(
+        missing,
+        (identifier) =>
+          resolveOne(input.httpClient, credential, identifier).pipe(
+            Effect.timeout("12 seconds"),
+            Effect.catchCause(() =>
+              Effect.succeed(unavailable(identifier, "Linear status is temporarily unavailable.")),
+            ),
           ),
-        ),
-      { concurrency: 2 },
-    );
+        { concurrency: 2 },
+      );
+    const resolved =
+      input.cache === undefined
+        ? yield* fetchMissing(validIdentifiers)
+        : yield* input.cache.resolve(validIdentifiers, fetchMissing);
     return { issues: [...invalid, ...resolved] } satisfies LinearIssueStatusResult;
   },
 );
