@@ -52,6 +52,7 @@ import { githubSshRemoteToHttps } from "./sourceControl/GitHubRemoteUrl.ts";
 import type * as SourceControlProfileService from "./sourceControl/SourceControlProfileService.ts";
 import type { ThreadExecutionSupervisorShape } from "./execution/ThreadExecutionSupervisor.ts";
 import { resolveLinearIssueStatuses } from "./linear/LinearIssueResolver.ts";
+import { sharedLinearIssueStatusCache } from "./linear/LinearIssueStatusCache.ts";
 import type { SessionArchiveServiceShape } from "./sessionArchive/SessionArchiveService.ts";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
@@ -210,12 +211,17 @@ export const makeForkWsHandlers = ({
     [WS_METHODS.linearIssuesResolve]: (input) =>
       observeRpcEffect(
         WS_METHODS.linearIssuesResolve,
-        resolveLinearIssueStatuses({
-          userId: personalMcpUserId,
-          identifiers: input.identifiers,
-          profiles: personalMcpProfiles,
-          httpClient,
-        }),
+        sharedLinearIssueStatusCache().pipe(
+          Effect.flatMap((cache) =>
+            resolveLinearIssueStatuses({
+              userId: personalMcpUserId,
+              identifiers: input.identifiers,
+              profiles: personalMcpProfiles,
+              httpClient,
+              cache,
+            }),
+          ),
+        ),
         { "rpc.aggregate": "linear-issues" },
       ),
     // T3-CUSTOM(expbkt3): BEGIN — archived-session worktree reclaim.
