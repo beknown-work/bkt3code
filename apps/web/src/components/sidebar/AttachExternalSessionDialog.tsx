@@ -209,10 +209,9 @@ export function AttachExternalSessionDialog({
                   }}
                 >
                   <ProjectFavicon
-                    environmentId={candidate.environmentId}
-                    cwd={candidate.workspaceRoot}
-                    projectName={candidate.title}
-                    projectIcon={candidate.projectIcon}
+                    // T3-CUSTOM(expbkt3): upstream takes the project record whole so the
+                    // saved title, favicon and icon override always travel together.
+                    project={candidate}
                   />
                   <span className="min-w-0 flex-1 truncate">{candidate.title}</span>
                 </button>

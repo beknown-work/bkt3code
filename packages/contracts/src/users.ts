@@ -80,7 +80,7 @@ export const EnvironmentUserManagementErrorReason = Schema.Literals([
 ]);
 export type EnvironmentUserManagementErrorReason = typeof EnvironmentUserManagementErrorReason.Type;
 
-export class EnvironmentUserManagementError extends Schema.TaggedErrorClass<EnvironmentUserManagementError>()(
+export class EnvironmentUserManagementError extends Schema.TaggedError<EnvironmentUserManagementError>()(
   "EnvironmentUserManagementError",
   {
     operation: TrimmedNonEmptyString,

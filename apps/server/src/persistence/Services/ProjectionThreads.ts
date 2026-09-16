@@ -41,6 +41,7 @@ export const ProjectionThread = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   sourceControlProfileId: Schema.NullOr(SourceControlProfileId),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurnId: Schema.NullOr(TurnId),
   ownerUserId: Schema.NullOr(UserId),
   createdAt: IsoDateTime,
@@ -74,6 +75,7 @@ export const ProjectionThread = Schema.Struct({
   // migration 1013 still decode.
   titleManuallySet: Schema.optional(NonNegativeInt),
   pinOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
+  activeOrderKey: Schema.optional(Schema.NullOr(Schema.String)),
   titleRegenerationRequestId: Schema.optional(Schema.NullOr(CommandId)),
   titleRegenerationStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),

@@ -17,9 +17,24 @@
 // not ship the ES2023 change-array-by-copy methods. Sort a copy with `.sort()`;
 // never reach for `.toSorted()`. phaseSidebar.test.ts asserts this by deleting
 // the method from Array.prototype.
-import type { ServerConfig, UserId, VcsStatusResult } from "@t3tools/contracts";
+import type {
+  ServerConfig,
+  ThreadPullRequestLink,
+  UserId,
+  VcsStatusResult,
+} from "@t3tools/contracts";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import {
+  linearIssueFromBranch,
+  parseLinearIssueUrl,
+  type LinearIssueRef,
+} from "@t3tools/shared/linearIssue";
 import { resolveChangeRequestPresentation } from "@t3tools/shared/sourceControl";
+import {
+  resolveThreadCurrentPullRequestLink,
+  resolveThreadPullRequestBadge,
+  resolveThreadPullRequestChains,
+} from "@t3tools/shared/threadPullRequests";
 // T3-CUSTOM(expbkt3): memorable worktree codenames.
 import {
   disambiguateWorktreeCodenames,
@@ -297,38 +312,14 @@ export function resolvePhaseSidebarWorkBadge(input: {
 }
 
 const PHASE_ID_SET = new Set<string>(PHASE_SIDEBAR_PHASE_IDS);
-const LINEAR_BRANCH_PATTERN = /^linear\/([a-z][a-z0-9]*-\d+)(?:-|$)/i;
-const LINEAR_ISSUE_URL_PATTERN =
-  /^https:\/\/linear\.app\/([^/]+)\/issue\/([a-z][a-z0-9]*-\d+)(?:\/[^?#]*)?(?:[?#].*)?$/i;
+export type PhaseSidebarLinearIssue = LinearIssueRef;
 
-export interface PhaseSidebarLinearIssue {
-  readonly identifier: string;
-  readonly url: string;
-}
-
+/** A manual tag wins; otherwise the `linear/ABC-123` branch names the issue. */
 export function resolvePhaseSidebarLinearIssue(
   branch: string | null,
   manualUrl?: string | null,
 ): PhaseSidebarLinearIssue | null {
-  const trimmedManualUrl = manualUrl?.trim();
-  if (trimmedManualUrl) {
-    const match = LINEAR_ISSUE_URL_PATTERN.exec(trimmedManualUrl);
-    const workspace = match?.[1];
-    const identifier = match?.[2]?.toUpperCase();
-    if (workspace && identifier) {
-      return {
-        identifier,
-        url: `https://linear.app/${workspace}/issue/${identifier}`,
-      };
-    }
-  }
-  if (branch === null) return null;
-  const identifier = LINEAR_BRANCH_PATTERN.exec(branch)?.[1]?.toUpperCase();
-  if (!identifier) return null;
-  return {
-    identifier,
-    url: `https://linear.app/beknown/issue/${identifier}`,
-  };
+  return parseLinearIssueUrl(manualUrl) ?? linearIssueFromBranch(branch);
 }
 
 /**
@@ -384,9 +375,22 @@ export function resolvePhaseSidebarMattermostLink(
  * review state stay in the tooltip — they are modifiers on "open", not states,
  * and giving each its own hue would make the lane unreadable.
  */
-export interface PhaseSidebarChangeRequestBadge {
-  /** "#1234" — the visible label. */
+export interface PhaseSidebarChangeRequestEntry {
+  /** "#1234" — the number stays visible for every entry. */
   readonly label: string;
+  readonly url: string;
+  readonly state: ChangeRequestStateLike;
+  readonly colorClassName: string;
+  /** Full state in words: "open · draft · checks failing". */
+  readonly statusText: string;
+  readonly title: string | null;
+  readonly tooltip: string;
+}
+
+export interface PhaseSidebarChangeRequestBadge {
+  /** "#1234", or "#1234 +2" when the thread carries more than one. */
+  readonly label: string;
+  /** The review a single click opens: the current one. */
   readonly url: string;
   readonly state: ChangeRequestStateLike;
   /** Static Tailwind classes; Tailwind cannot scan interpolated hues. */
@@ -394,6 +398,13 @@ export interface PhaseSidebarChangeRequestBadge {
   /** Full state in words, for the tooltip and the accessible name. */
   readonly statusText: string;
   readonly tooltip: string;
+  /**
+   * `stack` when the links form one chain, so the row can wear the layers
+   * glyph instead of the pull-request one; `multiple` when they are unrelated.
+   */
+  readonly kind: "single" | "stack" | "multiple";
+  /** Every review tagged to the thread, bottom of the stack first. */
+  readonly entries: ReadonlyArray<PhaseSidebarChangeRequestEntry>;
 }
 
 const PHASE_SIDEBAR_CHANGE_REQUEST_TONES = {
@@ -402,31 +413,132 @@ const PHASE_SIDEBAR_CHANGE_REQUEST_TONES = {
   closed: "text-red-600 dark:text-red-300/90",
 } satisfies Record<ChangeRequestStateLike, string>;
 
+/** Modifiers are qualifiers on "open", never states — they stay out of the hue. */
+function changeRequestStatusText(input: {
+  readonly state: ChangeRequestStateLike;
+  readonly isDraft?: boolean | null | undefined;
+  readonly mergeability?: string | null | undefined;
+  readonly reviewDecision?: string | null | undefined;
+  readonly checksStatus?: string | null | undefined;
+}): string {
+  const modifiers: string[] = [];
+  if (input.state === "open") {
+    if (input.isDraft === true) modifiers.push("draft");
+    if (input.mergeability === "conflicting") modifiers.push("conflicting");
+    if (input.reviewDecision === "approved") modifiers.push("approved");
+    if (input.reviewDecision === "changes-requested") modifiers.push("changes requested");
+    if (input.checksStatus === "fail" || input.checksStatus === "failing") {
+      modifiers.push("checks failing");
+    }
+    if (input.checksStatus === "pending") modifiers.push("checks running");
+  }
+  return modifiers.length === 0 ? input.state : `${input.state} · ${modifiers.join(" · ")}`;
+}
+
+function entryFromLink(
+  link: ThreadPullRequestLink,
+  shortName: string,
+): PhaseSidebarChangeRequestEntry {
+  const snapshot = link.snapshot;
+  const state: ChangeRequestStateLike = snapshot?.state ?? "open";
+  const statusText = snapshot
+    ? changeRequestStatusText({
+        state,
+        isDraft: snapshot.isDraft,
+        mergeability: snapshot.mergeability ?? null,
+        reviewDecision: snapshot.reviewDecision ?? null,
+        checksStatus: snapshot.checksState ?? null,
+      })
+    : "not synced yet";
+  const title = snapshot?.title ?? null;
+  return {
+    label: `#${link.number}`,
+    url: link.url,
+    state,
+    colorClassName: PHASE_SIDEBAR_CHANGE_REQUEST_TONES[state],
+    statusText,
+    title,
+    tooltip: `${shortName} #${link.number} — ${statusText}${title === null ? "" : ` · ${title}`}`,
+  };
+}
+
+/**
+ * T3-CUSTOM(expbkt3): The row's change requests, rendered beside the Linear tag
+ * so the two trackers a session answers to read as one line: ticket, then PR.
+ *
+ * Tagged links win over the branch-detected review. Branch detection only ever
+ * finds the PR for the checked-out branch, so a review an agent registered with
+ * `link_pull_request` — a second repository, a stack layer, a PR opened before
+ * the branch existed — was invisible here until it was also the branch's.
+ *
+ * The number stays the whole label. State is carried by COLOR ALONE — the row's
+ * metadata lane is already the densest text in the app, and "#1234 (merged)"
+ * spends a third of the lane restating what the hue says. Hues match
+ * `prStatusIndicator` so a PR never reads one colour here and another in the
+ * thread header: green open, violet merged, red closed. Draft, checks, and
+ * review state stay in the tooltip — they are modifiers on "open", not states,
+ * and giving each its own hue would make the lane unreadable.
+ */
 export function resolvePhaseSidebarChangeRequestBadge(
   vcsStatus: Pick<VcsStatusResult, "pr" | "sourceControlProvider"> | null | undefined,
+  pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined,
 ): PhaseSidebarChangeRequestBadge | null {
+  const shortName = resolveChangeRequestPresentation(vcsStatus?.sourceControlProvider).shortName;
+  const chains = resolveThreadPullRequestChains(pullRequests ?? []);
+  const linked = chains.flatMap((chain) => chain.layers);
+
+  if (linked.length > 0) {
+    const current = resolveThreadCurrentPullRequestLink(linked) ?? linked[0]!;
+    const entries = linked.map((link) => entryFromLink(link, shortName));
+    const currentEntry = entries.find((entry) => entry.url === current.url) ?? entries[0]!;
+    const aggregate = resolveThreadPullRequestBadge(linked);
+    // "draft" is an open review wearing a modifier; the lane keeps three hues.
+    const state: ChangeRequestStateLike =
+      aggregate === null || aggregate.state === "draft" ? "open" : aggregate.state;
+    const isStack = chains.length === 1 && linked.length > 1;
+    const others = linked.length - 1;
+    return {
+      label: others === 0 ? currentEntry.label : `${currentEntry.label} +${others}`,
+      url: currentEntry.url,
+      state,
+      colorClassName: PHASE_SIDEBAR_CHANGE_REQUEST_TONES[state],
+      statusText: currentEntry.statusText,
+      tooltip:
+        others === 0
+          ? currentEntry.tooltip
+          : `${isStack ? "Stack of" : ""} ${linked.length} ${isStack ? "layers" : "linked reviews"}`.trim(),
+      kind: others === 0 ? "single" : isStack ? "stack" : "multiple",
+      entries,
+    };
+  }
+
   const pr = vcsStatus?.pr;
   if (!pr) return null;
-  const shortName = resolveChangeRequestPresentation(vcsStatus?.sourceControlProvider).shortName;
-
-  const modifiers: string[] = [];
-  if (pr.state === "open") {
-    if (pr.isDraft === true) modifiers.push("draft");
-    if (pr.mergeability === "conflicting") modifiers.push("conflicting");
-    if (pr.reviewDecision === "approved") modifiers.push("approved");
-    if (pr.reviewDecision === "changes-requested") modifiers.push("changes requested");
-    if (pr.checksStatus === "fail") modifiers.push("checks failing");
-    if (pr.checksStatus === "pending") modifiers.push("checks running");
-  }
-  const statusText = modifiers.length === 0 ? pr.state : `${pr.state} · ${modifiers.join(" · ")}`;
-
-  return {
+  const statusText = changeRequestStatusText({
+    state: pr.state,
+    isDraft: pr.isDraft,
+    mergeability: pr.mergeability ?? null,
+    reviewDecision: pr.reviewDecision ?? null,
+    checksStatus: pr.checksStatus ?? null,
+  });
+  const entry: PhaseSidebarChangeRequestEntry = {
     label: `#${pr.number}`,
     url: pr.url,
     state: pr.state,
     colorClassName: PHASE_SIDEBAR_CHANGE_REQUEST_TONES[pr.state],
     statusText,
+    title: pr.title,
     tooltip: `${shortName} #${pr.number} — ${statusText} · ${pr.title}`,
+  };
+  return {
+    label: entry.label,
+    url: entry.url,
+    state: entry.state,
+    colorClassName: entry.colorClassName,
+    statusText,
+    tooltip: entry.tooltip,
+    kind: "single",
+    entries: [entry],
   };
 }
 

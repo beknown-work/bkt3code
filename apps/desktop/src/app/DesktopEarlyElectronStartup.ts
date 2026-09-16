@@ -28,9 +28,14 @@ interface EarlyDesktopSettingsInput {
 type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
 
 export interface EarlyLinuxElectronOptions {
+  readonly isDevelopment: boolean;
   readonly linuxWmClass: string;
+  readonly linuxDesktopEntryName: string;
   readonly passwordStore: LinuxPasswordStoreSwitch | null;
 }
+
+export const resolveLinuxDesktopEntryName = (isDevelopment: boolean): string =>
+  isDevelopment ? "com.t3tools.T3Code.Development.desktop" : "com.t3tools.T3Code.desktop";
 
 const trimNonEmpty = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
@@ -83,12 +88,15 @@ export function resolveEarlyLinuxElectronOptions(
   input: EarlyLinuxElectronOptionsInput,
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
+  const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
-    // T3-CUSTOM(expbkt3): BEGIN - keep the early Linux window class in step with
-    // the fork brand applied in DesktopEnvironment.ts, so the two never disagree.
-    linuxWmClass:
-      resolveRuntimeBrand()?.linuxWmClass ??
-      (isDevelopmentEnvironment(input.env) ? "t3code-dev" : "t3code"),
+    isDevelopment,
+    // T3-CUSTOM(expbkt3): BEGIN - keep the early Linux window class and desktop
+    // entry in step with the fork brand applied in DesktopEnvironment.ts, so the
+    // two never disagree.
+    linuxWmClass: resolveRuntimeBrand()?.linuxWmClass ?? (isDevelopment ? "t3code-dev" : "t3code"),
+    linuxDesktopEntryName:
+      resolveRuntimeBrand()?.linuxDesktopEntryName ?? resolveLinuxDesktopEntryName(isDevelopment),
     // T3-CUSTOM(expbkt3): END
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,

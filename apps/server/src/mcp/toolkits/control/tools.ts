@@ -37,7 +37,7 @@ import { ServerSettingsService } from "../../../serverSettings.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
-export class T3ControlToolError extends Schema.TaggedErrorClass<T3ControlToolError>()(
+export class T3ControlToolError extends Schema.TaggedError<T3ControlToolError>()(
   "T3ControlToolError",
   {
     operation: Schema.String,
@@ -191,7 +191,7 @@ export const T3SendPromptTool = mutatingTool(
 export const T3UpdateSessionTool = mutatingTool(
   Tool.make("t3_update_session", {
     description:
-      "Update T3 session metadata and defaults. Supports title, model selection, runtime/sandbox mode, interaction mode (plan/default), and branch. Only supplied fields change.",
+      "Update T3 session metadata and defaults. Supports title, Linear issue tag, model selection, runtime/sandbox mode, interaction mode (plan/default), and branch. Only supplied fields change. Use it to name the session once you know what the work is, and to tag the Linear ticket it belongs to; pull requests are tagged separately with link_pull_request.",
     parameters: Schema.Struct({
       ...optionalSessionId,
       title: Schema.optional(
@@ -226,6 +226,13 @@ export const T3UpdateSessionTool = mutatingTool(
         described(
           Schema.NullOr(ThreadPriority),
           "New session priority: 0 (P0, highest) through 4 (P4, lowest), or null to clear it.",
+        ),
+      ),
+      // T3-CUSTOM(expbkt3): the Linear ticket this session answers to.
+      linearIssueUrl: Schema.optional(
+        described(
+          Schema.NullOr(Schema.String),
+          "Linear issue URL to tag this session with, for example https://linear.app/acme/issue/ENG-42, or null to clear the tag. The key and its live status then appear beside the session in the sidebar. Only linear.app issue URLs are accepted.",
         ),
       ),
     }),

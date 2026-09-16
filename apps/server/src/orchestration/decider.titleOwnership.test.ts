@@ -49,6 +49,8 @@ function makeReadModel(
     ],
     threads: [
       {
+        // T3-CUSTOM(expbkt3): upstream's linked pull requests; empty on a fresh fixture.
+        pullRequests: [],
         id: THREAD_ID,
         projectId: ProjectId.make("project-1"),
         title: overrides.title ?? "New thread",

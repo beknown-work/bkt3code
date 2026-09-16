@@ -286,6 +286,9 @@ export const PhaseSidebarRowView = memo(function PhaseSidebarRowView(
   return (
     <ThreadSwipeable
       backgroundColor={screenColor}
+      // T3-CUSTOM(expbkt3): upstream added threadKey so a swipe row can register
+      // its dismissal; same environment:thread form the other thread lists use.
+      threadKey={`${thread.environmentId}:${thread.id}`}
       compactActions
       enableTrackpadSwipe
       fullSwipeAction="primary"

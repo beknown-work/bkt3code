@@ -11,6 +11,7 @@
  * All non-visual decisions live in `SessionManagerPage.logic.ts`.
  */
 import { LegendList } from "@legendapp/list/react";
+import { useAtomValue } from "@effect/atom-react";
 import {
   scopedProjectKey,
   scopedThreadKey,
@@ -77,6 +78,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { userManagementEnvironment } from "../../state/users";
 import { useEnvironmentQuery } from "../../state/query";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { primaryServerSettingsAtom } from "../../state/server";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import type { Project, ThreadShell } from "../../types";
@@ -742,7 +744,7 @@ export function SessionManagerPage() {
   const lastVisitedAtByThreadKey = useUiStateStore((state) => state.threadLastVisitedAtById);
   const markThreadVisited = useUiStateStore((state) => state.markThreadVisited);
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
-  const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
+  const autoSettleAfterDays = useAtomValue(primaryServerSettingsAtom).sidebarAutoSettleAfterDays;
   const nowMinute = useNowMinute();
   // `useNowMinute` yields "YYYY-MM-DDTHH:MM", which Date.parse reads as LOCAL
   // time. Re-anchor it to UTC so the idle-for filter measures real elapsed

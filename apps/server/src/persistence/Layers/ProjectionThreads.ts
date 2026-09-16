@@ -20,6 +20,7 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -42,6 +43,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           worktree_path,
           source_control_profile_id,
           linked_pull_request_json,
+          branch_pull_request_json,
           latest_turn_id,
           owner_user_id,
           created_at,
@@ -63,6 +65,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set,
           pin_order_key,
+          active_order_key,
           title_regeneration_request_id,
           title_regeneration_started_at,
           latest_user_message_at,
@@ -85,6 +88,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.worktreePath},
           ${row.sourceControlProfileId},
           ${row.linkedPullRequest === undefined || row.linkedPullRequest === null ? null : JSON.stringify(row.linkedPullRequest)},
+          ${row.branchPullRequest === undefined || row.branchPullRequest === null ? null : JSON.stringify(row.branchPullRequest)},
           ${row.latestTurnId},
           ${row.ownerUserId},
           ${row.createdAt},
@@ -106,6 +110,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           ${row.titleManuallySet ?? 0},
           ${row.pinOrderKey ?? null},
+          ${row.activeOrderKey ?? null},
           ${row.titleRegenerationRequestId ?? null},
           ${row.titleRegenerationStartedAt ?? null},
           ${row.latestUserMessageAt},
@@ -128,6 +133,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           worktree_path = excluded.worktree_path,
           source_control_profile_id = excluded.source_control_profile_id,
           linked_pull_request_json = excluded.linked_pull_request_json,
+          branch_pull_request_json = excluded.branch_pull_request_json,
           latest_turn_id = excluded.latest_turn_id,
           owner_user_id = COALESCE(excluded.owner_user_id, projection_threads.owner_user_id),
           created_at = excluded.created_at,
@@ -149,6 +155,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set = excluded.title_manually_set,
           pin_order_key = excluded.pin_order_key,
+          active_order_key = excluded.active_order_key,
           title_regeneration_request_id = excluded.title_regeneration_request_id,
           title_regeneration_started_at = excluded.title_regeneration_started_at,
           latest_user_message_at = excluded.latest_user_message_at,
@@ -178,6 +185,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           source_control_profile_id AS "sourceControlProfileId",
           linked_pull_request_json AS "linkedPullRequest",
+          branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -199,6 +207,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
           pin_order_key AS "pinOrderKey",
+          active_order_key AS "activeOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",
@@ -230,6 +239,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           source_control_profile_id AS "sourceControlProfileId",
           linked_pull_request_json AS "linkedPullRequest",
+          branch_pull_request_json AS "branchPullRequest",
           latest_turn_id AS "latestTurnId",
           owner_user_id AS "ownerUserId",
           created_at AS "createdAt",
@@ -251,6 +261,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           -- T3-CUSTOM(expbkt3): manual-title ownership.
           title_manually_set AS "titleManuallySet",
           pin_order_key AS "pinOrderKey",
+          active_order_key AS "activeOrderKey",
           title_regeneration_request_id AS "titleRegenerationRequestId",
           title_regeneration_started_at AS "titleRegenerationStartedAt",
           latest_user_message_at AS "latestUserMessageAt",

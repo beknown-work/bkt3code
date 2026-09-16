@@ -66,7 +66,7 @@ const RepoRoot = Effect.service(Path.Path).pipe(
 const GhReleaseList = Schema.Array(Schema.Struct({ tagName: Schema.String }));
 const decodeGhReleaseList = Schema.decodeUnknownEffect(Schema.fromJsonString(GhReleaseList));
 
-export class UnsupportedBuildHostError extends Schema.TaggedErrorClass<UnsupportedBuildHostError>()(
+export class UnsupportedBuildHostError extends Schema.TaggedError<UnsupportedBuildHostError>()(
   "UnsupportedBuildHostError",
   {
     hostPlatform: Schema.String,
@@ -81,7 +81,7 @@ export class UnsupportedBuildHostError extends Schema.TaggedErrorClass<Unsupport
   }
 }
 
-export class InvalidBkBuildVersionError extends Schema.TaggedErrorClass<InvalidBkBuildVersionError>()(
+export class InvalidBkBuildVersionError extends Schema.TaggedError<InvalidBkBuildVersionError>()(
   "InvalidBkBuildVersionError",
   {
     version: Schema.String,
@@ -98,7 +98,7 @@ export class InvalidBkBuildVersionError extends Schema.TaggedErrorClass<InvalidB
   }
 }
 
-export class BuildVersionChannelMismatchError extends Schema.TaggedErrorClass<BuildVersionChannelMismatchError>()(
+export class BuildVersionChannelMismatchError extends Schema.TaggedError<BuildVersionChannelMismatchError>()(
   "BuildVersionChannelMismatchError",
   {
     version: Schema.String,
@@ -115,7 +115,7 @@ export class BuildVersionChannelMismatchError extends Schema.TaggedErrorClass<Bu
   }
 }
 
-export class BuildNumberUnavailableError extends Schema.TaggedErrorClass<BuildNumberUnavailableError>()(
+export class BuildNumberUnavailableError extends Schema.TaggedError<BuildNumberUnavailableError>()(
   "BuildNumberUnavailableError",
   {
     suggestedVersion: Schema.String,
@@ -130,7 +130,7 @@ export class BuildNumberUnavailableError extends Schema.TaggedErrorClass<BuildNu
   }
 }
 
-export class InvalidBkManagedChannelError extends Schema.TaggedErrorClass<InvalidBkManagedChannelError>()(
+export class InvalidBkManagedChannelError extends Schema.TaggedError<InvalidBkManagedChannelError>()(
   "InvalidBkManagedChannelError",
   {
     channel: Schema.String,
@@ -145,7 +145,7 @@ export class InvalidBkManagedChannelError extends Schema.TaggedErrorClass<Invali
   }
 }
 
-export class ManagedBuildClerkKeyError extends Schema.TaggedErrorClass<ManagedBuildClerkKeyError>()(
+export class ManagedBuildClerkKeyError extends Schema.TaggedError<ManagedBuildClerkKeyError>()(
   "ManagedBuildClerkKeyError",
   {
     channel: Schema.String,
@@ -164,7 +164,7 @@ export class ManagedBuildClerkKeyError extends Schema.TaggedErrorClass<ManagedBu
   }
 }
 
-export class BkDesktopBuildFailedError extends Schema.TaggedErrorClass<BkDesktopBuildFailedError>()(
+export class BkDesktopBuildFailedError extends Schema.TaggedError<BkDesktopBuildFailedError>()(
   "BkDesktopBuildFailedError",
   {
     exitCode: Schema.Number,

@@ -2,6 +2,7 @@
 import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
 import type { DraftId } from "~/composerDraftStore";
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 // T3-CUSTOM(expbkt3): END
 import { FolderPlusIcon } from "lucide-react";
@@ -15,7 +16,9 @@ import { selectProjectGroupingSettings } from "~/logicalProject";
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  projectGroupsSpanEnvironments,
   type SidebarProjectGroupMember,
+  type SidebarProjectSnapshot,
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 // T3-CUSTOM(expbkt3): BEGIN — environment identity in the new-thread picker.
@@ -28,6 +31,8 @@ import {
 // T3-CUSTOM(expbkt3): environment glyph.
 import { EnvironmentBadgeView } from "../environment/EnvironmentBadge";
 // T3-CUSTOM(expbkt3): END
+import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
+import { ProjectFavicon } from "../ProjectFavicon";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
@@ -39,6 +44,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 
 interface DraftHeroHeadlineProps {
   readonly draftId: DraftId | null;
@@ -54,6 +60,8 @@ interface ProjectPickerItem {
   readonly displayName: string;
   readonly environmentId: EnvironmentId | null;
   readonly project: SidebarProjectGroupMember | null;
+  /** The logical group this row belongs to; carries the favicon and members. */
+  readonly group: SidebarProjectSnapshot;
 }
 
 // T3-CUSTOM(expbkt3): END
@@ -73,6 +81,7 @@ export function DraftHeroHeadline({
   );
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const setModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const applyStickyState = useComposerDraftStore((store) => store.applyStickyState);
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
 
   const environmentLabelById = useMemo(
@@ -103,6 +112,26 @@ export function DraftHeroHeadline({
       projects,
       threads,
     ],
+  );
+  // Same-named projects on two machines are only told apart by where they
+  // live, so rows on another machine carry its icon once the catalog spans
+  // more than one environment; a single-machine catalog stays as it was.
+  const showProjectEnvironments = useMemo(
+    () => projectGroupsSpanEnvironments(projectGroups),
+    [projectGroups],
+  );
+  const environmentMachineById = useMemo(
+    () =>
+      new Map(
+        environments.map(
+          (environment) =>
+            [
+              environment.environmentId,
+              resolveEnvironmentMachineKind(environment.serverConfig),
+            ] as const,
+        ),
+      ),
+    [environments],
   );
   const projectPickerEntries = useMemo(
     () =>
@@ -146,6 +175,7 @@ export function DraftHeroHeadline({
               displayName: group.displayName,
               environmentId: null,
               project: null,
+              group,
             },
           ];
         }
@@ -154,6 +184,7 @@ export function DraftHeroHeadline({
           displayName: group.displayName,
           environmentId: member.environmentId,
           project: member,
+          group,
         }));
       }),
     [projectPickerEntries],
@@ -231,8 +262,22 @@ export function DraftHeroHeadline({
               draftId,
             );
             if (!hasExplicitComposerModelSelection(currentDraft)) {
-              // T3-CUSTOM(expbkt3): clear old seeds so the target project/environment defaults win.
-              setModelSelection(draftId, null, { replaceOptions: true });
+              applyStickyState(draftId);
+              const environmentSettings = environments.find(
+                (environment) => environment.environmentId === project.environmentId,
+              )?.serverConfig?.settings;
+              const defaultModelSelection = environmentSettings
+                ? resolveProjectSettings(environmentSettings, project.id, project).settings
+                    .defaultModelSelection
+                : project.defaultModelSelection;
+              if (defaultModelSelection) {
+                setModelSelection(draftId, defaultModelSelection, {
+                  replaceOptions: true,
+                });
+              } else {
+                // T3-CUSTOM(expbkt3): clear old seeds so the target project/environment defaults win.
+                setModelSelection(draftId, null, { replaceOptions: true });
+              }
             }
           }}
         >
@@ -243,28 +288,40 @@ export function DraftHeroHeadline({
             const appearance =
               item.environmentId === null ? null : (appearances.get(item.environmentId) ?? null);
             return (
-              <MenuRadioItem key={item.value} value={item.value} closeOnClick>
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <Tooltip>
-                    <TooltipTrigger render={<span className="min-w-0 truncate" />}>
-                      {item.displayName}
-                    </TooltipTrigger>
-                    <TooltipPopup side="top" className="max-w-80">
-                      {item.displayName}
-                    </TooltipPopup>
-                  </Tooltip>
-                  {appearance ? (
-                    <>
-                      <EnvironmentBadgeView appearance={appearance} variant="glyph" />
-                      <span
-                        className="min-w-0 shrink-0 truncate text-xs"
-                        style={{ color: appearance.color }}
-                      >
-                        {appearance.name}
-                      </span>
-                    </>
-                  ) : null}
-                </span>
+              <MenuRadioItem
+                key={item.value}
+                value={item.value}
+                closeOnClick
+                className="[&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+              >
+                <ProjectFavicon project={item.group} className="size-4 shrink-0" />
+                <Tooltip>
+                  <TooltipTrigger render={<span className="block min-w-0 truncate" />}>
+                    {item.displayName}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top" className="max-w-80">
+                    {item.displayName}
+                  </TooltipPopup>
+                </Tooltip>
+                {appearance ? (
+                  // T3-CUSTOM(expbkt3): this row already names its environment, so
+                  // upstream's machine badge would repeat it.
+                  <>
+                    <EnvironmentBadgeView appearance={appearance} variant="glyph" />
+                    <span
+                      className="min-w-0 shrink-0 truncate text-xs"
+                      style={{ color: appearance.color }}
+                    >
+                      {appearance.name}
+                    </span>
+                  </>
+                ) : showProjectEnvironments ? (
+                  <ProjectEnvironmentBadge
+                    group={item.group}
+                    primaryEnvironmentId={primaryEnvironmentId}
+                    machineByEnvironmentId={environmentMachineById}
+                  />
+                ) : null}
               </MenuRadioItem>
             );
           })}

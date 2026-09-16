@@ -183,7 +183,7 @@ export const PlanReviewErrorReason = Schema.Literals([
 ]);
 export type PlanReviewErrorReason = typeof PlanReviewErrorReason.Type;
 
-export class PlanReviewError extends Schema.TaggedErrorClass<PlanReviewError>()("PlanReviewError", {
+export class PlanReviewError extends Schema.TaggedError<PlanReviewError>()("PlanReviewError", {
   operation: Schema.String,
   reason: PlanReviewErrorReason,
   detail: Schema.String,

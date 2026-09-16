@@ -35,6 +35,7 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
 } from "./cloud/serviceProtocol.ts";
 import * as ServerConfig from "./config.ts";
+import { ForgejoCliSelfContainedLive } from "./sourceControl/forgejoCliRuntime.expbkt3.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationCommandDispatcher from "./orchestration/dispatchCommand.ts";
@@ -58,7 +59,14 @@ import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 
 import packageJson from "../package.json" with { type: "json" };
 
-const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
+// T3-CUSTOM(expbkt3): the fork's CLI graph reaches SourceControlRepositoryService,
+// whose provider registry needs the Forgejo CLI upstream added. Upstream's own CLI
+// never touches that service, so its CliRuntimeLayer does not carry it.
+const CliRuntimeLayer = Layer.mergeAll(
+  NodeServices.layer,
+  NetService.layer,
+  ForgejoCliSelfContainedLive,
+);
 const DisconnectedLauncherChildLayer = Layer.mergeAll(
   Layer.succeed(HostProcessEnvironment, {
     ...process.env,

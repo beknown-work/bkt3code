@@ -139,7 +139,9 @@ export function PhaseSidebarPane(props: {
     unsettleThread,
     pinThread,
     unpinThread,
-    movePinnedThread,
+    // T3-CUSTOM(expbkt3): upstream generalised the pinned-reorder action into
+    // `moveThread`, which infers the pinned section from the thread itself.
+    moveThread,
   } = useThreadListActions();
   // The two row actions useThreadListActions does not cover.
   const updateThreadMetadata = useAtomCommand(
@@ -346,13 +348,13 @@ export function PhaseSidebarPane(props: {
     (subject: PhaseSidebarRow, before: PhaseSidebarRow) => {
       // Direction comes from the pin ORDER (`pinOrderKey`, the sortable key the
       // server assigns), not `pinnedAt`, which is when the pin happened.
-      // movePinnedThread owns the fractional-index planning and moves one
+      // `moveThread` owns the fractional-index planning and moves one
       // position per call, so a long drag needs repeating.
       const subjectKey = subject.thread.pinOrderKey ?? "";
       const beforeKey = before.thread.pinOrderKey ?? "";
-      void movePinnedThread(subject.thread, subjectKey > beforeKey ? "up" : "down");
+      void moveThread(subject.thread, subjectKey > beforeKey ? "up" : "down");
     },
-    [movePinnedThread],
+    [moveThread],
   );
 
   // Status labels and controls get their own lines. This keeps every count

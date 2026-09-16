@@ -236,7 +236,7 @@ export interface PlannotatorSession {
   readonly updatedAt: string;
 }
 
-export class PlannotatorManagerError extends Schema.TaggedErrorClass<PlannotatorManagerError>()(
+export class PlannotatorManagerError extends Schema.TaggedError<PlannotatorManagerError>()(
   "PlannotatorManagerError",
   {
     operation: Schema.String,

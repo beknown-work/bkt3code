@@ -44,16 +44,16 @@ below are deliberate exceptions: they are load-bearing infrastructure whose
 _increase_ merge and correctness risk rather than reduce it. Treat them as
 permanent fork surface and keep them marked instead.
 
-| Subsystem                         | Why it is not flag-gated                                                                                    |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| User management / Clerk team mode | The reason the fork exists. Already conditioned on `T3CODE_CLERK_SECRET_KEY` being configured.              |
-| Ownership + access control        | A disabled access-control path is a data-exposure bug, not a fallback. Part of user management in practice. |
-| ThreadExecutionSupervisor         | Turn admission and execution revisions are in the dispatch path; a bypass mode would be a second scheduler. |
-| Session recovery                  | Reconnect-after-restart has no meaningful "off" state — off is just the pre-existing stuck-session bug.     |
-| Thread priority                   | A projection column plus ordering. Nothing to disable; the sidebar that consumes it is itself flag-gated.   |
-| Thread Linear tags                | Durable metadata plus a read-only status lookup. The sidebar that consumes it is itself flag-gated.         |
-| Shell projection barrier          | Sync-correctness hardening. Disabling it reintroduces the drift it was written to fix.                      |
-| Plannotator plan review           | Relied on daily and mounted unconditionally; documented here rather than retrofitted behind a flag.         |
+| Subsystem                         | Why it is not flag-gated                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| User management / Clerk team mode | The reason the fork exists. Already conditioned on `T3CODE_CLERK_SECRET_KEY` being configured.                                        |
+| Ownership + access control        | A disabled access-control path is a data-exposure bug, not a fallback. Part of user management in practice.                           |
+| ThreadExecutionSupervisor         | Turn admission and execution revisions are in the dispatch path; a bypass mode would be a second scheduler.                           |
+| Session recovery                  | Reconnect-after-restart has no meaningful "off" state — off is just the pre-existing stuck-session bug.                               |
+| Thread priority                   | A projection column plus ordering. Nothing to disable; the sidebar that consumes it is itself flag-gated.                             |
+| Thread Linear tags                | Durable metadata plus a read-only status lookup, settable from the UI or over MCP. The sidebar that consumes it is itself flag-gated. |
+| Shell projection barrier          | Sync-correctness hardening. Disabling it reintroduces the drift it was written to fix.                                                |
+| Plannotator plan review           | Relied on daily and mounted unconditionally; documented here rather than retrofitted behind a flag.                                   |
 
 Everything outside this table should follow the flag rule in `AGENTS.md`.
 
@@ -273,6 +273,19 @@ it, `PhaseGroupedSidebar.tsx` renders it in the metadata lane.
   accessible name. They are modifiers on "open", not states; a hue each would
   make the densest lane in the app unreadable, and keeping them in the
   accessible name means state is never conveyed by colour alone.
+- **Tagged links win over branch detection.** The badge reads the thread's
+  `pullRequests` links first and only falls back to the branch probe when there
+  are none. Branch detection only ever finds the review for the checked-out
+  branch, so a PR an agent registered with `link_pull_request` — another
+  repository, a stack layer, a review opened before the branch existed — was
+  invisible in this lane until it happened to also be the branch's.
+- **More than one review opens a list instead of a link.** A single review keeps
+  the pull-request glyph and opens on click. Several unrelated reviews read
+  `#1234 +2`; one chain reads the same but wears the layers glyph, so a stack is
+  distinguishable from a pile at a glance. Either way the click opens a popover
+  listing every tagged review, bottom of the stack first, each one coloured by
+  its own state and opening on click — the badge never has to guess which
+  review you meant.
 
 The settle rule in `client-runtime/state/threadSettled.ts` is upstream-owned and
 carries one fork edit: **a merge no longer auto-settles a thread.** Landing the
