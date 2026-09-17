@@ -99,6 +99,10 @@
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"
     },
+    "./spoken-session-summary": {
+      "types": "./src/spokenSessionSummary.ts",
+      "default": "./src/spokenSessionSummary.ts"
+    },
     "./relay": {
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"

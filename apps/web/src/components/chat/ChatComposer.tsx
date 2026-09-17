@@ -917,6 +917,8 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
   );
 }
 import { Button } from "../ui/button";
+// T3-CUSTOM(expbkt3): whole-session spoken summary lives in a fork-owned module.
+import { SpokenSessionSummaryControl } from "../../fork/spokenSessionSummary/SpokenSessionSummaryControl";
 import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
@@ -6834,6 +6836,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
+                  {/* T3-CUSTOM(expbkt3): one additive composer seam for spoken summaries. */}
+                  {activeThreadId !== null && activeThread ? (
+                    <SpokenSessionSummaryControl
+                      environmentId={environmentId}
+                      threadId={activeThreadId}
+                      workSummary={activeThread.workSummary}
+                    />
+                  ) : null}
                   {showComposerAttachAction ? (
                     <>
                       <input
