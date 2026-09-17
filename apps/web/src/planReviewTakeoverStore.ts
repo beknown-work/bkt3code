@@ -31,7 +31,23 @@ export const PLAN_REVIEW_DISMISSED_LIMIT = 200;
 interface PlanReviewTakeoverState {
   readonly dismissedDocumentIds: ReadonlyArray<string>;
   dismiss: (documentId: string) => void;
+  /** Asking for the plan again after closing it. See `removeDismissedDocumentId`. */
+  undismiss: (documentId: string) => void;
   reset: () => void;
+}
+
+/**
+ * Forget one dismissal, leaving the rest alone.
+ *
+ * Closing a plan is a decision about that plan, and so is asking for it back:
+ * reopening must not clear the other plans the user has already waved away.
+ */
+export function removeDismissedDocumentId(
+  dismissed: ReadonlyArray<string>,
+  documentId: string,
+): ReadonlyArray<string> {
+  if (!dismissed.includes(documentId)) return dismissed;
+  return dismissed.filter((entry) => entry !== documentId);
 }
 
 export function appendDismissedDocumentId(
@@ -51,6 +67,11 @@ export const usePlanReviewTakeoverStore = create<PlanReviewTakeoverState>()(
       dismiss: (documentId) =>
         set((state) => {
           const next = appendDismissedDocumentId(state.dismissedDocumentIds, documentId);
+          return next === state.dismissedDocumentIds ? state : { dismissedDocumentIds: next };
+        }),
+      undismiss: (documentId) =>
+        set((state) => {
+          const next = removeDismissedDocumentId(state.dismissedDocumentIds, documentId);
           return next === state.dismissedDocumentIds ? state : { dismissedDocumentIds: next };
         }),
       reset: () => set({ dismissedDocumentIds: [] }),
