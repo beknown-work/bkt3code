@@ -18,12 +18,11 @@
  * @module planReviewTakeover
  */
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { ClipboardListIcon, PanelRightIcon, XIcon } from "lucide-react";
+import { XIcon } from "lucide-react";
 import { memo, Suspense, useEffect } from "react";
 
 import { useClientSettings } from "../hooks/useSettings";
 import { usePlanReviewTakeoverStore } from "../planReviewTakeoverStore";
-import { useRightPanelStore } from "../rightPanelStore";
 import { PlanReviewPanel } from "./planReviewSurface";
 
 /**
@@ -88,43 +87,22 @@ function PlanReviewTakeoverContent({
       aria-label="Plan ready for your decision"
       data-plan-review-takeover
     >
-      <div className="flex flex-none items-center gap-2 border-violet-500/25 border-b bg-violet-500/8 px-3 py-1.5">
-        <ClipboardListIcon className="size-3.5 shrink-0 text-violet-500" aria-hidden />
-        <span className="min-w-0 truncate font-medium text-violet-700 text-xs dark:text-violet-300">
-          Plan ready for your decision
-        </span>
-        <button
-          type="button"
-          className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[0.6875rem] text-secondary-label/70 hover:bg-accent/20 hover:text-secondary-label"
-          aria-label="Move the plan to the right panel"
-          data-plan-review-takeover-detach
-          onClick={() => {
-            // Handing the plan to the right panel is the user choosing where to
-            // read it, so the takeover stands down for this document.
-            useRightPanelStore.getState().openPlanReview(threadRef, documentId);
-            dismiss(documentId);
-          }}
-        >
-          <PanelRightIcon className="size-3" aria-hidden />
-          Right panel
-        </button>
-        <button
-          type="button"
-          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[0.6875rem] text-secondary-label/70 hover:bg-accent/20 hover:text-secondary-label"
-          aria-label="Close the plan review"
-          data-plan-review-takeover-close
-          onClick={() => dismiss(documentId)}
-        >
-          <XIcon className="size-3" aria-hidden />
-          Close
-        </button>
-      </div>
+      <button
+        type="button"
+        className="absolute top-2 right-2 z-50 flex size-8 items-center justify-center rounded-full border border-border/70 bg-background/90 text-muted-foreground shadow-md backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
+        aria-label="Close the plan review"
+        data-plan-review-takeover-close
+        onClick={() => dismiss(documentId)}
+      >
+        <XIcon className="size-4" aria-hidden />
+      </button>
       <div className="flex min-h-0 flex-1 flex-col">
         <Suspense fallback={null}>
           <PlanReviewPanel
             environmentId={threadRef.environmentId}
             documentId={documentId}
             onClose={() => dismiss(documentId)}
+            showConversationComposer
           />
         </Suspense>
       </div>

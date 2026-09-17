@@ -208,6 +208,8 @@ import {
 import { PlanReviewPanel, useOpenPlanReviewDocumentId } from "../fork/planReviewSurface";
 // T3-CUSTOM(expbkt3): a reviewable plan takes over the transcript.
 import { PlanReviewTakeover } from "../fork/planReviewTakeover";
+// T3-CUSTOM(expbkt3): dock the one live composer inside native plan review.
+import { PlanReviewComposerDock } from "../fork/planReviewComposerDock";
 // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
 import { AgentUiExpandedSurface } from "../fork/agentUiSurface";
 import {
@@ -9887,7 +9889,8 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
-                    <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
+                    {/* T3-CUSTOM(expbkt3): move this one mounted composer into plan review. */}
+                    <PlanReviewComposerDock contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
@@ -10071,7 +10074,7 @@ export default function ChatView(props: ChatViewProps) {
                           )}
                         </div>
                       </div>
-                    </ComposerSurface.Shell>
+                    </PlanReviewComposerDock>
                     <div
                       aria-hidden
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"
