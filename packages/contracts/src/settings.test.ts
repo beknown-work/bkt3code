@@ -730,6 +730,25 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("ServerSettings spoken session summaries", () => {
+  it("defaults legacy settings to a concise Luna summary", () => {
+    const summary = decodeServerSettings({}).experimental.sessionWorkSummary;
+    expect(summary.maxWords).toBe(60);
+    expect(summary.modelSelection).toMatchObject({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-luna",
+    });
+  });
+
+  it.each([19, 121])("rejects an out-of-range %i word limit", (maxWords) => {
+    expect(() =>
+      decodeServerSettingsPatch({
+        experimental: { sessionWorkSummary: { maxWords } },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("provider enabled defaults", () => {
   it("enables only the stable bindings by default", () => {
     const decoded = decodeServerSettings({});

@@ -974,6 +974,17 @@ export const SessionSummaryDataLimitChars = Schema.Int.check(
   }),
 );
 
+// T3-CUSTOM(expbkt3): Keep spoken work summaries short enough to be useful as audio.
+export const MIN_SESSION_WORK_SUMMARY_WORDS = 20;
+export const MAX_SESSION_WORK_SUMMARY_WORDS = 120;
+export const DEFAULT_SESSION_WORK_SUMMARY_WORDS = 60;
+export const SessionWorkSummaryWords = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_SESSION_WORK_SUMMARY_WORDS,
+    maximum: MAX_SESSION_WORK_SUMMARY_WORDS,
+  }),
+);
+
 export const MIN_SESSION_SUMMARY_TURN_DURATION_MINUTES = 0;
 export const MAX_SESSION_SUMMARY_TURN_DURATION_MINUTES = 120;
 export const DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES = 5;
@@ -1032,6 +1043,9 @@ export const SessionWorkSummarySettings = Schema.Struct({
   ),
   dataLimitChars: SessionSummaryDataLimitChars.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  maxWords: SessionWorkSummaryWords.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_WORK_SUMMARY_WORDS)),
   ),
   // Appended to the work-summary prompt. Empty means "use the built-in prompt".
   promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1741,6 +1755,7 @@ export const ServerSettingsPatch = Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
           modelSelection: Schema.optionalKey(ModelSelectionPatch),
           dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          maxWords: Schema.optionalKey(SessionWorkSummaryWords),
           promptInstructions: Schema.optionalKey(TrimmedString),
         }),
       ),

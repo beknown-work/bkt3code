@@ -57,6 +57,16 @@ const WORK_SUMMARY_NO_CONTEXT_MESSAGE =
   "This session is archived, so it is no longer available to summarize.";
 const MAX_WORK_SUMMARY_ERROR_CHARS = 500;
 
+/** Hard cap for providers that ignore the requested spoken-summary length. */
+export function limitWorkSummaryWords(summary: string, maxWords: number): string {
+  const words = summary.trim().split(/\s+/u).filter(Boolean);
+  if (words.length <= maxWords) return words.join(" ");
+  return `${words
+    .slice(0, maxWords)
+    .join(" ")
+    .replace(/[,:;.!?]+$/u, "")}…`;
+}
+
 const isTextGenerationError = Schema.is(TextGenerationError);
 
 /** Leaves room for the prompt's own rules inside the configured budget. */
@@ -244,18 +254,20 @@ const make = Effect.gen(function* () {
     }
 
     yield* Effect.gen(function* () {
+      const lengthInstruction = `Keep the summary to at most ${workSummary.maxWords} words so it can be read aloud.`;
+      const promptInstructions = [lengthInstruction, workSummary.promptInstructions]
+        .filter((value) => value.trim().length > 0)
+        .join("\n");
       const generated = yield* textGeneration
         .generateWorkSummary({
           cwd,
           context,
           modelSelection: workSummary.modelSelection,
-          ...(workSummary.promptInstructions.trim().length > 0
-            ? { promptInstructions: workSummary.promptInstructions }
-            : {}),
+          promptInstructions,
         })
         .pipe(Effect.timeout(WORK_SUMMARY_TIMEOUT));
 
-      const summary = generated.summary.trim();
+      const summary = limitWorkSummaryWords(generated.summary, workSummary.maxWords);
       yield* dispatchUpdate({
         threadId: input.threadId,
         requestId: input.requestId,
