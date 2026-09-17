@@ -23,6 +23,16 @@ describe("isThreadDetailEvent", () => {
     expect(isThreadDetailEvent(event)).toBe(true);
   });
 
+  // T3-CUSTOM(expbkt3): spoken summaries must update the open composer without a reload.
+  it.each(["thread.work-summary-requested", "thread.work-summary-updated"] as const)(
+    "routes %s to already-open thread subscriptions",
+    (type) => {
+      const event = { type } as OrchestrationEvent;
+
+      expect(isThreadDetailEvent(event)).toBe(true);
+    },
+  );
+
   it("does not route shell-only project events to a thread detail", () => {
     const event = {
       type: "project.meta-updated",
