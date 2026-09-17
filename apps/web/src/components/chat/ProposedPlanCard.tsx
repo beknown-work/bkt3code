@@ -223,7 +223,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
                   size="sm"
                   data-scroll-anchor-ignore
                   data-plan-review-trigger
-                  aria-label="Open the plan in the review panel"
+                  aria-label="Open the plan review"
                   onClick={() => onOpenPlanReview(planReviewDocumentId)}
                 >
                   Preview
