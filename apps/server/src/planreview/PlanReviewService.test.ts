@@ -128,6 +128,22 @@ const capturePlan = (
     authorUserId: null,
   });
 
+/** The proposed-plan records a decision closed, as dispatched to the thread. */
+const implementedPlans = (
+  commands: ReadonlyArray<OrchestrationCommand>,
+): ReadonlyArray<{ id: string; implementedAt: string | null; implementationThreadId: unknown }> =>
+  commands.flatMap((command) =>
+    command.type === "thread.proposed-plan.upsert" && command.proposedPlan.implementedAt !== null
+      ? [
+          {
+            id: command.proposedPlan.id,
+            implementedAt: command.proposedPlan.implementedAt,
+            implementationThreadId: command.proposedPlan.implementationThreadId,
+          },
+        ]
+      : [],
+  );
+
 const turnText = (commands: ReadonlyArray<OrchestrationCommand>): string => {
   const turn = commands.find((command) => command.type === "thread.turn.start");
   if (turn === undefined || turn.type !== "thread.turn.start") {
@@ -899,6 +915,117 @@ describe("PlanReviewService version diff", () => {
 
         expect(diff.diff).toContain("diff --git a/Auth rewrite.md");
         expect(diff.diff).toContain("+4. Announce it");
+      }),
+    ),
+  );
+});
+
+describe("PlanReviewService closes the plan it decided", () => {
+  const withPlan = (planId: string) => ({
+    sessionStatus: "running",
+    compactionAt: null,
+    proposedPlans: [
+      {
+        id: planId,
+        planMarkdown: PLAN,
+        implementedAt: null,
+        updatedAt: "2026-09-01T10:00:00.000Z",
+      },
+    ],
+  });
+
+  it.effect("marks the plan implemented when the review is approved", () =>
+    runWithService(withPlan("plan:a"), ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "approved",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const closed = implementedPlans(yield* Ref.get(dispatched));
+        expect(closed).toHaveLength(1);
+        expect(closed[0]?.id).toBe("plan:a");
+        // Implementation runs in this thread, so it owns the plan.
+        expect(closed[0]?.implementationThreadId).toBe(threadId);
+      }),
+    ),
+  );
+
+  it.effect("marks the plan implemented when the review is discarded", () =>
+    runWithService(withPlan("plan:a"), ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "discarded",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const closed = implementedPlans(yield* Ref.get(dispatched));
+        expect(closed).toHaveLength(1);
+        expect(closed[0]?.id).toBe("plan:a");
+        expect(closed[0]?.implementationThreadId).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("leaves the plan open while the agent answers feedback", () =>
+    runWithService(withPlan("plan:a"), ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.upsertDiscussion({
+          documentId: document.documentId,
+          discussionId: "plan-discussion:1",
+          quotedText: "Backfill the rows",
+          bodyMarkdown: "In batches, please.",
+          actorUserId: reviewerId,
+        });
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "changes-requested",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        // The lineage is still live: its revision is what the reviewer waits
+        // for, and closing the record here would hide it.
+        expect(implementedPlans(yield* Ref.get(dispatched))).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("heals a decision taken before the write-back existed", () =>
+    runWithService(withPlan("plan:a"), ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const document = yield* capturePlan(service, "plan:a");
+        yield* service.submit({
+          documentId: document.documentId,
+          decision: "approved",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+        yield* Ref.set(dispatched, []);
+
+        // Startup reconciliation re-offers every plan whose record is still
+        // open. This one's review is approved, so the record is closed instead
+        // of the plan being captured again.
+        yield* capturePlan(service, "plan:a");
+
+        const closed = implementedPlans(yield* Ref.get(dispatched));
+        expect(closed).toHaveLength(1);
+        expect(closed[0]?.id).toBe("plan:a");
       }),
     ),
   );
