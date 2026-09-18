@@ -44,12 +44,16 @@ export const SESSION_MANAGER_ATTENTION_KINDS: ReadonlyArray<PhaseSidebarAttentio
   "approval",
   "input",
   "error",
+  // T3-CUSTOM(expbkt3): filter for sessions holding a plan awaiting a decision.
+  "plan",
 ];
 
 export const SESSION_MANAGER_ATTENTION_LABELS: Record<PhaseSidebarAttentionKind, string> = {
   approval: "Approval",
   input: "Input",
   error: "Error",
+  // T3-CUSTOM(expbkt3): plan review.
+  plan: "Plan",
 };
 
 /** Per-environment capability gates, resolved once per row. */

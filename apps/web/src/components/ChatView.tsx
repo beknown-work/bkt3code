@@ -206,6 +206,11 @@ import {
 } from "../rightPanelStore";
 // T3-CUSTOM(expbkt3): native plan review surface.
 import { PlanReviewPanel, useOpenPlanReviewDocumentId } from "../fork/planReviewSurface";
+// T3-CUSTOM(expbkt3): a reviewable plan takes over the transcript.
+import { PlanReviewTakeover } from "../fork/planReviewTakeover";
+// T3-CUSTOM(expbkt3): dock the one live composer inside native plan review.
+import { PlanReviewComposerDock } from "../fork/planReviewComposerDock";
+import { usePlanReviewTakeoverStore } from "../planReviewTakeoverStore";
 // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
 import { AgentUiExpandedSurface } from "../fork/agentUiSurface";
 import {
@@ -4893,13 +4898,13 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadRef],
   );
-  const openPlanReviewSurface = useCallback(
-    (documentId: string) => {
-      if (!activeThreadRef) return;
-      useRightPanelStore.getState().openPlanReview(activeThreadRef, documentId);
-    },
-    [activeThreadRef],
-  );
+  // Every "open the plan" entry point — the pill above the composer and the
+  // Preview button on the plan card — brings back the transcript takeover, the
+  // surface the plan opened in. The takeover's own header is the one route to
+  // the side panel, so the two never mean the same word differently.
+  const openPlanReviewSurface = useCallback((documentId: string) => {
+    usePlanReviewTakeoverStore.getState().undismiss(documentId);
+  }, []);
   const planReviewDocumentId = useOpenPlanReviewDocumentId(
     activeThreadRef?.environmentId ?? null,
     activeThreadRef?.threadId ?? null,
@@ -9819,17 +9824,21 @@ export default function ChatView(props: ChatViewProps) {
                 >
                   <button
                     type="button"
-                    aria-label="Open the plan in preview"
+                    aria-label="Open the plan review"
                     data-plan-review-pill
                     onClick={() => openPlanReviewSurface(planReviewDocumentId)}
                     className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:cursor-pointer hover:border-border hover:text-foreground"
                   >
                     <ClipboardListIcon className="size-3.5" />
-                    Open the plan in preview
+                    Open the plan
                   </button>
                 </div>
               ) : null}
               {/* T3-CUSTOM(expbkt3): END */}
+              {/* T3-CUSTOM(expbkt3): a reviewable plan covers the transcript, not the composer.
+                  Mounted before the agent view so a surface the user expanded on
+                  purpose still wins over the automatic one. */}
+              <PlanReviewTakeover threadRef={activeThreadRef} documentId={planReviewDocumentId} />
               {/* T3-CUSTOM(expbkt3): an expanded agent view covers the transcript, not the composer. */}
               <AgentUiExpandedSurface threadRef={activeThreadRef} />
             </div>
@@ -9881,7 +9890,8 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
-                    <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
+                    {/* T3-CUSTOM(expbkt3): move this one mounted composer into plan review. */}
+                    <PlanReviewComposerDock contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
@@ -10065,7 +10075,7 @@ export default function ChatView(props: ChatViewProps) {
                           )}
                         </div>
                       </div>
-                    </ComposerSurface.Shell>
+                    </PlanReviewComposerDock>
                     <div
                       aria-hidden
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"

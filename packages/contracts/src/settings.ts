@@ -508,6 +508,10 @@ export const ClientSettingsSchema = Schema.Struct({
   // T3-CUSTOM(expbkt3): native plan review. On by default; turning it off hides
   // the Preview entry points and leaves Plannotator as the only review path.
   nativePlanReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // T3-CUSTOM(expbkt3): a reviewable plan takes over the transcript as soon as
+  // it lands, so a plan gate cannot be missed. Off leaves the Preview button as
+  // the only way in. Requires nativePlanReviewEnabled.
+  planReviewAutoOpenEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in the chat transcript. While
   // off, a `t3_show_ui` call stays an ordinary collapsed tool row.
   agentUiSurfacesEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -970,6 +974,17 @@ export const SessionSummaryDataLimitChars = Schema.Int.check(
   }),
 );
 
+// T3-CUSTOM(expbkt3): Keep spoken work summaries short enough to be useful as audio.
+export const MIN_SESSION_WORK_SUMMARY_WORDS = 20;
+export const MAX_SESSION_WORK_SUMMARY_WORDS = 120;
+export const DEFAULT_SESSION_WORK_SUMMARY_WORDS = 60;
+export const SessionWorkSummaryWords = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_SESSION_WORK_SUMMARY_WORDS,
+    maximum: MAX_SESSION_WORK_SUMMARY_WORDS,
+  }),
+);
+
 export const MIN_SESSION_SUMMARY_TURN_DURATION_MINUTES = 0;
 export const MAX_SESSION_SUMMARY_TURN_DURATION_MINUTES = 120;
 export const DEFAULT_SESSION_SUMMARY_TURN_DURATION_MINUTES = 5;
@@ -1028,6 +1043,9 @@ export const SessionWorkSummarySettings = Schema.Struct({
   ),
   dataLimitChars: SessionSummaryDataLimitChars.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_SUMMARY_DATA_LIMIT_CHARS)),
+  ),
+  maxWords: SessionWorkSummaryWords.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SESSION_WORK_SUMMARY_WORDS)),
   ),
   // Appended to the work-summary prompt. Empty means "use the built-in prompt".
   promptInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1737,6 +1755,7 @@ export const ServerSettingsPatch = Schema.Struct({
           enabled: Schema.optionalKey(Schema.Boolean),
           modelSelection: Schema.optionalKey(ModelSelectionPatch),
           dataLimitChars: Schema.optionalKey(SessionSummaryDataLimitChars),
+          maxWords: Schema.optionalKey(SessionWorkSummaryWords),
           promptInstructions: Schema.optionalKey(TrimmedString),
         }),
       ),
@@ -1834,6 +1853,8 @@ export const ClientSettingsPatch = Schema.Struct({
   planModeAvailable: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): native plan review.
   nativePlanReviewEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): plan review takeover.
+  planReviewAutoOpenEnabled: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   agentUiSurfacesEnabled: Schema.optionalKey(Schema.Boolean),
   pullRequestMergeMethodOverrides: Schema.optionalKey(

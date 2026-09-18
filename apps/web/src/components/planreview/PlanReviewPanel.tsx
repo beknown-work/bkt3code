@@ -38,11 +38,13 @@ import { toastManager } from "../ui/toast";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useCurrentUserId } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
+import { PlanReviewConversationComposerTarget } from "../../fork/planReviewComposerDock";
 
 interface PlanReviewPanelProps {
   readonly environmentId: EnvironmentId;
   readonly documentId: string;
   readonly onClose: () => void;
+  readonly showConversationComposer?: boolean;
 }
 
 type PanelTab = "review" | "versions";
@@ -53,6 +55,7 @@ export default function PlanReviewPanel({
   environmentId,
   documentId,
   onClose,
+  showConversationComposer = false,
 }: PlanReviewPanelProps) {
   const [tab, setTab] = useState<PanelTab>("review");
   const [suggestionMode, setSuggestionMode] = useState(true);
@@ -505,14 +508,16 @@ export default function PlanReviewPanel({
 
         {isResolved ? null : (
           <div className="border-t p-2">
-            <textarea
-              className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
-              rows={3}
-              value={globalComment}
-              placeholder="Overall notes for the agent (optional)"
-              aria-label="Overall review notes"
-              onChange={(event) => setGlobalComment(event.target.value)}
-            />
+            {showConversationComposer ? null : (
+              <textarea
+                className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
+                rows={3}
+                value={globalComment}
+                placeholder="Overall notes for the agent (optional)"
+                aria-label="Overall review notes"
+                onChange={(event) => setGlobalComment(event.target.value)}
+              />
+            )}
             {/*
               Unsaved edits take the whole row. Deciding on a plan whose edits are
               not yet a version is ambiguous — neither the reviewer nor the agent
@@ -583,6 +588,7 @@ export default function PlanReviewPanel({
             </div>
           </div>
         )}
+        {showConversationComposer ? <PlanReviewConversationComposerTarget /> : null}
       </aside>
     </div>
   );

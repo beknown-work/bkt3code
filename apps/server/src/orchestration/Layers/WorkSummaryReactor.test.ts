@@ -32,7 +32,7 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { WorkSummaryReactorLive } from "./WorkSummaryReactor.ts";
+import { limitWorkSummaryWords, WorkSummaryReactorLive } from "./WorkSummaryReactor.ts";
 
 const PROJECT_ID = ProjectId.make("project-work-summary-reactor");
 const THREAD_ID = ThreadId.make("thread-work-summary-reactor");
@@ -52,6 +52,7 @@ const GENERATED = {
 const makeHarness = (options: {
   readonly enabled?: boolean;
   readonly fail?: boolean;
+  readonly maxWords?: number;
   /** Completed by the stub when the first generation starts. */
   readonly firstCallStarted?: Deferred.Deferred<void>;
   /** Awaited by the first generation, so the test controls the queue window. */
@@ -59,10 +60,12 @@ const makeHarness = (options: {
 }) =>
   Effect.gen(function* () {
     const generateCalls = yield* Ref.make(0);
+    const promptInstructions = yield* Ref.make<string | null>(null);
 
     const textGeneration = {
-      generateWorkSummary: () =>
-        Ref.update(generateCalls, (count) => count + 1).pipe(
+      generateWorkSummary: (input: { readonly promptInstructions?: string }) =>
+        Ref.set(promptInstructions, input.promptInstructions ?? null).pipe(
+          Effect.andThen(Ref.update(generateCalls, (count) => count + 1)),
           Effect.andThen(
             Effect.gen(function* () {
               if (options.firstCallStarted === undefined) {
@@ -109,6 +112,7 @@ const makeHarness = (options: {
           experimental: {
             sessionWorkSummary: {
               enabled: options.enabled ?? true,
+              ...(options.maxWords === undefined ? {} : { maxWords: options.maxWords }),
             },
           },
         }),
@@ -119,7 +123,7 @@ const makeHarness = (options: {
       Layer.provide(NodeServices.layer),
     );
 
-    return { reactorLayer, generateCalls };
+    return { reactorLayer, generateCalls, promptInstructions };
   });
 
 const seedThread = Effect.fn("seedThread")(function* () {
@@ -207,6 +211,10 @@ const readWorkSummary = Effect.gen(function* () {
 const layer = it.layer(SqlitePersistenceMemory);
 
 layer("WorkSummaryReactor", (it) => {
+  it("caps generated prose at the configured word boundary", () => {
+    assert.strictEqual(limitWorkSummaryWords("one two three four five", 3), "one two three…");
+  });
+
   it.effect("writes a ready work summary with the assigned progress", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({});
@@ -219,6 +227,7 @@ layer("WorkSummaryReactor", (it) => {
         yield* reactor.drain;
 
         assert.strictEqual(yield* Ref.get(harness.generateCalls), 1);
+        assert.include(yield* Ref.get(harness.promptInstructions), "at most 60 words");
         const workSummary = yield* readWorkSummary;
         assert.strictEqual(workSummary?.status, "ready");
         assert.strictEqual(workSummary?.summary, GENERATED.summary);

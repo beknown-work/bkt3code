@@ -130,6 +130,43 @@ describe("phaseSidebarRowActionsClassName", () => {
   });
 });
 
+// T3-CUSTOM(expbkt3): BEGIN — the violet Plan Ready row treatment.
+describe("phase sidebar plan-ready rows", () => {
+  it("mirrors the Needs Input pulse in violet", () => {
+    const planReady = phaseSidebarRowClassName(false, false, false, true);
+
+    expect(planReady).toContain("animate-[pulse_1.25s_ease-in-out_infinite]");
+    expect(planReady).toContain("bg-violet-500/20");
+    expect(planReady).toContain("ring-violet-500/60");
+    expect(planReady).toContain("shadow-[inset_3px_0_0_0_var(--color-violet-500)");
+    expect(planReady).toContain("motion-reduce:animate-none");
+  });
+
+  it("stays visually distinct from the red Needs Input row", () => {
+    const planReady = phaseSidebarRowClassName(false, false, false, true);
+    const needsInput = phaseSidebarRowClassName(false, false, true, false);
+
+    expect(planReady).not.toContain("bg-red-500/20");
+    expect(needsInput).not.toContain("bg-violet-500/20");
+    expect(planReady).not.toBe(needsInput);
+  });
+
+  it("lets a question win the row when a plan is also waiting", () => {
+    // Both flags can be true mid-transition; the row must not carry two pulses.
+    const both = phaseSidebarRowClassName(false, false, true, true);
+
+    expect(both).toContain("bg-red-500/20");
+    expect(both).not.toContain("bg-violet-500/20");
+  });
+
+  it("leaves an ordinary row unpulsed", () => {
+    expect(phaseSidebarRowClassName(false, false, false, false)).not.toContain(
+      "animate-[pulse_1.25s_ease-in-out_infinite]",
+    );
+  });
+});
+// T3-CUSTOM(expbkt3): END
+
 describe("phase sidebar group headers", () => {
   it("gives ready states distinct, theme-aware surfaces and larger labels", () => {
     const planReady = phaseSidebarGroupHeaderClassName("plan_ready");
@@ -221,8 +258,11 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
     ).toEqual({
       kind: "current",
       label: "dev",
-      tooltip: "Current checkout on dev",
+      // T3-CUSTOM(expbkt3): the thread is on `stale-branch` but `dev` is checked
+      // out, so the row now says so instead of reading as healthy.
+      tooltip: "Current checkout on dev — this thread is on stale-branch",
       toneIndex: null,
+      branchMismatch: "stale-branch",
     });
   });
 
@@ -250,7 +290,11 @@ describe("resolvePhaseSidebarCheckoutMetadata", () => {
         { branch: "t3code/generated-feature", worktreePath },
         { refName: "t3code/generated-feature", baseRef: "main", pr: null },
       ).tooltip,
-    ).toBe(`Worktree ${resolveWorktreeCodename(worktreePath)} · from main · ${worktreePath}`);
+      // T3-CUSTOM(expbkt3): the codename replaces the branch in the label, so
+      // the branch has to survive here.
+    ).toBe(
+      `Worktree ${resolveWorktreeCodename(worktreePath)} · t3code/generated-feature · from main · ${worktreePath}`,
+    );
   });
 
   it("prefers a pull request base when one is available", () => {
@@ -696,7 +740,10 @@ describe("phase sidebar lifecycle", () => {
         }),
       ),
     ).toBe("plan_ready");
-    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("plan_ready");
+    // T3-CUSTOM(expbkt3): plan mode alone is not Plan Ready any more — the group
+    // means a plan is waiting for a decision, so an idle plan-mode thread with
+    // nothing to decide is just idle.
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
     expect(
       resolvePhaseSidebarPhase(
         makeThread({
@@ -802,8 +849,68 @@ describe("phase sidebar lifecycle", () => {
     ]);
   });
 
-  it("uses only plan mode and working state for lifecycle classification", () => {
-    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("plan_ready");
+  // T3-CUSTOM(expbkt3): BEGIN — Plan Ready means a plan is waiting, in any mode.
+  it("files a plan submitted from a default-mode turn under Plan Ready", () => {
+    // `t3_submit_plan` never changes interactionMode, so gating the group on
+    // plan mode hid every plan an agent submitted mid-turn.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({ interactionMode: "default", hasActionableProposedPlan: true }),
+      ),
+    ).toBe("plan_ready");
+  });
+
+  it("keeps a waiting plan out of Plan Ready while the agent is still running", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "default",
+          hasActionableProposedPlan: true,
+          execution: makeActiveExecution(),
+        }),
+      ),
+    ).toBe("implementing");
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          execution: makeActiveExecution(),
+        }),
+      ),
+    ).toBe("planning");
+  });
+
+  it("drops a failed thread with nothing to decide into Ready", () => {
+    // It used to land in Plan Ready purely for being in plan mode; the ERROR
+    // badge already says what happened.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          execution: makeExecution({ activity: "failed" }),
+        }),
+      ),
+    ).toBe("ready");
+  });
+
+  it("keeps a failed thread in Plan Ready when its plan is still outstanding", () => {
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          interactionMode: "plan",
+          hasActionableProposedPlan: true,
+          execution: makeExecution({ activity: "failed" }),
+        }),
+      ),
+    ).toBe("plan_ready");
+  });
+  // T3-CUSTOM(expbkt3): END
+
+  it("uses an actionable plan and working state for lifecycle classification", () => {
+    // T3-CUSTOM(expbkt3): interaction mode picks Planning vs Implementing while
+    // work runs; it no longer decides Plan Ready on its own.
+    expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "plan" }))).toBe("ready");
     expect(resolvePhaseSidebarPhase(makeThread({ interactionMode: "default" }))).toBe("ready");
     expect(
       resolvePhaseSidebarPhase(
@@ -881,6 +988,42 @@ describe("phase sidebar attention badges", () => {
       ),
     ).toBe("error");
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN — a plan waiting on a human is attention too.
+  it("reports a waiting plan as attention, ranked below every blocking kind", () => {
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ hasActionableProposedPlan: true }))).toBe(
+      "plan",
+    );
+    // A question, an approval and a failure each outrank it.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, hasPendingUserInput: true }),
+      ),
+    ).toBe("input");
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, hasPendingApprovals: true }),
+      ),
+    ).toBe("approval");
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({
+          hasActionableProposedPlan: true,
+          execution: makeExecution({ activity: "failed" }),
+        }),
+      ),
+    ).toBe("error");
+  });
+
+  it("badges a plan that arrives while the agent is still working", () => {
+    // The row stays in Implementing, but it still has to say a plan is there.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, execution: makeActiveExecution() }),
+      ),
+    ).toBe("plan");
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it("does not add attention badges to ordinary lifecycle states", () => {
     expect(resolvePhaseSidebarAttentionKind(makeThread())).toBeNull();
@@ -1603,3 +1746,152 @@ describe("phase sidebar priority", () => {
     expect(phaseSidebarPriorityBadgeClassName(0)).not.toContain("bg-red-500");
   });
 });
+
+// T3-CUSTOM(expbkt3): BEGIN — signals the stock sidebar shows and this one did not.
+describe("phase sidebar detected pull requests", () => {
+  const detected = {
+    projectId: ProjectId.make("project-1"),
+    repository: "beknown-work/bkt3code",
+    number: 180,
+    url: "https://github.com/beknown-work/bkt3code/pull/180",
+  };
+
+  it("shows a pull request the server detected for the thread's branch", () => {
+    // The auto-detected PR lives only on the thread, never in `pullRequests`,
+    // so the row used to render nothing while the chat header showed it.
+    const badge = resolvePhaseSidebarChangeRequestBadge(null, [], detected);
+
+    expect(badge?.label).toBe("#180");
+    expect(badge?.url).toBe(detected.url);
+    expect(badge?.statusText).toBe("status pending");
+  });
+
+  it("keeps the detected review muted until its state is known", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge(null, [], detected);
+
+    // Colouring it green would assert an "open" the row has not confirmed.
+    expect(badge?.colorClassName).toBe("text-muted-foreground");
+    expect(badge?.colorClassName).not.toContain("emerald");
+  });
+
+  it("enriches the detected review with live state when the two agree", () => {
+    const badge = resolvePhaseSidebarChangeRequestBadge(
+      { pr: { number: 180, url: detected.url, state: "open", title: "A plan" } as never },
+      [],
+      detected,
+    );
+
+    expect(badge?.label).toBe("#180");
+    expect(badge?.statusText).toBe("open");
+  });
+
+  it("ignores a working-directory probe pointing at another thread's review", () => {
+    // The probe is keyed by cwd, so on a shared local checkout it reports
+    // whatever branch is checked out. The thread's own field decides identity.
+    const badge = resolvePhaseSidebarChangeRequestBadge(
+      {
+        pr: {
+          number: 999,
+          url: "https://example.test/999",
+          state: "open",
+          title: "Other",
+        } as never,
+      },
+      [],
+      detected,
+    );
+
+    expect(badge?.label).toBe("#180");
+    expect(badge?.statusText).toBe("status pending");
+  });
+
+  it("renders nothing when there is no review at all", () => {
+    expect(resolvePhaseSidebarChangeRequestBadge(null, [], null)).toBeNull();
+  });
+});
+
+describe("phase sidebar branch mismatch", () => {
+  it("flags a local checkout sitting on another branch", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "feature/mine", worktreePath: null },
+      { refName: "main", baseRef: null, pr: null } as never,
+    );
+
+    expect(metadata.branchMismatch).toBe("feature/mine");
+    expect(metadata.tooltip).toContain("feature/mine");
+  });
+
+  it("stays quiet when the checkout matches the thread", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata({ branch: "main", worktreePath: null }, {
+      refName: "main",
+      baseRef: null,
+      pr: null,
+    } as never);
+
+    expect(metadata.branchMismatch).toBeNull();
+  });
+
+  it("never flags a worktree, which owns its own checkout", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "feature/mine", worktreePath: "/tmp/wt" },
+      { refName: "main", baseRef: null, pr: null } as never,
+    );
+
+    expect(metadata.branchMismatch).toBeNull();
+  });
+
+  it("names the branch in a worktree tooltip, since the label is a codename", () => {
+    const metadata = resolvePhaseSidebarCheckoutMetadata(
+      { branch: "feature/mine", worktreePath: "/tmp/wt" },
+      null,
+      { codename: "onigiri" },
+    );
+
+    expect(metadata.label).toBe("onigiri");
+    expect(metadata.tooltip).toContain("feature/mine");
+  });
+});
+
+describe("phase sidebar session errors", () => {
+  it("badges a session error, matching how it is already grouped", () => {
+    // resolvePhaseSidebarPhase already treats this as a failure, so badging on
+    // execution activity alone left a row grouped as failed with no badge.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ session: { status: "error" } as never, execution: null }),
+      ),
+    ).toBe("error");
+  });
+});
+// T3-CUSTOM(expbkt3): END
+
+// T3-CUSTOM(expbkt3): BEGIN — pinning used to be a no-op the UI still offered.
+describe("phase sidebar pinning", () => {
+  it("sorts a pinned thread to the top of its group", () => {
+    const pinned = makeRow({
+      thread: makeThread({ id: ThreadId.make("thread-pinned"), pinnedAt: now }),
+    });
+    const ordinary = makeRow({ thread: makeThread({ id: ThreadId.make("thread-plain") }) });
+
+    const groups = buildPhaseSidebarGroups(
+      [ordinary, pinned],
+      EMPTY_PHASE_SIDEBAR_FILTERS,
+      "updated_at",
+    );
+
+    expect(groups[0]?.rows[0]?.thread.id).toBe(ThreadId.make("thread-pinned"));
+  });
+
+  it("leaves order alone when nothing is pinned", () => {
+    const a = makeRow({ thread: makeThread({ id: ThreadId.make("thread-a") }) });
+    const b = makeRow({ thread: makeThread({ id: ThreadId.make("thread-b") }) });
+
+    const groups = buildPhaseSidebarGroups([a, b], EMPTY_PHASE_SIDEBAR_FILTERS, "updated_at");
+
+    expect(groups[0]?.rows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
+    ]);
+  });
+});
+// T3-CUSTOM(expbkt3): END

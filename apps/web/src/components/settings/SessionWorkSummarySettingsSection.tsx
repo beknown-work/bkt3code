@@ -10,7 +10,9 @@ import { useState } from "react";
 import * as Equal from "effect/Equal";
 import {
   DEFAULT_UNIFIED_SETTINGS,
+  MAX_SESSION_WORK_SUMMARY_WORDS,
   MAX_SESSION_SUMMARY_DATA_LIMIT_CHARS,
+  MIN_SESSION_WORK_SUMMARY_WORDS,
   MIN_SESSION_SUMMARY_DATA_LIMIT_CHARS,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -129,6 +131,7 @@ export function SessionWorkSummarySettingsSection() {
     DEFAULT_WORK_SUMMARY.modelSelection ?? null,
   );
   const isDataLimitDirty = workSummary.dataLimitChars !== DEFAULT_WORK_SUMMARY.dataLimitChars;
+  const isMaxWordsDirty = workSummary.maxWords !== DEFAULT_WORK_SUMMARY.maxWords;
   const isPromptDirty = workSummary.promptInstructions !== DEFAULT_WORK_SUMMARY.promptInstructions;
 
   // `updateSettings` takes a whole-value patch, so merge onto current values.
@@ -149,7 +152,7 @@ export function SessionWorkSummarySettingsSection() {
     <SettingsSection title="Session work summary">
       <SettingsRow
         title="Generate work summaries"
-        description="Fill the AI work summary and progress columns in the sessions manager: what each session actually did, and how far along it looks. Generated on the server, so the columns are the same for everyone."
+        description="Generate the session manager summary and the spoken summary opened from the chat composer. Generated on the server, so the result is shared across clients."
         resetAction={
           isEnabledDirty ? (
             <SettingResetButton
@@ -197,6 +200,33 @@ export function SessionWorkSummarySettingsSection() {
                 });
               }}
             />
+          </div>
+        }
+      />
+
+      <SettingsRow
+        title="Spoken summary length"
+        description="Maximum words in the summary shown and read aloud from the chat composer."
+        resetAction={
+          isMaxWordsDirty ? (
+            <SettingResetButton
+              label="spoken summary length"
+              onClick={() => patchWorkSummary({ maxWords: DEFAULT_WORK_SUMMARY.maxWords })}
+            />
+          ) : null
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <SettingsNumberField
+              ariaLabel="Spoken summary maximum words"
+              disabled={!enabled}
+              max={MAX_SESSION_WORK_SUMMARY_WORDS}
+              min={MIN_SESSION_WORK_SUMMARY_WORDS}
+              onValueChange={(value) => patchWorkSummary({ maxWords: value })}
+              step={10}
+              value={workSummary.maxWords}
+            />
+            <span className="text-muted-foreground text-xs">words</span>
           </div>
         }
       />
