@@ -260,6 +260,67 @@ export const make = Effect.gen(function* () {
       });
     }).pipe(Effect.ignore);
 
+  /**
+   * Close the proposed-plan records a decided review came from.
+   *
+   * `hasActionableProposedPlan` — the projection behind the violet "Plan Ready"
+   * row, the plan badge and the composer's follow-up banner — is true while the
+   * newest proposed plan has no `implementedAt`. Approving or discarding a
+   * review ends the planning phase, but nothing used to write that back, so a
+   * thread kept advertising a decision that had already been made: the row
+   * returned to Plan Ready the moment the implementation turn settled.
+   *
+   * Feedback is deliberately not closed here. The lineage stays live until the
+   * agent answers it, and while that turn runs the row reads as working; the
+   * revision then becomes the plan that is genuinely waiting.
+   *
+   * Failure is swallowed: a decision that reached the agent must not be undone
+   * by a projection write.
+   */
+  const markPlansImplemented = (input: {
+    readonly threadId: ThreadId;
+    readonly documentId: string;
+    readonly implementationThreadId: ThreadId | null;
+  }) =>
+    Effect.gen(function* () {
+      const versions = yield* repository.listVersions(input.documentId);
+      const sourcePlanIds = new Set(
+        versions.flatMap((version) =>
+          version.sourcePlanId === null ? [] : [version.sourcePlanId],
+        ),
+      );
+      if (sourcePlanIds.size === 0) return;
+
+      const threadOption = yield* query.getThreadDetailById(input.threadId);
+      if (Option.isNone(threadOption)) return;
+      const open = threadOption.value.proposedPlans.filter(
+        (plan) => plan.implementedAt === null && sourcePlanIds.has(plan.id),
+      );
+      if (open.length === 0) return;
+
+      const implementedAt = yield* nowIso;
+      yield* Effect.forEach(
+        open,
+        (plan) =>
+          Effect.gen(function* () {
+            const commandUuid = yield* uuid;
+            yield* dispatcher.dispatch({
+              type: "thread.proposed-plan.upsert",
+              commandId: CommandId.make(`plan-review:implemented:${commandUuid}`),
+              threadId: input.threadId,
+              proposedPlan: {
+                ...plan,
+                implementedAt,
+                implementationThreadId: input.implementationThreadId,
+                updatedAt: implementedAt,
+              },
+              createdAt: implementedAt,
+            });
+          }),
+        { discard: true },
+      );
+    }).pipe(Effect.ignore);
+
   const capturePlan: PlanReviewService["Service"]["capturePlan"] = (input) =>
     Effect.gen(function* () {
       // A plan id we have already captured means this is a redelivery, not a
@@ -267,7 +328,21 @@ export const make = Effect.gen(function* () {
       const existingForPlan = yield* repository
         .findDocumentBySourcePlanId(input.planId)
         .pipe(asInvariant("capturePlan.findBySourcePlan"));
-      if (Option.isSome(existingForPlan)) return existingForPlan.value;
+      if (Option.isSome(existingForPlan)) {
+        // Reconciliation and redelivery both land here, which makes it the one
+        // place that sees a plan whose review already ended while its
+        // proposed-plan record is still open — decisions taken before this
+        // write-back existed, or an approval whose turn never started. Heal it.
+        const decided = existingForPlan.value;
+        if (decided.status === "approved" || decided.status === "discarded") {
+          yield* markPlansImplemented({
+            threadId: decided.threadId,
+            documentId: decided.documentId,
+            implementationThreadId: decided.status === "approved" ? decided.threadId : null,
+          });
+        }
+        return decided;
+      }
 
       // An open document on the same thread is the lineage this plan revises.
       // A lineage awaiting a revision is still the lineage this plan belongs
@@ -708,6 +783,11 @@ export const make = Effect.gen(function* () {
             updatedAt: discardedAt,
           })
           .pipe(asInvariant("submit.discard"));
+        yield* markPlansImplemented({
+          threadId: document.threadId,
+          documentId: document.documentId,
+          implementationThreadId: null,
+        });
         yield* appendActivity({
           threadId: document.threadId,
           summary: "Plan review was discarded.",
@@ -845,6 +925,17 @@ export const make = Effect.gen(function* () {
         })
         .pipe(asInvariant("submit.setStatus"));
       yield* repository.clearDraft(document.documentId).pipe(asInvariant("submit.clearDraft"));
+
+      // Implementation starts in this thread, so the plan is no longer waiting
+      // on anyone. Upstream only closes a plan when a *different* thread picks
+      // it up, which never happens on this path.
+      if (input.decision === "approved") {
+        yield* markPlansImplemented({
+          threadId: document.threadId,
+          documentId: document.documentId,
+          implementationThreadId: document.threadId,
+        });
+      }
 
       // Anything already handed to the agent is spent. This applies to an
       // approval too: implementation comments must not remain falsely open in

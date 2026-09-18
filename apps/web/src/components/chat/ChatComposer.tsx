@@ -133,6 +133,12 @@ import {
 import type { ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerSurface } from "./ComposerSurface";
+// T3-CUSTOM(expbkt3): a composer docked into plan review rests while unfocused,
+// and collapses on the plan document instead of the hidden timeline.
+import {
+  usePlanReviewComposerScrollSurface,
+  usePlanReviewDockedRest,
+} from "../../fork/planReviewComposerDock";
 import {
   ComposerBannerStack,
   type ComposerBannerStackContent,
@@ -1537,9 +1543,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     restingControlsHost,
     restingControlsHaveLeadingContext,
     onRestingControlsVisibilityChange,
-    getTimelineScrollableNode,
-    isTimelineAtLogicalEnd,
-    timelineOverflows,
+    // T3-CUSTOM(expbkt3): aliased so a docked composer can answer these from the plan.
+    getTimelineScrollableNode: getChatTimelineScrollableNode,
+    isTimelineAtLogicalEnd: isChatTimelineAtLogicalEnd,
+    timelineOverflows: chatTimelineOverflows,
     onComposerOverlayHeightChange,
     onRestingChange,
     promptRef,
@@ -2118,6 +2125,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsComposerScrollCollapsed,
     restoreAfterTimelineReachedEnd,
   } = useComposerFocusState();
+  // T3-CUSTOM(expbkt3): docked under a plan, the document the reviewer scrolls
+  // is the surface upstream's collapse gesture watches. Everything downstream —
+  // the wheel handler, the resting layout, the PageUp/Home keys — is unchanged.
+  const { getTimelineScrollableNode, isTimelineAtLogicalEnd, timelineOverflows } =
+    usePlanReviewComposerScrollSurface({
+      getTimelineScrollableNode: getChatTimelineScrollableNode,
+      isTimelineAtLogicalEnd: isChatTimelineAtLogicalEnd,
+      timelineOverflows: chatTimelineOverflows,
+    });
   const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
   const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
     null,
@@ -4699,6 +4715,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const expandedComposerImages = isComposerResting
     ? standaloneComposerImages.filter((image) => pendingSnapShotIdSet.has(image.id))
     : standaloneComposerImages;
+  // T3-CUSTOM(expbkt3): while docked under a plan, losing focus rests the
+  // composer too — every pixel it holds there is a line of the plan.
+  usePlanReviewDockedRest({
+    isComposerScrollCollapsed,
+    setIsComposerScrollCollapsed,
+    hasMultilinePrompt,
+    hasExpandedChrome: composerHasExpandedChrome || isComposerModelPickerOpen,
+  });
   // The relocated controls live in the context strip whenever the composer is
   // collapsed for any reason, the desktop resting layout or the phone
   // collapse. Both leave the footer unrendered, so the strip is the only place

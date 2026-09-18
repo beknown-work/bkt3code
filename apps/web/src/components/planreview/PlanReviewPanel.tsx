@@ -38,7 +38,10 @@ import { toastManager } from "../ui/toast";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useCurrentUserId } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
-import { PlanReviewConversationComposerTarget } from "../../fork/planReviewComposerDock";
+import {
+  PlanReviewConversationComposerTarget,
+  usePlanReviewScrollSurfaceRef,
+} from "../../fork/planReviewComposerDock";
 
 interface PlanReviewPanelProps {
   readonly environmentId: EnvironmentId;
@@ -109,6 +112,9 @@ export default function PlanReviewPanel({
   const latestVersion = useMemo(() => snapshot?.versions.at(-1) ?? null, [snapshot?.versions]);
 
   const viewerUserId = useCurrentUserId();
+  // The document column is what the reviewer scrolls while reading, so it is
+  // the surface the docked composer's collapse gesture watches.
+  const scrollSurfaceRef = usePlanReviewScrollSurfaceRef();
 
   // Adopt a token only from our own save. Taking whatever the last writer
   // produced would make the next save look valid and silently overwrite them.
@@ -385,211 +391,219 @@ export default function PlanReviewPanel({
       reviewer asked for after living with a header and a footer eating ~150px
       of a tall, narrow panel.
     */
-    <div className="@container/plan-review flex min-h-0 min-w-0 flex-1 flex-row bg-background">
-      {/*
+    <div className="@container/plan-review flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+        {/*
         The outline is a luxury of width, not a requirement: at panel widths
         below ~56rem the document column is already the scarce thing, so the
         rail is dropped by container query rather than by measuring anything.
       */}
-      {tab === "review" && !isHtmlPlan && outlineHeadings.length > 0 ? (
-        <div className="hidden min-h-0 @[56rem]/plan-review:flex">
-          <PlanReviewOutline
-            headings={outlineHeadings}
-            commentCounts={outlineCommentCounts}
-            onSelectHeading={handleSelectHeading}
-          />
-        </div>
-      ) : null}
-
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {roundTripWarning && !isHtmlPlan ? (
-          <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
-            This plan uses markdown the editor cannot reproduce exactly. Edits may reformat parts of
-            it — check the diff before sending.
-          </p>
-        ) : null}
-
-        {tab === "versions" ? (
-          <PlanReviewVersions
-            versions={snapshot.versions}
-            diff={diffQuery.data?.diff ?? null}
-            isDiffPending={comparison !== null && diffQuery.isPending}
-            canRestore={!isResolved && !isHtmlPlan}
-            onCompare={(from, to) => setComparison({ from, to })}
-            onRestore={handleRestore}
-          />
-        ) : isHtmlPlan ? (
-          <PlanReviewHtmlView html={canonicalMarkdown} title={snapshot.document.title} />
-        ) : (
-          <PlanReviewEditor
-            markdown={canonicalMarkdown}
-            readOnly={isResolved}
-            suggestionMode={suggestionMode}
-            handleRef={editorHandleRef}
-            onChanged={handleEditorChanged}
-            onAddComment={handleAddComment}
-            onRoundTripUnstable={handleRoundTripUnstable}
-            discussions={editorDiscussions}
-            activeDiscussionId={activeDiscussionId}
-            onSelectDiscussion={handleSelectDiscussion}
-          />
-        )}
-      </main>
-
-      <aside
-        className="flex min-h-0 w-72 shrink-0 flex-col border-l"
-        aria-label="Plan review controls"
-      >
-        <nav className="flex items-center gap-1 border-b px-2 py-1">
-          <Button
-            size="sm"
-            variant={tab === "review" ? "secondary" : "ghost"}
-            onClick={() => setTab("review")}
-            title={snapshot.document.title}
-          >
-            <MessageSquareIcon className="size-3.5" aria-hidden /> Review
-            {openDiscussionCount > 0 ? (
-              <span className="ml-1 rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums">
-                {openDiscussionCount}
-              </span>
-            ) : null}
-          </Button>
-          <Button
-            size="sm"
-            variant={tab === "versions" ? "secondary" : "ghost"}
-            onClick={() => setTab("versions")}
-          >
-            <HistoryIcon className="size-3.5" aria-hidden /> v{snapshot.document.currentRevision}
-          </Button>
-          {isResolved ? (
-            <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-[11px]">
-              {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
-            </span>
-          ) : null}
-        </nav>
-
-        {!isResolved && !isHtmlPlan ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <label className="flex items-center gap-1.5 border-b px-3 py-1.5 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={suggestionMode}
-                    onChange={(event) => setSuggestionMode(event.target.checked)}
-                  />
-                  Suggest edits
-                </label>
-              }
+        {tab === "review" && !isHtmlPlan && outlineHeadings.length > 0 ? (
+          <div className="hidden min-h-0 @[56rem]/plan-review:flex">
+            <PlanReviewOutline
+              headings={outlineHeadings}
+              commentCounts={outlineCommentCounts}
+              onSelectHeading={handleSelectHeading}
             />
-            <TooltipPopup side="bottom">
-              Record your edits as tracked suggestions instead of editing in place
-            </TooltipPopup>
-          </Tooltip>
+          </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 overflow-auto">
-          {isHtmlPlan ? (
-            <p className="p-4 text-muted-foreground text-xs">
-              This plan is an HTML document, so it is shown as the agent rendered it. Use the notes
-              below to send feedback.
+        <main ref={scrollSurfaceRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {roundTripWarning && !isHtmlPlan ? (
+            <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
+              This plan uses markdown the editor cannot reproduce exactly. Edits may reformat parts
+              of it — check the diff before sending.
             </p>
+          ) : null}
+
+          {tab === "versions" ? (
+            <PlanReviewVersions
+              versions={snapshot.versions}
+              diff={diffQuery.data?.diff ?? null}
+              isDiffPending={comparison !== null && diffQuery.isPending}
+              canRestore={!isResolved && !isHtmlPlan}
+              onCompare={(from, to) => setComparison({ from, to })}
+              onRestore={handleRestore}
+            />
+          ) : isHtmlPlan ? (
+            <PlanReviewHtmlView html={canonicalMarkdown} title={snapshot.document.title} />
           ) : (
-            <PlanReviewDiscussions
-              discussions={snapshot.discussions}
-              comments={snapshot.comments}
-              onResolve={handleResolve}
-              disabled={isResolved}
+            <PlanReviewEditor
+              markdown={canonicalMarkdown}
+              readOnly={isResolved}
+              suggestionMode={suggestionMode}
+              handleRef={editorHandleRef}
+              onChanged={handleEditorChanged}
+              onAddComment={handleAddComment}
+              onRoundTripUnstable={handleRoundTripUnstable}
+              discussions={editorDiscussions}
               activeDiscussionId={activeDiscussionId}
               onSelectDiscussion={handleSelectDiscussion}
             />
           )}
-        </div>
+        </main>
 
-        {isResolved ? null : (
-          <div className="border-t p-2">
-            {showConversationComposer ? null : (
-              <textarea
-                className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
-                rows={3}
-                value={globalComment}
-                placeholder="Overall notes for the agent (optional)"
-                aria-label="Overall review notes"
-                onChange={(event) => setGlobalComment(event.target.value)}
+        <aside
+          className="flex min-h-0 w-72 shrink-0 flex-col border-l"
+          aria-label="Plan review controls"
+        >
+          <nav className="flex items-center gap-1 border-b px-2 py-1">
+            <Button
+              size="sm"
+              variant={tab === "review" ? "secondary" : "ghost"}
+              onClick={() => setTab("review")}
+              title={snapshot.document.title}
+            >
+              <MessageSquareIcon className="size-3.5" aria-hidden /> Review
+              {openDiscussionCount > 0 ? (
+                <span className="ml-1 rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums">
+                  {openDiscussionCount}
+                </span>
+              ) : null}
+            </Button>
+            <Button
+              size="sm"
+              variant={tab === "versions" ? "secondary" : "ghost"}
+              onClick={() => setTab("versions")}
+            >
+              <HistoryIcon className="size-3.5" aria-hidden /> v{snapshot.document.currentRevision}
+            </Button>
+            {isResolved ? (
+              <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-[11px]">
+                {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
+              </span>
+            ) : null}
+          </nav>
+
+          {!isResolved && !isHtmlPlan ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <label className="flex items-center gap-1.5 border-b px-3 py-1.5 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={suggestionMode}
+                      onChange={(event) => setSuggestionMode(event.target.checked)}
+                    />
+                    Suggest edits
+                  </label>
+                }
+              />
+              <TooltipPopup side="bottom">
+                Record your edits as tracked suggestions instead of editing in place
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+
+          <div className="min-h-0 flex-1 overflow-auto">
+            {isHtmlPlan ? (
+              <p className="p-4 text-muted-foreground text-xs">
+                This plan is an HTML document, so it is shown as the agent rendered it. Use the
+                notes below to send feedback.
+              </p>
+            ) : (
+              <PlanReviewDiscussions
+                discussions={snapshot.discussions}
+                comments={snapshot.comments}
+                onResolve={handleResolve}
+                disabled={isResolved}
+                activeDiscussionId={activeDiscussionId}
+                onSelectDiscussion={handleSelectDiscussion}
               />
             )}
-            {/*
+          </div>
+
+          {isResolved ? null : (
+            <div className="border-t p-2">
+              {showConversationComposer ? null : (
+                <textarea
+                  className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
+                  rows={3}
+                  value={globalComment}
+                  placeholder="Overall notes for the agent (optional)"
+                  aria-label="Overall review notes"
+                  onChange={(event) => setGlobalComment(event.target.value)}
+                />
+              )}
+              {/*
               Unsaved edits take the whole row. Deciding on a plan whose edits are
               not yet a version is ambiguous — neither the reviewer nor the agent
               can say afterwards which text was approved — so saving is made the
               one available move rather than a third button competing with two.
             */}
-            <div className="flex flex-col gap-1.5">
-              {hasUnsavedEdits ? (
-                <>
-                  <Button size="sm" onClick={handleSaveVersion}>
-                    <SaveIcon className="size-3.5" aria-hidden /> Save the plan
-                  </Button>
-                  <p className="text-muted-foreground text-[11px]">
-                    Save your edits as a version to approve or send feedback.
-                  </p>
-                </>
-              ) : (
-                /* Stacked, not side by side: the rail is 288px and
-                   "Approve with comments" was being cut in half by a shared row. */
-                <div className="flex flex-col gap-1.5">
-                  {hasFeedbackToSend ? (
-                    <Button size="sm" onClick={() => handleSubmit("changes-requested")}>
-                      <SendIcon className="size-3.5 shrink-0" aria-hidden /> Send feedback
-                      {openDiscussionCount > 0 ? (
-                        <span className="ml-1 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">
-                          {openDiscussionCount}
-                        </span>
-                      ) : null}
+              <div className="flex flex-col gap-1.5">
+                {hasUnsavedEdits ? (
+                  <>
+                    <Button size="sm" onClick={handleSaveVersion}>
+                      <SaveIcon className="size-3.5" aria-hidden /> Save the plan
                     </Button>
-                  ) : null}
+                    <p className="text-muted-foreground text-[11px]">
+                      Save your edits as a version to approve or send feedback.
+                    </p>
+                  </>
+                ) : (
+                  /* Stacked, not side by side: the rail is 288px and
+                   "Approve with comments" was being cut in half by a shared row. */
+                  <div className="flex flex-col gap-1.5">
+                    {hasFeedbackToSend ? (
+                      <Button size="sm" onClick={() => handleSubmit("changes-requested")}>
+                        <SendIcon className="size-3.5 shrink-0" aria-hidden /> Send feedback
+                        {openDiscussionCount > 0 ? (
+                          <span className="ml-1 rounded-full bg-primary-foreground/20 px-1.5 text-[11px] tabular-nums">
+                            {openDiscussionCount}
+                          </span>
+                        ) : null}
+                      </Button>
+                    ) : null}
+                    <Button
+                      size="sm"
+                      variant={hasFeedbackToSend ? "outline" : "default"}
+                      onClick={() => handleSubmit("approved")}
+                      title={
+                        openDiscussionCount > 0
+                          ? "Start implementing, with your open comments sent as refinements"
+                          : undefined
+                      }
+                    >
+                      <CheckIcon className="size-3.5 shrink-0" aria-hidden />
+                      <span className="truncate">
+                        {openDiscussionCount > 0 ? "Approve with comments" : "Approve"}
+                      </span>
+                    </Button>
+                  </div>
+                )}
+                <div className="flex items-center gap-1">
                   <Button
                     size="sm"
-                    variant={hasFeedbackToSend ? "outline" : "default"}
-                    onClick={() => handleSubmit("approved")}
-                    title={
-                      openDiscussionCount > 0
-                        ? "Start implementing, with your open comments sent as refinements"
-                        : undefined
-                    }
+                    variant="ghost"
+                    className="flex-1"
+                    onClick={handleSaveVersion}
+                    disabled={!isDirty || isHtmlPlan || hasUnsavedEdits}
                   >
-                    <CheckIcon className="size-3.5 shrink-0" aria-hidden />
-                    <span className="truncate">
-                      {openDiscussionCount > 0 ? "Approve with comments" : "Approve"}
-                    </span>
+                    Save version
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    onClick={() => handleSubmit("discarded")}
+                    aria-label="Discard this review"
+                  >
+                    <Trash2Icon className="size-3.5" aria-hidden />
                   </Button>
                 </div>
-              )}
-              <div className="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="flex-1"
-                  onClick={handleSaveVersion}
-                  disabled={!isDirty || isHtmlPlan || hasUnsavedEdits}
-                >
-                  Save version
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-destructive"
-                  onClick={() => handleSubmit("discarded")}
-                  aria-label="Discard this review"
-                >
-                  <Trash2Icon className="size-3.5" aria-hidden />
-                </Button>
               </div>
             </div>
-          </div>
-        )}
-        {showConversationComposer ? <PlanReviewConversationComposerTarget /> : null}
-      </aside>
+          )}
+        </aside>
+      </div>
+      {/*
+        The conversation bar spans the whole panel, the way the composer spans
+        the chat pane: at rail width its placeholder truncated and its controls
+        had nowhere to go. It rests until the reviewer uses it, so the plan and
+        the comment list keep the height.
+      */}
+      {showConversationComposer ? <PlanReviewConversationComposerTarget /> : null}
     </div>
   );
 }
