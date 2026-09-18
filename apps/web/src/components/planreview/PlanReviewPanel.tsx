@@ -460,7 +460,18 @@ export default function PlanReviewPanel({
           className="flex min-h-0 w-72 shrink-0 flex-col border-l"
           aria-label="Plan review controls"
         >
-          <nav className="flex items-center gap-1 border-b px-2 py-1">
+          {/*
+            In the takeover the close button is a 32px circle pinned to the
+            panel's top-right corner at z-50, which lands on top of this header.
+            Anything right-aligned here — the width control, the resolved badge —
+            is covered by it and swallows its own clicks, so the row ends early.
+          */}
+          <nav
+            className={cn(
+              "flex items-center gap-1 border-b px-2 py-1",
+              showConversationComposer && "pe-10",
+            )}
+          >
             <Button
               size="sm"
               variant={tab === "review" ? "secondary" : "ghost"}
