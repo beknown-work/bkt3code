@@ -1,11 +1,15 @@
 import type { ReactNode } from "react";
+import { useEffect } from "react";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  type ComposerScrollSurface,
   PlanReviewComposerDock,
   PlanReviewConversationComposerTarget,
   resetPlanReviewComposerDockForTests,
+  shouldRestDockedComposer,
+  usePlanReviewComposerScrollSurface,
 } from "./planReviewComposerDock";
 
 class TestNode {
@@ -164,6 +168,67 @@ describe("plan review composer dock", () => {
       await render(root, <Harness reviewOpen={false} />);
       expect(findByAttribute(container, "data-composer-fixture")).toBe(composer);
       expect(home?.textContent).toBe("Composer draft");
+    } finally {
+      flushSync(() => root.unmount());
+    }
+  });
+});
+
+describe("resting a docked composer", () => {
+  const docked = {
+    isDocked: true,
+    isFocusWithin: false,
+    hasMultilinePrompt: false,
+    hasExpandedChrome: false,
+  };
+
+  it("rests a docked composer nothing is focused in", () => {
+    expect(shouldRestDockedComposer(docked)).toBe(true);
+  });
+
+  it("leaves the composer alone in its normal home", () => {
+    expect(shouldRestDockedComposer({ ...docked, isDocked: false })).toBe(false);
+  });
+
+  it("stays expanded while the reviewer is typing in it", () => {
+    expect(shouldRestDockedComposer({ ...docked, isFocusWithin: true })).toBe(false);
+  });
+
+  it("keeps a multiline draft readable", () => {
+    expect(shouldRestDockedComposer({ ...docked, hasMultilinePrompt: true })).toBe(false);
+  });
+
+  it("does not collapse behind open composer chrome", () => {
+    expect(shouldRestDockedComposer({ ...docked, hasExpandedChrome: true })).toBe(false);
+  });
+});
+
+describe("the docked scroll surface", () => {
+  it("passes chat's own timeline through while the composer is home", async () => {
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const container = document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const timeline = document.createElement("div") as unknown as HTMLElement;
+    const captured: { surface: ComposerScrollSurface | null } = { surface: null };
+
+    function Probe() {
+      const surface = usePlanReviewComposerScrollSurface({
+        getTimelineScrollableNode: () => timeline,
+        isTimelineAtLogicalEnd: () => false,
+        timelineOverflows: false,
+      });
+      useEffect(() => {
+        captured.surface = surface;
+      }, [surface]);
+      return null;
+    }
+
+    try {
+      await render(root, <Probe />);
+      expect(captured.surface?.getTimelineScrollableNode()).toBe(timeline);
+      expect(captured.surface?.isTimelineAtLogicalEnd()).toBe(false);
+      expect(captured.surface?.timelineOverflows).toBe(false);
     } finally {
       flushSync(() => root.unmount());
     }
