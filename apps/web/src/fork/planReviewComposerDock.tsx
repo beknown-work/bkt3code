@@ -156,6 +156,30 @@ export function PlanReviewComposerDock(props: ComponentProps<typeof ComposerSurf
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether the composer's plan follow-up banner should be shown.
+ *
+ * Outside plan review it is the only thing telling the reviewer a plan is
+ * waiting, so it stays. Inside plan review the plan *is* the surface, the rail
+ * already carries Approve and Send feedback — and the banner is chrome, which
+ * upstream (correctly) treats as a reason to hold the composer open. Left in,
+ * it pins the docked bar at full height in the one state it is ever used in.
+ */
+export function shouldShowPlanFollowUpDrawer(input: {
+  readonly isDockedInPlanReview: boolean;
+  readonly showPlanFollowUpPrompt: boolean;
+  readonly hasActiveProposedPlan: boolean;
+  readonly isCollapsedMobile: boolean;
+}): boolean {
+  if (input.isDockedInPlanReview) return false;
+  return !input.isCollapsedMobile && input.showPlanFollowUpPrompt && input.hasActiveProposedPlan;
+}
+
+/** Whether the one live composer is currently docked into plan review. */
+export function usePlanReviewComposerDocked(): boolean {
+  return usePlanReviewComposerDockStore((state) => state.target !== null);
+}
+
+/**
  * Whether a docked composer should be resting.
  *
  * Blur is the one rule here that chat does not have: chat keeps the composer

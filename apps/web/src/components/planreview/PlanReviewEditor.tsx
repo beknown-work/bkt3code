@@ -250,6 +250,8 @@ interface PlanReviewEditorProps {
   readonly discussions: ReadonlyArray<PlanReviewEditorDiscussion>;
   readonly activeDiscussionId: string | null;
   readonly onSelectDiscussion: (discussionId: string) => void;
+  /** Side margin the reviewer chose for the document, as a max-width class. */
+  readonly contentWidthClassName: string;
 }
 
 function PlanReviewEditorImpl({
@@ -263,6 +265,7 @@ function PlanReviewEditorImpl({
   discussions,
   activeDiscussionId,
   onSelectDiscussion,
+  contentWidthClassName,
 }: PlanReviewEditorProps) {
   const editor = usePlateEditor({ plugins: PLAN_REVIEW_PLUGINS });
   const [pendingQuote, setPendingQuote] = useState<string | null>(null);
@@ -561,7 +564,8 @@ function PlanReviewEditorImpl({
           >
             <PlateContent
               className={cn(
-                "min-h-full px-5 pt-3 pb-24 text-[15px] text-foreground leading-relaxed outline-none",
+                "mx-auto min-h-full w-full px-5 pt-3 pb-24 text-[15px] text-foreground leading-relaxed outline-none",
+                contentWidthClassName,
               )}
               readOnly={readOnly}
               placeholder="This plan is empty."

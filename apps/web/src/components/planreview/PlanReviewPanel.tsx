@@ -12,6 +12,8 @@ import type {
 } from "@t3tools/contracts";
 import {
   CheckIcon,
+  ChevronsLeftRightIcon,
+  ChevronsRightLeftIcon,
   HistoryIcon,
   MessageSquareIcon,
   SaveIcon,
@@ -25,6 +27,12 @@ import { PlanReviewEditor, type PlanReviewEditorHandle } from "./PlanReviewEdito
 import { PlanReviewHtmlView } from "./PlanReviewHtmlView";
 import { PlanReviewOutline } from "./PlanReviewOutline";
 import { PlanReviewVersions } from "./PlanReviewVersions";
+import {
+  canStepPlanContentWidth,
+  PLAN_CONTENT_WIDTH_CLASS,
+  PLAN_CONTENT_WIDTH_LABEL,
+  usePlanContentWidth,
+} from "./planReviewContentWidth";
 import {
   countPlanOutlineComments,
   parsePlanOutline,
@@ -116,6 +124,7 @@ export default function PlanReviewPanel({
   // The document column is what the reviewer scrolls while reading, so it is
   // the surface the docked composer's collapse gesture watches.
   const scrollSurfaceRef = usePlanReviewScrollSurfaceRef();
+  const [contentWidth, stepContentWidth] = usePlanContentWidth();
 
   // Adopt a token only from our own save. Taking whatever the last writer
   // produced would make the next save look valid and silently overwrite them.
@@ -441,6 +450,7 @@ export default function PlanReviewPanel({
                 discussions={editorDiscussions}
                 activeDiscussionId={activeDiscussionId}
                 onSelectDiscussion={handleSelectDiscussion}
+                contentWidthClassName={PLAN_CONTENT_WIDTH_CLASS[contentWidth]}
               />
             )}
           </div>
@@ -475,6 +485,49 @@ export default function PlanReviewPanel({
               <span className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-[11px]">
                 {snapshot.document.status === "approved" ? "Approved" : snapshot.document.status}
               </span>
+            ) : null}
+            {/*
+              Side margin for the plan itself. A wide monitor gives the document
+              more width than prose wants, and only the reviewer knows whether
+              they are reading paragraphs or tables.
+            */}
+            {showOutline ? (
+              <div className={cn("flex items-center gap-0.5", isResolved ? "ms-1" : "ms-auto")}>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        disabled={!canStepPlanContentWidth(contentWidth, -1)}
+                        onClick={() => stepContentWidth(-1)}
+                        aria-label="Less side margin"
+                      />
+                    }
+                  >
+                    <ChevronsLeftRightIcon className="size-3.5" aria-hidden />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">Less side margin</TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        disabled={!canStepPlanContentWidth(contentWidth, 1)}
+                        onClick={() => stepContentWidth(1)}
+                        aria-label="More side margin"
+                      />
+                    }
+                  >
+                    <ChevronsRightLeftIcon className="size-3.5" aria-hidden />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">
+                    More side margin — {PLAN_CONTENT_WIDTH_LABEL[contentWidth]}
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
             ) : null}
           </nav>
 
