@@ -717,6 +717,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Native plan review",
     to: "/settings/experiments",
   },
+  // T3-CUSTOM(expbkt3): plan review takeover.
+  {
+    id: "plan-review-takeover",
+    title: "Open a ready plan automatically",
+    to: "/settings/experiments",
+    searchTerms: ["plan review takeover auto open proposed decision gate approve full screen"],
+  },
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   {
     id: "agent-ui-surfaces",

@@ -16,6 +16,8 @@ export type ThreadDetailEvent = Extract<
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.catchup-summary-updated"
+      | "thread.work-summary-requested"
+      | "thread.work-summary-updated"
       | "thread.bootstrap-requested"
       | "thread.bootstrap-step-updated"
       | "thread.bootstrap-completed"
@@ -34,6 +36,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is ThreadD
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.catchup-summary-updated" ||
+    event.type === "thread.work-summary-requested" ||
+    event.type === "thread.work-summary-updated" ||
     event.type === "thread.bootstrap-requested" ||
     event.type === "thread.bootstrap-step-updated" ||
     event.type === "thread.bootstrap-completed" ||

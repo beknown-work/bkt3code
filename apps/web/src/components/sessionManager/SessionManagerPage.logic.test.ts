@@ -19,6 +19,9 @@ import {
   sanitizeSessionManagerSort,
   sortSessionManagerRows,
   workSummaryPreview,
+  // T3-CUSTOM(expbkt3): plan review attention.
+  SESSION_MANAGER_ATTENTION_KINDS,
+  SESSION_MANAGER_ATTENTION_LABELS,
   type SessionManagerFilters,
   type SessionManagerRow,
 } from "./SessionManagerPage.logic";
@@ -477,3 +480,18 @@ describe("work summary presentation helpers", () => {
     expect(workSummaryPreview(null)).toBeNull();
   });
 });
+
+// T3-CUSTOM(expbkt3): BEGIN — a waiting plan is a filterable kind of attention.
+describe("session manager plan attention", () => {
+  it("offers a plan filter alongside the blocking kinds", () => {
+    expect(SESSION_MANAGER_ATTENTION_KINDS).toContain("plan");
+    expect(SESSION_MANAGER_ATTENTION_LABELS.plan).toBe("Plan");
+  });
+
+  it("labels every attention kind it offers", () => {
+    for (const kind of SESSION_MANAGER_ATTENTION_KINDS) {
+      expect(SESSION_MANAGER_ATTENTION_LABELS[kind]).toBeTruthy();
+    }
+  });
+});
+// T3-CUSTOM(expbkt3): END

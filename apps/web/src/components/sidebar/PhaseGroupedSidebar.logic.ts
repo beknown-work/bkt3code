@@ -85,6 +85,10 @@ export function phaseSidebarRowClassName(
   isActive: boolean,
   isSelected: boolean,
   needsUserInput: boolean,
+  // T3-CUSTOM(expbkt3): a plan waiting on a human gets the Needs Input
+  // treatment in violet — same geometry, different hue, so the two read as
+  // siblings rather than as one urgent state.
+  planReady = false,
 ): string {
   return cn(
     // T3-CUSTOM(expbkt3): Center the adaptive title/metadata content lane.
@@ -103,6 +107,11 @@ export function phaseSidebarRowClassName(
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
+    // T3-CUSTOM(expbkt3): the violet mirror, for a plan the human has to decide
+    // on. A question always wins the row, so this never stacks with the red one.
+    !needsUserInput &&
+      planReady &&
+      "animate-[pulse_1.25s_ease-in-out_infinite] bg-violet-500/20 text-foreground ring-1 ring-inset ring-violet-500/60 shadow-[inset_3px_0_0_0_var(--color-violet-500),0_0_14px_rgba(139,92,246,0.22)] hover:bg-violet-500/30 motion-reduce:animate-none",
   );
 }
 

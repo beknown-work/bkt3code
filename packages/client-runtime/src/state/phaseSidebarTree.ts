@@ -51,7 +51,14 @@ const BUSY_PHASE_IDS: ReadonlySet<PhaseSidebarPhaseId> = new Set<PhaseSidebarPha
  * Most-blocking first. A subtree can hold several stuck sessions at once, and
  * the parent has room for exactly one derived badge, so it reports the worst.
  */
-const ATTENTION_RANK: ReadonlyArray<PhaseSidebarAttentionKind> = ["input", "approval", "error"];
+// T3-CUSTOM(expbkt3): "plan" sits last — a waiting decision is the least
+// blocking kind of attention, so it never masks a question below it.
+const ATTENTION_RANK: ReadonlyArray<PhaseSidebarAttentionKind> = [
+  "input",
+  "approval",
+  "error",
+  "plan",
+];
 
 /**
  * A descendant needs a human when it is parked in the Needs Input phase or is
@@ -61,7 +68,10 @@ const ATTENTION_RANK: ReadonlyArray<PhaseSidebarAttentionKind> = ["input", "appr
 function attentionKindOf(row: PhaseSidebarRow): PhaseSidebarAttentionKind | null {
   const kind = resolvePhaseSidebarAttentionKind(row.thread);
   if (kind !== null) return kind;
-  return row.phaseId === "needs_input" ? "input" : null;
+  if (row.phaseId === "needs_input") return "input";
+  // T3-CUSTOM(expbkt3): same fallback for a plan, so a collapsed parent still
+  // reports the decision hiding underneath it.
+  return row.phaseId === "plan_ready" ? "plan" : null;
 }
 
 function moreUrgent(
@@ -288,6 +298,10 @@ export function buildPhaseSidebarTree(
  * scanning first.
  */
 export function resolvePhaseSidebarTreePhase(node: PhaseSidebarTreeNode): PhaseSidebarPhaseId {
+  // T3-CUSTOM(expbkt3): a plan-only subtree hoists to Plan Ready, not Needs
+  // Input. Turning a parent red because a child has a plan waiting misreports
+  // the urgency and puts a violet reason in the red group.
+  if (node.descendantAttention === "plan") return "plan_ready";
   if (node.descendantAttention !== null) return "needs_input";
   return node.hasBusyDescendant ? "implementing" : node.row.phaseId;
 }

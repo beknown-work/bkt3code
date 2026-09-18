@@ -40,6 +40,7 @@ import {
   BotIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  ClipboardListIcon,
   ClockIcon,
   ExternalLinkIcon,
   FilterIcon,
@@ -246,7 +247,10 @@ function reportBulkOutcome(
 
 const PHASE_TONE: Record<PhaseSidebarPhaseId, string> = {
   needs_input: "text-warning-foreground bg-warning-surface",
-  plan_ready: "text-info-foreground bg-info/10",
+  // T3-CUSTOM(expbkt3): violet, matching the sidebar. It used to share the blue
+  // of `planning`, so "a plan is waiting" and "a plan is being written" looked
+  // identical in the one view built for scanning them.
+  plan_ready: "text-violet-700 bg-violet-500/12 dark:text-violet-300",
   ready: "text-muted-foreground bg-muted",
   planning: "text-info-foreground bg-info/10",
   implementing: "text-primary bg-primary/10",
@@ -312,6 +316,15 @@ function LifecycleIcon({ row }: { row: SessionManagerRow }) {
   }
   if (row.attentionKind === "input") {
     return <MessageSquarePlusIcon aria-label="Waiting for input" className="text-info size-3.5" />;
+  }
+  // T3-CUSTOM(expbkt3): a plan awaiting a decision, below the blocking kinds.
+  if (row.attentionKind === "plan") {
+    return (
+      <ClipboardListIcon
+        aria-label="Plan ready for review"
+        className="size-3.5 text-violet-600 dark:text-violet-300"
+      />
+    );
   }
   if (row.phaseId === "planning" || row.phaseId === "implementing") {
     return <Spinner className="text-primary size-3.5" />;

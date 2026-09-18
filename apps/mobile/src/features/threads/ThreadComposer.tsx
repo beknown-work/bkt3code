@@ -106,6 +106,8 @@ import { useVoiceInputController } from "../voice-input/useVoiceInputController"
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
 // T3-CUSTOM(expbkt3): preserve legacy Plan mode state while the provider interaction setting migrates.
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
+// T3-CUSTOM(expbkt3): native whole-session summary player lives in a fork-owned module.
+import { SpokenSessionSummaryControl } from "../spoken-session-summary/SpokenSessionSummaryControl";
 import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
@@ -887,6 +889,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             ) : null}
             {!isExpanded ? (
               <View className="flex-row items-center">
+                {/* T3-CUSTOM(expbkt3): expose summary speech in the compact mobile composer. */}
+                <SpokenSessionSummaryControl
+                  environmentId={props.environmentId}
+                  threadId={props.selectedThread.id}
+                  workSummary={props.selectedThread.workSummary}
+                  serverConfig={props.serverConfig}
+                />
                 <ComposerDictationStartAction
                   state={voiceInput.state}
                   isAvailable={voiceInput.isAvailable}
@@ -994,6 +1003,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   // T3-CUSTOM(expbkt3): END keep model and Plan/Build controls reachable in the composer toolbar.
                 )}
                 <View className="shrink-0 flex-row items-center">
+                  {/* T3-CUSTOM(expbkt3): expose summary speech in the expanded mobile composer. */}
+                  <SpokenSessionSummaryControl
+                    environmentId={props.environmentId}
+                    threadId={props.selectedThread.id}
+                    workSummary={props.selectedThread.workSummary}
+                    serverConfig={props.serverConfig}
+                  />
                   <ComposerDictationPrimaryAction
                     state={voiceInput.state}
                     presentation={voicePresentation}

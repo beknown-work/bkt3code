@@ -156,6 +156,8 @@ export function applyThreadDetailEvent(
           activities: [],
           checkpoints: [],
           rollingSummary: null,
+          // T3-CUSTOM(expbkt3): work summaries stream into the active thread detail.
+          workSummary: null,
           turnSummaries: [],
           session: null,
         },
@@ -726,6 +728,39 @@ export function applyThreadDetailEvent(
         thread: { ...thread, rollingSummary, turnSummaries },
       };
     }
+
+    // T3-CUSTOM(expbkt3): BEGIN — keep the composer summary player in sync.
+    case "thread.work-summary-requested":
+      return event.payload.threadId === thread.id
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              workSummary: {
+                status: "pending",
+                summary: null,
+                stage: null,
+                remaining: null,
+                percent: null,
+                error: null,
+                requestId: event.payload.requestId,
+                updatedAt: event.payload.requestedAt,
+              },
+            },
+          }
+        : { kind: "unchanged" };
+
+    case "thread.work-summary-updated":
+      return event.payload.threadId === thread.id &&
+        (thread.workSummary?.requestId === null ||
+          thread.workSummary?.requestId === undefined ||
+          thread.workSummary.requestId === event.payload.requestId)
+        ? {
+            kind: "updated",
+            thread: { ...thread, workSummary: event.payload.workSummary },
+          }
+        : { kind: "unchanged" };
+    // T3-CUSTOM(expbkt3): END
 
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {

@@ -385,6 +385,37 @@ describe("resolvePhaseSidebarTreePhase", () => {
     expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
   });
 
+  // T3-CUSTOM(expbkt3): BEGIN — a plan below a parent is violet, not red.
+  it("hoists a plan-only subtree into Plan Ready rather than Needs Input", () => {
+    // Turning the parent red for a plan would put a violet reason in the red
+    // group and overstate how blocked the subtree is.
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("child", { parent: "parent", phaseId: "plan_ready" }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(tree[0]?.descendantAttention).toBe("plan");
+    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("plan_ready");
+  });
+
+  it("still goes red when the subtree holds both a plan and a question", () => {
+    const tree = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("planning", { parent: "parent", phaseId: "plan_ready" }),
+        makeRow("stuck", { parent: "parent", phaseId: "needs_input" }),
+      ],
+      { compareSiblings: byId },
+    );
+
+    expect(tree[0]?.descendantAttention).toBe("input");
+    expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
+  });
+  // T3-CUSTOM(expbkt3): END
+
   it("leaves a childless row in its own phase", () => {
     const tree = buildPhaseSidebarTree([makeRow("solo", { phaseId: "plan_ready" })], {
       compareSiblings: byId,

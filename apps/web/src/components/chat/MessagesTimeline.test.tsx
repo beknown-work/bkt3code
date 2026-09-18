@@ -360,7 +360,9 @@ describe("MessagesTimeline", () => {
     expect(nativePreviewPending).toContain("data-plan-review-pending");
     expect(nativePreviewPending).toContain('aria-label="Preparing plan preview"');
     expect(nativePreviewReady).toContain("data-plan-review-trigger");
-    expect(nativePreviewReady).toContain('aria-label="Open the plan in the review panel"');
+    // T3-CUSTOM(expbkt3): the button reopens the transcript takeover now, so it
+    // no longer promises a panel.
+    expect(nativePreviewReady).toContain('aria-label="Open the plan review"');
   });
   // T3-CUSTOM(expbkt3): END
 
