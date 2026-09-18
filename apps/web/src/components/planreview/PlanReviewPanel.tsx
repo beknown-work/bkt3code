@@ -32,6 +32,7 @@ import {
 } from "@t3tools/client-runtime/state/planReviewMarkdown";
 import { locateQuotedLineRange } from "@t3tools/shared/planReview";
 import { Button } from "../ui/button";
+import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { planReviewEnvironment } from "../../state/planReview";
 import { toastManager } from "../ui/toast";
@@ -376,6 +377,7 @@ export default function PlanReviewPanel({
   ).length;
 
   const isHtmlPlan = snapshot.document.format === "html";
+  const showOutline = tab === "review" && !isHtmlPlan && outlineHeadings.length > 0;
   const hasFeedbackToSend = openDiscussionCount > 0 || globalComment.trim().length > 0 || isDirty;
   /**
    * A hand edit that is not yet a version. An HTML plan is never editable, so it
@@ -393,22 +395,7 @@ export default function PlanReviewPanel({
     */
     <div className="@container/plan-review flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <div className="flex min-h-0 min-w-0 flex-1 flex-row">
-        {/*
-        The outline is a luxury of width, not a requirement: at panel widths
-        below ~56rem the document column is already the scarce thing, so the
-        rail is dropped by container query rather than by measuring anything.
-      */}
-        {tab === "review" && !isHtmlPlan && outlineHeadings.length > 0 ? (
-          <div className="hidden min-h-0 @[56rem]/plan-review:flex">
-            <PlanReviewOutline
-              headings={outlineHeadings}
-              commentCounts={outlineCommentCounts}
-              onSelectHeading={handleSelectHeading}
-            />
-          </div>
-        ) : null}
-
-        <main ref={scrollSurfaceRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main ref={scrollSurfaceRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {roundTripWarning && !isHtmlPlan ? (
             <p className="border-amber-500/40 border-b bg-amber-500/10 px-3 py-1.5 text-amber-800 text-xs dark:text-amber-300">
               This plan uses markdown the editor cannot reproduce exactly. Edits may reformat parts
@@ -416,31 +403,47 @@ export default function PlanReviewPanel({
             </p>
           ) : null}
 
-          {tab === "versions" ? (
-            <PlanReviewVersions
-              versions={snapshot.versions}
-              diff={diffQuery.data?.diff ?? null}
-              isDiffPending={comparison !== null && diffQuery.isPending}
-              canRestore={!isResolved && !isHtmlPlan}
-              onCompare={(from, to) => setComparison({ from, to })}
-              onRestore={handleRestore}
-            />
-          ) : isHtmlPlan ? (
-            <PlanReviewHtmlView html={canonicalMarkdown} title={snapshot.document.title} />
-          ) : (
-            <PlanReviewEditor
-              markdown={canonicalMarkdown}
-              readOnly={isResolved}
-              suggestionMode={suggestionMode}
-              handleRef={editorHandleRef}
-              onChanged={handleEditorChanged}
-              onAddComment={handleAddComment}
-              onRoundTripUnstable={handleRoundTripUnstable}
-              discussions={editorDiscussions}
-              activeDiscussionId={activeDiscussionId}
-              onSelectDiscussion={handleSelectDiscussion}
-            />
-          )}
+          {/*
+            The outline overlays the document from a 1.75rem gutter instead of
+            taking a column of its own. At every panel width the plan is what
+            the reviewer came for, and nothing reflows when it opens.
+          */}
+          <div
+            className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col", showOutline && "ps-7")}
+          >
+            {showOutline ? (
+              <PlanReviewOutline
+                headings={outlineHeadings}
+                commentCounts={outlineCommentCounts}
+                onSelectHeading={handleSelectHeading}
+              />
+            ) : null}
+            {tab === "versions" ? (
+              <PlanReviewVersions
+                versions={snapshot.versions}
+                diff={diffQuery.data?.diff ?? null}
+                isDiffPending={comparison !== null && diffQuery.isPending}
+                canRestore={!isResolved && !isHtmlPlan}
+                onCompare={(from, to) => setComparison({ from, to })}
+                onRestore={handleRestore}
+              />
+            ) : isHtmlPlan ? (
+              <PlanReviewHtmlView html={canonicalMarkdown} title={snapshot.document.title} />
+            ) : (
+              <PlanReviewEditor
+                markdown={canonicalMarkdown}
+                readOnly={isResolved}
+                suggestionMode={suggestionMode}
+                handleRef={editorHandleRef}
+                onChanged={handleEditorChanged}
+                onAddComment={handleAddComment}
+                onRoundTripUnstable={handleRoundTripUnstable}
+                discussions={editorDiscussions}
+                activeDiscussionId={activeDiscussionId}
+                onSelectDiscussion={handleSelectDiscussion}
+              />
+            )}
+          </div>
         </main>
 
         <aside
