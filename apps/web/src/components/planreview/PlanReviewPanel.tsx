@@ -487,21 +487,29 @@ export default function PlanReviewPanel({
               </span>
             ) : null}
             {/*
-              Side margin for the plan itself. A wide monitor gives the document
-              more width than prose wants, and only the reviewer knows whether
-              they are reading paragraphs or tables.
+              Side margin for the plan itself, as a labelled control rather than
+              two bare icons: a reviewer who has not been told it exists has to
+              be able to see what it does. A wide monitor gives the document more
+              width than prose wants, and only the reviewer knows whether they
+              are reading paragraphs or tables.
             */}
-            {showOutline ? (
-              <div className={cn("flex items-center gap-0.5", isResolved ? "ms-1" : "ms-auto")}>
+            {tab === "review" && !isHtmlPlan ? (
+              <div
+                className={cn(
+                  "flex items-center gap-px rounded-md border bg-muted/40 p-px",
+                  isResolved ? "ms-1" : "ms-auto",
+                )}
+              >
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <Button
                         size="icon-sm"
                         variant="ghost"
+                        className="size-5 rounded-[5px]"
                         disabled={!canStepPlanContentWidth(contentWidth, -1)}
                         onClick={() => stepContentWidth(-1)}
-                        aria-label="Less side margin"
+                        aria-label="Less side margin around the plan"
                       />
                     }
                   >
@@ -509,23 +517,25 @@ export default function PlanReviewPanel({
                   </TooltipTrigger>
                   <TooltipPopup side="bottom">Less side margin</TooltipPopup>
                 </Tooltip>
+                <span className="px-1 text-[10px] text-muted-foreground tabular-nums">
+                  {PLAN_CONTENT_WIDTH_LABEL[contentWidth]}
+                </span>
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <Button
                         size="icon-sm"
                         variant="ghost"
+                        className="size-5 rounded-[5px]"
                         disabled={!canStepPlanContentWidth(contentWidth, 1)}
                         onClick={() => stepContentWidth(1)}
-                        aria-label="More side margin"
+                        aria-label="More side margin around the plan"
                       />
                     }
                   >
                     <ChevronsRightLeftIcon className="size-3.5" aria-hidden />
                   </TooltipTrigger>
-                  <TooltipPopup side="bottom">
-                    More side margin — {PLAN_CONTENT_WIDTH_LABEL[contentWidth]}
-                  </TooltipPopup>
+                  <TooltipPopup side="bottom">More side margin</TooltipPopup>
                 </Tooltip>
               </div>
             ) : null}
