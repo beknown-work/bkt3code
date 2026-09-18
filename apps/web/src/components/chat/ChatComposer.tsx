@@ -136,6 +136,8 @@ import { ComposerSurface } from "./ComposerSurface";
 // T3-CUSTOM(expbkt3): a composer docked into plan review rests while unfocused,
 // and collapses on the plan document instead of the hidden timeline.
 import {
+  shouldShowPlanFollowUpDrawer,
+  usePlanReviewComposerDocked,
   usePlanReviewComposerScrollSurface,
   usePlanReviewDockedRest,
 } from "../../fork/planReviewComposerDock";
@@ -2128,6 +2130,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // T3-CUSTOM(expbkt3): docked under a plan, the document the reviewer scrolls
   // is the surface upstream's collapse gesture watches. Everything downstream —
   // the wheel handler, the resting layout, the PageUp/Home keys — is unchanged.
+  // T3-CUSTOM(expbkt3): the plan review dock changes what counts as chrome.
+  const isDockedInPlanReview = usePlanReviewComposerDocked();
   const { getTimelineScrollableNode, isTimelineAtLogicalEnd, timelineOverflows } =
     usePlanReviewComposerScrollSurface({
       getTimelineScrollableNode: getChatTimelineScrollableNode,
@@ -2547,7 +2551,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const showComposerTopDrawer =
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
-    (!isComposerCollapsedMobile && showPlanFollowUpPrompt && activeProposedPlan !== null) ||
+    // T3-CUSTOM(expbkt3): inside plan review the plan is the surface, so this
+    // banner is noise — and as chrome it would hold the docked bar open forever.
+    shouldShowPlanFollowUpDrawer({
+      isDockedInPlanReview,
+      showPlanFollowUpPrompt,
+      hasActiveProposedPlan: activeProposedPlan !== null,
+      isCollapsedMobile: isComposerCollapsedMobile,
+    }) ||
     // T3-CUSTOM(expbkt3): queued messages open the drawer on their own.
     (queuedMessages !== undefined && queuedMessages.length > 0);
   const showCollapsedMobilePromptRow =

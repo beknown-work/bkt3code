@@ -9,6 +9,7 @@ import {
   PlanReviewConversationComposerTarget,
   resetPlanReviewComposerDockForTests,
   shouldRestDockedComposer,
+  shouldShowPlanFollowUpDrawer,
   usePlanReviewComposerScrollSurface,
 } from "./planReviewComposerDock";
 
@@ -232,5 +233,33 @@ describe("the docked scroll surface", () => {
     } finally {
       flushSync(() => root.unmount());
     }
+  });
+});
+
+describe("the plan follow-up banner", () => {
+  const waiting = {
+    isDockedInPlanReview: false,
+    showPlanFollowUpPrompt: true,
+    hasActiveProposedPlan: true,
+    isCollapsedMobile: false,
+  };
+
+  it("announces a waiting plan in the chat pane", () => {
+    expect(shouldShowPlanFollowUpDrawer(waiting)).toBe(true);
+  });
+
+  it("stays out of plan review, where the plan is already the surface", () => {
+    // Left in, it counts as composer chrome and pins the docked bar open in the
+    // one state the docked bar is ever used in.
+    expect(shouldShowPlanFollowUpDrawer({ ...waiting, isDockedInPlanReview: true })).toBe(false);
+  });
+
+  it("is absent when no plan is waiting", () => {
+    expect(shouldShowPlanFollowUpDrawer({ ...waiting, hasActiveProposedPlan: false })).toBe(false);
+    expect(shouldShowPlanFollowUpDrawer({ ...waiting, showPlanFollowUpPrompt: false })).toBe(false);
+  });
+
+  it("keeps the phone's collapsed row clear", () => {
+    expect(shouldShowPlanFollowUpDrawer({ ...waiting, isCollapsedMobile: true })).toBe(false);
   });
 });
