@@ -23,6 +23,18 @@ import type { LinearStatusBridge } from "./LinearStatusBridge.ts";
 const LINEAR_IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/u;
 const MAX_ISSUES_PER_REQUEST = 25;
 
+/**
+ * Bifrost answers one issue per round trip, so a full window is this many waves
+ * deep. At two it was thirteen waves — long enough that a cold read outlived the
+ * sidebar's own refresh interval and was cancelled before it could finish, which
+ * is how the status cache ended up with reads that never completed. Keeping the
+ * whole window inside that interval is what stops that happening at all, and it
+ * costs Bifrost nothing: the cache means the server reads each issue once per
+ * window however many people are looking.
+ */
+const BIFROST_CONCURRENCY = 8;
+const BIFROST_ISSUE_TIMEOUT = "12 seconds";
+
 class LinearIssueResolverError extends Data.TaggedError("LinearIssueResolverError")<{
   readonly message: string;
 }> {}
@@ -197,14 +209,14 @@ export const resolveLinearIssueStatuses = Effect.fn("LinearIssueResolver.resolve
                 unresolved,
                 (identifier) =>
                   resolveOne(input.httpClient, credential, identifier).pipe(
-                    Effect.timeout("12 seconds"),
+                    Effect.timeout(BIFROST_ISSUE_TIMEOUT),
                     Effect.catchCause(() =>
                       Effect.succeed(
                         unavailable(identifier, "Linear status is temporarily unavailable."),
                       ),
                     ),
                   ),
-                { concurrency: 2 },
+                { concurrency: BIFROST_CONCURRENCY },
               );
       const byIdentifier = new Map(fromBifrost.map((summary) => [summary.identifier, summary]));
       return missing.map((identifier) => known?.get(identifier) ?? byIdentifier.get(identifier)!);
