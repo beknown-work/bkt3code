@@ -130,6 +130,14 @@ These exist on the box and are not in the repository:
   in the browser (no sign-in gate, no member tagging) while the server stays in
   team mode; the page still loads, so nothing fails loudly. Any future
   `VITE_`-prefixed setting on this box has the same split.
+- **Linear status bridge token** — `bridge.conf` systemd drop-ins under
+  `/etc/systemd/system/<unit>.d/`, setting `BRIDGE_SERVICE_TOKEN` to the value in
+  `/home/ubuntu/.config/t3-linear-bridge-next/bridge.env` (the bridge's own
+  config, which is where to re-read it from after a rebuild). With it, sidebar
+  Linear status comes from the bridge's webhook projection in one batched call;
+  without it the server silently falls back to one Bifrost round trip per issue
+  per viewer, which is slow enough to be visible. Unset is a supported state, so
+  nothing fails loudly when it is missing.
 - **Memory limits** — applied with `systemctl set-property`, persisted under
   `/etc/systemd/system.control/<unit>.d/`. These _override_ the values committed
   in the unit files, so check the live value with
