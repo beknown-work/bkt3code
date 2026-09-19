@@ -98,7 +98,39 @@ describe("LinearIssueStatusCache", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("re-reads once the entry goes stale", () =>
+  it.effect("releases its claim when the caller walks away mid-read", () =>
+    Effect.gen(function* () {
+      const cache = yield* makeLinearIssueStatusCache();
+      const calls = yield* Ref.make(0);
+      const gate = yield* Deferred.make<void>();
+      const fetch = (missing: ReadonlyArray<string>) =>
+        Ref.update(calls, (n) => n + 1).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.as(missing.map((identifier) => ok(identifier))),
+        );
+
+      // The sidebar refreshes on its own interval and interrupts the request it
+      // replaces. The read that request claimed has to survive it, or the
+      // identifier stays pinned as in-flight behind a Deferred nobody completes.
+      const abandoned = yield* Effect.forkChild(cache.resolve(["TEC-1"], fetch), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust(Duration.millis(1));
+      yield* Fiber.interrupt(abandoned);
+
+      const next = yield* Effect.forkChild(cache.resolve(["TEC-1"], fetch), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust(Duration.millis(1));
+      yield* Deferred.succeed(gate, undefined);
+
+      expect((yield* Fiber.join(next)).map((s) => s.status)).toEqual(["In Progress"]);
+      // The abandoned read still counts: it finished and filled the cache.
+      expect(yield* Ref.get(calls)).toBe(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("answers from the last known status while it refreshes behind it", () =>
     Effect.gen(function* () {
       const cache = yield* makeLinearIssueStatusCache();
       const calls = yield* Ref.make(0);
@@ -108,10 +140,29 @@ describe("LinearIssueStatusCache", () => {
         );
 
       expect((yield* cache.resolve(["TEC-1"], fetch))[0]?.status).toBe("state-1");
-      yield* TestClock.adjust(Duration.millis(DEFAULT_STATUS_TTL_MS - 1));
+      yield* TestClock.adjust(Duration.millis(DEFAULT_STATUS_TTL_MS + 1));
+      // Past the TTL the answer is served immediately rather than blocking on a
+      // fresh upstream read; that read runs behind it.
       expect((yield* cache.resolve(["TEC-1"], fetch))[0]?.status).toBe("state-1");
-      yield* TestClock.adjust(Duration.millis(2));
+      yield* TestClock.adjust(Duration.millis(1));
       expect((yield* cache.resolve(["TEC-1"], fetch))[0]?.status).toBe("state-2");
+      expect(yield* Ref.get(calls)).toBe(2);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("blocks only until a status it has never seen arrives", () =>
+    Effect.gen(function* () {
+      const cache = yield* makeLinearIssueStatusCache();
+      const gate = yield* Deferred.make<void>();
+      const fetch = (missing: ReadonlyArray<string>) =>
+        Deferred.await(gate).pipe(Effect.as(missing.map((identifier) => ok(identifier))));
+
+      const first = yield* Effect.forkChild(cache.resolve(["TEC-1"], fetch), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust(Duration.millis(1));
+      yield* Deferred.succeed(gate, undefined);
+      expect((yield* Fiber.join(first)).map((s) => s.status)).toEqual(["In Progress"]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
@@ -143,6 +194,24 @@ describe("LinearIssueStatusCache", () => {
       // A hung Deferred here would strand every waiting caller.
       expect(resolved.map((s) => s.identifier)).toEqual(["TEC-1", "TEC-2"]);
       expect(resolved.every((s) => s.error !== null)).toBe(true);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("re-reads an identifier whose read fell over rather than pinning it", () =>
+    Effect.gen(function* () {
+      const cache = yield* makeLinearIssueStatusCache();
+      const resolved = yield* cache.resolve(["TEC-1"], () => Effect.interrupt);
+
+      expect(resolved.map((s) => s.identifier)).toEqual(["TEC-1"]);
+      expect(resolved[0]?.error).not.toBeNull();
+
+      // The claim the dead read took out has to be gone with it, or the retry
+      // queues behind it forever instead of asking again.
+      yield* TestClock.adjust(Duration.millis(DEFAULT_ERROR_TTL_MS + 1));
+      const retried = yield* cache.resolve(["TEC-1"], (missing) =>
+        Effect.succeed(missing.map((identifier) => ok(identifier))),
+      );
+      expect(retried[0]?.status).toBe("In Progress");
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
