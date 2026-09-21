@@ -57,6 +57,9 @@ const ATTENTION_RANK: ReadonlyArray<PhaseSidebarAttentionKind> = [
   "input",
   "approval",
   "error",
+  // T3-CUSTOM(expbkt3): a question someone asked outranks a plan waiting to be
+  // read, which is why the hoisted subtree lands in Ask rather than Plan Ready.
+  "ask",
   "plan",
 ];
 
@@ -69,8 +72,9 @@ function attentionKindOf(row: PhaseSidebarRow): PhaseSidebarAttentionKind | null
   const kind = resolvePhaseSidebarAttentionKind(row.thread);
   if (kind !== null) return kind;
   if (row.phaseId === "needs_input") return "input";
-  // T3-CUSTOM(expbkt3): same fallback for a plan, so a collapsed parent still
-  // reports the decision hiding underneath it.
+  // T3-CUSTOM(expbkt3): same fallback for an async question and for a plan, so
+  // a collapsed parent still reports what is hiding underneath it.
+  if (row.phaseId === "ask") return "ask";
   return row.phaseId === "plan_ready" ? "plan" : null;
 }
 
@@ -302,6 +306,9 @@ export function resolvePhaseSidebarTreePhase(node: PhaseSidebarTreeNode): PhaseS
   // Input. Turning a parent red because a child has a plan waiting misreports
   // the urgency and puts a violet reason in the red group.
   if (node.descendantAttention === "plan") return "plan_ready";
+  // T3-CUSTOM(expbkt3): likewise an ask-only subtree hoists to Ask, in amber,
+  // rather than turning its parent red.
+  if (node.descendantAttention === "ask") return "ask";
   if (node.descendantAttention !== null) return "needs_input";
   return node.hasBusyDescendant ? "implementing" : node.row.phaseId;
 }

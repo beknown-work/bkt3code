@@ -414,6 +414,40 @@ describe("resolvePhaseSidebarTreePhase", () => {
     expect(tree[0]?.descendantAttention).toBe("input");
     expect(resolvePhaseSidebarTreePhase(tree[0] as never)).toBe("needs_input");
   });
+
+  it("hoists an ask-only subtree into Ask, above a plan and below a question", () => {
+    const askOnly = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("child", { parent: "parent", phaseId: "ask" }),
+      ],
+      { compareSiblings: byId },
+    );
+    expect(askOnly[0]?.descendantAttention).toBe("ask");
+    expect(resolvePhaseSidebarTreePhase(askOnly[0] as never)).toBe("ask");
+
+    // A question someone asked outranks a plan waiting to be read...
+    const askAndPlan = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("planning", { parent: "parent", phaseId: "plan_ready" }),
+        makeRow("asking", { parent: "parent", phaseId: "ask" }),
+      ],
+      { compareSiblings: byId },
+    );
+    expect(resolvePhaseSidebarTreePhase(askAndPlan[0] as never)).toBe("ask");
+
+    // ...and loses to a parked session.
+    const askAndInput = buildPhaseSidebarTree(
+      [
+        makeRow("parent", { phaseId: "ready" }),
+        makeRow("asking", { parent: "parent", phaseId: "ask" }),
+        makeRow("stuck", { parent: "parent", phaseId: "needs_input" }),
+      ],
+      { compareSiblings: byId },
+    );
+    expect(resolvePhaseSidebarTreePhase(askAndInput[0] as never)).toBe("needs_input");
+  });
   // T3-CUSTOM(expbkt3): END
 
   it("leaves a childless row in its own phase", () => {

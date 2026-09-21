@@ -247,6 +247,8 @@ function reportBulkOutcome(
 
 const PHASE_TONE: Record<PhaseSidebarPhaseId, string> = {
   needs_input: "text-warning-foreground bg-warning-surface",
+  // T3-CUSTOM(expbkt3): amber, matching the sidebar's Ask group and ASK badge.
+  ask: "text-amber-700 bg-amber-500/12 dark:text-amber-300",
   // T3-CUSTOM(expbkt3): violet, matching the sidebar. It used to share the blue
   // of `planning`, so "a plan is waiting" and "a plan is being written" looked
   // identical in the one view built for scanning them.
@@ -316,6 +318,15 @@ function LifecycleIcon({ row }: { row: SessionManagerRow }) {
   }
   if (row.attentionKind === "input") {
     return <MessageSquarePlusIcon aria-label="Waiting for input" className="text-info size-3.5" />;
+  }
+  // T3-CUSTOM(expbkt3): an async question — the agent asked and kept working.
+  if (row.attentionKind === "ask") {
+    return (
+      <MessageSquarePlusIcon
+        aria-label="Question waiting"
+        className="size-3.5 text-amber-600 dark:text-amber-300"
+      />
+    );
   }
   // T3-CUSTOM(expbkt3): a plan awaiting a decision, below the blocking kinds.
   if (row.attentionKind === "plan") {

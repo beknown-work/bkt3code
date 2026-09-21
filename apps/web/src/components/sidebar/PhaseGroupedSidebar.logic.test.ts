@@ -943,8 +943,94 @@ describe("phase sidebar lifecycle", () => {
       ThreadId.make("thread-b"),
       ThreadId.make("thread-c"),
     ]);
-    expect(PHASE_SIDEBAR_PHASE_IDS).toHaveLength(5);
+    // T3-CUSTOM(expbkt3): the lifecycle order itself is the contract — Ask sits
+    // between the two other groups that wait on a human.
+    expect(PHASE_SIDEBAR_PHASE_IDS).toEqual([
+      "needs_input",
+      "ask",
+      "plan_ready",
+      "ready",
+      "planning",
+      "implementing",
+    ]);
   });
+
+  // T3-CUSTOM(expbkt3): BEGIN — async questions get their own lifecycle group.
+  it("files an async question under ask, below a parked session and above a plan", () => {
+    // The agent asked and kept working: grouping by liveness alone would file
+    // this under Implementing, where nobody would see the question.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({ execution: makeActiveExecution(), hasPendingAsyncUserInput: true }),
+      ),
+    ).toBe("ask");
+    expect(resolvePhaseSidebarPhase(makeThread({ hasPendingAsyncUserInput: true }))).toBe("ask");
+    // A parked session still outranks it.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({ hasPendingAsyncUserInput: true, hasPendingUserInput: true }),
+      ),
+    ).toBe("needs_input");
+    // A question someone asked outranks a plan waiting to be read.
+    expect(
+      resolvePhaseSidebarPhase(
+        makeThread({
+          hasPendingAsyncUserInput: true,
+          hasActionableProposedPlan: true,
+          execution: makeExecution(),
+        }),
+      ),
+    ).toBe("ask");
+  });
+
+  it("keeps the plan attention kind when a thread holds a plan and a question", () => {
+    // The row renders ASK from the thread and PLAN from the attention kind, so
+    // this deliberately stays "plan": both badges have to survive together.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasActionableProposedPlan: true, hasPendingAsyncUserInput: true }),
+      ),
+    ).toBe("plan");
+    expect(resolvePhaseSidebarAttentionKind(makeThread({ hasPendingAsyncUserInput: true }))).toBe(
+      "ask",
+    );
+    // Blocking kinds still win the badge outright.
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasPendingUserInput: true, hasPendingAsyncUserInput: true }),
+      ),
+    ).toBe("input");
+    expect(
+      resolvePhaseSidebarAttentionKind(
+        makeThread({ hasPendingApprovals: true, hasPendingAsyncUserInput: true }),
+      ),
+    ).toBe("approval");
+  });
+
+  it("ranks the row highlight red over amber over violet", () => {
+    const ask = phaseSidebarRowClassName(false, false, false, false, true);
+    expect(ask).toContain("bg-amber-500/20");
+    // A question outranks a plan: only one pulse ever runs on a row.
+    const askAndPlan = phaseSidebarRowClassName(false, false, false, true, true);
+    expect(askAndPlan).toContain("bg-amber-500/20");
+    expect(askAndPlan).not.toContain("bg-violet-500/20");
+    // A parked session outranks both.
+    const inputAndAsk = phaseSidebarRowClassName(false, false, true, false, true);
+    expect(inputAndAsk).toContain("bg-red-500/20");
+    expect(inputAndAsk).not.toContain("bg-amber-500/20");
+  });
+
+  it("keeps the work badge on an ask row, unlike plan ready", () => {
+    // The agent is still running, so the row has to keep saying so.
+    expect(
+      resolvePhaseSidebarWorkBadge({
+        phaseId: "ask",
+        backgroundLiveness: "working",
+        executionPresentation: { active: true, label: "Running" },
+      }),
+    ).toEqual({ label: "Running", monitoring: false });
+  });
+  // T3-CUSTOM(expbkt3): END
 
   it("uses ready only as the non-running fallback", () => {
     expect(resolvePhaseSidebarPhase(makeThread())).toBe("ready");
