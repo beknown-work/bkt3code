@@ -13,6 +13,9 @@ export function phaseSidebarSectionToneClassName(phaseId: PhaseSidebarPhaseId): 
   switch (phaseId) {
     case "needs_input":
       return "text-adaptive-amber-700-300";
+    // T3-CUSTOM(expbkt3): an async question, amber like the web sidebar.
+    case "ask":
+      return "text-adaptive-amber-700-300";
     case "plan_ready":
       return "text-adaptive-violet-700-300";
     case "ready":

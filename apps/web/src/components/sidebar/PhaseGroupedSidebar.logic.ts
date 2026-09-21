@@ -47,6 +47,7 @@ export function phaseSidebarGroupHeaderClassName(phaseId: PhaseSidebarPhaseId): 
   const tone = {
     needs_input:
       "border-red-500/20 bg-red-500/8 text-red-700 dark:border-red-400/20 dark:bg-red-400/8 dark:text-red-300",
+    ask: "border-amber-500/20 bg-amber-500/8 text-amber-700 dark:border-amber-400/20 dark:bg-amber-400/8 dark:text-amber-300",
     plan_ready:
       "border-violet-500/20 bg-violet-500/9 text-violet-700 dark:border-violet-400/20 dark:bg-violet-400/9 dark:text-violet-300",
     ready:
@@ -89,6 +90,9 @@ export function phaseSidebarRowClassName(
   // treatment in violet — same geometry, different hue, so the two read as
   // siblings rather than as one urgent state.
   planReady = false,
+  // T3-CUSTOM(expbkt3): an async question, in amber. It sits between the two:
+  // someone asked, but the agent kept working, so it is not the red emergency.
+  askPending = false,
 ): string {
   return cn(
     // T3-CUSTOM(expbkt3): Center the adaptive title/metadata content lane.
@@ -107,9 +111,15 @@ export function phaseSidebarRowClassName(
     // T3-CUSTOM(expbkt3): Flash only structured-question rows in the experimental sidebar.
     needsUserInput &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-red-500/20 text-foreground ring-1 ring-inset ring-red-500/60 shadow-[inset_3px_0_0_0_var(--color-red-500),0_0_14px_rgba(239,68,68,0.22)] hover:bg-red-500/30 motion-reduce:animate-none",
+    // T3-CUSTOM(expbkt3): the amber mirror, for a question asked mid-run. Only
+    // a parked session outranks it.
+    !needsUserInput &&
+      askPending &&
+      "animate-[pulse_1.25s_ease-in-out_infinite] bg-amber-500/20 text-foreground ring-1 ring-inset ring-amber-500/60 shadow-[inset_3px_0_0_0_var(--color-amber-500),0_0_14px_rgba(245,158,11,0.22)] hover:bg-amber-500/30 motion-reduce:animate-none",
     // T3-CUSTOM(expbkt3): the violet mirror, for a plan the human has to decide
     // on. A question always wins the row, so this never stacks with the red one.
     !needsUserInput &&
+      !askPending &&
       planReady &&
       "animate-[pulse_1.25s_ease-in-out_infinite] bg-violet-500/20 text-foreground ring-1 ring-inset ring-violet-500/60 shadow-[inset_3px_0_0_0_var(--color-violet-500),0_0_14px_rgba(139,92,246,0.22)] hover:bg-violet-500/30 motion-reduce:animate-none",
   );
