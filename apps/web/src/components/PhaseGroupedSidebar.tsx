@@ -1,6 +1,5 @@
 import { resolveSettledTimestamp } from "@t3tools/client-runtime/state/phase-sidebar";
 import { useAtomValue } from "@effect/atom-react";
-import { autoAnimate } from "@formkit/auto-animate";
 import {
   scopedProjectKey,
   scopedThreadKey,
@@ -235,6 +234,7 @@ import {
 import { SidebarSearchAction } from "./sidebar/SidebarSearchAction";
 // T3-CUSTOM(expbkt3): attach-to-external-session.
 import { AttachExternalSessionDialog } from "./sidebar/AttachExternalSessionDialog";
+import { autoAnimatedListRef } from "./sidebar/autoAnimatedList";
 import { RunningSessionGlint } from "./sidebar/RunningSessionGlint";
 import { RunningSessionDivider } from "./sidebar/RunningSessionDivider";
 import {
@@ -2818,13 +2818,6 @@ export function PhaseGroupedSidebar() {
     });
     return labels;
   }, [keybindings, showJumpHints, visibleThreadKeys]);
-  const animatedLists = useRef(new WeakSet<HTMLElement>());
-  const attachAutoAnimate = useCallback((node: HTMLElement | null) => {
-    if (!node || animatedLists.current.has(node)) return;
-    autoAnimate(node, { duration: 180, easing: "ease-out" });
-    animatedLists.current.add(node);
-  }, []);
-
   useEffect(() => {
     if (
       !allEnvironmentShellsLive ||
@@ -3536,7 +3529,7 @@ export function PhaseGroupedSidebar() {
         {expanded && node.children.length > 0 ? (
           <li>
             <ul
-              ref={attachAutoAnimate}
+              ref={autoAnimatedListRef}
               role="group"
               aria-label={`Sessions started by ${node.row.thread.title}`}
               className="mt-0.5 space-y-0.5 border-l border-sidebar-border pl-1"
@@ -3617,7 +3610,7 @@ export function PhaseGroupedSidebar() {
           </div>
         ) : null}
         <div
-          ref={attachAutoAnimate}
+          ref={autoAnimatedListRef}
           className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
           data-testid="phase-sidebar-groups"
         >
@@ -3631,7 +3624,6 @@ export function PhaseGroupedSidebar() {
               }
               onToggleCollapsed={toggleSectionCollapsed}
               renderTreeNode={renderTreeNode}
-              attachAutoAnimate={attachAutoAnimate}
             />
           ))}
           {/* T3-CUSTOM(expbkt3): BEGIN — parked shelves below the lifecycle
@@ -3664,9 +3656,17 @@ export function PhaseGroupedSidebar() {
                   )}
                 />
               </button>
-              <ul ref={attachAutoAnimate} className="space-y-0.5">
-                {renderedSnoozedRows.map((row) => renderThreadRow(row, "snoozed"))}
-              </ul>
+              {/* T3-CUSTOM(expbkt3): a collapsed shelf renders no rows, so it must
+                  render no list either. An empty list left in the tree is where
+                  auto-animate re-inserts the row it is animating out, and it is
+                  animated in turn, so the two bounce the row between them and it
+                  blinks until the page is reloaded. The shelves are parked
+                  history: they lose nothing by not animating. */}
+              {renderedSnoozedRows.length > 0 ? (
+                <ul className="space-y-0.5">
+                  {renderedSnoozedRows.map((row) => renderThreadRow(row, "snoozed"))}
+                </ul>
+              ) : null}
             </section>
           ) : null}
           {settledRows.length > 0 ? (
@@ -3694,9 +3694,11 @@ export function PhaseGroupedSidebar() {
                   )}
                 />
               </button>
-              <ul ref={attachAutoAnimate} className="space-y-0.5">
-                {renderedSettledRows.map((row) => renderThreadRow(row, "settled"))}
-              </ul>
+              {renderedSettledRows.length > 0 ? (
+                <ul className="space-y-0.5">
+                  {renderedSettledRows.map((row) => renderThreadRow(row, "settled"))}
+                </ul>
+              ) : null}
               {settledShelfExpanded && hiddenSettledCount > 0 ? (
                 <button
                   type="button"
@@ -3808,14 +3810,12 @@ function PhaseSidebarSectionBlock({
   showRunningDivider,
   onToggleCollapsed,
   renderTreeNode,
-  attachAutoAnimate,
 }: {
   readonly section: PhaseSidebarGroupSection;
   readonly collapsed: boolean;
   readonly showRunningDivider: boolean;
   readonly onToggleCollapsed: (sectionKey: string) => void;
   readonly renderTreeNode: (node: PhaseSidebarTreeNode) => ReactNode;
-  readonly attachAutoAnimate: (element: HTMLElement | null) => void;
 }) {
   const { summary } = section;
   const phaseId = phaseSidebarSectionPhase(section);
@@ -3883,7 +3883,7 @@ function PhaseSidebarSectionBlock({
           Empty — use “Move to group” on a session.
         </p>
       ) : (
-        <ul ref={attachAutoAnimate} className="space-y-0.5">
+        <ul ref={autoAnimatedListRef} className="space-y-0.5">
           {section.nodes.map((node) => renderTreeNode(node))}
         </ul>
       )}
