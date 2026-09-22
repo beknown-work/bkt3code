@@ -231,6 +231,9 @@ export const make = Effect.gen(function* () {
     const env = projectScriptRuntimeEnv({
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
+      // T3-CUSTOM(expbkt3): setup runs before a terminal renderer is attached.
+      // Color probes (including vp on macOS) can otherwise wait forever for replies.
+      extraEnv: { NO_COLOR: "1" },
     });
 
     const completion = yield* terminalManager

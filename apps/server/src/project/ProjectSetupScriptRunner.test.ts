@@ -159,7 +159,12 @@ describe("ProjectSetupScriptRunner", () => {
           terminalId: "setup-default-setup",
           cwd: "/repo/worktrees/a",
           worktreePath: "/repo/worktrees/a",
-          env: { T3CODE_PROJECT_ROOT: "/repo/project", T3CODE_WORKTREE_PATH: "/repo/worktrees/a" },
+          env: {
+            // T3-CUSTOM(expbkt3): unattended setup must not probe terminal colors.
+            NO_COLOR: "1",
+            T3CODE_PROJECT_ROOT: "/repo/project",
+            T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
+          },
           command: "npm install",
         }),
       );
@@ -248,6 +253,7 @@ describe("ProjectSetupScriptRunner", () => {
         cwd: "/repo/worktrees/a",
         worktreePath: "/repo/worktrees/a",
         env: {
+          NO_COLOR: "1", // T3-CUSTOM(expbkt3): unattended setup must not probe terminal colors.
           T3CODE_PROJECT_ROOT: "/repo/project",
           T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
         },
@@ -424,6 +430,7 @@ describe("ProjectSetupScriptRunner", () => {
         cwd: "/repo/worktrees/a",
         worktreePath: "/repo/worktrees/a",
         env: {
+          NO_COLOR: "1", // T3-CUSTOM(expbkt3): unattended setup must not probe terminal colors.
           T3CODE_PROJECT_ROOT: workspaceRoot,
           T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
         },
