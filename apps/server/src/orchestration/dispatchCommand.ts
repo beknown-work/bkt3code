@@ -32,6 +32,8 @@ import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 import { ThreadExecutionSupervisor } from "../execution/ThreadExecutionSupervisor.ts";
 // T3-CUSTOM(expbkt3): high-level creation is resolved and queued by one durable coordinator.
 import * as ThreadBootstrapCoordinator from "../thread-bootstrap/Coordinator.ts";
+// T3-CUSTOM(expbkt3): one worktree per (parent session, repository).
+import * as ThreadWorkspaceGroups from "../persistence/ThreadWorkspaceGroups.ts";
 import * as ThreadCreationDefaultsResolver from "../thread-bootstrap/DefaultsResolver.ts";
 // T3-CUSTOM(expbkt3): attach-to-external-session.
 import {
@@ -785,7 +787,11 @@ export const layerWithBootstrapRepository = Layer.effect(OrchestrationCommandDis
 
 export const layer = layerWithBootstrapRepository.pipe(
   Layer.provide(
-    ProjectionThreadBootstrapRepositoryLive.pipe(Layer.provide(SqlitePersistenceLayerLive)),
+    Layer.mergeAll(
+      ProjectionThreadBootstrapRepositoryLive,
+      // T3-CUSTOM(expbkt3): one worktree per (parent, repository).
+      ThreadWorkspaceGroups.layer,
+    ).pipe(Layer.provide(SqlitePersistenceLayerLive)),
   ),
 );
 

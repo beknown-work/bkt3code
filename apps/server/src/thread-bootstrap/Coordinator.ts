@@ -40,7 +40,13 @@ import {
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import { ThreadWorkspaceGroupRepository } from "../persistence/ThreadWorkspaceGroups.ts";
 import { ThreadCreationDefaultsResolver } from "./DefaultsResolver.ts";
+// T3-CUSTOM(expbkt3): one worktree per (parent session, repository).
+import {
+  shouldJoinParentWorkspaceGroup,
+  withWorktreeCreationPermit,
+} from "./parentWorkspaceInheritance.ts";
 import { resolveAvailableWorktreeBase } from "./WorktreeBaseResolver.ts";
 // T3-CUSTOM(expbkt3): worktree directories are named after their codename.
 import {
@@ -128,6 +134,8 @@ const make = Effect.gen(function* () {
   const terminalManager = yield* TerminalManager.TerminalManager;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const bootstraps = yield* ProjectionThreadBootstrapRepository;
+  // T3-CUSTOM(expbkt3): the worktree a parent shares across one repository.
+  const workspaceGroups = yield* ThreadWorkspaceGroupRepository;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
   // T3-CUSTOM(expbkt3): worktree directories are named after their codename.
@@ -460,45 +468,76 @@ const make = Effect.gen(function* () {
       }
     }
     const projectCwd = workspace.projectCwd;
+    // T3-CUSTOM(expbkt3): BEGIN — one worktree per (parent, repository). Two
+    // siblings are handed the same branch and path, so creation is serialised
+    // on that path and the sibling that arrives second uses what the first
+    // built. The permit covers the checkout only: a joiner waits for
+    // `git worktree add`, never for the project's setup script.
+    const sharedPath = workspace.intendedPath ?? null;
+    const sharedBranch = workspace.newBranch ?? null;
+    const createOrJoinWorktree = Effect.gen(function* () {
+      if (sharedPath !== null && sharedBranch !== null) {
+        const builtBySibling = yield* fileSystem
+          .exists(sharedPath)
+          .pipe(Effect.orElseSucceed(() => false));
+        // Its branch is our branch — both came from the same reservation.
+        if (builtBySibling) return { path: sharedPath, branch: sharedBranch };
+      }
+      if (input.baseRef.source === "origin") {
+        yield* gitWorkflow.fetchRemote({ cwd: projectCwd, remoteName: "origin" });
+      }
+      const exactBaseRef = yield* resolveAvailableWorktreeBase({
+        cwd: projectCwd,
+        baseRef: input.baseRef,
+        listRefs: gitWorkflow.listRefs,
+        resolveRemoteTrackingCommit: gitWorkflow.resolveRemoteTrackingCommit,
+      });
+      if (!exactBaseRef || exactBaseRef.kind !== "branch") {
+        const selected =
+          input.baseRef.kind === "repository-default"
+            ? `${input.baseRef.source} repository default`
+            : `${input.baseRef.source}/${input.baseRef.branch}`;
+        return yield* new ThreadBootstrapCoordinatorError({
+          message: `Configured worktree base ref is unavailable: ${selected}.`,
+        });
+      }
+      const branch = exactBaseRef.branch;
+      let refName = branch;
+      if (exactBaseRef.source === "origin") {
+        const remote = yield* gitWorkflow.resolveRemoteTrackingCommit({
+          cwd: projectCwd,
+          refName: branch,
+          fallbackRemoteName: "origin",
+        });
+        refName = remote.commitSha;
+      }
+      const created = yield* gitWorkflow.createWorktree({
+        cwd: projectCwd,
+        refName,
+        newRefName: workspace.newBranch,
+        baseRefName: branch,
+        path: workspace.intendedPath ?? null,
+      });
+      // Published before the permit is released, so the next sibling in this
+      // group sees a reservation it can use rather than one it must build.
+      const ownerThreadId = input.request.parentThreadId ?? null;
+      if (ownerThreadId !== null) {
+        yield* workspaceGroups
+          .markReady({
+            ownerThreadId,
+            projectId: input.request.projectId,
+            worktreePath: created.worktree.path,
+          })
+          .pipe(Effect.ignoreCause({ log: true }));
+      }
+      return { path: created.worktree.path, branch: created.worktree.refName };
+    });
     const result = yield* Effect.exit(
-      Effect.gen(function* () {
-        if (input.baseRef.source === "origin") {
-          yield* gitWorkflow.fetchRemote({ cwd: projectCwd, remoteName: "origin" });
-        }
-        const exactBaseRef = yield* resolveAvailableWorktreeBase({
-          cwd: projectCwd,
-          baseRef: input.baseRef,
-          listRefs: gitWorkflow.listRefs,
-          resolveRemoteTrackingCommit: gitWorkflow.resolveRemoteTrackingCommit,
-        });
-        if (!exactBaseRef || exactBaseRef.kind !== "branch") {
-          const selected =
-            input.baseRef.kind === "repository-default"
-              ? `${input.baseRef.source} repository default`
-              : `${input.baseRef.source}/${input.baseRef.branch}`;
-          return yield* new ThreadBootstrapCoordinatorError({
-            message: `Configured worktree base ref is unavailable: ${selected}.`,
-          });
-        }
-        const branch = exactBaseRef.branch;
-        let refName = branch;
-        if (exactBaseRef.source === "origin") {
-          const remote = yield* gitWorkflow.resolveRemoteTrackingCommit({
-            cwd: projectCwd,
-            refName: branch,
-            fallbackRemoteName: "origin",
-          });
-          refName = remote.commitSha;
-        }
-        return yield* gitWorkflow.createWorktree({
-          cwd: projectCwd,
-          refName,
-          newRefName: workspace.newBranch,
-          baseRefName: branch,
-          path: workspace.intendedPath ?? null,
-        });
-      }),
+      sharedPath === null
+        ? createOrJoinWorktree
+        : withWorktreeCreationPermit(sharedPath, createOrJoinWorktree),
     );
+    // T3-CUSTOM(expbkt3): END
     if (Exit.isFailure(result)) {
       const failure = Cause.squash(result.cause);
       yield* updateStep({
@@ -512,8 +551,8 @@ const make = Effect.gen(function* () {
     }
     yield* finishWorktree({
       request: input.request,
-      worktreePath: result.value.worktree.path,
-      branch: result.value.worktree.refName,
+      worktreePath: result.value.path,
+      branch: result.value.branch,
       attempt: input.attempt,
       setupAttempt: 1,
     });
@@ -577,6 +616,10 @@ const make = Effect.gen(function* () {
           ),
         );
       if (resolved.workspace.mode === "new-worktree") {
+        // T3-CUSTOM(expbkt3): kept as locals so the group rewrite below can
+        // rebuild the workspace after `resolved` widens the union.
+        const workspaceProjectCwd = resolved.workspace.projectCwd;
+        const workspaceBaseRef = resolved.workspace.baseRef;
         const originBaseExplicitlyRequested =
           command.overrides?.workspace?.mode === "new-worktree" &&
           command.overrides.workspace.baseRef?.source === "origin";
@@ -636,16 +679,62 @@ const make = Effect.gen(function* () {
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.orElseSucceed(() => legacyName),
           ));
+        // T3-CUSTOM(expbkt3): held as locals because the reassignment below
+        // widens `resolved.workspace` back to the full union.
+        const allocatedIdentityBranch = identity?.branchName ?? allocatedBranch;
+        const allocatedIdentityPath =
+          resolved.workspace.intendedPath ?? path.join(projectWorktreesDir, directoryName);
         resolved = {
           ...resolved,
           workspace: {
             ...resolved.workspace,
             ...(originBaseExplicitlyRequested ? { originBaseExplicitlyRequested: true } : {}),
-            newBranch: identity?.branchName ?? allocatedBranch,
-            intendedPath:
-              resolved.workspace.intendedPath ?? path.join(projectWorktreesDir, directoryName),
+            newBranch: allocatedIdentityBranch,
+            intendedPath: allocatedIdentityPath,
           },
         };
+        // T3-CUSTOM(expbkt3): END
+
+        // T3-CUSTOM(expbkt3): BEGIN — one worktree per (parent, repository).
+        // The identity just allocated is a candidate, not yet a decision: the
+        // first child of this parent to reach this repository reserves it and
+        // every later child joins that reservation. Claiming here rather than
+        // reading a sibling's worktree back out of the projection is what makes
+        // a parallel fan-out land in one tree — when four children are
+        // dispatched together, none of them has a worktree to be observed.
+        const parentThreadId = resolved.parentThreadId ?? null;
+        if (
+          shouldJoinParentWorkspaceGroup({
+            hasExplicitWorkspace: command.overrides?.workspace !== undefined,
+            parentThreadId,
+          }) &&
+          parentThreadId !== null
+        ) {
+          const group = yield* workspaceGroups
+            .claim({
+              ownerThreadId: parentThreadId,
+              projectId: resolved.projectId,
+              branch: allocatedIdentityBranch,
+              worktreePath: allocatedIdentityPath,
+              createdAt: resolved.createdAt,
+            })
+            // A reservation we cannot read must not block the session. The cost
+            // of falling back is one extra worktree, not a failed creation.
+            .pipe(Effect.option);
+          if (Option.isSome(group) && group.value.worktreePath !== allocatedIdentityPath) {
+            resolved = {
+              ...resolved,
+              workspace: {
+                mode: "new-worktree",
+                projectCwd: workspaceProjectCwd,
+                baseRef: workspaceBaseRef,
+                ...(originBaseExplicitlyRequested ? { originBaseExplicitlyRequested: true } : {}),
+                newBranch: group.value.branch,
+                intendedPath: group.value.worktreePath,
+              },
+            };
+          }
+        }
         // T3-CUSTOM(expbkt3): END
       }
       if (!resolved.ownerUserId && options?.actorUserId) {

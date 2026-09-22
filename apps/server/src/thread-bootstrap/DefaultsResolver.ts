@@ -15,6 +15,10 @@ import * as Option from "effect/Option";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import {
+  type ParentWorkspaceInheritance,
+  resolveParentWorkspaceInheritance,
+} from "./parentWorkspaceInheritance.ts";
 
 export class ThreadCreationDefaultsResolutionError extends Data.TaggedError(
   "ThreadCreationDefaultsResolutionError",
@@ -64,6 +68,11 @@ export function mergeThreadCreationDefaults(input: {
   readonly command: ThreadBootstrapRequestCommand;
   readonly project: OrchestrationProjectShell;
   readonly settings: ServerSettingsContract;
+  /**
+   * Where the creating session works. Consulted only when the caller named no
+   * workspace of its own; see parentWorkspaceInheritance.
+   */
+  readonly inheritance?: ParentWorkspaceInheritance;
 }): Omit<ResolvedThreadBootstrapRequest, "workspace"> & {
   readonly workspace:
     | { readonly mode: "local"; readonly path: string }
@@ -80,6 +89,7 @@ export function mergeThreadCreationDefaults(input: {
       };
 } {
   const { command, project, settings } = input;
+  const inheritance = input.inheritance ?? { kind: "none" };
   const projectDefaults = project.threadCreationDefaults ?? {
     environmentMode: null,
     worktreeBaseRef: null,
@@ -87,42 +97,63 @@ export function mergeThreadCreationDefaults(input: {
     interactionMode: null,
   };
   const explicitWorkspace = command.overrides?.workspace;
+  // T3-CUSTOM(expbkt3): a child works where its parent works. Inheriting the
+  // parent's own tree is a local environment, not a worktree to create; a
+  // different repository still allocates, and the coordinator turns that
+  // allocation into the parent's shared group for that repository.
+  const inheritsParentWorkspace =
+    inheritance.kind === "parent-worktree" || inheritance.kind === "parent-checkout";
   const environmentMode =
     explicitWorkspace?.mode === "new-worktree"
       ? "worktree"
       : explicitWorkspace?.mode === "local" || explicitWorkspace?.mode === "existing-worktree"
         ? "local"
-        : (projectDefaults.environmentMode ?? settings.defaultThreadEnvMode);
+        : inheritsParentWorkspace
+          ? "local"
+          : (projectDefaults.environmentMode ?? settings.defaultThreadEnvMode);
 
-  const workspace = explicitWorkspace
-    ? explicitWorkspace.mode === "local"
-      ? ({ mode: "local", path: project.workspaceRoot } as const)
-      : explicitWorkspace.mode === "existing-worktree"
-        ? ({
-            mode: "existing-worktree",
-            path: explicitWorkspace.path,
-            ...(explicitWorkspace.branch ? { branch: explicitWorkspace.branch } : {}),
-          } as const)
+  const inheritedWorkspace =
+    inheritance.kind === "parent-worktree"
+      ? ({
+          mode: "existing-worktree",
+          path: inheritance.path,
+          ...(inheritance.branch ? { branch: inheritance.branch } : {}),
+        } as const)
+      : inheritance.kind === "parent-checkout"
+        ? ({ mode: "local", path: project.workspaceRoot } as const)
+        : null;
+
+  const workspace = inheritedWorkspace
+    ? inheritedWorkspace
+    : explicitWorkspace
+      ? explicitWorkspace.mode === "local"
+        ? ({ mode: "local", path: project.workspaceRoot } as const)
+        : explicitWorkspace.mode === "existing-worktree"
+          ? ({
+              mode: "existing-worktree",
+              path: explicitWorkspace.path,
+              ...(explicitWorkspace.branch ? { branch: explicitWorkspace.branch } : {}),
+            } as const)
+          : ({
+              mode: "new-worktree",
+              projectCwd: project.workspaceRoot,
+              baseRef: explicitWorkspace.baseRef ??
+                projectDefaults.worktreeBaseRef ?? {
+                  kind: "repository-default",
+                  source: settings.newWorktreesStartFromOrigin ? "origin" : "local",
+                },
+              ...(explicitWorkspace.newBranch ? { newBranch: explicitWorkspace.newBranch } : {}),
+            } as const)
+      : environmentMode === "local"
+        ? ({ mode: "local", path: project.workspaceRoot } as const)
         : ({
             mode: "new-worktree",
             projectCwd: project.workspaceRoot,
-            baseRef: explicitWorkspace.baseRef ??
-              projectDefaults.worktreeBaseRef ?? {
-                kind: "repository-default",
-                source: settings.newWorktreesStartFromOrigin ? "origin" : "local",
-              },
-            ...(explicitWorkspace.newBranch ? { newBranch: explicitWorkspace.newBranch } : {}),
-          } as const)
-    : environmentMode === "local"
-      ? ({ mode: "local", path: project.workspaceRoot } as const)
-      : ({
-          mode: "new-worktree",
-          projectCwd: project.workspaceRoot,
-          baseRef: projectDefaults.worktreeBaseRef ?? {
-            kind: "repository-default",
-            source: settings.newWorktreesStartFromOrigin ? "origin" : "local",
-          },
-        } as const);
+            baseRef: projectDefaults.worktreeBaseRef ?? {
+              kind: "repository-default",
+              source: settings.newWorktreesStartFromOrigin ? "origin" : "local",
+            },
+          } as const);
 
   return {
     bootstrapId: command.bootstrapId,
@@ -195,10 +226,40 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+        // T3-CUSTOM(expbkt3): BEGIN — a child session works where its parent
+        // works. The parent row is only read when the caller named no workspace,
+        // so an explicit request never pays for the lookup.
+        const parentThreadId = command.parentThreadId ?? null;
+        const parent =
+          command.overrides?.workspace === undefined && parentThreadId !== null
+            ? yield* snapshotQuery.getThreadShellById(parentThreadId).pipe(
+                Effect.map(
+                  Option.match({
+                    onNone: () => null,
+                    onSome: (thread) => ({
+                      projectId: thread.projectId as string,
+                      worktreePath: thread.worktreePath,
+                      branch: thread.branch,
+                    }),
+                  }),
+                ),
+                // A parent we cannot read is a parent we cannot inherit from.
+                // Falling back to the defaults beats failing the creation.
+                Effect.orElseSucceed(() => null),
+              )
+            : null;
+        const inheritance = resolveParentWorkspaceInheritance({
+          hasExplicitWorkspace: command.overrides?.workspace !== undefined,
+          parentThreadId,
+          parent,
+          targetProjectId: command.projectId,
+        });
+        // T3-CUSTOM(expbkt3): END
         const merged = mergeThreadCreationDefaults({
           command,
           project: project.value,
           settings,
+          inheritance,
         });
         // Repository I/O happens only after the request is durably queued, so
         // a slow fetch or stale ref becomes visible worktree-step progress.

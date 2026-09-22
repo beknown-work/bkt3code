@@ -428,7 +428,7 @@ export const T3CreateSessionTool = mutatingTool(
       worktreePath: Schema.optional(
         described(
           Schema.NullOr(Schema.String),
-          "Optional existing worktree path. Omit to use normal T3 project behavior.",
+          "Optional existing worktree path. Omit to inherit the calling session's workspace; see workspace.",
         ),
       ),
       workspace: Schema.optional(
@@ -446,7 +446,10 @@ export const T3CreateSessionTool = mutatingTool(
               newBranch: Schema.optional(Schema.String),
             }),
           ]),
-          "Optional workspace override. Omit to use project then app defaults.",
+          // T3-CUSTOM(expbkt3): the default is now inherited from the calling
+          // session, so this description is the only place a calling model
+          // learns how to ask for an isolated tree.
+          "Optional workspace override. Omit and the new session works where yours does: your own worktree when it targets your repository, otherwise one worktree shared by every session you create in that repository. Pass {mode: 'new-worktree'} when this session needs a tree of its own — for example when several children will edit the same repository in parallel.",
         ),
       ),
       // T3-CUSTOM(expbkt3): session priority.

@@ -168,6 +168,7 @@ import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
 import * as PlanReviewServiceLayer from "./planreview/PlanReviewService.ts";
 // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
 import * as AgentUiRenders from "./persistence/AgentUiRenders.ts";
+import * as ThreadWorkspaceGroups from "./persistence/ThreadWorkspaceGroups.ts";
 import * as AgentUiServiceLayer from "./agentui/AgentUiService.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
@@ -851,6 +852,8 @@ const buildAppUnderTest = (options?: {
               listIncomplete: () => Effect.succeed([]),
             }),
           ),
+          // T3-CUSTOM(expbkt3): shared child worktrees, one per (parent, repo).
+          Layer.provide(ThreadWorkspaceGroups.layer.pipe(Layer.provide(SqlitePersistenceMemory))),
         ),
       ),
       Layer.provide(
