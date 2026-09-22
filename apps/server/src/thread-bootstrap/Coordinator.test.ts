@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off - the fake `git worktree add` has
+// to make a real directory, and it runs inside a mock layer with no services.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -8,6 +14,7 @@ import {
   ThreadId,
   type OrchestrationCommand,
   type ResolvedThreadBootstrapRequest,
+  type ThreadBootstrapRequestCommand,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -29,6 +36,9 @@ import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import { ThreadBootstrapCoordinator, layer } from "./Coordinator.ts";
+import * as ThreadWorkspaceGroups from "../persistence/ThreadWorkspaceGroups.ts";
+import { MigrationsLive } from "../persistence/Migrations.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ThreadDeletionReactor } from "../orchestration/Services/ThreadDeletionReactor.ts";
 import { ThreadCreationDefaultsResolver } from "./DefaultsResolver.ts";
 
@@ -61,6 +71,15 @@ function resolvedRequest(): ResolvedThreadBootstrapRequest {
     sourceControlProfileId: null,
     priority: null,
     createdAt: NOW,
+  };
+}
+
+function requestCommandFor(threadId: string) {
+  return {
+    ...requestCommand(),
+    commandId: CommandId.make(`request-${threadId}`),
+    bootstrapId: `bootstrap-${threadId}`,
+    threadId: ThreadId.make(threadId),
   };
 }
 
@@ -125,6 +144,11 @@ function testLayer(input: {
   readonly drainDeletionThrough?: (sequence: number) => Effect.Effect<void>;
   readonly setup: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly request?: ResolvedThreadBootstrapRequest;
+  // T3-CUSTOM(expbkt3): per-command resolution, so a fan-out can be given the
+  // distinct worktree identities the allocator would really hand out.
+  readonly resolveRequest?: (
+    command: ThreadBootstrapRequestCommand,
+  ) => ResolvedThreadBootstrapRequest;
   readonly bootstrap?: ProjectionThreadBootstrap;
   readonly onCommand?: (command: OrchestrationCommand) => Effect.Effect<void>;
   readonly stopCommand?: TerminalManager.TerminalManager["Service"]["stopCommand"];
@@ -139,7 +163,8 @@ function testLayer(input: {
     ),
     Layer.provide(
       Layer.mock(ThreadCreationDefaultsResolver)({
-        resolve: () => Effect.succeed(input.request ?? resolvedRequest()),
+        resolve: (command) =>
+          Effect.succeed(input.resolveRequest?.(command) ?? input.request ?? resolvedRequest()),
       }),
     ),
     Layer.provide(
@@ -236,6 +261,14 @@ function testLayer(input: {
         Layer.provide(NodeServices.layer),
       ),
     ),
+    // T3-CUSTOM(expbkt3): shared child worktrees, one per (parent, repository).
+    Layer.provide(
+      ThreadWorkspaceGroups.layer.pipe(
+        Layer.provide(MigrationsLive),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
   );
 }
 
@@ -283,6 +316,111 @@ describe("ThreadBootstrapCoordinator", () => {
         yield* Deferred.await(setupStarted);
         yield* Deferred.await(bootstrapCompleted);
       }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
+  // T3-CUSTOM(expbkt3): one worktree per (parent session, repository).
+  it.effect("puts two children of one parent in a single worktree", () =>
+    Effect.gen(function* () {
+      const worktreesDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-group-"));
+      const parentThreadId = ThreadId.make("thread-parent");
+      // The identities the allocator would hand two children dispatched
+      // together — different codenames, because neither can see the other.
+      const candidates: Record<string, { branch: string; path: string }> = {
+        "thread-1": {
+          branch: "t3code/hongkong",
+          path: NodePath.join(worktreesDir, "hongkong"),
+        },
+        "thread-2": {
+          branch: "t3code/cagliari",
+          path: NodePath.join(worktreesDir, "cagliari"),
+        },
+      };
+
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const createdPaths = yield* Ref.make<ReadonlyArray<string>>([]);
+      const turnStarted = yield* Deferred.make<void>();
+      const bootstrapCompleted = yield* Deferred.make<void>();
+      const settled = yield* Deferred.make<void>();
+
+      const dependencies = testLayer({
+        commands,
+        turnStarted,
+        bootstrapCompleted,
+        resolveRequest: (command) => {
+          const candidate = candidates[command.threadId]!;
+          const { initialTurn: _initialTurn, ...base } = resolvedRequest();
+          return {
+            ...base,
+            bootstrapId: `bootstrap-${command.threadId}`,
+            threadId: command.threadId,
+            parentThreadId,
+            workspace: {
+              mode: "new-worktree",
+              projectCwd: "/repo/project",
+              baseRef: { kind: "branch", source: "local", branch: "main" },
+              newBranch: candidate.branch,
+              intendedPath: candidate.path,
+            },
+          };
+        },
+        onCommand: (command) =>
+          command.type === "thread.meta.update"
+            ? Ref.get(commands).pipe(
+                Effect.flatMap((all) =>
+                  all.filter((entry) => entry.type === "thread.meta.update").length >= 2
+                    ? Deferred.succeed(settled, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+                ),
+              )
+            : Effect.void,
+        gitWorkflow: {
+          // Stand in for `git worktree add`, which is what makes the path exist
+          // for whichever sibling arrives second.
+          createWorktree: (input) =>
+            Effect.sync(() => {
+              NodeFS.mkdirSync(input.path!, { recursive: true });
+              return { worktree: { path: input.path!, refName: input.newRefName! } };
+            }).pipe(
+              Effect.tap((created) =>
+                Ref.update(createdPaths, (paths) => [...paths, created.worktree.path]),
+              ),
+            ),
+        },
+        setup: () =>
+          Effect.succeed({
+            status: "completed" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+            terminalId: "setup-1",
+            cwd: worktreesDir,
+            exitCode: 0 as const,
+          }),
+      });
+
+      yield* Effect.gen(function* () {
+        const coordinator = yield* ThreadBootstrapCoordinator;
+        yield* Effect.all(
+          [
+            coordinator.request(requestCommandFor("thread-1")),
+            coordinator.request(requestCommandFor("thread-2")),
+          ],
+          { concurrency: 2 },
+        );
+        yield* Deferred.await(settled);
+
+        // One checkout, and both sessions recorded against it.
+        expect(yield* Ref.get(createdPaths)).toEqual([candidates["thread-1"]!.path]);
+        const recorded = (yield* Ref.get(commands))
+          .filter((command) => command.type === "thread.meta.update")
+          .map((command) => command.worktreePath);
+        expect(recorded).toEqual([candidates["thread-1"]!.path, candidates["thread-1"]!.path]);
+      }).pipe(
+        Effect.provide(dependencies),
+        Effect.ensuring(
+          Effect.sync(() => NodeFS.rmSync(worktreesDir, { recursive: true, force: true })),
+        ),
+      );
     }),
   );
 

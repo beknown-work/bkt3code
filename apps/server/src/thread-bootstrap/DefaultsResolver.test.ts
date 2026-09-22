@@ -222,3 +222,70 @@ describe("mergeThreadCreationDefaults session lineage", () => {
     expect(resolved.parentThreadId).toBe(null);
   });
 });
+
+// T3-CUSTOM(expbkt3): a child session works where its parent works.
+describe("inheriting the creating session's workspace", () => {
+  it("puts a child in the parent's own worktree for the parent's repository", () => {
+    const resolved = mergeThreadCreationDefaults({
+      command: command({ parentThreadId: ThreadId.make("thread-parent") }),
+      project: project(),
+      settings: DEFAULT_SERVER_SETTINGS,
+      inheritance: {
+        kind: "parent-worktree",
+        path: "/worktrees/project/hongkong",
+        branch: "t3code/hongkong",
+      },
+    });
+
+    expect(resolved.workspace).toEqual({
+      mode: "existing-worktree",
+      path: "/worktrees/project/hongkong",
+      branch: "t3code/hongkong",
+    });
+  });
+
+  it("puts a child in the project checkout when the parent is not in a worktree", () => {
+    const resolved = mergeThreadCreationDefaults({
+      command: command({ parentThreadId: ThreadId.make("thread-parent") }),
+      project: project(),
+      settings: DEFAULT_SERVER_SETTINGS,
+      inheritance: { kind: "parent-checkout" },
+    });
+
+    expect(resolved.workspace).toEqual({ mode: "local", path: "/repo/project" });
+  });
+
+  // A different repository still allocates here. The coordinator turns that
+  // allocation into the parent's shared group for that repository.
+  it("still allocates a worktree for a repository the parent does not work in", () => {
+    const resolved = mergeThreadCreationDefaults({
+      command: command({ parentThreadId: ThreadId.make("thread-parent") }),
+      project: project({
+        threadCreationDefaults: {
+          environmentMode: "worktree",
+          worktreeBaseRef: null,
+          runtimeMode: null,
+          interactionMode: null,
+        },
+      }),
+      settings: DEFAULT_SERVER_SETTINGS,
+      inheritance: { kind: "shared-group" },
+    });
+
+    expect(resolved.workspace.mode).toBe("new-worktree");
+  });
+
+  it("leaves a caller that asked for its own worktree alone", () => {
+    const resolved = mergeThreadCreationDefaults({
+      command: command({
+        parentThreadId: ThreadId.make("thread-parent"),
+        overrides: { workspace: { mode: "new-worktree" } },
+      }),
+      project: project(),
+      settings: DEFAULT_SERVER_SETTINGS,
+      inheritance: { kind: "none" },
+    });
+
+    expect(resolved.workspace.mode).toBe("new-worktree");
+  });
+});

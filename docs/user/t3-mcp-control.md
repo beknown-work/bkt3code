@@ -213,12 +213,29 @@ such as `t3_get_session`, `t3_send_prompt`, and the `preview_*` family remain th
 preferred interface for routine agent work; the bridge is the complete escape
 hatch for deep control and read parity.
 
-`t3_create_session` resolves omitted workspace, model/options, access, and Build/Plan fields from
-the target project's defaults and then that environment's app defaults. Its structured `workspace`
-override can request Local, an existing worktree, or a new worktree with a Local or Origin base ref.
-It returns `threadId`, `bootstrapId`, and `bootstrapStatus: "queued"` after durable queueing. When a
-prompt is supplied, the first turn remains pending until new-worktree setup succeeds or a user
-bypasses a failed setup.
+`t3_create_session` resolves omitted model/options, access, and Build/Plan fields from the target
+project's defaults and then that environment's app defaults. Its structured `workspace` override can
+request Local, an existing worktree, or a new worktree with a Local or Origin base ref. It returns
+`threadId`, `bootstrapId`, and `bootstrapStatus: "queued"` after durable queueing. When a prompt is
+supplied, the first turn remains pending until new-worktree setup succeeds or a user bypasses a
+failed setup.
+
+### Where a session a session creates works
+
+A session that creates another session no longer scatters checkouts. With no `workspace` passed:
+
+| The new session targets           | Where it works                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| the creating session's repository | that session's own worktree, or its project checkout when it has no worktree  |
+| a different repository            | one worktree, shared by every session that session creates in that repository |
+
+The second row holds for a fan-out as well as a sequence: the shared worktree is reserved when each
+session is accepted, before any checkout exists, so four sessions created at once land in one tree
+rather than four.
+
+Pass a `workspace` to opt out; it is honoured exactly as given. `{mode: "new-worktree"}` is the way
+to ask for an isolated tree, which is what several sessions editing one repository **in parallel**
+need — sharing a worktree means sharing a branch and a working tree, and their edits will interleave.
 
 ### Session lineage
 
