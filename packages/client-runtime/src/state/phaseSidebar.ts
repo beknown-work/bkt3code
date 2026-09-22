@@ -113,6 +113,9 @@ export function resolveSettledTimestamp(
 
 export const PHASE_SIDEBAR_PHASE_IDS = [
   "needs_input",
+  // T3-CUSTOM(expbkt3): an async question — the agent asked something and kept
+  // working. It ranks directly below Needs Input and above Plan Ready.
+  "ask",
   "plan_ready",
   "ready",
   "planning",
@@ -295,6 +298,9 @@ export const PHASE_SIDEBAR_PHASES: ReadonlyArray<PhaseSidebarPhaseDefinition> = 
     label: "Needs Input",
     helperText: "Agent is waiting for your answer",
   },
+  // T3-CUSTOM(expbkt3): a question asked mid-run. The agent did not park, so
+  // nothing else in the row says a human is holding it up.
+  { id: "ask", label: "Ask", helperText: "Agent asked a question while working" },
   // T3-CUSTOM(expbkt3): the group means a plan is waiting, not "plan mode, idle".
   { id: "plan_ready", label: "Plan Ready", helperText: "A plan is waiting for your decision" },
   { id: "ready", label: "Ready", helperText: "No active agent work" },
@@ -916,8 +922,41 @@ export function phaseSidebarNeedsUserInput(
   return thread.hasPendingUserInput || thread.execution?.turn?.state === "waiting-for-input";
 }
 
-// T3-CUSTOM(expbkt3): "plan" is attention too — a decision is waiting on a human.
-export type PhaseSidebarAttentionKind = "input" | "approval" | "error" | "plan";
+/**
+ * T3-CUSTOM(expbkt3): an async question — asked mid-turn, answerable without
+ * parking the agent. It never touches execution state, so unlike a blocking
+ * question nothing else on the row says a human is being waited on.
+ */
+export function phaseSidebarHasAsyncQuestion(
+  thread: Pick<ThreadShell, "hasPendingAsyncUserInput">,
+): boolean {
+  return thread.hasPendingAsyncUserInput === true;
+}
+
+/**
+ * T3-CUSTOM(expbkt3): is an agent actually working on this thread right now?
+ *
+ * Extracted from `resolvePhaseSidebarPhase` because the badge layer needs the
+ * same answer: a plan is "ready to decide" only once the turn it came from has
+ * settled, and the Ask phase now outranks Plan Ready in the grouping, so the
+ * phase id alone can no longer carry that distinction.
+ */
+export function phaseSidebarIsExecutionActive(
+  thread: Pick<ThreadShell, "execution" | "session">,
+): boolean {
+  return (
+    (thread.execution?.intent !== undefined &&
+      thread.execution.intent.phase !== "recovery-exhausted") ||
+    thread.execution?.activity === "active" ||
+    thread.execution?.activity === "blocked" ||
+    thread.execution?.activity === "stopping" ||
+    thread.session?.status === "starting" ||
+    thread.session?.status === "running"
+  );
+}
+
+// T3-CUSTOM(expbkt3): "ask" and "plan" are attention too — both wait on a human.
+export type PhaseSidebarAttentionKind = "input" | "approval" | "error" | "ask" | "plan";
 
 export function resolvePhaseSidebarAttentionKind(
   thread: Pick<
@@ -926,6 +965,8 @@ export function resolvePhaseSidebarAttentionKind(
     | "hasPendingApprovals"
     | "hasPendingUserInput"
     | "hasActionableProposedPlan"
+    // T3-CUSTOM(expbkt3): an async question is attention that leaves the agent running.
+    | "hasPendingAsyncUserInput"
     // T3-CUSTOM(expbkt3): a session error is a failure the badge has to show.
     | "session"
   >,
@@ -941,9 +982,15 @@ export function resolvePhaseSidebarAttentionKind(
   if (thread.execution?.activity === "failed" || thread.session?.status === "error") {
     return "error";
   }
-  // T3-CUSTOM(expbkt3): ranked last. A plan is a decision to make at leisure,
-  // not a session stuck mid-turn, so it never outranks a question or a failure.
+  // T3-CUSTOM(expbkt3): ranked below the blocking kinds but above a plan. An
+  // async question is answered at leisure too, but it is a question someone
+  // actually asked, so it outranks a plan sitting there waiting to be read.
+  //
+  // It deliberately loses to `plan` in the row badges rather than replacing it:
+  // callers render ASK from `phaseSidebarHasAsyncQuestion` alongside whatever
+  // this returns, so a thread holding both flies both badges.
   if (thread.hasActionableProposedPlan) return "plan";
+  if (phaseSidebarHasAsyncQuestion(thread)) return "ask";
   return null;
 }
 
@@ -953,20 +1000,19 @@ export function resolvePhaseSidebarPhase(
 ): PhaseSidebarPhaseId {
   if (phaseSidebarNeedsUserInput(thread)) return "needs_input";
 
+  // T3-CUSTOM(expbkt3): an async question outranks liveness, because it does
+  // not change liveness at all — the agent asked and carried on working, so
+  // grouping by execution state would file the question under Implementing and
+  // nobody would ever see it. Checked below Needs Input: a parked session is
+  // the more urgent of the two.
+  if (phaseSidebarHasAsyncQuestion(thread)) return "ask";
+
   // A failed provider is actionable even if a stale durable intent or
   // background-liveness projection has not cleared yet.
   const hasFailure = thread.execution?.activity === "failed" || thread.session?.status === "error";
 
-  // T3-CUSTOM(expbkt3): BEGIN — group from the same durable intent as the badge.
-  const isActive =
-    (thread.execution?.intent !== undefined &&
-      thread.execution.intent.phase !== "recovery-exhausted") ||
-    thread.execution?.activity === "active" ||
-    thread.execution?.activity === "blocked" ||
-    thread.execution?.activity === "stopping" ||
-    thread.session?.status === "starting" ||
-    thread.session?.status === "running";
-  // T3-CUSTOM(expbkt3): END
+  // T3-CUSTOM(expbkt3): group from the same durable intent as the badge.
+  const isActive = phaseSidebarIsExecutionActive(thread);
   if (!hasFailure && isActive) {
     return thread.interactionMode === "plan" ? "planning" : "implementing";
   }
@@ -1389,6 +1435,9 @@ export function threadNeedsHumanAttention(thread: ThreadShell): boolean {
   return (
     thread.hasPendingApprovals ||
     thread.hasPendingUserInput ||
+    // T3-CUSTOM(expbkt3): an async question is a human step too, even though it
+    // leaves the agent running.
+    phaseSidebarHasAsyncQuestion(thread) ||
     thread.hasActionableProposedPlan ||
     thread.execution?.turn?.state === "waiting-for-approval" ||
     thread.execution?.turn?.state === "waiting-for-input" ||

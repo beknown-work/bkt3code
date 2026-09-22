@@ -71,6 +71,8 @@ import Migration1022 from "./Migrations/1022_AgentUiRenders.ts";
 import Migration1023 from "./Migrations/1023_ProjectionThreadsMattermostLink.ts";
 // T3-CUSTOM(expbkt3): a parent session may live on another environment.
 import Migration1024 from "./Migrations/1024_ProjectionThreadsParentEnvironment.ts";
+// T3-CUSTOM(expbkt3): one worktree per (parent session, repository).
+import Migration1035 from "./Migrations/1035_ThreadWorkspaceGroups.ts";
 import Migration1001 from "./Migrations/1001_SessionRecoveryState.ts";
 import Migration1002 from "./Migrations/1002_ThreadBootstrapAndCreationDefaults.ts";
 // T3-CUSTOM(expbkt3): exact durable work items and guarded recovery audit.
@@ -263,6 +265,8 @@ const migrationEntries = [
   [1032, "ProjectionThreadsActiveOrderKey", Migration1032],
   [1033, "ProjectionThreadPullRequests", Migration1033],
   [1034, "ProjectionThreadMessageContext", Migration1034],
+  // T3-CUSTOM(expbkt3): shared child worktrees, one per (parent, repository).
+  [1035, "ThreadWorkspaceGroups", Migration1035],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

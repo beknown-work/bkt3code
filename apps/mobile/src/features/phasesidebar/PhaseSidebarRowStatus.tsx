@@ -45,6 +45,18 @@ export function resolvePhaseSidebarRowGlyph(row: PhaseSidebarRow): Glyph | null 
       pulse: false,
     };
   }
+  // T3-CUSTOM(expbkt3): a question asked mid-run. Checked before the work badge
+  // because the agent is usually still working — the bolt would hide it. Same
+  // glyph as Needs Input in amber rather than rose: it is the same request for
+  // a human, minus the parked agent.
+  if (row.phaseId === "ask") {
+    return {
+      icon: "exclamationmark.bubble.fill",
+      color: "#d97706",
+      label: "Question waiting",
+      pulse: false,
+    };
+  }
   const workBadge = resolvePhaseSidebarWorkBadge({
     phaseId: row.phaseId,
     backgroundLiveness: thread.backgroundLiveness ?? null,

@@ -99,6 +99,8 @@ import {
 } from "../../project/ProjectSetupScriptRunner.ts";
 // T3-CUSTOM(expbkt3): exact durable-bootstrap bases bypass ref-list pagination.
 import { resolveAvailableWorktreeBase } from "../../thread-bootstrap/WorktreeBaseResolver.ts";
+// T3-CUSTOM(expbkt3): siblings sharing one worktree must not race its creation.
+import { withWorktreeCreationPermit } from "../../thread-bootstrap/parentWorkspaceInheritance.ts";
 // T3-CUSTOM(expbkt3): periodic title refresh cadence.
 import { shouldRefreshThreadTitle } from "../../thread-title/titleRefreshCadence.ts";
 // T3-CUSTOM(expbkt3): who owns a session title, and when generation may replace it.
@@ -2912,27 +2914,40 @@ const make = Effect.gen(function* () {
             false,
           );
         }
-        const created = yield* gitWorkflow
-          .createWorktree({
-            cwd: projectCwd,
-            refName: worktreeBaseRef,
-            ...(resolvedPrepare !== undefined || prepare?.branch !== undefined
-              ? { newRefName: targetBranch }
-              : {}),
-            baseRefName: baseBranch,
-            path: deterministicPath,
-          })
-          .pipe(
-            Effect.mapError((cause) =>
-              fail(
-                "bootstrap-worktree-create-failed",
-                `Could not create worktree branch '${targetBranch}'.`,
-                true,
-                cause,
-              ),
+        // T3-CUSTOM(expbkt3): BEGIN — one worktree per (parent, repository).
+        // Sibling sessions that share a parent's worktree for a repository are
+        // handed the same branch and the same deterministic path, so creation
+        // is serialised on that path and the sibling arriving second adopts
+        // what the first built instead of failing on a path that now exists.
+        const created = yield* withWorktreeCreationPermit(
+          deterministicPath,
+          Effect.gen(function* () {
+            const builtWhileWaiting = yield* fileSystem
+              .exists(deterministicPath)
+              .pipe(Effect.orElseSucceed(() => false));
+            if (builtWhileWaiting) return null;
+            return yield* gitWorkflow.createWorktree({
+              cwd: projectCwd,
+              refName: worktreeBaseRef,
+              ...(resolvedPrepare !== undefined || prepare?.branch !== undefined
+                ? { newRefName: targetBranch }
+                : {}),
+              baseRefName: baseBranch,
+              path: deterministicPath,
+            });
+          }),
+        ).pipe(
+          Effect.mapError((cause) =>
+            fail(
+              "bootstrap-worktree-create-failed",
+              `Could not create worktree branch '${targetBranch}'.`,
+              true,
+              cause,
             ),
-          );
-        worktreePath = created.worktree.path;
+          ),
+        );
+        worktreePath = created === null ? deterministicPath : created.worktree.path;
+        // T3-CUSTOM(expbkt3): END
       }
 
       yield* orchestrationEngine

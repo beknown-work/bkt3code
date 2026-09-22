@@ -16,9 +16,11 @@ import {
   ChevronsRightLeftIcon,
   HistoryIcon,
   MessageSquareIcon,
+  MessageSquarePlusIcon,
   SaveIcon,
   SendIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -51,6 +53,7 @@ import {
   PlanReviewConversationComposerTarget,
   usePlanReviewScrollSurfaceRef,
 } from "../../fork/planReviewComposerDock";
+import { canHidePlanGlobalNote, shouldShowPlanGlobalNote } from "../../fork/planReviewGlobalNote";
 
 interface PlanReviewPanelProps {
   readonly environmentId: EnvironmentId;
@@ -72,6 +75,8 @@ export default function PlanReviewPanel({
   const [tab, setTab] = useState<PanelTab>("review");
   const [suggestionMode, setSuggestionMode] = useState(true);
   const [globalComment, setGlobalComment] = useState("");
+  // The overall note rests behind a button in the rail; see planReviewGlobalNote.
+  const [isGlobalNoteOpen, setIsGlobalNoteOpen] = useState(false);
   // A boolean, not the document: keeping the markdown in state would re-render
   // the panel — and the editor beneath it — on every keystroke.
   const [hasLocalEdits, setHasLocalEdits] = useState(false);
@@ -85,6 +90,7 @@ export default function PlanReviewPanel({
   const editedMarkdownRef = useRef<string | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorHandleRef = useRef<PlanReviewEditorHandle | null>(null);
+  const globalNoteRef = useRef<HTMLTextAreaElement | null>(null);
   // Read inside the save callback without making it depend on every snapshot.
   const latestDraftRef = useRef<PlanReviewSnapshotResult["draft"]>(null);
 
@@ -234,6 +240,13 @@ export default function PlanReviewPanel({
     [],
   );
 
+  // Opening the note is the reviewer saying they want to type in it, so the
+  // caret goes there rather than making them click the box they just revealed.
+  useEffect(() => {
+    if (!isGlobalNoteOpen) return;
+    globalNoteRef.current?.focus();
+  }, [isGlobalNoteOpen]);
+
   // The editor owns the id so it can highlight the span it still has selected,
   // rather than waiting for the round trip to learn what to mark.
   const handleAddComment = useCallback(
@@ -352,6 +365,7 @@ export default function PlanReviewPanel({
       }).then((result) => {
         if (result._tag !== "Success") return;
         setGlobalComment("");
+        setIsGlobalNoteOpen(false);
         setHasLocalEdits(false);
         editedMarkdownRef.current = null;
         if (decision === "approved") {
@@ -388,6 +402,10 @@ export default function PlanReviewPanel({
   const isHtmlPlan = snapshot.document.format === "html";
   const showOutline = tab === "review" && !isHtmlPlan && outlineHeadings.length > 0;
   const hasFeedbackToSend = openDiscussionCount > 0 || globalComment.trim().length > 0 || isDirty;
+  const showGlobalNote = shouldShowPlanGlobalNote({
+    isOpen: isGlobalNoteOpen,
+    note: globalComment,
+  });
   /**
    * A hand edit that is not yet a version. An HTML plan is never editable, so it
    * can never be in this state and must not be gated by it.
@@ -576,7 +594,7 @@ export default function PlanReviewPanel({
             {isHtmlPlan ? (
               <p className="p-4 text-muted-foreground text-xs">
                 This plan is an HTML document, so it is shown as the agent rendered it. Use the
-                notes below to send feedback.
+                overall note below to send feedback.
               </p>
             ) : (
               <PlanReviewDiscussions
@@ -592,15 +610,50 @@ export default function PlanReviewPanel({
 
           {isResolved ? null : (
             <div className="border-t p-2">
-              {showConversationComposer ? null : (
-                <textarea
-                  className="mb-2 w-full resize-y rounded-md border bg-background p-2 text-sm"
-                  rows={3}
-                  value={globalComment}
-                  placeholder="Overall notes for the agent (optional)"
-                  aria-label="Overall review notes"
-                  onChange={(event) => setGlobalComment(event.target.value)}
-                />
+              {/*
+                The overall note is not the chat bar below it: it travels with
+                Approve or Send feedback, where a chat message is its own turn.
+                It sits collapsed so an unused box stops taking rail height from
+                the comment list, and refuses to collapse once it holds text.
+              */}
+              {showGlobalNote ? (
+                <div className="mb-2">
+                  <div className="mb-1 flex items-center gap-1">
+                    <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                      Overall note, sent with your decision
+                    </span>
+                    {canHidePlanGlobalNote(globalComment) ? (
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="ms-auto size-5"
+                        aria-label="Hide the overall note"
+                        onClick={() => setIsGlobalNoteOpen(false)}
+                      >
+                        <XIcon className="size-3" aria-hidden />
+                      </Button>
+                    ) : null}
+                  </div>
+                  <textarea
+                    ref={globalNoteRef}
+                    className="w-full resize-y rounded-md border bg-background p-2 text-sm"
+                    rows={3}
+                    value={globalComment}
+                    placeholder="Overall notes for the agent (optional)"
+                    aria-label="Overall review notes"
+                    onChange={(event) => setGlobalComment(event.target.value)}
+                  />
+                </div>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="mb-2 w-full justify-start text-muted-foreground"
+                  onClick={() => setIsGlobalNoteOpen(true)}
+                >
+                  <MessageSquarePlusIcon className="size-3.5 shrink-0" aria-hidden />
+                  Add an overall note
+                </Button>
               )}
               {/*
               Unsaved edits take the whole row. Deciding on a plan whose edits are

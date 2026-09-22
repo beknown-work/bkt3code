@@ -162,6 +162,7 @@ import {
   phaseSidebarCheckoutToneClassName,
   phaseSidebarWorktreeRowProps,
   resolvePhaseSidebarWorktreeView,
+  phaseSidebarIsExecutionActive,
   resolvePhaseSidebarAttentionKind,
   resolvePhaseSidebarAttentionPriority,
   resolvePhaseSidebarCheckoutMetadata,
@@ -1093,16 +1094,20 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   );
   const needsUserInput = row.phaseId === "needs_input";
   const attentionKind = resolvePhaseSidebarAttentionKind(row.thread);
+  // A message-mode question. It never parks the agent, so without this the row
+  // is indistinguishable from a busy one while someone waits on an answer.
+  // T3-CUSTOM(expbkt3): read before `planReady` because a thread can hold both,
+  // and the question is the part that goes stale.
+  const hasAsyncQuestion = row.thread.hasPendingAsyncUserInput === true;
   // T3-CUSTOM(expbkt3): the pulse is for a decision that is actually waiting.
   // A running row can hold a plan too, but it gets the badge only — the row is
-  // still moving, so flashing it would cry wolf.
-  const planReady = row.phaseId === "plan_ready" && attentionKind === "plan";
+  // still moving, so flashing it would cry wolf. This reads execution directly
+  // rather than the phase id, because a thread holding a plan *and* a question
+  // is filed under Ask and its plan is still perfectly decidable.
+  const planReady = attentionKind === "plan" && !phaseSidebarIsExecutionActive(row.thread);
   // T3-CUSTOM(expbkt3): BEGIN — signals the stock sidebar carries and this one
   // dropped. Each reads a field already on the row.
   const isPinned = row.thread.pinnedAt != null;
-  // A message-mode question. It never changes the phase, so without this the
-  // row is indistinguishable from an idle one while an agent waits on an answer.
-  const hasAsyncQuestion = row.thread.hasPendingAsyncUserInput === true;
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: row.thread.environmentId,
     threadId: row.thread.id,
@@ -1507,10 +1512,24 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
       <button
         ref={rowRef}
         type="button"
-        className={phaseSidebarRowClassName(active, selected, needsUserInput, planReady)}
+        className={phaseSidebarRowClassName(
+          active,
+          selected,
+          needsUserInput,
+          planReady,
+          hasAsyncQuestion,
+        )}
         aria-current={active ? "page" : undefined}
         aria-expanded={hasChildren ? treeExpanded : undefined}
-        data-attention={needsUserInput ? "user-input" : planReady ? "plan-ready" : undefined}
+        data-attention={
+          needsUserInput
+            ? "user-input"
+            : hasAsyncQuestion
+              ? "ask"
+              : planReady
+                ? "plan-ready"
+                : undefined
+        }
         data-testid={`phase-thread-row-${row.thread.id}`}
         onClick={handleClick}
         onDoubleClick={() => onStartRename(row)}
@@ -1976,7 +1995,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
           {/* T3-CUSTOM(expbkt3): END */}
           {/* T3-CUSTOM(expbkt3): a plan does not silence the work badge — a
               running row with a plan attached has to keep saying it is running. */}
-          {workBadge && (attentionKind === null || attentionKind === "plan") ? (
+          {workBadge &&
+          (attentionKind === null || attentionKind === "plan" || attentionKind === "ask") ? (
             <span
               role="status"
               className={cn(
@@ -1991,7 +2011,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               with a ↳ glyph, same grammar as the derived work badge: solid is
               this row, outlined is somewhere beneath it. */}
           {collapsedDescendantAttention !== null &&
-          (attentionKind === null || attentionKind === "plan") ? (
+          (attentionKind === null || attentionKind === "plan" || attentionKind === "ask") ? (
             <span
               role="status"
               aria-label={`A child session needs ${collapsedDescendantAttention}`}
@@ -2000,7 +2020,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                 "rounded-sm border px-1 py-0.5 text-[8px] font-black tracking-wide",
                 collapsedDescendantAttention === "input"
                   ? "border-red-500/50 text-red-600 dark:border-red-400/50 dark:text-red-300"
-                  : collapsedDescendantAttention === "approval"
+                  : collapsedDescendantAttention === "approval" ||
+                      collapsedDescendantAttention === "ask"
                     ? "border-amber-500/50 text-amber-700 dark:border-amber-400/50 dark:text-amber-300"
                     : // T3-CUSTOM(expbkt3): a plan below reads violet, like its own row would.
                       collapsedDescendantAttention === "plan"
@@ -2016,6 +2037,20 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               number, in both open and closed states, for less width. The
               collapsed sweep still runs, since that is about work the closed
               subtree hides rather than about how much of it there is. */}
+          {/* T3-CUSTOM(expbkt3): a message-mode question, rendered ahead of — and
+              independently of — the attention chain below. It used to be the
+              chain's last branch, which meant a thread holding a plan *and* a
+              question showed PLAN only, and the question that someone was
+              actively waiting on was the one signal the row dropped. */}
+          {hasAsyncQuestion ? (
+            <span
+              aria-label="Question waiting"
+              data-testid={`phase-thread-async-question-${row.thread.id}`}
+              className="rounded-sm bg-amber-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-amber-700 shadow-sm dark:text-amber-300"
+            >
+              ASK
+            </span>
+          ) : null}
           {attentionKind === "input" ? (
             <span
               aria-label="Awaiting input"
@@ -2052,16 +2087,6 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
               }
             >
               PLAN
-            </span>
-          ) : /* T3-CUSTOM(expbkt3): a message-mode question. It never changes the
-                 phase, so the row would otherwise look idle while an agent waits. */
-          hasAsyncQuestion ? (
-            <span
-              aria-label="Question waiting"
-              data-testid={`phase-thread-async-question-${row.thread.id}`}
-              className="rounded-sm bg-amber-500/15 px-1 py-0.5 text-[8px] font-black tracking-wide text-amber-700 shadow-sm dark:text-amber-300"
-            >
-              ASK
             </span>
           ) : /* T3-CUSTOM(expbkt3): END */ null}
           {/* T3-CUSTOM(expbkt3): A woken thread returns to its original sort

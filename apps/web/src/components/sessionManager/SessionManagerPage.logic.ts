@@ -44,6 +44,8 @@ export const SESSION_MANAGER_ATTENTION_KINDS: ReadonlyArray<PhaseSidebarAttentio
   "approval",
   "input",
   "error",
+  // T3-CUSTOM(expbkt3): filter for sessions holding an async question.
+  "ask",
   // T3-CUSTOM(expbkt3): filter for sessions holding a plan awaiting a decision.
   "plan",
 ];
@@ -52,6 +54,8 @@ export const SESSION_MANAGER_ATTENTION_LABELS: Record<PhaseSidebarAttentionKind,
   approval: "Approval",
   input: "Input",
   error: "Error",
+  // T3-CUSTOM(expbkt3): a question asked mid-run.
+  ask: "Ask",
   // T3-CUSTOM(expbkt3): plan review.
   plan: "Plan",
 };
@@ -523,7 +527,7 @@ export const SESSION_MANAGER_SAVED_VIEWS: ReadonlyArray<SessionManagerSavedView>
     id: "blocked",
     label: "Needs input",
     countKey: "blocked",
-    filters: { ...DEFAULT_SESSION_MANAGER_FILTERS, phaseIds: ["needs_input"] },
+    filters: { ...DEFAULT_SESSION_MANAGER_FILTERS, phaseIds: ["needs_input", "ask"] },
   },
   {
     id: "review",
@@ -560,6 +564,9 @@ export function buildSessionManagerCounts(
     if (row.attentionKind !== null) attention += 1;
     if (row.phaseId === "planning" || row.phaseId === "implementing") running += 1;
     if (row.phaseId === "needs_input") blocked += 1;
+    // T3-CUSTOM(expbkt3): an async question is a human step too, so it counts
+    // toward the same "waiting on me" tab rather than hiding in Implementing.
+    if (row.phaseId === "ask") blocked += 1;
     if (row.phaseId === "plan_ready") review += 1;
     const activityMs = row.lastActivityAt === null ? null : Date.parse(row.lastActivityAt);
     if (activityMs === null || Number.isNaN(activityMs)) {

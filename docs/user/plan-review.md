@@ -100,8 +100,11 @@ one.
 a note, or an edit — so **Approve** is the single obvious action on a plan you
 agree with.
 
-Add overall notes in the box above the buttons; they are sent with either
-decision.
+**Add an overall note** above the buttons opens a box for anything you want to
+say about the plan as a whole; it is sent with either decision. It is not the
+chat bar along the bottom of the panel — a chat message is its own turn, while
+the note travels with Approve or Send feedback. Once the note has text it stays
+open, so nothing you typed is sent invisibly or left behind.
 
 Whatever you send, each anchored comment reaches the agent as a card quoting the
 lines it points at, followed by your note.
