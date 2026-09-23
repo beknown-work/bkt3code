@@ -114,6 +114,8 @@ import {
   makeDurableExecutionCoordinator,
 } from "../../execution/DurableExecutionCoordinator.ts";
 import { DurableExecutionIntentRepository } from "../../execution/DurableExecutionIntentRepository.ts";
+// T3-CUSTOM(expbkt3): guarded recovery quotes the request it may have lost.
+import { buildGuardedContinuationPrompt } from "../../execution/guardedContinuationPrompt.ts";
 // T3-CUSTOM(expbkt3): stop a setup command by its owned durable terminal id.
 import { TerminalManager } from "../../terminal/Manager.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
@@ -3787,7 +3789,7 @@ const make = Effect.gen(function* () {
             const messageText =
               effectiveMode === "exact-undelivered"
                 ? (intent.messageText ?? "")
-                : "Continue the unfinished task from the persisted conversation and current workspace state. Inspect what already completed before acting, and do not repeat completed external actions.";
+                : buildGuardedContinuationPrompt(intent.messageText);
             if (effectiveMode === "inspect-or-continue") {
               yield* increment(durableExecutionGuardedContinuationsTotal, {
                 threadId: intent.threadId,
