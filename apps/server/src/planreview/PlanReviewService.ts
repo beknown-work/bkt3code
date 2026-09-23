@@ -870,6 +870,11 @@ export const make = Effect.gen(function* () {
         nowIso,
       ]);
 
+      // The reviewer is the sender of this turn. A sender-less turn resolves a
+      // different session identity than the reviewer's own messages, which
+      // restarts the provider process exactly as the approval is delivered.
+      const dispatchOptions = { actorUserId: input.actorUserId };
+
       // Only approval may leave Plan mode; feedback keeps the thread planning.
       if (input.decision === "approved") {
         const modeCommand: OrchestrationCommand = {
@@ -879,40 +884,45 @@ export const make = Effect.gen(function* () {
           interactionMode: "default",
           createdAt,
         };
-        yield* dispatcher.dispatch(modeCommand).pipe(asInvariant("submit.setMode"));
+        yield* dispatcher
+          .dispatch(modeCommand, dispatchOptions)
+          .pipe(asInvariant("submit.setMode"));
       }
 
       yield* dispatcher
-        .dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make(`plan-review:turn:${commandUuid}`),
-          threadId: document.threadId,
-          message: {
-            messageId: MessageId.make(`plan-review:${messageUuid}`),
-            role: "user",
-            text: prompt,
-            attachments: [],
-          },
-          modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
-          interactionMode: input.decision === "approved" ? "default" : "plan",
-          ...(input.decision === "approved" && approvedVersion.sourcePlanId !== null
-            ? {
-                sourceProposedPlan: {
-                  threadId: document.threadId,
-                  planId: approvedVersion.sourcePlanId as OrchestrationProposedPlanId,
-                },
-              }
-            : input.decision === "approved" && agentBaseline.sourcePlanId !== null
+        .dispatch(
+          {
+            type: "thread.turn.start",
+            commandId: CommandId.make(`plan-review:turn:${commandUuid}`),
+            threadId: document.threadId,
+            message: {
+              messageId: MessageId.make(`plan-review:${messageUuid}`),
+              role: "user",
+              text: prompt,
+              attachments: [],
+            },
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: input.decision === "approved" ? "default" : "plan",
+            ...(input.decision === "approved" && approvedVersion.sourcePlanId !== null
               ? {
                   sourceProposedPlan: {
                     threadId: document.threadId,
-                    planId: agentBaseline.sourcePlanId as OrchestrationProposedPlanId,
+                    planId: approvedVersion.sourcePlanId as OrchestrationProposedPlanId,
                   },
                 }
-              : {}),
-          createdAt,
-        })
+              : input.decision === "approved" && agentBaseline.sourcePlanId !== null
+                ? {
+                    sourceProposedPlan: {
+                      threadId: document.threadId,
+                      planId: agentBaseline.sourcePlanId as OrchestrationProposedPlanId,
+                    },
+                  }
+                : {}),
+            createdAt,
+          },
+          dispatchOptions,
+        )
         .pipe(asInvariant("submit.startTurn"));
 
       const status: PlanDocumentStatus =
