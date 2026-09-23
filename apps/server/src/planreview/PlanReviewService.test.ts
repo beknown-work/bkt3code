@@ -35,6 +35,12 @@ const PLAN = [
   "3. Flip the flag",
 ].join("\n");
 
+/** Who each dispatched command was attributed to, in dispatch order. */
+interface CommandSender {
+  readonly type: OrchestrationCommand["type"];
+  readonly actorUserId: UserId | null;
+}
+
 interface ThreadStub {
   readonly sessionStatus: string | null;
   readonly compactionAt: string | null;
@@ -54,12 +60,19 @@ interface ThreadStub {
 const makeHarness = (thread: ThreadStub) =>
   Effect.gen(function* () {
     const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+    const senders = yield* Ref.make<ReadonlyArray<CommandSender>>([]);
 
     const dispatcherLayer = Layer.succeed(
       OrchestrationCommandDispatcher,
       OrchestrationCommandDispatcher.of({
-        dispatch: (command) =>
+        dispatch: (command, options) =>
           Ref.update(dispatched, (current) => [...current, command]).pipe(
+            Effect.andThen(
+              Ref.update(senders, (current) => [
+                ...current,
+                { type: command.type, actorUserId: options?.actorUserId ?? null },
+              ]),
+            ),
             Effect.as({ sequence: 1 }),
           ),
       }),
@@ -86,7 +99,7 @@ const makeHarness = (thread: ThreadStub) =>
       } as never),
     );
 
-    return { dispatched, dispatcherLayer, queryLayer };
+    return { dispatched, senders, dispatcherLayer, queryLayer };
   });
 
 const runWithService = <A, E>(
@@ -94,6 +107,7 @@ const runWithService = <A, E>(
   body: (input: {
     readonly service: PlanReviewService["Service"];
     readonly dispatched: Ref.Ref<ReadonlyArray<OrchestrationCommand>>;
+    readonly senders: Ref.Ref<ReadonlyArray<CommandSender>>;
   }) => Effect.Effect<A, E, never>,
 ) =>
   Effect.gen(function* () {
@@ -109,7 +123,7 @@ const runWithService = <A, E>(
 
     return yield* Effect.gen(function* () {
       const service = yield* PlanReviewService;
-      return yield* body({ service, dispatched: harness.dispatched });
+      return yield* body({ service, dispatched: harness.dispatched, senders: harness.senders });
     }).pipe(Effect.provide(layer));
   });
 
@@ -382,6 +396,45 @@ describe("PlanReviewService approval", () => {
         expect(turn?.type === "thread.turn.start" && turn.sourceProposedPlan?.planId).toBe(
           "plan:a",
         );
+      }),
+    ),
+  );
+
+  it.effect("sends approval and feedback turns as the reviewer", () =>
+    runWithService({ sessionStatus: "running", compactionAt: null }, ({ service, senders }) =>
+      Effect.gen(function* () {
+        // A sender-less turn resolves a different session identity than the
+        // reviewer's own messages, and that restarts the provider process
+        // right as the approval is delivered.
+        const feedbackDocument = yield* capturePlan(service, "plan:a", PLAN, otherThreadId);
+        yield* service.submit({
+          documentId: feedbackDocument.documentId,
+          decision: "changes-requested",
+          globalComment: "Split step 2.",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+        const approvalDocument = yield* capturePlan(service, "plan:b");
+        yield* service.submit({
+          documentId: approvalDocument.documentId,
+          decision: "approved",
+          globalComment: "",
+          editedMarkdown: null,
+          actorUserId: reviewerId,
+          actorLabel: "Tushar",
+        });
+
+        const turnSenders = (yield* Ref.get(senders)).filter(
+          (sender) =>
+            sender.type === "thread.turn.start" || sender.type === "thread.interaction-mode.set",
+        );
+        expect(turnSenders.map((sender) => sender.type)).toEqual([
+          "thread.turn.start",
+          "thread.interaction-mode.set",
+          "thread.turn.start",
+        ]);
+        expect(turnSenders.every((sender) => sender.actorUserId === reviewerId)).toBe(true);
       }),
     ),
   );
