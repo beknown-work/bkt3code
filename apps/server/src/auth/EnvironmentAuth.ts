@@ -36,7 +36,7 @@ import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 // T3-CUSTOM(expbkt3): the acting operator reported on `/api/auth/session`.
 import { operatorSessionStateFields } from "./OperatorIdentity.ts";
 // T3-CUSTOM(expbkt3): shorter sessions for member self-service pairings.
-import { selfIssuedSessionTtlFields } from "./SelfServicePairing.ts";
+import { pairedSessionTtlFields } from "./SelfServicePairing.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -749,8 +749,8 @@ export const make = Effect.gen(function* () {
             subject: grant.subject,
             scopes: grant.scopes,
             ...(input?.userId ? { userId: input.userId } : {}),
-            // T3-CUSTOM(expbkt3): a member's own pairing yields a shorter session.
-            ...selfIssuedSessionTtlFields(grant),
+            // T3-CUSTOM(expbkt3): a pairing's session does not expire.
+            ...pairedSessionTtlFields(grant),
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -839,11 +839,10 @@ export const make = Effect.gen(function* () {
                       ttl: Duration.hours(1),
                     }
                   : {}),
-                // T3-CUSTOM(expbkt3): a member's own pairing yields a shorter session
-                // than the 30-day default — and a longer one than the DPoP hour above,
-                // which it deliberately overrides: a device-bound token does not need
-                // re-pairing every hour to stay safe. Spread order is the mechanism.
-                ...selfIssuedSessionTtlFields(grant),
+                // T3-CUSTOM(expbkt3): a pairing's session does not expire. It overrides
+                // the DPoP hour above on purpose: nothing refreshes that token, so an
+                // hour meant re-pairing. Spread order is the mechanism.
+                ...pairedSessionTtlFields(grant),
                 ...(input?.userId ? { userId: input.userId } : {}),
                 // Desktop restarts forget the previous bearer token. Replace
                 // its session, including stale entries left by older versions.

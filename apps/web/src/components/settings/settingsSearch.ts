@@ -730,6 +730,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Agent views in chat",
     to: "/settings/experiments",
   },
+  // T3-CUSTOM(expbkt3): upstream's pull request view.
+  {
+    id: "native-pull-request-view",
+    title: "Native pull request view",
+    to: "/settings/experiments",
+    searchTerms: ["pr pull request link github integrated browser panel open"],
+  },
+  // T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+  {
+    id: "open-links-in-integrated-browser",
+    title: "Open links in the integrated browser",
+    to: "/settings/experiments",
+    searchTerms: ["link url linear external system browser in-app preview tab click"],
+  },
   {
     id: "load-balancing",
     title: "Load balancing",

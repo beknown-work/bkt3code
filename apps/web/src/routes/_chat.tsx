@@ -11,6 +11,8 @@ import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
 import { PersistentPlannotatorReviewHost } from "../components/PersistentPlannotatorReviewHost";
+// T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+import { IntegratedBrowserLinkInterceptor } from "../fork/integratedBrowserLinks";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isPreviewFocused } from "../lib/previewFocus";
@@ -190,6 +192,8 @@ function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
+      {/* T3-CUSTOM(expbkt3): every link opens in the integrated browser. */}
+      <IntegratedBrowserLinkInterceptor threadRef={routeThreadRef} />
       <PersistentPlannotatorReviewHost
         activeThreadRef={routeThreadRef}
         activeSurface={activePlannotatorSurface}
