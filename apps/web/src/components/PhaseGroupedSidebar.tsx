@@ -91,7 +91,10 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 // T3-CUSTOM(expbkt3): side-by-side sessions need their own thread id up front.
 import { cn, isMacPlatform, newThreadId } from "../lib/utils";
 // T3-CUSTOM(expbkt3): every link opens in the integrated browser.
-import { useOpenInIntegratedBrowser } from "../fork/integratedBrowserLinks";
+import {
+  opensInIntegratedBrowser,
+  useOpenInIntegratedBrowser,
+} from "../fork/integratedBrowserLinks";
 import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
@@ -1047,8 +1050,25 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !active;
   const clearComposerContent = useComposerDraftStore((state) => state.clearComposerContent);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
-  // T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+  // T3-CUSTOM(expbkt3): every link opens in the integrated browser. A row's own link (Linear,
+  // pull request, Mattermost) takes you to that row's thread and opens beside it, so the page
+  // never lands in the panel of a thread you are not looking at. Cmd/Ctrl-click stays put and
+  // goes to the system browser.
   const openInIntegratedBrowser = useOpenInIntegratedBrowser();
+  const openRowLink = (
+    url: string,
+    event: { readonly metaKey: boolean; readonly ctrlKey: boolean } | undefined,
+    failureTitle?: string,
+  ) => {
+    const inApp = opensInIntegratedBrowser(event);
+    if (inApp) onNavigate(threadRef);
+    openInIntegratedBrowser(url, {
+      ...(event ? { event } : {}),
+      ...(inApp ? { threadRef } : {}),
+      fallbackThreadRef: threadRef,
+      ...(failureTitle ? { failureTitle } : {}),
+    });
+  };
   // T3-CUSTOM(expbkt3): the Mattermost conversation following this session.
   const mattermostLink = resolvePhaseSidebarMattermostLink(row.thread.mattermostThreadUrl);
   // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
@@ -1187,11 +1207,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     event.preventDefault();
     event.stopPropagation();
     if (!linearIssue) return;
-    openInIntegratedBrowser(linearIssue.url, {
-      event,
-      fallbackThreadRef: threadRef,
-      failureTitle: `Failed to open ${linearIssue.identifier}`,
-    });
+    openRowLink(linearIssue.url, event, `Failed to open ${linearIssue.identifier}`);
   };
 
   // T3-CUSTOM(expbkt3): same affordance as the Linear tag — the badge opens the
@@ -1201,11 +1217,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     label: string,
     event?: { readonly metaKey: boolean; readonly ctrlKey: boolean },
   ) => {
-    openInIntegratedBrowser(url, {
-      ...(event ? { event } : {}),
-      fallbackThreadRef: threadRef,
-      failureTitle: `Failed to open ${label}`,
-    });
+    openRowLink(url, event, `Failed to open ${label}`);
   };
 
   // T3-CUSTOM(expbkt3): one review opens it; several list themselves first, so
@@ -1467,7 +1479,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "remove-linear") onSetLinearIssueUrl(row, null);
     // T3-CUSTOM(expbkt3): Mattermost conversation link.
     if (action === "open-mattermost" && mattermostLink) {
-      openInIntegratedBrowser(mattermostLink.url, { fallbackThreadRef: threadRef });
+      openRowLink(mattermostLink.url, undefined);
     }
     if (action === "link-mattermost") setMattermostDialogOpen(true);
     if (action === "remove-mattermost") onSetMattermostThreadUrl(row, null);

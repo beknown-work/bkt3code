@@ -26,8 +26,8 @@
  * - a member may hold only {@link SELF_SERVICE_PAIRING_LIMIT} pairings at once,
  *   counting both pending credentials and the device sessions they became, so a
  *   leaked member session cannot quietly accumulate durable access;
- * - the sessions it produces live {@link SELF_ISSUED_SESSION_TTL} rather than the
- *   30-day default, so an unnoticed device drops off by itself.
+ * - the sessions it produces do not expire (see {@link PAIRED_SESSION_TTL}); a
+ *   device stays paired until it is revoked.
  *
  * @module auth/SelfServicePairing
  */
@@ -51,13 +51,19 @@ import { operatorUserIdForPrincipal, type OperatorPrincipal } from "./OperatorId
 export const SELF_SERVICE_PAIRING_LIMIT = 5;
 
 /**
- * Life of a session redeemed from a member's own pairing credential.
+ * Life of every session redeemed from a pairing credential: effectively forever.
  *
- * Shorter than `SessionStore`'s 30-day default, which stays untouched for
- * administrator-minted pairings and every other session: a device a member added
- * themselves should fall off on its own if they stop using it.
+ * Nothing renews a session — its expiry is signed into the token, and desktop and
+ * mobile store the `expires_in` they were handed and drop the credential at that
+ * moment — so any finite lifetime is a hard cut on a device in daily use. The old
+ * seven-day self-issued lifetime made every paired desktop and phone re-pair
+ * weekly, surfacing as "credentials are invalid" on the next reconnect. A paired
+ * device now stays paired until it is revoked in Settings → Connections.
+ *
+ * A century rather than an unbounded duration because the expiry is still a
+ * concrete epoch in the token, the cookie and the client's stored deadline.
  */
-export const SELF_ISSUED_SESSION_TTL = Duration.days(7);
+export const PAIRED_SESSION_TTL = Duration.days(36_500);
 
 /**
  * Scopes a self-issued credential may carry: the caller's own, narrowed to the
@@ -112,15 +118,16 @@ export function canIssueSelfServicePairing(input: {
 }
 
 /**
- * The `ttl` field to spread into a session issued from a grant.
+ * The `ttl` field to spread into a session issued from a pairing grant: the same
+ * for a member's own pairing and an administrator-minted one.
  *
  * Spread-shaped so the upstream `sessions.issue` calls keep their formatting,
  * and so it can sit after the DPoP branch and override its one-hour default.
  */
-export function selfIssuedSessionTtlFields(
-  grant: Pick<PairingGrantStore.BootstrapGrant, "selfIssued">,
-): { readonly ttl: Duration.Duration } | Record<string, never> {
-  return grant.selfIssued ? { ttl: SELF_ISSUED_SESSION_TTL } : {};
+export function pairedSessionTtlFields(
+  _grant: Pick<PairingGrantStore.BootstrapGrant, "selfIssued">,
+): { readonly ttl: Duration.Duration } {
+  return { ttl: PAIRED_SESSION_TTL };
 }
 
 /** The caller's own pairing links, for the member "Your devices" view. */

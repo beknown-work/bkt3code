@@ -24,6 +24,7 @@ import { isWebUrl } from "~/browser/browserLinkTarget";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { getClientSettings } from "~/hooks/useSettings";
+import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 
 /**
  * Whether a document-level click on `anchor` should be taken over. Only a plain primary click
@@ -48,6 +49,20 @@ export function shouldInterceptLinkClick(input: {
   return new URL(input.href).origin !== input.appOrigin;
 }
 
+/**
+ * Whether a click on a link will land in the integrated browser rather than the system one: the
+ * flag is on, this client has an integrated browser, and no Cmd/Ctrl escape hatch was used.
+ * Callers that navigate to a thread before opening its link use this to leave a Cmd/Ctrl-click
+ * where it is.
+ */
+export function opensInIntegratedBrowser(event?: {
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+}): boolean {
+  if (event?.metaKey || event?.ctrlKey) return false;
+  return getClientSettings().openLinksInIntegratedBrowser && isPreviewSupportedInRuntime();
+}
+
 /** The thread the open chat route shows; set by the interceptor, read by link buttons. */
 let activeThreadRef: ScopedThreadRef | null = null;
 
@@ -59,6 +74,8 @@ export function useOpenInIntegratedBrowser(): (
   url: string,
   options?: {
     readonly event?: { readonly metaKey: boolean; readonly ctrlKey: boolean };
+    /** Open beside this thread rather than the open one, e.g. a sidebar row just navigated to. */
+    readonly threadRef?: ScopedThreadRef | null;
     readonly fallbackThreadRef?: ScopedThreadRef | null;
     readonly failureTitle?: string;
   },
@@ -66,7 +83,8 @@ export function useOpenInIntegratedBrowser(): (
   const openLink = useOpenLink(null);
   return useCallback(
     (url, options = {}) => {
-      const threadRef = activeThreadRef ?? options.fallbackThreadRef ?? undefined;
+      const threadRef =
+        options.threadRef ?? activeThreadRef ?? options.fallbackThreadRef ?? undefined;
       void openLink(url, {
         ...(options.event ? { event: options.event } : {}),
         threadRef,
