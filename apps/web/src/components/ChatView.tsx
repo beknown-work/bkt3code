@@ -213,6 +213,11 @@ import { PlanReviewComposerDock } from "../fork/planReviewComposerDock";
 import { usePlanReviewTakeoverStore } from "../planReviewTakeoverStore";
 // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
 import { AgentUiExpandedSurface } from "../fork/agentUiSurface";
+// T3-CUSTOM(expbkt3): a send while history loads keeps the remembered history.
+import {
+  shouldFollowEndAfterHistoryLoads,
+  withRememberedHistoryWhileLoading,
+} from "../fork/threadSwitchPendingTimeline";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -3716,7 +3721,13 @@ export default function ChatView(props: ChatViewProps) {
   const displayedTimeline = resolveThreadSwitchTimeline({
     loading: timelineEntries.length === 0 && threadSyncPhase !== null,
     activeThreadKey,
-    nextEntries: timelineEntries,
+    // T3-CUSTOM(expbkt3): a send while history loads keeps the remembered history.
+    nextEntries: withRememberedHistoryWhileLoading({
+      loading: threadDetailLoading,
+      serverMessageCount: displayServerMessages.length,
+      entries: timelineEntries,
+      remembered: peekRememberedThreadTimeline<typeof timelineEntries>(activeThreadKey),
+    }),
     rememberedForActive: peekRememberedThreadTimeline<typeof timelineEntries>(activeThreadKey),
   });
   const displayedTimelineKey = displayedTimeline.displayThreadKey ?? routeThreadKey;
@@ -5682,6 +5693,23 @@ export default function ChatView(props: ChatViewProps) {
       void legendListRef.current?.scrollToEnd?.({ animated });
     });
   }, []);
+  // T3-CUSTOM(expbkt3): BEGIN — a send while history loads ends at the latest message.
+  const threadDetailWasLoadingRef = useRef(threadDetailLoading);
+  useLayoutEffect(() => {
+    const wasLoading = threadDetailWasLoadingRef.current;
+    threadDetailWasLoadingRef.current = threadDetailLoading;
+    if (
+      shouldFollowEndAfterHistoryLoads({
+        wasLoading,
+        loading: threadDetailLoading,
+        pendingSendCount: optimisticUserMessages.length,
+        followingEnd: timelineScrollModeRef.current === "following-end",
+      })
+    ) {
+      scrollToEnd();
+    }
+  }, [optimisticUserMessages.length, scrollToEnd, threadDetailLoading]);
+  // T3-CUSTOM(expbkt3): END
   const displayedTimelineKeyRef = useRef(displayedTimeline.displayThreadKey);
   useLayoutEffect(() => {
     const displayKey = displayedTimeline.displayThreadKey;
