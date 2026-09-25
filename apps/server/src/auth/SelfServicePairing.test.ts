@@ -34,14 +34,14 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import { issuePairingCredentialForPrincipal } from "./OperatorIdentity.ts";
 import {
-  SELF_ISSUED_SESSION_TTL,
+  PAIRED_SESSION_TTL,
   SELF_SERVICE_PAIRING_LIMIT,
   canIssueSelfServicePairing,
   countSelfServicePairings,
   isSelfServiceScopeAllowed,
   ownClientSessions,
   ownPairingLinks,
-  selfIssuedSessionTtlFields,
+  pairedSessionTtlFields,
   selfServicePairingScopes,
 } from "./SelfServicePairing.ts";
 import { requireEnvironmentScopeOrOwnIdentity } from "./http.ts";
@@ -238,7 +238,7 @@ it.layer(
 )("sessions redeemed from a member's own credential", (it) => {
   const secondsIn = (duration: Duration.Duration) => Math.round(Duration.toSeconds(duration));
 
-  it.effect("live seven days, not the thirty-day default", () =>
+  it.effect("do not expire, whoever minted the credential", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
 
@@ -253,10 +253,10 @@ it.layer(
         undefined,
         requestMetadata,
       );
-      expect(memberSession.expires_in).toBeCloseTo(secondsIn(SELF_ISSUED_SESSION_TTL), -1);
-      expect(secondsIn(SELF_ISSUED_SESSION_TTL)).toBe(7 * 24 * 60 * 60);
+      expect(memberSession.expires_in).toBeCloseTo(secondsIn(PAIRED_SESSION_TTL), -1);
+      expect(secondsIn(PAIRED_SESSION_TTL)).toBe(36_500 * 24 * 60 * 60);
 
-      // An administrator-minted credential is untouched: still 30 days.
+      // An administrator-minted credential gets the same lifetime.
       const administrative = yield* issuePairingCredentialForPrincipal({
         serverAuth,
         principal: MEMBER,
@@ -267,11 +267,11 @@ it.layer(
         undefined,
         requestMetadata,
       );
-      expect(adminSession.expires_in).toBeCloseTo(30 * 24 * 60 * 60, -1);
+      expect(adminSession.expires_in).toBeCloseTo(secondsIn(PAIRED_SESSION_TTL), -1);
     }).pipe(Effect.provide(environmentAuthLayer)),
   );
 
-  it.effect("keep seven days for a device-bound credential too", () =>
+  it.effect("do not expire for a device-bound credential either", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const deviceBound = yield* issuePairingCredentialForPrincipal({
@@ -289,10 +289,10 @@ it.layer(
         { proofKeyThumbprint: "thumbprint-a" },
       );
 
-      // Deliberately overrides the one-hour DPoP default: the token is bound to a
-      // device key, so it does not need re-pairing every hour to stay safe.
+      // Deliberately overrides the one-hour DPoP default: nothing refreshes the token,
+      // so an hour would mean re-pairing the desktop every hour.
       expect(issued.token_type).toBe("DPoP");
-      expect(issued.expires_in).toBeCloseTo(secondsIn(SELF_ISSUED_SESSION_TTL), -1);
+      expect(issued.expires_in).toBeCloseTo(secondsIn(PAIRED_SESSION_TTL), -1);
     }).pipe(Effect.provide(environmentAuthLayer)),
   );
 
@@ -332,12 +332,10 @@ it.layer(
   );
 });
 
-describe("selfIssuedSessionTtlFields", () => {
-  it("is empty for everything that is not a member's own pairing", () => {
-    expect(selfIssuedSessionTtlFields({ selfIssued: false })).toEqual({});
-    expect(selfIssuedSessionTtlFields({})).toEqual({});
-    expect(selfIssuedSessionTtlFields({ selfIssued: true })).toEqual({
-      ttl: SELF_ISSUED_SESSION_TTL,
-    });
+describe("pairedSessionTtlFields", () => {
+  it("gives every pairing the never-expiring lifetime", () => {
+    for (const grant of [{ selfIssued: false }, {}, { selfIssued: true }]) {
+      expect(pairedSessionTtlFields(grant)).toEqual({ ttl: PAIRED_SESSION_TTL });
+    }
   });
 });
