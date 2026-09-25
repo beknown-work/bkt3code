@@ -41,6 +41,10 @@ export function ExperimentsSettingsPanel() {
   const nativePullRequestViewEnabled = useClientSettings(
     (settings) => settings.nativePullRequestViewEnabled,
   );
+  // T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+  const openLinksInIntegratedBrowser = useClientSettings(
+    (settings) => settings.openLinksInIntegratedBrowser,
+  );
 
   return (
     <SettingsPageContainer>
@@ -102,6 +106,21 @@ export function ExperimentsSettingsPanel() {
                 updateSettings({ nativePullRequestViewEnabled: Boolean(checked) })
               }
               aria-label="Native pull request view"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): BEGIN — every link opens in the integrated browser. */}
+        <SettingsRow
+          {...searchableSetting("open-links-in-integrated-browser")}
+          description="Open every link — in messages, the composer, the sidebar's Linear and pull request tags, and anywhere else — in the integrated browser beside the open thread. Cmd/Ctrl-click still opens the system browser. While off, links follow Settings → Integrations → Open links in."
+          control={
+            <Switch
+              checked={openLinksInIntegratedBrowser}
+              onCheckedChange={(checked) =>
+                updateSettings({ openLinksInIntegratedBrowser: Boolean(checked) })
+              }
+              aria-label="Open links in the integrated browser"
             />
           }
         />

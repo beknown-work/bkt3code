@@ -520,6 +520,11 @@ export const ClientSettingsSchema = Schema.Struct({
   nativePullRequestViewEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // T3-CUSTOM(expbkt3): every link opens in the integrated browser (Cmd/Ctrl-click still
+  // goes to the system browser). On by default; off returns to the "Open links in" setting.
+  openLinksInIntegratedBrowser: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   compactSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -1864,6 +1869,8 @@ export const ClientSettingsPatch = Schema.Struct({
   agentUiSurfacesEnabled: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): upstream's pull request view.
   nativePullRequestViewEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+  openLinksInIntegratedBrowser: Schema.optionalKey(Schema.Boolean),
   pullRequestMergeMethodOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, PullRequestMergeMethod),
   ),
