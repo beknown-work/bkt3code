@@ -90,6 +90,8 @@ import {
 import { isTerminalFocused } from "../lib/terminalFocus";
 // T3-CUSTOM(expbkt3): side-by-side sessions need their own thread id up front.
 import { cn, isMacPlatform, newThreadId } from "../lib/utils";
+// T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+import { useOpenInIntegratedBrowser } from "../fork/integratedBrowserLinks";
 import { readLocalApi } from "../localApi";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
@@ -1045,6 +1047,8 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !active;
   const clearComposerContent = useComposerDraftStore((state) => state.clearComposerContent);
   const linearIssue = resolvePhaseSidebarLinearIssue(row.thread.branch, row.thread.linearIssueUrl);
+  // T3-CUSTOM(expbkt3): every link opens in the integrated browser.
+  const openInIntegratedBrowser = useOpenInIntegratedBrowser();
   // T3-CUSTOM(expbkt3): the Mattermost conversation following this session.
   const mattermostLink = resolvePhaseSidebarMattermostLink(row.thread.mattermostThreadUrl);
   // T3-CUSTOM(expbkt3): the row's PR reads beside its Linear tag — colour-only
@@ -1172,48 +1176,50 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
         );
   // T3-CUSTOM(expbkt3): END
 
-  const openLinearIssue = (event: { preventDefault(): void; stopPropagation(): void }) => {
+  // T3-CUSTOM(expbkt3): links open in the integrated browser beside the open thread (this
+  // row's when none is open); Cmd/Ctrl-click still goes to the system browser.
+  const openLinearIssue = (event: {
+    preventDefault(): void;
+    stopPropagation(): void;
+    metaKey: boolean;
+    ctrlKey: boolean;
+  }) => {
     event.preventDefault();
     event.stopPropagation();
     if (!linearIssue) return;
-    const api = readLocalApi();
-    if (!api) return;
-    void api.shell.openExternal(linearIssue.url).catch((error: unknown) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Failed to open ${linearIssue.identifier}`,
-          description:
-            error instanceof Error ? error.message : "The Linear issue could not be opened.",
-        }),
-      );
+    openInIntegratedBrowser(linearIssue.url, {
+      event,
+      fallbackThreadRef: threadRef,
+      failureTitle: `Failed to open ${linearIssue.identifier}`,
     });
   };
 
   // T3-CUSTOM(expbkt3): same affordance as the Linear tag — the badge opens the
   // change request rather than routing to the thread.
-  const openChangeRequestUrl = (url: string, label: string) => {
-    const api = readLocalApi();
-    if (!api) return;
-    void api.shell.openExternal(url).catch((error: unknown) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: `Failed to open ${label}`,
-          description:
-            error instanceof Error ? error.message : "The change request could not be opened.",
-        }),
-      );
+  const openChangeRequestUrl = (
+    url: string,
+    label: string,
+    event?: { readonly metaKey: boolean; readonly ctrlKey: boolean },
+  ) => {
+    openInIntegratedBrowser(url, {
+      ...(event ? { event } : {}),
+      fallbackThreadRef: threadRef,
+      failureTitle: `Failed to open ${label}`,
     });
   };
 
   // T3-CUSTOM(expbkt3): one review opens it; several list themselves first, so
   // a thread carrying a stack is never a link to whichever layer sorted top.
-  const openChangeRequest = (event: { preventDefault(): void; stopPropagation(): void }) => {
+  const openChangeRequest = (event: {
+    preventDefault(): void;
+    stopPropagation(): void;
+    metaKey: boolean;
+    ctrlKey: boolean;
+  }) => {
     event.preventDefault();
     event.stopPropagation();
     if (!changeRequestBadge) return;
-    openChangeRequestUrl(changeRequestBadge.url, changeRequestBadge.label);
+    openChangeRequestUrl(changeRequestBadge.url, changeRequestBadge.label, event);
   };
 
   const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1461,7 +1467,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
     if (action === "remove-linear") onSetLinearIssueUrl(row, null);
     // T3-CUSTOM(expbkt3): Mattermost conversation link.
     if (action === "open-mattermost" && mattermostLink) {
-      window.open(mattermostLink.url, "_blank", "noopener,noreferrer");
+      openInIntegratedBrowser(mattermostLink.url, { fallbackThreadRef: threadRef });
     }
     if (action === "link-mattermost") setMattermostDialogOpen(true);
     if (action === "remove-mattermost") onSetMattermostThreadUrl(row, null);
@@ -1874,7 +1880,7 @@ const PhaseThreadRow = memo(function PhaseThreadRow(props: PhaseThreadRowProps) 
                         className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         onClick={(event) => {
                           event.stopPropagation();
-                          openChangeRequestUrl(entry.url, entry.label);
+                          openChangeRequestUrl(entry.url, entry.label, event);
                         }}
                       >
                         <GitPullRequestIcon
