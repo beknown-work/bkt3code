@@ -37,6 +37,10 @@ export function ExperimentsSettingsPanel() {
   );
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   const agentUiSurfacesEnabled = useClientSettings((settings) => settings.agentUiSurfacesEnabled);
+  // T3-CUSTOM(expbkt3): upstream's pull request view.
+  const nativePullRequestViewEnabled = useClientSettings(
+    (settings) => settings.nativePullRequestViewEnabled,
+  );
 
   return (
     <SettingsPageContainer>
@@ -83,6 +87,21 @@ export function ExperimentsSettingsPanel() {
                 updateSettings({ agentUiSurfacesEnabled: Boolean(checked) })
               }
               aria-label="Agent views in chat"
+            />
+          }
+        />
+        {/* T3-CUSTOM(expbkt3): END */}
+        {/* T3-CUSTOM(expbkt3): BEGIN — upstream's pull request view. */}
+        <SettingsRow
+          {...searchableSetting("native-pull-request-view")}
+          description="Open pull request links in T3's own pull request view: summary, checks, diff and review in the side panel. While off, a pull request link opens its GitHub page in the integrated browser beside the thread. Cmd/Ctrl-click still opens the system browser either way."
+          control={
+            <Switch
+              checked={nativePullRequestViewEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ nativePullRequestViewEnabled: Boolean(checked) })
+              }
+              aria-label="Native pull request view"
             />
           }
         />

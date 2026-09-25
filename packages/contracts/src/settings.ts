@@ -515,6 +515,11 @@ export const ClientSettingsSchema = Schema.Struct({
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in the chat transcript. While
   // off, a `t3_show_ui` call stays an ordinary collapsed tool row.
   agentUiSurfacesEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // T3-CUSTOM(expbkt3): upstream's pull request view. Off by default, so a pull request
+  // link opens the host's page in the integrated browser instead.
+  nativePullRequestViewEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   compactSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
@@ -1857,6 +1862,8 @@ export const ClientSettingsPatch = Schema.Struct({
   planReviewAutoOpenEnabled: Schema.optionalKey(Schema.Boolean),
   // T3-CUSTOM(expbkt3): agent-rendered UI surfaces in chat.
   agentUiSurfacesEnabled: Schema.optionalKey(Schema.Boolean),
+  // T3-CUSTOM(expbkt3): upstream's pull request view.
+  nativePullRequestViewEnabled: Schema.optionalKey(Schema.Boolean),
   pullRequestMergeMethodOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, PullRequestMergeMethod),
   ),

@@ -730,6 +730,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Agent views in chat",
     to: "/settings/experiments",
   },
+  // T3-CUSTOM(expbkt3): upstream's pull request view.
+  {
+    id: "native-pull-request-view",
+    title: "Native pull request view",
+    to: "/settings/experiments",
+    searchTerms: ["pr pull request link github integrated browser panel open"],
+  },
   {
     id: "load-balancing",
     title: "Load balancing",

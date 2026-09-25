@@ -106,6 +106,8 @@ import { resolvePathLinkTarget } from "~/terminal-links";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { useOpenLink } from "~/browser/useOpenLink";
+// T3-CUSTOM(expbkt3): pull request links open in the integrated browser.
+import { useOpenPullRequestInBrowserInstead } from "~/fork/pullRequestBrowserLinks";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 
 interface GitActionsControlProps {
@@ -1033,6 +1035,8 @@ export default function GitActionsControl({
   );
   const openPrLink = useOpenPrLink(activeThreadRef ?? undefined);
   const openLink = useOpenLink(activeThreadRef);
+  // T3-CUSTOM(expbkt3): pull request links open in the integrated browser.
+  const openPrInBrowserInstead = useOpenPullRequestInBrowserInstead(activeThreadRef);
   const activeDraftThread = useComposerDraftStore((store) =>
     draftId
       ? store.getDraftSession(draftId)
@@ -1278,7 +1282,12 @@ export default function GitActionsControl({
     const openPr = gitStatusForActions?.pr?.state === "open" ? gitStatusForActions.pr : null;
     // Beside the thread where it was made, the way the browser opens beside it. Checked before
     // the shell, which opening in the app does not need.
-    if (openPr && onOpenPullRequest) {
+    // T3-CUSTOM(expbkt3): with the native view off, the PR opens in the integrated browser.
+    const openedInBrowser = openPr
+      ? openPrInBrowserInstead({ preventDefault() {}, stopPropagation() {} }, openPr.url)
+      : undefined;
+    if (openedInBrowser === true) return;
+    if (openPr && onOpenPullRequest && openedInBrowser === undefined) {
       onOpenPullRequest(openPr.number);
       return;
     }
@@ -1302,7 +1311,8 @@ export default function GitActionsControl({
         }),
       );
     });
-  }, [gitStatusForActions, onOpenPullRequest, openLink, threadToastData]);
+    // T3-CUSTOM(expbkt3): openPrInBrowserInstead.
+  }, [gitStatusForActions, onOpenPullRequest, openLink, openPrInBrowserInstead, threadToastData]);
 
   runGitActionWithToast = useEffectEvent(
     async ({
