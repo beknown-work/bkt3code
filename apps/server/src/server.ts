@@ -176,6 +176,8 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 // T3-CUSTOM(expbkt3): archived-session worktree reclaim
 import * as SessionArchiveService from "./sessionArchive/SessionArchiveService.ts";
 import * as SessionArchiveSweeper from "./sessionArchive/SessionArchiveSweeper.ts";
+// T3-CUSTOM(expbkt3): 6-hourly SQLite statistics refresh.
+import { SqliteOptimizeScheduleLive } from "./persistence/sqliteOptimize.expbkt3.ts";
 import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages.ts";
 // T3-CUSTOM(expbkt3): archive-time history export reads activities, thread
 // rows (for the soft-deleted backfill), and provider resume cursors.
@@ -679,9 +681,14 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   // T3-CUSTOM(expbkt3): the session archive is merged into the VCS group rather
   // than added as its own `pipe` step — the chain is already at TypeScript's
-  // 20-overload ceiling for `.pipe`.
+  // 20-overload ceiling for `.pipe`. The 6-hourly SQLite optimize rides along.
   Layer.provideMerge(
-    Layer.mergeAll(VcsLayerLive, SessionArchiveLayerLive, SessionArchiveSweeperLayerLive),
+    Layer.mergeAll(
+      VcsLayerLive,
+      SessionArchiveLayerLive,
+      SessionArchiveSweeperLayerLive,
+      SqliteOptimizeScheduleLive,
+    ),
   ),
   Layer.provideMerge(ProviderExecutionRuntimeLayerLive),
   Layer.provideMerge(
