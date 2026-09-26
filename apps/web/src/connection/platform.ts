@@ -75,6 +75,8 @@ import {
 } from "./desktopLocal";
 import { connectionStorageLayer } from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
+// T3-CUSTOM(expbkt3): focus wakeups probe unless the window was away >= 60 s.
+import { type FocusWakeup, makeFocusWakeupTracker } from "./focusWakeup.expbkt3";
 
 let nextObservedRpcRequestId = 0;
 
@@ -115,26 +117,58 @@ const applicationActiveFrom = (register: (emit: () => void) => () => void) =>
     ).pipe(Effect.asVoid),
   );
 
+// T3-CUSTOM(expbkt3): BEGIN focus probes unless the window was away >= 60 s,
+// and the desktop shell's resume/unlock event reconnects at once.
+const focusTracker = makeFocusWakeupTracker();
+
+const focusWakeups = Stream.callback<FocusWakeup>((queue) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const onFocus = () => Queue.offerUnsafe(queue, focusTracker.onFocus());
+      window.addEventListener("focus", onFocus);
+      window.addEventListener("blur", focusTracker.markInactive);
+      return () => {
+        window.removeEventListener("focus", onFocus);
+        window.removeEventListener("blur", focusTracker.markInactive);
+      };
+    }),
+    (cleanup) => Effect.sync(cleanup),
+  ).pipe(Effect.asVoid),
+);
+
+const systemResumeWakeups = Stream.callback<"application-active-reconnect">((queue) =>
+  Effect.acquireRelease(
+    Effect.sync(
+      () =>
+        window.desktopBridge?.onSystemResumed?.(() =>
+          Queue.offerUnsafe(queue, "application-active-reconnect"),
+        ) ?? (() => {}),
+    ),
+    (cleanup) => Effect.sync(cleanup),
+  ).pipe(Effect.asVoid),
+);
+// T3-CUSTOM(expbkt3): END
+
 const wakeupsLayer = Wakeups.layer({
   changes: Stream.merge(
     // Tab/window became visible again.
     applicationActiveFrom((emit) => {
       const listener = () => {
         if (document.visibilityState === "visible") {
+          // T3-CUSTOM(expbkt3): the focus that usually follows only probes.
+          focusTracker.markResynced();
           emit();
+        } else {
+          // T3-CUSTOM(expbkt3): hidden time counts toward the focus resync.
+          focusTracker.markInactive();
         }
       };
       document.addEventListener("visibilitychange", listener);
       return () => document.removeEventListener("visibilitychange", listener);
     }),
     Stream.merge(
-      // Window regained focus — fire unconditionally. Covers the always-visible
-      // desktop window that never emits `visibilitychange` after a sleep, so the
-      // supervisor still runs a liveness probe on wake.
-      applicationActiveFrom((emit) => {
-        window.addEventListener("focus", emit);
-        return () => window.removeEventListener("focus", emit);
-      }),
+      // T3-CUSTOM(expbkt3): focus probes; a resume from sleep reconnects.
+      Stream.merge(focusWakeups, systemResumeWakeups),
       Stream.merge(
         // Network connectivity returned.
         applicationActiveFrom((emit) => {
