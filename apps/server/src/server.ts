@@ -78,6 +78,8 @@ import * as PlanReviewDocuments from "./persistence/PlanReviewDocuments.ts";
 import * as AgentUiRenders from "./persistence/AgentUiRenders.ts";
 import { plannotatorProxyRouteLayer } from "./plannotator/http.ts";
 // T3-CUSTOM(expbkt3): END
+// T3-CUSTOM(expbkt3): event feed for followers such as the Linear bridge.
+import { eventFeedRouteLayer } from "./orchestration/eventFeedHttp.expbkt3.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -779,6 +781,7 @@ const PlannotatorAndMcpRoutesLive = Layer.mergeAll(
   plannotatorProxyRouteLayer,
   mcpUpstreamProxyRouteLayer,
   McpHttpServer.layer,
+  eventFeedRouteLayer,
 ).pipe(
   // One registry instance authenticates both the native and upstream MCP
   // routes; separate instances would not recognize each other's run tokens.
