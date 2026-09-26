@@ -148,7 +148,7 @@ const withHarness = <A, E>(
       reason?: string,
     ) => ProviderRuntimeEvent;
     readonly emitAndDrain: (events: ReadonlyArray<ProviderRuntimeEvent>) => Effect.Effect<void>;
-    readonly sessionSetEvents: Effect.Effect<ReadonlyArray<OrchestrationEvent>, unknown>;
+    readonly sessionSetEvents: Effect.Effect<ReadonlyArray<OrchestrationEvent>>;
   }) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
@@ -225,6 +225,7 @@ const withHarness = <A, E>(
           Stream.filter((event) => event.type === "thread.session-set"),
           Stream.runCollect,
           Effect.map((events) => Array.from(events)),
+          Effect.orDie,
         ),
       });
     }).pipe(Effect.provide(makeLayer(provider.service)));
